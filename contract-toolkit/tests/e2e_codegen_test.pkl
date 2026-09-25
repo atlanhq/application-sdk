@@ -88,6 +88,8 @@ local widgetApp = (App) {
         inputs {
           ["bool_field"] = new App.BooleanInput { title = "Bool"; default = true }
           ["num_field"] = new App.NumericInput { title = "Num"; default = 42 }
+          ["date_field"] = new App.DateInput { title = "Date"; defaultDay = -3 }
+          ["date_today_field"] = new App.DateInput { title = "Today" }
           ["radio_field"] = new App.Radio {
             title = "Radio"
             possibleValues { ["alpha"] = "Alpha"; ["beta"] = "Beta" }
@@ -649,6 +651,24 @@ facts {
     widgetSubs.contains("num_field: int = Field(default=42, alias=\"{{num_field}}\")")
   }
 
+  // A DateInput submits the epoch seconds of the date it pre-selects, relative to
+  // today, so the default is computed per instance rather than a literal. It used to
+  // fall through to `str = ""`, which fails the `int` field `_input.py` declares.
+  ["DateInput emits a per-instance default from the date helper"] {
+    widgetSubs.contains("date_field: str = Field(\n        default_factory=lambda: _utc_date_epoch(-3),\n        alias=\"{{date_field}}\",\n    )")
+    widgetSubs.contains("date_today_field: str = Field(\n        default_factory=lambda: _utc_date_epoch(0),\n        alias=\"{{date_today_field}}\",\n    )")
+    !widgetSubs.contains("date_field: str = Field(default=\"\"")
+  }
+
+  ["DateInput helper returns now for today, else UTC midnight plus the offset"] {
+    widgetSubs.contains("def _utc_date_epoch(days: int) -> str:")
+    widgetSubs.contains("return str(now if days == 0 else now - now % 86400 + days * 86400)")
+  }
+
+  ["Substitutions imports time before typing when a DateInput is present"] {
+    widgetSubs.contains("from __future__ import annotations\n\nimport time\nfrom typing import Any, Literal\n\nfrom pydantic import Field")
+  }
+
   ["Radio with possibleValues emits Literal type"] {
     // 90 chars → fmtSubsField wraps to multi-line form
     widgetSubs.contains("radio_field: Literal[\"alpha\", \"beta\"] = Field(\n        default=\"alpha\",\n        alias=\"{{radio_field}}\",\n    )")
@@ -735,6 +755,8 @@ facts {
     }
     local subs = strOnlyApp.output.files["app/generated/_e2e_substitutions.py"].text
     !subs.contains("from typing import")
+    !subs.contains("import time")
+    !subs.contains("_utc_date_epoch")
   }
 
   // ── _e2e_substitutions.py: alias preserves original key casing ────────────────

@@ -3546,6 +3546,13 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  else if (u is Widgets.DateInput)
+    // A DateInput submits the epoch seconds of the date it pre-selects, which is
+    // relative to today, so no literal default exists. Compute it per instance the
+    // way the picker does (`_utc_date_epoch`, emitted below); a `""` fallthrough
+    // fails the `int` field `_input.py` declares. Stays `str` because the manifest
+    // embeds the token inside a quoted JSON string.
+    fmtSubsField(pyName, "str", "default_factory=lambda: _utc_date_epoch(\((u as Widgets.DateInput).defaultDay))", k)
   else if (u is Widgets.Radio)
     let (radio = u as Widgets.Radio)
     let (vals = radio.possibleValues.keys.toList())
@@ -3809,6 +3816,18 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
       else if (usesLiteral) "from typing import Literal\n\n"
       else if (usesAny) "from typing import Any\n\n"
       else ""
+    local usesDate = fieldLines.contains("_utc_date_epoch(")
+    // `import time` sorts before `from typing` (both stdlib) under ruff's isort.
+    local stdlibBlock =
+      if (usesDate) "import time\n" + (if (typingLine.isEmpty) "\n" else typingLine)
+      else typingLine
+    local dateHelper =
+      if (usesDate)
+        "\n\ndef _utc_date_epoch(days: int) -> str:\n" +
+        "    \"\"\"Epoch seconds a DateInput submits: now for today, else UTC midnight + days.\"\"\"\n" +
+        "    now = int(time.time())\n" +
+        "    return str(now if days == 0 else now - now % 86400 + days * 86400)\n"
+      else ""
     local parentImport =
       if (parentClass == "SQLMustacheSubstitutions")
         "from application_sdk.testing.e2e.substitutions import SQLMustacheSubstitutions\n"
@@ -3818,9 +3837,10 @@ local function generateE2ESubstitutionsPy(): FileOutput? =
       "# Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.\n" +
       "# Regenerate with: pkl eval -m . contract/app.pkl\n" +
       "from __future__ import annotations\n\n" +
-      typingLine +
+      stdlibBlock +
       "from pydantic import Field\n\n" +
       parentImport +
+      dateHelper +
       "\n\nclass \(cname)MustacheSubstitutions(\(parentClass)):\n" +
       fieldLines
   }
