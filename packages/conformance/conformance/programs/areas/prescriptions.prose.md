@@ -602,11 +602,12 @@ drafting.
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
     `App.run_in_thread()` inside a `@task`.  Only the send is a finding
-    (`requests.get`, or `s.get`/`s.send` on a session built in the same
-    function, or on a `self.<attr>` session set in any method of the class):
-    building a `requests.Session()` or `HTTPAdapter()` does no I/O
-    and is not flagged, so never move a constructor behind a sync helper to
-    clear P023.
+    (`requests.get`, `s.get`/`s.send` on a `requests.Session()`, or `o.open`
+    on a urllib `build_opener()`, whether the client is built inline, in the
+    same or an enclosing function, or on a `self.<attr>` in the class):
+    building a `requests.Session()`, `HTTPAdapter()` or `build_opener()` does
+    no I/O and is not flagged, so never move a constructor behind a sync
+    helper to clear P023.
   - *tree op, data-scale I/O, whole-file, serialization* — offload with the
     callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
     `await run_in_thread(pd.read_parquet, path)`,

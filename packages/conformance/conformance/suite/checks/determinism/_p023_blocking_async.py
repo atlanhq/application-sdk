@@ -10,14 +10,16 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   any ``async def``.
 
 * **Blocking sync I/O** — a synchronous call that sends a request or sleeps
-  (``requests.get``/``post``/…/``request``, a send on a ``requests.Session()``
-  built inline, bound to a name in the same function, or bound to a
-  ``self.<attr>`` in any method of the same class,
-  ``urllib.request.urlopen``/``urlretrieve``,
-  ``time.sleep``) and blocks the event loop instead of awaiting an async
-  equivalent / offloading via ``App.run_in_thread()``.  Constructors that do no
-  I/O — ``requests.Session()``, ``requests.adapters.HTTPAdapter()``,
-  ``urllib.request.Request()`` — are not flagged.  Flagged
+  (``requests.get``/``post``/…/``request``, ``urllib.request.urlopen``/
+  ``urlretrieve``, ``time.sleep``, and a send on a client — a
+  ``requests.Session()`` or a urllib ``build_opener()`` / ``OpenerDirector()``
+  — built inline, bound to a name in the same or an enclosing function, or
+  bound to a ``self.<attr>`` in the same class) and blocks the event loop
+  instead of awaiting an async equivalent / offloading via
+  ``App.run_in_thread()``.  Constructors that do no I/O —
+  ``requests.Session()``, ``requests.adapters.HTTPAdapter()``,
+  ``urllib.request.Request()``, ``build_opener()`` — and lookups such as
+  ``requests.codes.get`` are not flagged.  Flagged
   in ``async def`` bodies **outside** workflow context — inside workflow methods
   the same calls are already owned by P020 (sleep) and P021 (network), so they are
   skipped here to avoid double-reporting.
@@ -96,24 +98,66 @@ _BLOCKING_EXACT = frozenset({"time.sleep"})
 _REQUESTS_VERBS = frozenset(
     {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 )
+_REQUESTS_VERB_TARGETS = frozenset(
+    f"{module}.{verb}"
+    for module in ("requests", "requests.api")
+    for verb in _REQUESTS_VERBS
+)
 _URLLIB_BLOCKING = frozenset({"urlopen", "urlretrieve"})
+# A client whose construction does no I/O, and the methods that send on it.
 _SESSION_FACTORIES = frozenset({"Session", "session"})
-_SESSION_SENDS = _REQUESTS_VERBS | {"send"}
+_OPENER_FACTORIES = frozenset({"build_opener", "OpenerDirector"})
+_CLIENT_SENDS = {
+    "session": _REQUESTS_VERBS | {"send"},
+    "opener": frozenset({"open"}),
+}
+_CLIENT_LABEL = {
+    "session": "requests.Session()",
+    "opener": "urllib.request.build_opener()",
+}
 
 
 def _is_blocking_network(target: str) -> bool:
+    return target in _REQUESTS_VERB_TARGETS or (
+        target.startswith("urllib.request.")
+        and target.rsplit(".", 1)[-1] in _URLLIB_BLOCKING
+    )
+
+
+def _client_kind(target: str | None) -> str | None:
+    if target is None:
+        return None
     last = target.rsplit(".", 1)[-1]
-    return (target.startswith("requests.") and last in _REQUESTS_VERBS) or (
-        target.startswith("urllib.request.") and last in _URLLIB_BLOCKING
-    )
+    if target.startswith("requests.") and last in _SESSION_FACTORIES:
+        return "session"
+    if target.startswith("urllib.request.") and last in _OPENER_FACTORIES:
+        return "opener"
+    return None
 
 
-def _is_session_factory(target: str | None) -> bool:
-    return (
-        target is not None
-        and target.startswith("requests.")
-        and target.rsplit(".", 1)[-1] in _SESSION_FACTORIES
-    )
+def _assignment_pairs(stmt: ast.AST) -> list[tuple[ast.expr, ast.expr | None]]:
+    if isinstance(stmt, ast.Assign):
+        return [(target, stmt.value) for target in stmt.targets]
+    if isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+        return [(stmt.target, stmt.value)]
+    if isinstance(stmt, ast.With):
+        return [
+            (item.optional_vars, item.context_expr)
+            for item in stmt.items
+            if item.optional_vars is not None
+        ]
+    return []
+
+
+def _walk_same_class(node: ast.AST):
+    """``ast.walk`` that does not descend into a nested class."""
+    pending = list(ast.iter_child_nodes(node))
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.ClassDef):
+            continue
+        yield current
+        pending.extend(ast.iter_child_nodes(current))
 
 
 # Tree-scale filesystem work: duration scales with the tree, not with a fixed
@@ -286,8 +330,8 @@ class _Visitor(ast.NodeVisitor):
         self.bindings = bindings
         self.workflow_ids = workflow_ids
         self._async_stack: list[bool] = []
-        self._session_stack: list[set[str]] = []
-        self._class_sessions: list[set[str]] = []
+        self._scopes: list[dict[str, str | None]] = []
+        self._class_clients: list[dict[str, str]] = []
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -328,43 +372,44 @@ class _Visitor(ast.NodeVisitor):
     def _visit_func(self, node: ast.AST, is_async: bool) -> None:
         in_wf = id(node) in self.workflow_ids
         self._async_stack.append(is_async)
-        self._session_stack.append(set())
+        self._scopes.append({})
         if in_wf:
             self._wf_depth += 1
         self.generic_visit(node)
         if in_wf:
             self._wf_depth -= 1
-        self._session_stack.pop()
+        self._scopes.pop()
         self._async_stack.pop()
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._class_sessions.append(self._self_sessions(node))
+        self._class_clients.append(self._self_clients(node))
         self.generic_visit(node)
-        self._class_sessions.pop()
+        self._class_clients.pop()
 
-    def _self_sessions(self, node: ast.ClassDef) -> set[str]:
-        """``self.<attr>`` names bound to a ``requests`` session in any method."""
-        found: set[str] = set()
+    def _self_clients(self, node: ast.ClassDef) -> dict[str, str]:
+        """``self.<attr>`` names bound only to one kind of client in this class.
+
+        A name also bound to anything else (``None`` aside, the lazy-init idiom)
+        is dropped: the class does not say which value a send reaches.
+        """
+        kinds: dict[str, set[str | None]] = {}
         for method in node.body:
             if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 continue
-            for stmt in ast.walk(method):
-                pairs: list[tuple[ast.expr, ast.expr | None]] = []
-                if isinstance(stmt, ast.Assign):
-                    pairs = [(target, stmt.value) for target in stmt.targets]
-                elif isinstance(stmt, ast.AnnAssign):
-                    pairs = [(stmt.target, stmt.value)]
-                elif isinstance(stmt, ast.With):
-                    pairs = [
-                        (item.optional_vars, item.context_expr)
-                        for item in stmt.items
-                        if item.optional_vars is not None
-                    ]
-                for target, value in pairs:
+            for stmt in _walk_same_class(method):
+                for target, value in _assignment_pairs(stmt):
                     key = self._binding_key(target)
-                    if key and key.startswith("self.") and self._is_session_call(value):
-                        found.add(key)
-        return found
+                    if not key or not key.startswith("self."):
+                        continue
+                    if isinstance(value, ast.Constant) and value.value is None:
+                        continue
+                    kinds.setdefault(key, set()).add(self._client_call(value))
+        clients: dict[str, str] = {}
+        for key, found in kinds.items():
+            kind = next(iter(found)) if len(found) == 1 else None
+            if kind is not None:
+                clients[key] = kind
+        return clients
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_func(node, is_async=False)
@@ -372,10 +417,10 @@ class _Visitor(ast.NodeVisitor):
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_func(node, is_async=True)
 
-    def _is_session_call(self, value: ast.expr | None) -> bool:
-        return isinstance(value, ast.Call) and _is_session_factory(
-            resolve_call_target(value.func, self.bindings)
-        )
+    def _client_call(self, value: ast.expr | None) -> str | None:
+        if not isinstance(value, ast.Call):
+            return None
+        return _client_kind(resolve_call_target(value.func, self.bindings))
 
     def _binding_key(self, target: ast.expr) -> str | None:
         if not isinstance(target, (ast.Name, ast.Attribute)):
@@ -384,12 +429,8 @@ class _Visitor(ast.NodeVisitor):
 
     def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
         key = self._binding_key(target)
-        if not self._session_stack or key is None:
-            return
-        if self._is_session_call(value):
-            self._session_stack[-1].add(key)
-        else:
-            self._session_stack[-1].discard(key)
+        if self._scopes and key is not None:
+            self._scopes[-1][key] = self._client_call(value)
 
     def visit_Assign(self, node: ast.Assign) -> None:
         self.generic_visit(node)
@@ -409,13 +450,19 @@ class _Visitor(ast.NodeVisitor):
         for stmt in node.body:
             self.visit(stmt)
 
-    def _is_named_session_send(self, target: str) -> bool:
+    def _receiver_kind(self, receiver: str) -> str | None:
+        """The client bound to ``receiver``, innermost scope first, then the class."""
+        for scope in reversed(self._scopes):
+            if receiver in scope:
+                return scope[receiver]
+        if self._class_clients:
+            return self._class_clients[-1].get(receiver)
+        return None
+
+    def _is_named_client_send(self, target: str) -> bool:
         receiver, _, attr = target.rpartition(".")
-        if attr not in _SESSION_SENDS:
-            return False
-        if self._session_stack and receiver in self._session_stack[-1]:
-            return True
-        return bool(self._class_sessions) and receiver in self._class_sessions[-1]
+        kind = self._receiver_kind(receiver)
+        return kind is not None and attr in _CLIENT_SENDS[kind]
 
     def _in_async(self) -> bool:
         return bool(self._async_stack) and self._async_stack[-1]
@@ -432,9 +479,9 @@ class _Visitor(ast.NodeVisitor):
             return
         target = resolve_call_target(node.func, self.bindings)
         if target is None:
-            verb = self._inline_session_verb(node)
-            if self._wf_depth == 0 and verb is not None:
-                self._add(node, f"requests.Session().{verb}()", _BLOCKING_HINT)
+            label = self._inline_client_send(node)
+            if self._wf_depth == 0 and label is not None:
+                self._add(node, label, _BLOCKING_HINT)
             return
         if target in _BRIDGE_EXACT:
             self._add(node, f"{target}()", _BRIDGE_HINT)
@@ -443,7 +490,7 @@ class _Visitor(ast.NodeVisitor):
         if self._wf_depth == 0 and (
             target in _BLOCKING_EXACT
             or _is_blocking_network(target)
-            or self._is_named_session_send(target)
+            or self._is_named_client_send(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
             return
@@ -493,16 +540,14 @@ class _Visitor(ast.NodeVisitor):
         if target.endswith(_TRAVERSAL_SUFFIXES):
             self._add(node, f"{target}()", _TRAVERSAL_HINT)
 
-    def _inline_session_verb(self, node: ast.Call) -> str | None:
+    def _inline_client_send(self, node: ast.Call) -> str | None:
         func = node.func
-        if (
-            isinstance(func, ast.Attribute)
-            and func.attr in _REQUESTS_VERBS
-            and isinstance(func.value, ast.Call)
-            and _is_session_factory(resolve_call_target(func.value.func, self.bindings))
-        ):
-            return func.attr
-        return None
+        if not isinstance(func, ast.Attribute):
+            return None
+        kind = self._client_call(func.value)
+        if kind is None or func.attr not in _CLIENT_SENDS[kind]:
+            return None
+        return f"{_CLIENT_LABEL[kind]}.{func.attr}()"
 
     def _add(self, node: ast.Call, label: str, hint: str) -> None:
         self.findings.append(

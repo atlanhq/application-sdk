@@ -1113,11 +1113,14 @@ writers (`pandas.read_sql` / `read_parquet` / `DataFrame.to_parquet` / `pq.read_
 
 Only the calls that send a request are network findings. Constructors do no I/O —
 `requests.Session()`, `requests.adapters.HTTPAdapter()`, `requests.Request()`,
-`urllib.request.Request()` — so building a session in an `async def` is silent.  A send
-on that session is flagged: inline (`requests.Session().get(...)`), or through a name
-bound from `requests.Session()` in the same function (`s = ...`, `s: ... = ...`, `with
-... as s`) and then called with `s.get` / `post` / … / `request` / `send`, or through a
-`self.<attr>` bound to a session in any method of the same class (`__init__` included).
+`urllib.request.Request()`, `urllib.request.build_opener()` — so building a client in an
+`async def` is silent, and so is a lookup such as `requests.codes.get`.  A send on the
+client is flagged: `get` / `post` / … / `request` / `send` on a `requests.Session()`, or
+`open` on a `build_opener()` / `OpenerDirector()`.  The send is found inline
+(`requests.Session().send(...)`), through a name bound in the same or an enclosing
+function (`s = ...`, `s: ... = ...`, `with ... as s`; the nearest binding wins), or
+through a `self.<attr>` bound to one client in the methods of the same class (`__init__`
+included, an initial `None` allowed, nested classes excluded).
 
 Single-syscall filesystem operations (`os.remove`, `os.unlink`, `os.rmdir`) are **not**
 flagged: one inode operation does not earn a thread hop, and flagging them would bury
