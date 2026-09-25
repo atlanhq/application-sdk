@@ -181,7 +181,7 @@ def check(
     *,
     max_input_tokens: int = 8000,
     max_lookups: int = 4,
-    max_tokens: int = 1200,
+    max_tokens: int = 16000,  # reasoning tokens count against this
     max_concerns: int = 2,
 ) -> ApproachCheck:
     out = ApproachCheck()

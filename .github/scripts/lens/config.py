@@ -20,7 +20,7 @@ from .llm import Price
 @dataclass
 class Config:
     model: str = "gpt-6-luna"
-    reasoning_effort: str | None = "medium"
+    reasoning_effort: str | None = "max"
     api: str = "responses"
     price: Price = field(default_factory=lambda: Price(0.0, 0.0, 0.0))
     cap_usd_per_pr: float = 1.0

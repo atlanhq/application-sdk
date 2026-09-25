@@ -50,13 +50,13 @@ class AgentLimits:
     max_tool_turns_cap: int = 20
     max_empty_turns: int = 2
     context_limit_tokens: int = 60_000
-    review_max_tokens: int = 4_000
-    reflect_max_tokens: int = 1_200
+    review_max_tokens: int = 24_000  # reasoning tokens count against this
+    reflect_max_tokens: int = 8_000
     max_comments: int = 12
     max_nits: int = 5  # low-severity findings kept per bundle (REVIEW.md-style nit cap)
     plan: int = 1  # 0 disables
     plan_min_lines: int = 60
-    plan_max_tokens: int = 800
+    plan_max_tokens: int = 8_000
     second_pass: int = 0  # 1 enables
     second_pass_min_lines: int = 300
 

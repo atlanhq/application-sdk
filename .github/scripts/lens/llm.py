@@ -38,6 +38,13 @@ class FatalRequestError(LLMError):
     request shape or size). The whole run stops; nothing is retried."""
 
 
+# Cloudflare in front of the gateway bans known script signatures, Python's
+# default "Python-urllib/3.x" among them (error 1010, seen on the first live
+# runs: every call 403'd while curl from a laptop worked). Every request lens
+# makes to the gateway carries this instead.
+USER_AGENT = "lens/1.0 (+https://github.com/atlanhq/application-sdk)"
+
+
 def prompt_view(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Messages as they count toward size estimates: without the raw Responses
     output items (`_items`), whose encrypted reasoning is a large opaque blob
@@ -203,6 +210,8 @@ class Client:
 
     # Optional request parameters the client may drop if the gateway rejects them.
     DROPPABLE = ("prompt_cache_key", "reasoning_effort", "temperature")
+    # Reasoning levels, highest first: a rejected level steps down one rung.
+    EFFORT_LADDER = ("max", "xhigh", "high", "medium", "low", "none")
     # Client errors: the request, key or alias is wrong. Never retried; they stop the run.
     FATAL = frozenset({400, 401, 403, 404, 405, 413, 422})
 
@@ -214,7 +223,7 @@ class Client:
         ledger: Ledger,
         base_url: str | None = None,
         api_key: str | None = None,
-        timeout_s: float = 120.0,
+        timeout_s: float = 300.0,  # max reasoning effort is slower per call
         max_retries: int = 2,
         max_consecutive_failures: int = 3,
         max_retry_after_s: float = 30.0,
@@ -245,7 +254,8 @@ class Client:
         # records a one-time switch to chat when the gateway has no /v1/responses.
         self.api = api
         self.fell_back = ""
-        self.diagnostics: list[str] = []  # what answered an unexpected preflight status
+        self.diagnostics: list[str] = []
+        self.stop_reason = ""  # why the breaker was opened, when a fatal error opened it  # what answered an unexpected preflight status
         self._transport = transport or self._http
         self._meta = meta_transport or self._http_get
         self.unsupported: set[str] = set()
@@ -302,6 +312,7 @@ class Client:
             headers={
                 "Content-Type": "application/json",
                 "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": USER_AGENT,
             },
             method="POST",
         )
@@ -317,7 +328,11 @@ class Client:
 
     def _http_get(self, path: str) -> tuple[int, str]:
         req = urllib.request.Request(
-            self._root() + path, headers={"Authorization": f"Bearer {self.api_key}"}
+            self._root() + path,
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "User-Agent": USER_AGENT,
+            },
         )
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - fixed https base from config
@@ -334,7 +349,9 @@ class Client:
         if status in (200, 401):
             return
         low = text.lower()
-        if "cloudflare" in low or "cf-ray" in low:
+        if "error code: 1010" in low or "error 1010" in low:
+            who = "Cloudflare error 1010 (request signature / User-Agent banned at the edge)"
+        elif "cloudflare" in low or "cf-ray" in low:
             who = "a Cloudflare page (edge block, not LiteLLM)"
         elif "<html" in low:
             who = "an HTML page (an edge or proxy, not LiteLLM)"
@@ -422,7 +439,8 @@ class Client:
     ) -> Completion:
         if self._breaker_open():
             raise LLMError(
-                f"{stage}: not sent — {self._fail_streak} consecutive failed requests; stopping this run"
+                f"{stage}: not sent — the run was stopped after {self.ledger.failed_requests} failed request(s)"
+                + (f" ({self.stop_reason})" if self.stop_reason else "")
             )
         worst = self.worst_case_cost(messages, tools, max_tokens)
         if not self.ledger.reserve(worst):
@@ -479,6 +497,26 @@ class Client:
     def _learn_rejection(self, body: dict[str, Any], text: str) -> bool:
         """A 400 naming a parameter we can live without: stop sending it. True if learnt."""
         low = text.lower()
+        # A rejected effort LEVEL steps down one level (max -> xhigh -> high -> ...)
+        # instead of dropping reasoning altogether — losing reasoning is the worst
+        # outcome for review quality, so it is the last resort, not the first.
+        effort = (body.get("reasoning") or {}).get("effort") or body.get(
+            "reasoning_effort"
+        )
+        # Only when the error names the LEVEL (e.g. "'max' is not supported"); an
+        # error about the parameter itself falls through and drops it below.
+        names_level = (
+            bool(effort)
+            and re.search(rf"\b{re.escape(str(effort))}\b", low) is not None
+        )
+        if effort and names_level and effort in self.EFFORT_LADDER[:-1]:
+            lower = self.EFFORT_LADDER[self.EFFORT_LADDER.index(effort) + 1]
+            self.reasoning_effort = lower
+            if "reasoning" in body:
+                body["reasoning"] = {"effort": lower}
+            else:
+                body["reasoning_effort"] = lower
+            return True
         if (
             "reasoning" in body
             and "reasoning" in low
@@ -709,6 +747,7 @@ class Client:
                 # Our side is wrong (key, alias, request shape, context size). Every other
                 # bundle would send the same thing and fail the same way: open the breaker
                 # for the whole run and stop now, without a single retry.
+                self.stop_reason = f"{stage}: HTTP {status}"
                 self._trip()
                 raise FatalRequestError(
                     f"{stage}: {last} — stopping the run (a request lens got wrong; retrying cannot help)"

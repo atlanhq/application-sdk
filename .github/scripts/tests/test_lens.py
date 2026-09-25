@@ -1670,6 +1670,57 @@ def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
     assert "sk-abc123XYZ" not in key and "sk-…" in key
 
 
+def test_every_gateway_request_carries_the_lens_user_agent(monkeypatch):
+    """Cloudflare bans Python's default urllib signature (error 1010): every
+    completion and metadata request must identify itself as lens."""
+    import urllib.request  # noqa: PLC0415 - patched below
+
+    seen: list[str] = []
+
+    class _Resp:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def read(self):
+            return b'{"data": [], "output": [], "usage": {}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req.get_header("User-agent") or "")
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        base_url="https://gw.test",
+        api_key="k",
+        api="responses",
+    )
+    c.preflight(min_budget_usd=0.01)
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert seen and all(ua.startswith("lens/") for ua in seen)
+    assert not any("Python-urllib" in ua for ua in seen)
+
+
+def test_preflight_names_cloudflare_error_1010():
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=lambda path: (403, "error code: 1010"),
+    )
+    c.preflight(min_budget_usd=0.05)
+    assert "Cloudflare error 1010" in c.diagnostics[0]
+
+
 def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
     gh = FakeGitHub()
     cfg = cfg_for(repo)
@@ -2077,3 +2128,54 @@ def test_shipped_config_uses_luna_list_prices_on_the_responses_api():
     assert cfg.price.prompt_ceiling == pytest.approx(
         0.125
     )  # cache writes bill at 1.25x input
+
+
+def test_shipped_config_reasons_at_max_with_room_for_it():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    assert cfg.reasoning_effort == "max"
+    # Reasoning tokens count against max_output_tokens: at max effort the limits
+    # must leave room, or a turn is cut off before it can call a tool.
+    assert cfg.limits.review_max_tokens >= 16_000
+    assert (
+        cfg.limits.reflect_max_tokens >= 4_000 and cfg.limits.plan_max_tokens >= 4_000
+    )
+
+
+def test_a_rejected_effort_level_steps_down_one_rung_instead_of_dropping_reasoning():
+    ok = _responses_reply(
+        [
+            {
+                "type": "function_call",
+                "call_id": "c",
+                "name": "task_done",
+                "arguments": "{}",
+            }
+        ]
+    )
+    sent = Script(
+        (
+            400,
+            {},
+            '{"error": "reasoning.effort \'max\' is not supported for this model"}',
+        ),
+        ok,
+    )
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+        reasoning_effort="max",
+    )
+    c.complete(
+        "x",
+        [{"role": "user", "content": "hi"}],
+        max_tokens=5,
+        tools=agent_mod.TOOL_SCHEMAS,
+    )
+    assert sent.requests[0]["reasoning"] == {"effort": "max"}
+    assert sent.requests[1]["reasoning"] == {
+        "effort": "xhigh"
+    }  # still reasoning, one rung lower
+    assert c.reasoning_effort == "xhigh"

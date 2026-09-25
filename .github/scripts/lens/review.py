@@ -418,7 +418,7 @@ def _verify(client: Client, ws: Workspace, open_: list[Finding]) -> list[str]:
         comp = client.complete(
             "verify",
             messages,
-            max_tokens=900,
+            max_tokens=8000,
             tools=prompts.VERIFY_TOOLS,
             tool_choice="required",
             cache_key="lens-verify",
