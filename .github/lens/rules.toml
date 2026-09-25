@@ -1,6 +1,9 @@
 # First matching [[path]] entry wins; `cards` lists card ids.
 # Globs: `**` crosses directories, `*` does not, `**/` may match zero dirs. No {a,b} braces.
 # Keep specific entries above general ones and at most 4 cards per entry, most relevant first.
+# Every glob must match a tracked file and win for at least one of them
+# (.github/scripts/tests/test_lens.py checks both), so a moved directory cannot
+# leave an entry that silently routes nothing, or routes a card to the wrong place.
 
 # --- application_sdk: specific areas first ---------------------------------
 [[path]]
@@ -28,12 +31,20 @@ glob = "application_sdk/clients/**"
 cards = ["security", "performance", "error-handling-and-logging", "python-correctness"]
 
 [[path]]
+glob = "application_sdk/app/**"
+cards = ["v3-architecture", "performance", "public-api-and-deprecation", "error-handling-and-logging"]
+
+[[path]]
+glob = "application_sdk/execution/**"
+cards = ["v3-architecture", "error-handling-and-logging", "performance", "python-correctness"]
+
+[[path]]
 glob = "application_sdk/infrastructure/**"
 cards = ["v3-architecture", "security", "error-handling-and-logging", "python-correctness"]
 
 [[path]]
 glob = "application_sdk/observability/**"
-cards = ["error-handling-and-logging", "security", "performance", "python-correctness"]
+cards = ["observability", "error-handling-and-logging", "security", "performance"]
 
 [[path]]
 glob = "application_sdk/errors/**"
@@ -60,12 +71,24 @@ glob = "application_sdk/templates/**"
 cards = ["v3-architecture", "performance", "public-api-and-deprecation", "error-handling-and-logging"]
 
 [[path]]
+glob = "application_sdk/common/**/*.py"
+cards = ["python-correctness", "storage-io", "public-api-and-deprecation", "error-handling-and-logging"]
+
+[[path]]
+glob = "application_sdk/constants.py"
+cards = ["public-api-and-deprecation", "security", "python-correctness"]
+
+[[path]]
 glob = "application_sdk/**/*.py"
 cards = ["python-correctness", "v3-architecture", "error-handling-and-logging", "public-api-and-deprecation"]
 
 # --- CI --------------------------------------------------------------------
 [[path]]
 glob = ".github/workflows/**"
+cards = ["github-actions", "security"]
+
+[[path]]
+glob = ".github/workflow-templates/**"
 cards = ["github-actions", "security"]
 
 [[path]]
@@ -80,27 +103,42 @@ cards = ["tests", "ci-scripts"]
 glob = ".github/scripts/**"
 cards = ["ci-scripts", "security", "python-correctness"]
 
-# --- conformance / remediation / toolkit -----------------------------------
+[[path]]
+glob = ".github/CODEOWNERS"
+cards = ["security"]
+
+[[path]]
+glob = ".security/**"
+cards = ["security"]
+
+# --- conformance package ---------------------------------------------------
+# Workflow templates shipped verbatim to other repos.
+[[path]]
+glob = "packages/conformance/conformance/bootstrap/templates/**"
+cards = ["github-actions", "security"]
+
 [[path]]
 glob = "packages/conformance/tests/**"
 cards = ["conformance-rules", "tests"]
 
 [[path]]
+glob = "packages/conformance/conformance/package*.json"
+cards = ["build-config"]
+
+[[path]]
+glob = "packages/conformance/conformance/renovate/**"
+cards = ["build-config"]
+
+[[path]]
 glob = "packages/*/pyproject.toml"
 cards = ["build-config"]
 
+# Rules, checks, remediation programs (programs/areas/*.prose.md) and rule docs.
 [[path]]
 glob = "packages/**"
 cards = ["conformance-rules", "python-correctness"]
 
-[[path]]
-glob = "remediation/**"
-cards = ["conformance-rules"]
-
-[[path]]
-glob = "conformance/**"
-cards = ["conformance-rules", "python-correctness"]
-
+# --- contract toolkit ------------------------------------------------------
 [[path]]
 glob = "contract-toolkit/**/*.md"
 cards = ["contract-toolkit", "docs"]
@@ -115,8 +153,8 @@ glob = "tests/**"
 cards = ["tests", "python-correctness"]
 
 [[path]]
-glob = "**/tests/**"
-cards = ["tests", "python-correctness"]
+glob = "tools/migrate_v3/**"
+cards = ["v3-architecture", "python-correctness"]
 
 [[path]]
 glob = "components/**"
@@ -131,6 +169,10 @@ glob = "**/pyproject.toml"
 cards = ["build-config"]
 
 [[path]]
+glob = "**/uv.lock"
+cards = ["build-config"]
+
+[[path]]
 glob = ".pre-commit-config.yaml"
 cards = ["build-config"]
 
@@ -140,7 +182,7 @@ cards = ["build-config"]
 
 [[path]]
 glob = "renovate-config/**"
-cards = ["build-config"]
+cards = ["build-config", "security"]
 
 # --- docs and fallbacks ----------------------------------------------------
 [[path]]
