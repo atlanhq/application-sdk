@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import threading
 import time
 import urllib.error
@@ -244,6 +245,7 @@ class Client:
         # records a one-time switch to chat when the gateway has no /v1/responses.
         self.api = api
         self.fell_back = ""
+        self.diagnostics: list[str] = []  # what answered an unexpected preflight status
         self._transport = transport or self._http
         self._meta = meta_transport or self._http_get
         self.unsupported: set[str] = set()
@@ -324,6 +326,25 @@ class Client:
             return e.code, e.read().decode("utf-8", "replace")
 
     # ---- preflight: zero-token checks ------------------------------------
+    def _diagnose(self, path: str, status: int, text: str) -> None:
+        """Record what answered an unexpected preflight status, so a CI failure
+        explains itself: LiteLLM's JSON error, or an HTML page from an edge
+        (e.g. Cloudflare) in front of it. Never the key or the base URL; any
+        key-shaped token in the body is redacted."""
+        if status in (200, 401):
+            return
+        low = text.lower()
+        if "cloudflare" in low or "cf-ray" in low:
+            who = "a Cloudflare page (edge block, not LiteLLM)"
+        elif "<html" in low:
+            who = "an HTML page (an edge or proxy, not LiteLLM)"
+        else:
+            who = "the gateway's JSON"
+        snippet = re.sub(r"sk-[A-Za-z0-9._-]+", "sk-…", " ".join(text.split()))[:160]
+        self.diagnostics.append(
+            f"preflight {path}: HTTP {status} from {who}: {snippet}"
+        )
+
     def preflight(self, min_budget_usd: float) -> str | None:
         """None when the run may start; otherwise the reason it must not.
 
@@ -341,6 +362,7 @@ class Client:
             status, text = self._meta("/v1/models")
         except (LLMError, TimeoutError, urllib.error.URLError, OSError) as e:
             return f"gateway unreachable: {e}"
+        self._diagnose("/v1/models", status, text)
         if status == 401:
             return f"the LiteLLM key was rejected (HTTP 401: {text[:160]})"
         if status == 200:
@@ -354,6 +376,7 @@ class Client:
             status, text = self._meta("/key/info")
         except (TimeoutError, urllib.error.URLError, OSError):
             return None
+        self._diagnose("/key/info", status, text)
         if status == 200:
             try:
                 info = json.loads(text).get("info") or {}

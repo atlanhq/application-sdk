@@ -230,6 +230,7 @@ def run(
     )
     if cfg.preflight and will_call:
         reason = client.preflight(min_budget_usd=min(0.05, round_cap))
+        res.notes.extend(getattr(client, "diagnostics", []))
         if reason:
             res.preflight_error = reason
             res.incomplete.append(f"not started: {reason}")

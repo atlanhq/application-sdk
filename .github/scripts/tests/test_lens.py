@@ -1650,6 +1650,26 @@ def test_preflight_catches_bad_alias_key_and_budget_with_zero_tokens(meta, expec
     assert sent.requests == []
 
 
+def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
+    def meta(path):
+        if path == "/v1/models":
+            return 403, "<html><title>Attention Required! | Cloudflare</title></html>"
+        return 403, '{"error": "route not allowed for key sk-abc123XYZ"}'
+
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=meta,
+    )
+    assert c.preflight(min_budget_usd=0.05) is None  # neither 403 is a reason to stop
+    models, key = c.diagnostics
+    assert "/v1/models: HTTP 403 from a Cloudflare page" in models
+    assert "/key/info: HTTP 403 from the gateway's JSON" in key
+    assert "sk-abc123XYZ" not in key and "sk-…" in key
+
+
 def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
     gh = FakeGitHub()
     cfg = cfg_for(repo)
