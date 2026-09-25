@@ -35,6 +35,16 @@ remediation dispatch table.
 **Detector correctness (`[RULE]`)**
 - False positives / false negatives in the AST match: does the pattern
   over- or under-match? Are sibling/legitimate forms excluded?
+- **Judge the detection approach first** (ORCHESTRATION §2e″). Detectors are
+  syntactic heuristics, not interpreters: is this match strategy and its
+  declared bias (docstring, rule doc, tier) the right one for the rule? If not,
+  that is the finding — one **Wrong approach** with the alternative. If it is,
+  a miss that follows from that bias ("biased toward matching", "literal
+  scan") is by design — record it in `by_design_check`. An FP/FN on forms real
+  connector code uses (cite the SDK or a canonical app) is a finding; one that
+  needs reassignment, shadowing, aliasing, or call-order tricks is `MEDIUM` at
+  most. Never recommend data-flow or name-binding resolution as the fix —
+  propose "pin it with a test and a docstring note" instead.
 - Severity tier is correct: WARN-tier (detect-only, non-blocking) vs
   blocking. A new rule defaulting to blocking can break the dogfooded gate.
 - The rule is **dogfooded** — the suite runs against the SDK itself at PR
