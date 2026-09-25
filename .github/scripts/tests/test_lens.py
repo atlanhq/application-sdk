@@ -1217,9 +1217,7 @@ def test_maintainer_comment_triggers_and_force_is_parsed():
         _comment("please /lens"),
         _comment("/lens", on_pr=False),
         _comment("/lensfoo"),
-        _comment(
-            "@lens"
-        ),  # an @-mention links/notifies a real GitHub user: never the trigger
+        _comment("@lens"),
     ],
 )
 def test_untrusted_or_unaddressed_comments_do_not_trigger(event):
