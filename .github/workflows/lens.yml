@@ -19,8 +19,9 @@ run-name: lens #${{ github.event.issue.number || inputs.pr }}
 #     The job's own GITHUB_TOKEN is contents:read and only checks out the base branch.
 #   * App-token comments DO trigger other workflows (GITHUB_TOKEN ones do not). lens's own
 #     comments never start with `@lens` and bots are refused in event.py, so it cannot loop.
-#   * The model key is a dedicated LiteLLM key; its gateway-side max_budget is the backstop
-#     to the $1/PR cap lens enforces in code.
+#   * The model key is the repo's existing LiteLLM key (secrets.LITELLM_API_KEY, shared with
+#     the sdk-loop lane). lens's own $1/PR cap is enforced in code whatever the key's budget;
+#     preflight refuses to start when the key has less than a few cents left.
 #
 # Nothing here conflicts with the existing sdk-review lanes: lens uses its own trigger
 # (`@lens`), its own sticky comment and its own state marker.
@@ -89,7 +90,7 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
           LENS_BOT_LOGIN: atlan-app-fleet[bot]
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
-          LENS_LITELLM_KEY: ${{ secrets.LENS_LITELLM_KEY }}
+          LENS_LITELLM_KEY: ${{ secrets.LITELLM_API_KEY }}
           REPO: ${{ github.repository }}
           ROOT: ${{ github.workspace }}
           EVENT_NAME: ${{ github.event_name }}
