@@ -94,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
             price=cfg.price,
             ledger=ledger,
             reasoning_effort=cfg.reasoning_effort,
+            api=cfg.api,
         )
 
     try:

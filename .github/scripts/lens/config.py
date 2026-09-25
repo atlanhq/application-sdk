@@ -21,6 +21,7 @@ from .llm import Price
 class Config:
     model: str = "gpt-6-luna"
     reasoning_effort: str | None = "medium"
+    api: str = "responses"
     price: Price = field(default_factory=lambda: Price(0.0, 0.0, 0.0))
     cap_usd_per_pr: float = 1.0
     first_round_share: float = 0.6
@@ -46,6 +47,7 @@ def load_config(config_dir: Path) -> Config:
     m = data.get("model", {})
     cfg.model = m.get("name", cfg.model)
     cfg.reasoning_effort = m.get("reasoning_effort", cfg.reasoning_effort) or None
+    cfg.api = m.get("api", cfg.api)
     p = m.get("price", {})
     cfg.price = Price(
         input_per_mtok=float(p.get("input_per_mtok", 0.0)),
@@ -53,6 +55,9 @@ def load_config(config_dir: Path) -> Config:
             p.get("cached_input_per_mtok", p.get("input_per_mtok", 0.0))
         ),
         output_per_mtok=float(p.get("output_per_mtok", 0.0)),
+        cache_write_per_mtok=(
+            float(p["cache_write_per_mtok"]) if "cache_write_per_mtok" in p else None
+        ),
     )
     b = data.get("budget", {})
     cfg.cap_usd_per_pr = float(b.get("cap_usd_per_pr", cfg.cap_usd_per_pr))

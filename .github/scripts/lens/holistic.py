@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .diff import FileDiff
-from .llm import BudgetExhausted, Client, LLMError, estimate_tokens
+from .llm import BudgetExhausted, Client, LLMError, assistant_turn, estimate_tokens
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 
 SYSTEM = """\
@@ -210,12 +210,8 @@ def check(
                 cache_key="lens-approach",
             )
             messages.append(
-                {
-                    "role": "assistant",
-                    "content": comp.content or None,
-                    "tool_calls": comp.tool_calls,
-                }
-            )
+                assistant_turn(comp)
+            )  # carries reasoning items across turns
             for tc in comp.tool_calls:
                 fn = tc.get("function") or {}
                 name = fn.get("name") or ""

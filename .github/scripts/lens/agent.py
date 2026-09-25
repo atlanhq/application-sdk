@@ -29,7 +29,15 @@ from . import prompts
 from .bundle import Bundle
 from .diff import FileDiff, anchor
 from .findings import Finding
-from .llm import BudgetExhausted, Client, FatalRequestError, LLMError, estimate_tokens
+from .llm import (
+    BudgetExhausted,
+    Client,
+    FatalRequestError,
+    LLMError,
+    assistant_turn,
+    estimate_tokens,
+    prompt_view,
+)
 from .rules import RuleSet
 from .tools import TOOL_SCHEMAS, Workspace, parse_args, run_tool
 
@@ -311,7 +319,9 @@ def _plan(
         tool_choice="none",
         cache_key="lens-review",
     )
-    messages.append({"role": "assistant", "content": comp.content or "(no plan)"})
+    plan_turn = assistant_turn(comp)
+    plan_turn["content"] = plan_turn["content"] or "(no plan)"
+    messages.append(plan_turn)
     messages.append({"role": "user", "content": prompts.EXECUTE_PLAN})
 
 
@@ -329,7 +339,10 @@ def _loop(
     turns = empty = 0
     final = False
     while True:
-        over = estimate_tokens(json.dumps(messages)) > limits.context_limit_tokens
+        over = (
+            estimate_tokens(json.dumps(prompt_view(messages)))
+            > limits.context_limit_tokens
+        )
         # This bundle's share of the budget: once spent, it must wrap up (a clean
         # final turn), not run until the shared cap refuses someone else's call.
         spent = sum(
@@ -358,17 +371,11 @@ def _loop(
             if final or empty >= limits.max_empty_turns:
                 res.stop = "empty_turns"
                 return
-            messages.append({"role": "assistant", "content": comp.content or ""})
+            messages.append(assistant_turn(comp) | {"content": comp.content or ""})
             messages.append({"role": "user", "content": prompts.NUDGE})
             continue
         empty = 0
-        messages.append(
-            {
-                "role": "assistant",
-                "content": comp.content or None,
-                "tool_calls": comp.tool_calls,
-            }
-        )
+        messages.append(assistant_turn(comp))  # carries reasoning items across turns
         done = False
         for tc in comp.tool_calls:
             fn = tc.get("function") or {}

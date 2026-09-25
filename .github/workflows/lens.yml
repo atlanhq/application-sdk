@@ -14,8 +14,11 @@ run-name: lens #${{ github.event.issue.number || inputs.pr }}
 #     API as data. Do not add a step that checks out the PR head.
 #   * Who may trigger is decided in lens/event.py (tested), not in shell here, per
 #     docs/standards/ci.md. Bots and non-collaborators cannot trigger it.
-#   * Permissions are the minimum to read the PR, post one summary + one review, and see
-#     whether another lens run for the same PR is still going (actions: read).
+#   * lens acts on GitHub as atlan-app-fleet[bot], with a token minted per run and scoped to
+#     contents:read, pull-requests/issues/statuses:write and actions:read. It cannot push.
+#     The job's own GITHUB_TOKEN is contents:read and only checks out the base branch.
+#   * App-token comments DO trigger other workflows (GITHUB_TOKEN ones do not). lens's own
+#     comments never start with `@lens` and bots are refused in event.py, so it cannot loop.
 #   * The model key is a dedicated LiteLLM key; its gateway-side max_budget is the backstop
 #     to the $1/PR cap lens enforces in code.
 #
@@ -35,12 +38,10 @@ on:
         type: boolean
         default: false
 
+# The job's own GITHUB_TOKEN only checks out the base branch. Everything lens does on GitHub
+# uses a fleet App token minted below and scoped to exactly what it needs.
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
-  actions: read # lens/lock.py: is an older review of this PR still running?
-  statuses: write # the `lens` commit status: green/red for the reviewed head
 
 # Deliberately no `concurrency:` block. GitHub can only queue a new run behind the running
 # one or cancel the running one; lens wants neither — the review in progress finishes, and a
@@ -65,10 +66,28 @@ jobs:
         with:
           python-version: "3.12"
 
+      # lens speaks to GitHub as atlan-app-fleet[bot]. Naming any permission-* scopes the
+      # minted token to those alone, so the review never holds the App's full grant — and
+      # nothing here can push: contents stays read.
+      - name: Mint fleet App token
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read # PR diff and head-side file text, as data
+          permission-pull-requests: write # inline review comments
+          permission-issues: write # the sticky summary and reactions (PR comments are Issues-scope)
+          permission-statuses: write # the `lens` commit status: green/red for the reviewed head
+          permission-actions: read # lens/lock.py: is an older review of this PR still running?
+
       - name: Review
         working-directory: .github/scripts
         env:
-          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_TOKEN: ${{ steps.app.outputs.token }}
+          LENS_BOT_LOGIN: atlan-app-fleet[bot]
           LITELLM_BASE_URL: ${{ secrets.LITELLM_BASE_URL }}
           LENS_LITELLM_KEY: ${{ secrets.LENS_LITELLM_KEY }}
           REPO: ${{ github.repository }}

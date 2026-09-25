@@ -32,7 +32,7 @@ from .bundle import Bundle, group
 from .config import Config
 from .diff import parse_unified_diff, snippet_in_text
 from .findings import BLOCKING, SEVERITIES, Finding, PRState, merge_new
-from .github import GitHub, GitHubError
+from .github import GitHub, GitHubError, bot_login
 from .index import build_index
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
@@ -58,6 +58,9 @@ class RunResult:
     ledger: Ledger | None = None
     triage: Triage = field(default_factory=Triage)
     retried: list[str] = field(default_factory=list)
+    notes: list[str] = field(
+        default_factory=list
+    )  # advisory run notes (e.g. an API fallback)
     preflight_error: str = ""
     incomplete: list[str] = field(
         default_factory=list
@@ -82,9 +85,8 @@ def _sev_at_least(sev: str, floor: str) -> bool:
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
-        if SUMMARY_MARKER in body and (c.get("user") or {}).get("login") in {
-            "github-actions[bot]"
-        }:
+        # Only the App's own comment is trusted: see github.bot_login().
+        if SUMMARY_MARKER in body and (c.get("user") or {}).get("login") == bot_login():
             return PRState.decode(body), body
     return None, ""
 
@@ -283,6 +285,8 @@ def run(
 
     with ThreadPoolExecutor(max_workers=max(1, cfg.concurrency)) as pool:
         res.bundles = list(pool.map(one, bundles))
+    if getattr(client, "fell_back", ""):
+        res.notes.append(client.fell_back)
 
     fresh: list[Finding] = []
     for br in res.bundles:
@@ -548,6 +552,8 @@ def render_summary(res: RunResult) -> str:
         else 0.0
     )
     failed = int(led.get("failed_requests", 0))
+    for n in res.notes:
+        lines.append(f"\n> ℹ️ {n}")
     lines.append(
         f"\n<sub>round {st.round} · ${led.get('spent_usd', 0):.3f} of ${led.get('cap_usd', 0):.2f} · "
         f"{led.get('calls', 0)} model calls · {failed} failed requests · "

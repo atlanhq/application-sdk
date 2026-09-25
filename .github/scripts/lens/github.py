@@ -15,7 +15,18 @@ import urllib.request
 from typing import Any
 
 API = "https://api.github.com"
-BOT_LOGINS = {"github-actions[bot]"}
+DEFAULT_BOT_LOGIN = "atlan-app-fleet[bot]"
+
+
+def bot_login() -> str:
+    """The one identity whose comments lens trusts as its own (state, summary).
+
+    lens posts with a fleet App token, so this is the App's bot. It is
+    deliberately NOT `github-actions[bot]`: any same-repo PR can add a
+    workflow that comments as github-actions[bot] and forge lens's state
+    (reset its spend ledger, close findings); only the App's key can post as
+    the App."""
+    return os.environ.get("LENS_BOT_LOGIN") or DEFAULT_BOT_LOGIN
 
 
 class GitHubError(RuntimeError):
@@ -156,7 +167,7 @@ class GitHub:
         for c in self.issue_comments(number):
             if (
                 marker in (c.get("body") or "")
-                and (c.get("user") or {}).get("login") in BOT_LOGINS
+                and (c.get("user") or {}).get("login") == bot_login()
             ):
                 out = self._call(
                     "PATCH",

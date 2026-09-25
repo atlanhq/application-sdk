@@ -37,6 +37,25 @@ class FatalRequestError(LLMError):
     request shape or size). The whole run stops; nothing is retried."""
 
 
+def prompt_view(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Messages as they count toward size estimates: without the raw Responses
+    output items (`_items`), whose encrypted reasoning is a large opaque blob
+    that would otherwise trip the context ceiling and inflate reservations.
+    The same turn's text and tool calls are still counted via content/tool_calls."""
+    return [{k: v for k, v in m.items() if k != "_items"} for m in messages]
+
+
+def assistant_turn(comp: "Completion") -> dict[str, Any]:
+    """The assistant message to append after a completion — carrying the raw
+    Responses items when there are any, so reasoning survives across turns."""
+    msg: dict[str, Any] = {"role": "assistant", "content": comp.content or None}
+    if comp.tool_calls:
+        msg["tool_calls"] = comp.tool_calls
+    if comp.message.get("_items"):
+        msg["_items"] = comp.message["_items"]
+    return msg
+
+
 def estimate_tokens(text: str) -> int:
     # ~3.5 chars/token for code-heavy English; deliberately pessimistic so the
     # pre-call estimate errs toward refusing, not overspending.
@@ -48,6 +67,14 @@ class Price:
     input_per_mtok: float
     cached_input_per_mtok: float
     output_per_mtok: float
+    cache_write_per_mtok: float | None = None  # default: 1.25x input (OpenAI, GPT-5.6+)
+
+    @property
+    def prompt_ceiling(self) -> float:
+        """The most a prompt token can cost: an uncached write, never less than input."""
+        return max(
+            self.input_per_mtok, self.cache_write_per_mtok or self.input_per_mtok * 1.25
+        )
 
 
 @dataclass
@@ -192,6 +219,7 @@ class Client:
         max_consecutive_failures: int = 3,
         max_retry_after_s: float = 30.0,
         reasoning_effort: str | None = None,
+        api: str = "chat",
         transport: Any = None,
         meta_transport: Any = None,
     ) -> None:
@@ -212,6 +240,11 @@ class Client:
         self.max_consecutive_failures = max_consecutive_failures
         self.max_retry_after_s = max_retry_after_s
         self.reasoning_effort = reasoning_effort
+        # "responses" is the only API on which reasoning models reason AND call tools
+        # (Chat Completions requires reasoning_effort "none" with tools). `fell_back`
+        # records a one-time switch to chat when the gateway has no /v1/responses.
+        self.api = api
+        self.fell_back = ""
         self._transport = transport or self._http
         self._meta = meta_transport or self._http_get
         self.unsupported: set[str] = set()
@@ -230,9 +263,11 @@ class Client:
         tools: list[dict[str, Any]] | None,
         max_tokens: int,
     ) -> float:
-        prompt = json.dumps(messages) + (json.dumps(tools) if tools else "")
+        prompt = json.dumps(prompt_view(messages)) + (
+            json.dumps(tools) if tools else ""
+        )
         return (
-            estimate_tokens(prompt) * self.price.input_per_mtok
+            estimate_tokens(prompt) * self.price.prompt_ceiling
             + max_tokens * self.price.output_per_mtok
         ) / 1e6
 
@@ -260,7 +295,8 @@ class Client:
 
     def _http(self, body: dict[str, Any]) -> tuple[int, dict[str, str], str]:
         req = urllib.request.Request(
-            self._root() + "/v1/chat/completions",
+            self._root()
+            + ("/v1/responses" if self.api == "responses" else "/v1/chat/completions"),
             data=json.dumps(body).encode(),
             headers={
                 "Content-Type": "application/json",
@@ -415,6 +451,19 @@ class Client:
     def _learn_rejection(self, body: dict[str, Any], text: str) -> bool:
         """A 400 naming a parameter we can live without: stop sending it. True if learnt."""
         low = text.lower()
+        if (
+            "reasoning" in body
+            and "reasoning" in low
+            and "reasoning_effort" not in body
+        ):
+            self.unsupported.update({"reasoning", "include"})
+            body.pop("reasoning")
+            body.pop("include", None)
+            return True
+        if "include" in body and "include" in low:
+            self.unsupported.add("include")
+            body.pop("include")
+            return True
         for p in self.DROPPABLE:
             if p in body and p in low:
                 self.unsupported.add(p)
@@ -435,6 +484,114 @@ class Client:
                     break
         return float(2 ** (attempt + 1))
 
+    # ---- Responses API ---------------------------------------------------
+    @staticmethod
+    def _to_input(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Chat-shaped messages as Responses `input` items. An assistant turn the
+        Responses API produced carries its raw output items (`_items`) — including
+        the encrypted reasoning — and those are replayed verbatim, so the model's
+        reasoning survives across tool turns instead of restarting each turn."""
+        out: list[dict[str, Any]] = []
+        for m in messages:
+            role = m.get("role")
+            if role == "tool":
+                out.append(
+                    {
+                        "type": "function_call_output",
+                        "call_id": m.get("tool_call_id") or "",
+                        "output": m.get("content") or "",
+                    }
+                )
+            elif role == "assistant" and m.get("_items"):
+                out.extend(m["_items"])
+            elif role == "assistant":
+                if m.get("content"):
+                    out.append({"role": "assistant", "content": m["content"]})
+                for tc in m.get("tool_calls") or []:
+                    fn = tc.get("function") or {}
+                    out.append(
+                        {
+                            "type": "function_call",
+                            "call_id": tc.get("id") or "",
+                            "name": fn.get("name") or "",
+                            "arguments": fn.get("arguments") or "{}",
+                        }
+                    )
+            else:
+                out.append({"role": role or "user", "content": m.get("content") or ""})
+        return out
+
+    def _responses_body(
+        self, messages, max_tokens, tools, temperature, tool_choice, cache_key
+    ) -> dict[str, Any]:  # noqa: ANN001
+        body: dict[str, Any] = {
+            "model": self.model,
+            "input": self._to_input(messages),
+            "max_output_tokens": max_tokens,
+            "store": False,  # stateless: nothing kept server-side; reasoning rides back encrypted
+        }
+        if tools:
+            body["tools"] = [{"type": "function", **t["function"]} for t in tools]
+            body["tool_choice"] = (
+                "auto"
+                if tool_choice == "required" and not self.required_tool_choice_ok
+                else tool_choice
+            )
+        if self.reasoning_effort and "reasoning" not in self.unsupported:
+            body["reasoning"] = {"effort": self.reasoning_effort}
+            if "include" not in self.unsupported:
+                body["include"] = ["reasoning.encrypted_content"]
+        if temperature is not None and "temperature" not in self.unsupported:
+            body["temperature"] = temperature
+        if cache_key and self.send_cache_key:
+            body["prompt_cache_key"] = cache_key
+        return body
+
+    @staticmethod
+    def _parse_responses(
+        data: dict[str, Any],
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any], dict[str, Any], str]:
+        items = data.get("output") or []
+        text_parts: list[str] = []
+        tool_calls: list[dict[str, Any]] = []
+        for it in items:
+            if it.get("type") == "message":
+                for c in it.get("content") or []:
+                    if c.get("type") in ("output_text", "text"):
+                        text_parts.append(c.get("text") or "")
+            elif it.get("type") == "function_call":
+                tool_calls.append(
+                    {
+                        "id": it.get("call_id") or it.get("id") or "",
+                        "type": "function",
+                        "function": {
+                            "name": it.get("name") or "",
+                            "arguments": it.get("arguments") or "{}",
+                        },
+                    }
+                )
+        u = data.get("usage") or {}
+        usage = {
+            "prompt_tokens": u.get("input_tokens", 0),
+            "completion_tokens": u.get("output_tokens", 0),
+            "prompt_tokens_details": {
+                "cached_tokens": (u.get("input_tokens_details") or {}).get(
+                    "cached_tokens", 0
+                )
+            },
+            "reasoning_tokens": (u.get("output_tokens_details") or {}).get(
+                "reasoning_tokens", 0
+            ),
+        }
+        content = "".join(text_parts)
+        message = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": tool_calls,
+            "_items": items,
+        }
+        return content, tool_calls, usage, message, str(data.get("status") or "")
+
     def _complete(
         self,
         stage,
@@ -446,15 +603,22 @@ class Client:
         tool_choice,
         cache_key,
     ) -> Completion:  # noqa: ANN001
-        body = self._body(
-            messages,
-            max_tokens,
-            tools,
-            response_format,
-            temperature,
-            tool_choice,
-            cache_key,
-        )
+        def build() -> dict[str, Any]:
+            if self.api == "responses":
+                return self._responses_body(
+                    messages, max_tokens, tools, temperature, tool_choice, cache_key
+                )
+            return self._body(
+                [{k: v for k, v in m.items() if k != "_items"} for m in messages],
+                max_tokens,
+                tools,
+                response_format,
+                temperature,
+                tool_choice,
+                cache_key,
+            )
+
+        body = build()
         last = ""
         attempt = 0
         learnt = 0
@@ -466,9 +630,13 @@ class Client:
             if status == 200:
                 self._record(True)
                 data = json.loads(text)
-                choice = (data.get("choices") or [{}])[0]
-                msg = choice.get("message") or {}
-                usage = data.get("usage") or {}
+                if self.api == "responses":
+                    _, _, usage, msg, finish = self._parse_responses(data)
+                    choice = {"message": msg, "finish_reason": finish}
+                else:
+                    choice = (data.get("choices") or [{}])[0]
+                    msg = choice.get("message") or {}
+                    usage = data.get("usage") or {}
                 reported = None
                 for k, v in headers.items():
                     if k.lower() == "x-litellm-response-cost":
@@ -488,6 +656,18 @@ class Client:
                 )
             self._record(False)
             last = f"HTTP {status}: {text[:300]}"
+            if self.api == "responses" and status in (404, 405, 501):
+                # The gateway has no /v1/responses: switch once, for the whole run, to chat —
+                # where luna can call tools only without reasoning — and say so.
+                self.api = "chat"
+                self.fell_back = f"/v1/responses unavailable (HTTP {status}); used chat completions with reasoning off"
+                self.reasoning_effort = "none"
+                with self._breaker_lock:
+                    self._fail_streak = max(
+                        self._fail_streak - 1, 0
+                    )  # a routing miss, not an outage
+                body = build()
+                continue
             if status in (400, 429) and _is_budget_error(text):
                 raise BudgetExhausted(f"{stage}: gateway budget exhausted ({last})")
             if (

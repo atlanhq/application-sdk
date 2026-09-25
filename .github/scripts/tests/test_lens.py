@@ -153,8 +153,10 @@ def response(
 
 
 def _is_approach(body) -> bool:
+    # Chat tools nest the name under "function"; Responses tools are flat.
     return any(
-        t["function"]["name"] == "approach_verdict" for t in body.get("tools") or []
+        (t.get("name") or (t.get("function") or {}).get("name")) == "approach_verdict"
+        for t in body.get("tools") or []
     )
 
 
@@ -243,7 +245,7 @@ class FakeGitHub:
             {
                 "id": len(self.comments) + 1,
                 "body": body,
-                "user": {"login": "github-actions[bot]"},
+                "user": {"login": "atlan-app-fleet[bot]"},
             }
         )
         return f"https://github.test/c/{len(self.comments)}"
@@ -766,7 +768,7 @@ def test_round_cap_and_spent_budget_stop_the_loop(repo: Path):
         {
             "id": 1,
             "body": SUMMARY_MARKER + st.encode(),
-            "user": {"login": "github-actions[bot]"},
+            "user": {"login": "atlan-app-fleet[bot]"},
         }
     )
     res = run(
@@ -1243,7 +1245,7 @@ def test_new_commits_are_reviewed_however_many_rounds_came_back_clean(repo: Path
         {
             "id": 1,
             "body": SUMMARY_MARKER + st.encode(),
-            "user": {"login": "github-actions[bot]"},
+            "user": {"login": "atlan-app-fleet[bot]"},
         }
     )
     gh.status = "diverged"  # h0 is not an ancestor: full review of b0..h1
@@ -1834,3 +1836,219 @@ def test_the_author_sees_eyes_then_the_outcome(
         assert _CliGitHub.comments == [
             "lens: nothing to review — head abc already reviewed."
         ]
+
+
+# ---- identity: the fleet App -------------------------------------------------------------------------------
+
+
+def test_state_posted_as_github_actions_bot_is_not_trusted(repo: Path):
+    """Any same-repo PR can add a workflow that comments as github-actions[bot].
+    A forged state there (a reset ledger, closed findings) must be ignored."""
+    gh = FakeGitHub()
+    forged = PRState(
+        reviewed_head="h1",
+        model="gpt-6-luna",
+        config_hash="test",
+        round=1,
+        ledger={"cap_usd": 1.0, "spent_usd": 0.0},
+    )
+    gh.comments.append(
+        {
+            "id": 9,
+            "body": SUMMARY_MARKER + forged.encode(),
+            "user": {"login": "github-actions[bot]"},
+        }
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=RuleSet([], {}),
+        client_factory=_factory(_review_script()),
+    )
+    assert res.action == "reviewed"  # the forged "already reviewed h1" was ignored
+
+
+def test_workflow_acts_as_the_fleet_app_with_a_scoped_token():
+    wf = (Path(__file__).resolve().parents[2] / "workflows" / "lens.yml").read_text()
+    job_perms = wf.split("\npermissions:", 1)[1].split("\n\n", 1)[0]
+    assert job_perms.strip() == "contents: read"  # the job token can only read
+    assert "actions/create-github-app-token@" in wf and "FLEET_APP_PRIVATE_KEY" in wf
+    for scope in (
+        "contents: read",
+        "pull-requests: write",
+        "issues: write",
+        "statuses: write",
+        "actions: read",
+    ):
+        assert f"permission-{scope}" in wf
+    assert "permission-contents: write" not in wf  # lens cannot push
+    assert "GITHUB_TOKEN: ${{ steps.app.outputs.token }}" in wf
+    assert "LENS_BOT_LOGIN: atlan-app-fleet[bot]" in wf
+
+
+# ---- the Responses API: reasoning AND tools --------------------------------------------------------------
+
+
+def _responses_reply(items, input_tokens=1000, cached=0, output=100, reasoning=40):
+    body = {
+        "status": "completed",
+        "output": items,
+        "usage": {
+            "input_tokens": input_tokens,
+            "input_tokens_details": {"cached_tokens": cached},
+            "output_tokens": output,
+            "output_tokens_details": {"reasoning_tokens": reasoning},
+        },
+    }
+    return 200, {"x-litellm-response-cost": "0.0001"}, json.dumps(body)
+
+
+REASONING = {
+    "type": "reasoning",
+    "id": "rs_1",
+    "encrypted_content": "gAAAA" + "x" * 4000,
+    "summary": [],
+}
+CALL = {
+    "type": "function_call",
+    "call_id": "call_1",
+    "name": "find_symbol",
+    "arguments": '{"name": "fetch"}',
+}
+
+
+def test_responses_request_carries_reasoning_and_flattened_tools():
+    sent = Script(_responses_reply([REASONING, CALL]))
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+        reasoning_effort="medium",
+    )
+    comp = c.complete(
+        "review:x",
+        [{"role": "system", "content": "s"}, {"role": "user", "content": "u"}],
+        max_tokens=500,
+        tools=agent_mod.TOOL_SCHEMAS,
+        tool_choice="auto",
+        cache_key="lens-review",
+    )
+    body = sent.requests[0]
+    assert body["reasoning"] == {"effort": "medium"} and body["include"] == [
+        "reasoning.encrypted_content"
+    ]
+    assert (
+        body["store"] is False
+        and body["max_output_tokens"] == 500
+        and "max_tokens" not in body
+    )
+    assert (
+        body["tools"][0]["type"] == "function"
+        and "name" in body["tools"][0]
+        and "function" not in body["tools"][0]
+    )
+    assert body["input"] == [
+        {"role": "system", "content": "s"},
+        {"role": "user", "content": "u"},
+    ]
+    # Parsed back into the shape the agent loop already speaks.
+    assert comp.tool_calls == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "find_symbol", "arguments": '{"name": "fetch"}'},
+        }
+    ]
+    assert comp.usage["prompt_tokens"] == 1000 and comp.usage["reasoning_tokens"] == 40
+    assert c.ledger.spent_usd == pytest.approx(0.0001)
+
+
+def test_reasoning_items_are_replayed_on_the_next_turn_and_not_counted_as_prompt_size(
+    repo: Path,
+):
+    ws, bundle = _ws(repo)
+    sent = Script(
+        _responses_reply([REASONING, CALL]),
+        _responses_reply(
+            [
+                {
+                    "type": "function_call",
+                    "call_id": "call_2",
+                    "name": "task_done",
+                    "arguments": '{"state": "DONE"}',
+                }
+            ]
+        ),
+    )
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+        reasoning_effort="medium",
+    )
+    agent_mod.review_bundle(
+        c,
+        ws,
+        bundle,
+        RuleSet([], {}),
+        {},
+        [],
+        agent_mod.AgentLimits(context_limit_tokens=4000),
+    )
+    second = sent.requests[1]["input"]
+    assert REASONING in second and CALL in second  # the model keeps its own reasoning
+    assert {"type": "function_call_output", "call_id": "call_1"}.items() <= next(
+        i for i in second if i.get("type") == "function_call_output"
+    ).items()
+    # The 4K-char encrypted blob did not trip the 4K-token context ceiling into a forced final turn.
+    assert sent.requests[1]["tool_choice"] == "auto"
+
+
+def test_a_gateway_without_responses_falls_back_to_chat_once_with_reasoning_off():
+    chat_ok = response([tool_call("task_done", {"state": "DONE"})])
+    sent = Script((404, {}, '{"error": "Not Found"}'), chat_ok, chat_ok)
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=sent,
+        api="responses",
+        reasoning_effort="medium",
+    )
+    c.complete(
+        "x",
+        [{"role": "user", "content": "hi"}],
+        max_tokens=5,
+        tools=agent_mod.TOOL_SCHEMAS,
+    )
+    c.complete(
+        "x",
+        [{"role": "user", "content": "hi"}],
+        max_tokens=5,
+        tools=agent_mod.TOOL_SCHEMAS,
+    )
+    assert "input" in sent.requests[0]
+    assert all(
+        "messages" in r and r.get("reasoning_effort") == "none"
+        for r in sent.requests[1:]
+    )
+    assert "responses unavailable" in c.fell_back and len(sent.requests) == 3
+
+
+def test_shipped_config_uses_luna_list_prices_on_the_responses_api():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    assert cfg.api == "responses" and cfg.model == "gpt-6-luna"
+    assert (
+        cfg.price.input_per_mtok,
+        cfg.price.cached_input_per_mtok,
+        cfg.price.output_per_mtok,
+    ) == (0.10, 0.01, 0.50)
+    assert cfg.price.prompt_ceiling == pytest.approx(
+        0.125
+    )  # cache writes bill at 1.25x input
