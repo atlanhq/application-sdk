@@ -2292,12 +2292,17 @@ local function renderJdbcUrlField(
     }
   }
   ["anyOf"] = new Listing {
-    for (authKey, _ in options) {
+    for (authKey, opt in options) {
       new Mapping {
         ["properties"] = new Mapping {
           ["auth-type"] = new Mapping { ["const"] = authKey }
         }
-        ["required"] = new Listing { authKey }
+        ["required"] = new Listing {
+          authKey
+          for (field in opt.anyOfRequiredFields) {
+            field
+          }
+        }
       }
     }
   }

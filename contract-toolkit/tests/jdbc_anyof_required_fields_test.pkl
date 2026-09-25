@@ -1,0 +1,91 @@
+/// Unit test: AdvancedJDBCUrlGroup honours `AuthOption.anyOfRequiredFields`.
+///
+/// The non-JDBC credential path appends each option's `anyOfRequiredFields`
+/// to its `anyOf[].required`. The `jdbcUrl` conditional must do the same, or
+/// the frontend treats host/port as implied for every auth type.
+amends "pkl:test"
+
+import "pkl:json"
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+local jdbcApp = (App) {
+  name = "jdbc-anyof-test"
+  displayName = "JDBC AnyOf Test"
+  connector = Connectors.TERADATA
+  icon = "https://example.com/icon.svg"
+
+  credentialUrlGroup = new App.AdvancedJDBCUrlGroup {
+    protocol = ""
+    urlAddonBefore = "driver://"
+    hostField = new App.FieldSpec {
+      name = "host"
+      displayName = "Host"
+      placeholder = "host.example.com"
+    }
+    portField = new App.FieldSpec {
+      name = "port"
+      fieldType = "number"
+      displayName = "Port"
+      defaultValue = "1025"
+      required = false
+    }
+  }
+
+  credentialAuthOptions {
+    ["basic"] = new App.JDBCUrlAuthOption {
+      label = "Basic"
+      nestedLabel = "Basic"
+      anyOfRequiredFields { "host"; "port" }
+      urlPartMapping = new App.UrlPartMapping {
+        hostname = "host"
+        searchParams {
+          ["PORT"] = new App.UrlRef { field = "port" }
+        }
+      }
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; sensitive = true; displayName = "Password" }
+      }
+    }
+    ["iam"] = new App.JDBCUrlAuthOption {
+      label = "IAM"
+      nestedLabel = "IAM"
+      urlPartMapping = new App.UrlPartMapping {
+        hostname = "host"
+      }
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Credential"] {
+        inputs {
+          ["credential-guid"] = new App.CredentialInput {
+            credType = "atlan-connectors-jdbc-anyof-test"
+          }
+        }
+      }
+    }
+  }
+}
+
+local credentialJson: String =
+  jdbcApp.output.files["app/generated/atlan-connectors-jdbc-anyof-test.json"].text
+local anyOf: List<Mapping> =
+  new json.Parser { useMapping = true }.parse(credentialJson)["config"]["properties"]["jdbcUrl"]["anyOf"].toList()
+
+local function requiredFor(authKey: String): List<String> =
+  anyOf.find((e) -> e["properties"]["auth-type"]["const"] == authKey)["required"].toList()
+
+facts {
+  ["jdbcUrl anyOf appends anyOfRequiredFields after the auth key"] {
+    requiredFor("basic") == List("basic", "host", "port")
+  }
+  ["jdbcUrl anyOf without anyOfRequiredFields requires only the auth key"] {
+    requiredFor("iam") == List("iam")
+  }
+}
