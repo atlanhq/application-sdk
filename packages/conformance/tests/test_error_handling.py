@@ -2126,6 +2126,26 @@ except ValueError as e:
 # ── E019 — ExceptionTextInContractField ──────────────────────────────────────
 
 
+def test_e019_prescribes_the_statically_typed_error_form() -> None:
+    from importlib.resources import files
+
+    from conformance.suite.rules import get_rule
+
+    rule = get_rule("E019")
+    prose = (
+        files("conformance")
+        .joinpath("programs/areas/error-handling.prose.md")
+        .read_text()
+    )
+    e019_prose = prose.split("**E019 ExceptionTextInContractField**", 1)[1].split(
+        "- **E020", 1
+    )[0]
+    for text in (rule.full_description, e019_prose):
+        assert "error=err.to_failure_details()" in " ".join(text.split())
+        assert "`error=err`" not in text
+        assert "message=err.message" not in text
+
+
 def test_e019_str_exc_in_returned_contract() -> None:
     # `return AuthOutput(message=str(e))` inside an except block leaks exc text.
     # E004 (broad except) co-fires — assert E019 membership, like the E015 tests.
