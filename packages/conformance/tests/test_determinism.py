@@ -508,6 +508,299 @@ def test_p023_silent_in_sync_def() -> None:
     assert _rule(body, "P023") == []
 
 
+def _p023_async_task(header: str, stmt: str) -> str:
+    return (
+        f"{header}\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        f"        {stmt}\n"
+    )
+
+
+def test_p023_silent_on_requests_and_urllib_constructors() -> None:
+    header = (
+        "import requests\nimport urllib.request\n"
+        "from requests.adapters import HTTPAdapter\n"
+        "from requests.auth import HTTPBasicAuth\n"
+    )
+    for stmt in (
+        "s = requests.Session()",
+        "a = requests.adapters.HTTPAdapter()",
+        "a = HTTPAdapter(max_retries=3)",
+        "r = requests.Request('GET', 'http://x').prepare()",
+        "p = requests.PreparedRequest()",
+        "auth = HTTPBasicAuth('u', 'p')",
+        "raise requests.exceptions.HTTPError('x')",
+        "req = urllib.request.Request('http://x')",
+        "o = urllib.request.build_opener()",
+    ):
+        assert _rule(_p023_async_task(header, stmt), "P023") == [], stmt
+
+
+def test_p023_flags_blocking_requests_and_urllib_calls() -> None:
+    header = "import requests\nimport urllib.request\nfrom requests import post\n"
+    for stmt in (
+        "requests.get('http://x')",
+        "requests.post('http://x', json={})",
+        "requests.put('http://x')",
+        "requests.patch('http://x')",
+        "requests.delete('http://x')",
+        "requests.head('http://x')",
+        "requests.options('http://x')",
+        "requests.request('GET', 'http://x')",
+        "post('http://x')",
+        "urllib.request.urlopen('http://x')",
+        "urllib.request.urlretrieve('http://x', 'f')",
+        "requests.Session().get('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmt), "P023")) == 1, stmt
+
+
+def test_p023_flags_sends_on_a_named_session() -> None:
+    header = "import requests\nfrom requests import Session\n"
+    for stmts in (
+        "s = requests.Session()\n        s.get('http://x')",
+        "s: requests.Session = requests.session()\n        s.send(req)",
+        "s = Session()\n        s.request('GET', 'http://x')",
+        "with requests.Session() as s:\n            s.post('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
+
+
+def test_p023_flags_a_send_whose_result_rebinds_the_session_name() -> None:
+    # The value runs before the target binds, so the send is on the session.
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "s = s.get('http://x')",
+        "s: object = s.get('http://x')",
+        "if (s := s.get('http://x')):\n            pass",
+    ):
+        src = _p023_async_task(header, session + stmts)
+        assert len(_rule(src, "P023")) == 1, stmts
+
+
+def test_p023_silent_on_a_named_session_never_sent() -> None:
+    header = "import requests\n"
+    for stmts in (
+        "s = requests.Session()\n        s.verify = False\n"
+        "        s.mount('https://', a)\n        return s",
+        "with requests.Session() as s:\n            s.headers.update({})",
+        "s = requests.Session()\n        s = other()\n        s.get('http://x')",
+    ):
+        assert _rule(_p023_async_task(header, stmts), "P023") == [], stmts
+
+
+def test_p023_session_names_do_not_leak_across_functions() -> None:
+    body = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        s = requests.Session()\n"
+        "        return s\n"
+        "    @task\n"
+        "    async def fetch(self, s):\n"
+        "        return s.get('http://x')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_sends_on_a_self_attribute_session() -> None:
+    header = "import requests\n"
+    for body in (
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "        return self.s.get('http://x')\n",
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.post('http://x')\n",
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.send(req)\n",
+    ):
+        assert len(_rule(header + body, "P023")) == 1, body
+
+
+def test_p023_silent_on_a_self_attribute_session_never_sent() -> None:
+    body = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "        self.s.verify = False\n"
+        "        self.s.mount('https://', a)\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_self_attribute_sessions_do_not_leak_across_classes() -> None:
+    body = (
+        "import requests\n"
+        "class Builder:\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "class MyApp(App):\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('http://x')\n"
+    )
+    assert _rule(body, "P023") == []
+
+
+def test_p023_flags_opens_on_a_urllib_opener() -> None:
+    header = "import urllib.request\n"
+    for stmts in (
+        "o = urllib.request.build_opener()\n        o.open('http://x')",
+        "o = urllib.request.OpenerDirector()\n        o.open('http://x')",
+        "urllib.request.build_opener().open('http://x')",
+    ):
+        assert len(_rule(_p023_async_task(header, stmts), "P023")) == 1, stmts
+
+
+def test_p023_silent_on_a_urllib_opener_never_opened() -> None:
+    stmts = "o = urllib.request.build_opener()\n        o.addheaders = []"
+    assert _rule(_p023_async_task("import urllib.request\n", stmts), "P023") == []
+
+
+def test_p023_flags_inline_session_send() -> None:
+    src = _p023_async_task("import requests\n", "requests.Session().send(prep)")
+    assert len(_rule(src, "P023")) == 1
+
+
+def test_p023_nested_async_def_sees_the_enclosing_session() -> None:
+    header = "import requests\n"
+    sent = (
+        "s = requests.Session()\n"
+        "        async def inner():\n"
+        "            s.get('http://x')"
+    )
+    shadowed = (
+        "s = requests.Session()\n"
+        "        async def inner():\n"
+        "            s = {}\n"
+        "            s.get('k')"
+    )
+    assert len(_rule(_p023_async_task(header, sent), "P023")) == 1
+    assert _rule(_p023_async_task(header, shadowed), "P023") == []
+
+
+def test_p023_self_attribute_session_ignores_nested_classes_and_rebinds() -> None:
+    nested_class = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def build(self):\n"
+        "        class Inner:\n"
+        "            def __init__(self):\n"
+        "                self.s = requests.Session()\n"
+        "        self.s = {}\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('k')\n"
+    )
+    local_rebind = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        self.s = {}\n"
+        "        return self.s.get('k')\n"
+    )
+    lazy_init = (
+        "import requests\n"
+        "class MyApp(App):\n"
+        "    def __init__(self):\n"
+        "        self.s = None\n"
+        "    @task\n"
+        "    async def build(self, input):\n"
+        "        self.s = requests.Session()\n"
+        "    @task\n"
+        "    async def fetch(self, input):\n"
+        "        return self.s.get('http://x')\n"
+    )
+    assert _rule(nested_class, "P023") == []
+    assert _rule(local_rebind, "P023") == []
+    assert len(_rule(lazy_init, "P023")) == 1
+
+
+def test_p023_local_bindings_shadow_an_enclosing_session() -> None:
+    header = "import requests\n"
+    session = "s = requests.Session()\n        "
+    for stmts in (
+        "async def inner(s):\n            s.get('x')",
+        "async def inner(*, s):\n            s.get('x')",
+        "for s in items:\n            s.get('x')",
+        "for k, s in items:\n            s.get('x')",
+        "r = [s.get('x') for s in items]",
+        "try:\n            pass\n        except E as s:\n            s.get('x')",
+        "with ctx() as (a, s):\n            s.get('x')",
+    ):
+        assert _rule(_p023_async_task(header, session + stmts), "P023") == [], stmts
+
+
+def test_p023_class_body_names_have_their_own_scope() -> None:
+    shadow_stays_in_class = (
+        "s = requests.Session()\n"
+        "        class C:\n"
+        "            s = 1\n"
+        "        s.get('x')"
+    )
+    method_cannot_see_class_body = (
+        "class C:\n"
+        "            s = requests.Session()\n"
+        "            async def g(self):\n"
+        "                s.get('x')"
+    )
+    header = "import requests\n"
+    assert len(_rule(_p023_async_task(header, shadow_stays_in_class), "P023")) == 1
+    assert _rule(_p023_async_task(header, method_cannot_see_class_body), "P023") == []
+
+
+def test_p023_comprehension_names_do_not_leak() -> None:
+    stmts = "s = requests.Session()\n        r = [s for s in items]\n        s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_flags_a_walrus_bound_session() -> None:
+    stmts = "if (s := requests.Session()):\n            s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_self_lookup_stops_at_a_nested_class() -> None:
+    def nested(receiver: str, bind: str) -> str:
+        return (
+            "import requests\n"
+            "class MyApp(App):\n"
+            "    @task\n"
+            "    async def fetch(self, input):\n"
+            f"        {bind} = requests.Session()\n"
+            "        class Inner:\n"
+            "            async def g(self):\n"
+            f"                {receiver}.get('k')\n"
+        )
+
+    assert _rule(nested("self.s", "self.s"), "P023") == []
+    assert len(_rule(nested("s", "s"), "P023")) == 1
+
+
+def test_p023_silent_on_requests_codes_lookup() -> None:
+    src = _p023_async_task("import requests\n", "requests.codes.get('ok')")
+    assert _rule(src, "P023") == []
+
+
 def test_p023_dedup_workflow_sleep_is_p020_not_p023() -> None:
     src = "import time\n" + _wrap_run("time.sleep(1)")
     assert len(_rule(src, "P020")) == 1
