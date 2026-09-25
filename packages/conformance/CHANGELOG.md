@@ -2,6 +2,16 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.39.1] - 2026-09-25
+
+### Bug fixes
+
+- D003 recognises SQLAlchemy entry-point dialects as used (#3967) ([0e488cc](https://github.com/atlanhq/application-sdk/commit/0e488cc))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.27.0 (#3991) ([1f9a363](https://github.com/atlanhq/application-sdk/commit/1f9a363))
+
 ## [0.39.0] - 2026-09-24
 
 ### Features
