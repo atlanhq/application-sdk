@@ -1,6 +1,6 @@
 # contract-toolkit: Pkl app-contract toolkit
 - `contract-toolkit/src/App.pkl` is canonical; `NativeApp.pkl`, `NativeAppBundle.pkl`, `AgentConfig.pkl`, `Config.pkl`, `Credential.pkl`, `Renderers.pkl` are legacy. Each release regenerates every app: the `contract-toolkit/examples/` diff is the fleet diff.
-- Flag: a feature in a legacy module; an output fix in `App.pkl` not mirrored in `NativeApp.pkl` when both render it.
+- Flag: a change to `NativeApp.pkl` (or another legacy module) with no equivalent in `App.pkl`; new features go in `App.pkl` only. Don't ask for `App.pkl` changes to be mirrored back.
 - Flag: default output changed for apps that don't opt in, unless the PR says what and why; a break with no `!` in the title.
 - Flag: an `inputs.args` key renamed/nested/flattened (dropped silently; K018 only warns); a `$.extract.outputs.<f>` the SDK Output lacks (K006); a `{{params.x}}` with no form field.
 - Flag: a generated `_input.py` field dropped/renamed/retyped (B005 on every app); `extraction_method`/`credential_guid`/`agent_json` moved off top level.
