@@ -256,6 +256,10 @@ _INTERNAL = "InternalError(message='x', suggested_action='y')"
         f"            False and {_AUTH}\n            raise {_INTERNAL}\n",
         f"            raise (isinstance(exc, PermissionError) and {_AUTH} or {_INTERNAL})\n",
         f"            for attempt in self.attempts:\n                raise {_AUTH}\n",
+        f"            return pick(exc.response.status_code, default=PreflightCheck(name='a', passed=False, error={_AUTH}))\n",
+        f"            return wrap(PreflightCheck(name='a', passed=False, error={_AUTH}), cause=exc)\n",
+        f"            PreflightCheck(name='a', passed=False, error={_AUTH})\n            raise {_INTERNAL}\n",
+        f"            try:\n                raise {_AUTH}\n            except Exception:\n                raise {_INTERNAL}\n",
     ],
     ids=[
         "unused-constructor",
@@ -264,6 +268,10 @@ _INTERNAL = "InternalError(message='x', suggested_action='y')"
         "never-evaluated-operand",
         "boolop-selection",
         "loop-body",
+        "row-as-wrapper-default",
+        "row-in-wrapper",
+        "unused-row",
+        "try-body-with-handler",
     ],
 )
 def test_unsupported_reporting_or_context_is_unknown(tmp_path: Path, row: str) -> None:
@@ -281,8 +289,20 @@ def test_unsupported_reporting_or_context_is_unknown(tmp_path: Path, row: str) -
         f"            return PreflightOutput(error={_AUTH}.to_failure_details())\n",
         f"            checks.append(PreflightCheck(name='a', passed=False, error={_AUTH}.to_failure_details()))\n",
         f"            with self.lock:\n                raise {_AUTH}\n",
+        f"            checks.extend([PreflightCheck(name='a', passed=False, error={_AUTH})])\n",
+        f"            return (PreflightCheck(name='a', passed=False, error={_AUTH}), None)\n",
+        f"            try:\n                raise {_AUTH}\n            finally:\n                self.close()\n",
     ],
-    ids=["raise-from", "row-error", "output-error", "appended-row", "with-body"],
+    ids=[
+        "raise-from",
+        "row-error",
+        "output-error",
+        "appended-row",
+        "with-body",
+        "extended-row",
+        "tuple-return",
+        "try-finally",
+    ],
 )
 def test_supported_reporting_shapes_fire(tmp_path: Path, row: str) -> None:
     src = _handler(_broad("except Exception as exc:", row))

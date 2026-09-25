@@ -13,16 +13,20 @@ Only a leaf F021 can see being reported is judged: ``raise Leaf(...)``, or the
 ``error=`` of a ``PreflightCheck`` / ``PreflightOutput`` (directly or through
 ``.to_failure_details()``). Its site must sit in contexts that always run or
 are gated by a modelled condition: statement blocks of the handler, ``if`` /
-``while`` / ``match`` / ``with`` / ``try``, and call arguments, lists, tuples,
-``await`` and ``return`` around a row. A leaf that is only constructed, stored
-in a name, passed to another function, or evaluated inside a boolean operand,
-a loop body or any other context is unknown. A helper only passed as a
-callback is not followed, since passing it does not prove it runs.
+``while`` / ``match`` / ``with`` / ``try ... finally`` bodies, and around a row
+only lists, tuples, sets, ``await``, ``return``, another row, or
+``.append`` / ``.extend`` / ``.insert`` on a collection. Unknown instead: a
+leaf or row that is only constructed (a bare expression statement), stored in
+a name, passed to any other function (a wrapper or a classifier default), or
+evaluated inside a boolean operand, a conditional expression around the leaf
+itself, a ``for`` body, or a ``try`` body whose own handlers could catch it. A
+helper only passed as a callback is not followed, since passing it does not
+prove it runs.
 
 Each reported leaf gets one of three outcomes from the conditions on its path
-(the enclosing ``if`` / ``while`` / conditional-expression arm or ``match``
-case, and every earlier early-exit guard such as ``if C: raise`` in the same
-block):
+(the enclosing ``if`` / ``while`` arm, a conditional-expression arm around a
+row, a ``match`` case, and every earlier early-exit guard such as
+``if C: raise`` in the same block):
 
 * **selected** — reaching it requires a discriminating exception predicate or
   its complement (``isinstance(exc, PermissionError)``, a comparison on
@@ -46,7 +50,9 @@ nested ``except``, a loop, or a walrus). An attribute store on an alias
 (``err.detail = ...``) does not rebind it. A nested ``except`` is judged on
 its own. Known limits: an early exit only counts as a flat ``if C: raise`` /
 ``return`` in the same block (not one nested in ``with`` or both arms of an
-inner ``if``, nor an ``assert``), and comprehension filters are ignored.
+inner ``if``, nor an ``assert``); code after an unconditional ``raise`` /
+``return`` and a leaf inside ``with contextlib.suppress(...)`` are still
+treated as reached; comprehension filters are ignored.
 """
 
 from __future__ import annotations
@@ -87,6 +93,7 @@ _EXITS = (ast.Raise, ast.Return, ast.Continue, ast.Break)
 _LOOPS = (ast.For, ast.AsyncFor, ast.While)
 _NEW_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
 _ROWS = ("PreflightCheck", "PreflightOutput")
+_COLLECTORS = frozenset({"append", "extend", "insert"})
 _CONTEXTS: dict[type[ast.AST], tuple[str, ...]] = {
     ast.ExceptHandler: ("body",),
     ast.If: ("body", "orelse"),
@@ -464,10 +471,11 @@ def _exits(body: list[ast.stmt]) -> bool:
     return bool(body) and isinstance(body[-1], _EXITS)
 
 
-def _receives(call: ast.Call, env: _Env) -> bool:
-    """Whether the caught exception itself is passed to ``call``."""
-    values = [*call.args, *(kw.value for kw in call.keywords if kw.arg != "cause")]
-    return any(_kind(value, env) is _Kind.EXCEPTION for value in values)
+def _collects(call: ast.Call, src: Source) -> bool:
+    """A call that keeps a row as-is: another row, or adding it to a collection."""
+    if any(_sdk(src, call.func, row) for row in _ROWS):
+        return True
+    return isinstance(call.func, ast.Attribute) and call.func.attr in _COLLECTORS
 
 
 def _case_reach(match: ast.Match, index: int, env: _Env) -> _Reach:
@@ -509,14 +517,16 @@ def _outcome(
     handler: ast.ExceptHandler,
 ) -> _Outcome:
     site = _report_site(leaf, src, parents)
-    if site is None:
+    if site is None or isinstance(parents[site][0], ast.Expr):
         return _Outcome.UNKNOWN
     conditions: list[_Reach] = []
     for parent, field, index in _ancestry(site, parents, handler):
         if field not in _CONTEXTS.get(type(parent), ()):
             return _Outcome.UNKNOWN
-        if isinstance(parent, ast.Call) and field in ("args", "keywords"):
-            if _receives(parent, _env_at(parent, caught, parents, handler)):
+        if isinstance(parent, ast.Call) and not _collects(parent, src):
+            return _Outcome.UNKNOWN
+        if isinstance(parent, (ast.Try, ast.TryStar)) and field == "body":
+            if parent.handlers:
                 return _Outcome.UNKNOWN
         if isinstance(parent, (ast.If, ast.While, ast.IfExp)) and field in (
             "body",
