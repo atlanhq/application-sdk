@@ -7,8 +7,7 @@ The round rules that make the loop converge are here, in code:
   stops and says so. New commits are always reviewed below that cap.
 - **Incremental.** Round N>1 reviews only `reviewed_head..head` when the new
   head strictly descends from the old one and neither model nor config
-  changed; anything else is a full review (open-code-review's fail-closed
-  checkpoint).
+  changed; anything else is a full review (a fail-closed checkpoint).
 - **Frozen findings.** Earlier findings are passed back as "do not repeat";
   a new finding in a later round must be at least `later_round_min_severity`.
   Fingerprint dedupe makes a restatement of an old finding a no-op.

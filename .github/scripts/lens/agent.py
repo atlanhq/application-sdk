@@ -1,7 +1,7 @@
 """Review one bundle: assemble context in code, run a bounded tool loop, place
 and fact-check the comments.
 
-Stages per bundle (open-code-review's shape, cache-friendly):
+Stages per bundle (cache-friendly):
 - **plan** (bundles over `plan_min_lines`): turn 0 of the SAME conversation,
   tools offered but not callable — the model writes the risks it will check.
   Same cached prefix, so it costs its output tokens and little else;

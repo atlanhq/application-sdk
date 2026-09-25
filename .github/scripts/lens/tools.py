@@ -1,8 +1,7 @@
 """The reviewer's toolset: few, capped, read-only, in-process.
 
-Modelled on open-code-review's distilled review toolset (search, read, find,
-read another file's diff, comment, done) with two changes that matter for
-cost:
+A small review toolset (search, read, find, read another file's diff,
+comment, done), with two properties that matter for cost:
 
 - `find_symbol` answers "where is X defined, who calls it, which tests cover
   it" from the prebuilt index in one call — the lookup a general agent makes
@@ -308,7 +307,7 @@ TOOL_SCHEMAS = [
 
 def parse_args(raw: str) -> dict[str, Any]:
     """Tool arguments as a dict. A malformed payload is salvaged by taking the
-    first balanced JSON object in it (open-code-review does the same);
+    first balanced JSON object in it;
     anything else is an empty dict and the tool reports the error."""
     try:
         v = json.loads(raw or "{}")

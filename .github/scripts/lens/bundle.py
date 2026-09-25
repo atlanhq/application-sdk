@@ -1,7 +1,7 @@
 """Group changed files into review units — deterministically.
 
-open-code-review asks a model to cluster files once a PR has 4+ of them; lens
-does it in code, which costs nothing and never varies between runs:
+Grouping is done in code rather than by a model call, so it costs nothing
+and never varies between runs:
 
 - A PR that fits one bundle's budget (`max_files`, `max_diff_tokens`) is one
   bundle: the whole change in one context, the cheapest possible review.

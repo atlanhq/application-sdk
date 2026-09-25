@@ -1,9 +1,8 @@
 """Rule cards, matched to files by glob — the model sees only what applies.
 
 `.github/lens/rules.toml` is an ordered list of `[[path]]` entries; the first
-whose glob matches a file decides that file's cards (open-code-review's
-first-match semantics: predictable, and a specific entry placed above a
-general one simply wins). A bundle's cards are the union over its files,
+whose glob matches a file decides that file's cards (first-match semantics:
+predictable, and a specific entry placed above a general one simply wins). A bundle's cards are the union over its files,
 each rendered once and tagged with the files it applies to.
 
 This replaces handing every reviewer ~111 KB of rulebooks regardless of

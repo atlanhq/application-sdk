@@ -103,8 +103,7 @@ class Ledger:
     def reserve(self, amount: float) -> bool:
         """Hold `amount` against the cap for an in-flight call. Concurrent
         bundles each reserve their worst case first, so together they can
-        never overshoot the cap (open-code-review allows an overrun of up to
-        its concurrency; lens does not)."""
+        never overshoot the cap, whatever the concurrency."""
         with self._lock:
             if amount > self.cap_usd - self.spent_usd - self.reserved_usd:
                 return False

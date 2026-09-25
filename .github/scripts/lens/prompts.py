@@ -2,9 +2,9 @@
 provider prompt-caching reuses across every bundle and PR, and everything the
 model needs about the change arrives pre-assembled in the user message.
 
-Adapted from open-code-review's main-task and review-filter prompts (their
-constraint sentences are the product of production tuning), then cut to
-what a single bounded pass needs.
+Each constraint sentence targets a known reviewer failure mode (scope creep,
+unevidenced findings, repeated comments), kept to what a single bounded pass
+needs.
 """
 
 REVIEW_SYSTEM = """\

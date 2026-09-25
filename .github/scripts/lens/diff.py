@@ -4,9 +4,8 @@ GitHub accepts an inline review comment only on a RIGHT-side line that is
 inside a hunk (added or context). A model's line number is a claim, not a
 fact, so every comment is re-anchored here before it is posted: to the line
 its evidence quote actually sits on, else to the nearest commentable line,
-else it is dropped. Position drift is one of the failure modes general agents
-show on review (open-code-review lists it first); it is fixed in code, not in
-the prompt.
+else it is dropped. Position drift is a common failure mode of agents on
+review; it is fixed in code, not in the prompt.
 """
 
 from __future__ import annotations
@@ -198,8 +197,8 @@ def anchor(fd: FileDiff, snippet: str) -> tuple[int, int] | None:
     """The RIGHT-side (start, end) the quoted code occupies inside the diff, or None.
 
     The model never supplies a line number — it quotes the code it means and
-    the position is computed here (open-code-review's design; drift is fixed
-    in code, not by asking harder). Matching is a consecutive, whitespace-
+    the position is computed here (drift is fixed in code, not by asking
+    harder). Matching is a consecutive, whitespace-
     normalised run over each hunk's RIGHT side (context + added lines). When
     the snippet appears more than once, the occurrence that touches an added
     line wins, then the first."""

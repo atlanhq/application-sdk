@@ -1,4 +1,4 @@
-# First matching [[path]] entry wins (open-code-review semantics); `cards` lists card ids.
+# First matching [[path]] entry wins; `cards` lists card ids.
 # Globs: `**` crosses directories, `*` does not, `**/` may match zero dirs. No {a,b} braces.
 # Keep specific entries above general ones and at most 4 cards per entry, most relevant first.
 
