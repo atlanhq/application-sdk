@@ -1482,7 +1482,15 @@ _SQLALCHEMY_DIALECT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\+([A-Za-z_][A-Za-z0
 
 
 def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
-    """Return DBAPI driver names referenced in SQLAlchemy dialect strings."""
+    """Return DBAPI driver names referenced in SQLAlchemy ``dialect+driver`` strings.
+
+    Scans string literals across *py_files* for the ``dialect+driver`` form and
+    keeps the ``driver`` component (``mysql+aiomysql`` -> ``aiomysql``). Used to
+    mark a dependency loaded dynamically by SQLAlchemy as used, so D003 does not
+    flag it as unimported. Deliberately biased toward matching (WARN-tier, zero
+    false positives): an over-captured token only ever suppresses a D003 finding
+    for a dependency literally named like that token.
+    """
     return _collect_source_usage(py_files)[1]
 
 
@@ -1495,19 +1503,83 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
 _SQLALCHEMY_URL_SCHEME_RE = re.compile(
     r"(?<![A-Za-z0-9_.+-])([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?://"
 )
+# A ``URL.create(drivername=…)`` value names the dialect with no ``://``.
 _SQLALCHEMY_DRIVERNAME_RE = re.compile(
     r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
 )
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
 
 
+def _dialect_entry_point_name(dialect: str, driver: str | None) -> str:
+    """Render a dialect the way SQLAlchemy looks it up (``foo+bar`` -> ``foo.bar``)."""
+    return f"{dialect}.{driver}" if driver else dialect
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    """Return ``id()`` of every module/class/function docstring constant."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            ids.add(id(body[0].value))
+    return ids
+
+
+def _url_create_drivername(call: ast.Call) -> str | None:
+    """Return the literal ``drivername`` of a ``URL.create(...)`` call, else None.
+
+    Only a direct string constant counts: a name, f-string or concatenation is
+    not resolved, so a partial value such as ``f"crate{suffix}"`` can never be
+    read as the complete dialect ``crate``.
+    """
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr == "create"):
+        return None
+    owner = func.value
+    owner_name = (
+        owner.id
+        if isinstance(owner, ast.Name)
+        else owner.attr
+        if isinstance(owner, ast.Attribute)
+        else None
+    )
+    if owner_name != "URL":
+        return None
+    value = call.args[0] if call.args else None
+    if value is None:
+        value = next((kw.value for kw in call.keywords if kw.arg == "drivername"), None)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    return None
+
+
 def _collect_source_usage(
     py_files: Iterable[Path],
 ) -> tuple[set[str], set[str], set[str]]:
-    """Collect imports and SQLAlchemy dialects used by URL constructors.
+    """Return ``(top-level imports, dialect drivers, dialect entry-point names)``.
 
-    Each source file is read and parsed once. URL evidence must flow into a
-    SQLAlchemy URL API, so docstrings and unrelated strings cannot suppress D003.
+    Each source file is read and parsed once.
+
+    Dialect entry-point names come from ``scheme://`` in any string literal
+    (f-string literal parts and config-mapping values included) and from a
+    literal ``URL.create(drivername=…)``. Like _collect_dialect_drivers this is
+    a literal scan, not data-flow analysis, and deliberately biased toward
+    matching (WARN-tier): a scheme only ever clears the finding for a
+    dependency that registers a ``sqlalchemy.dialects`` entry point under that
+    exact name. Two sound exclusions bound it: docstrings are not evidence, and
+    no name is credited unless the repo imports ``sqlalchemy`` somewhere —
+    without SQLAlchemy nothing loads a dialect entry point. The gate is
+    repo-wide because a URL constant often lives in a config module that never
+    imports SQLAlchemy itself.
     """
     modules: set[str] = set()
     drivers: set[str] = set()
@@ -1518,464 +1590,38 @@ def _collect_source_usage(
         except OSError:
             continue
         try:
-            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie.
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
+            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
+            # decoded correctly instead of crashing on a UTF-8 decode.
             tree = ast.parse(raw)
         except (SyntaxError, ValueError):
             continue
-
-        engine_factories: set[str] = set()
-        engine_from_config_factories: set[str] = set()
-        sqlalchemy_modules: set[str] = set()
-        url_classes: set[str] = set()
+        docstrings = _docstring_ids(tree)
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     modules.add(alias.name.split(".", 1)[0])
-                    if alias.name == "sqlalchemy":
-                        sqlalchemy_modules.add(alias.asname or alias.name)
-                    elif alias.name.startswith("sqlalchemy."):
-                        sqlalchemy_modules.add(
-                            alias.asname or alias.name.split(".", 1)[0]
-                        )
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module.split(".", 1)[0])
-                    if node.module.startswith("sqlalchemy"):
-                        for alias in node.names:
-                            if alias.name == "engine_from_config":
-                                engine_from_config_factories.add(
-                                    alias.asname or alias.name
-                                )
-                            elif alias.name in {
-                                "create_engine",
-                                "create_async_engine",
-                                "make_url",
-                            }:
-                                engine_factories.add(alias.asname or alias.name)
-                            elif alias.name == "URL":
-                                url_classes.add(alias.asname or alias.name)
-
-        class _SourceBindings(ast.NodeVisitor):
-            def __init__(self) -> None:
-                self.scope: tuple[str, ...] = ()
-                self.bindings: dict[
-                    tuple[str, ...], list[tuple[tuple[int, int], str, ast.expr]]
-                ] = {}
-                self.local_names: dict[tuple[str, ...], set[str]] = {}
-                self.parameters: dict[tuple[str, ...], set[str]] = {}
-                self.mutations: list[tuple[tuple[int, int], str, tuple[str, ...]]] = []
-                self.invocations: dict[str, list[tuple[int, int]]] = {}
-                self.function_definitions: dict[str, tuple[int, int]] = {}
-                self.dict_contexts: dict[
-                    int, tuple[tuple[str, ...], tuple[int, int]]
-                ] = {}
-                self.dict_bindings: dict[str, int] = {}
-                self.calls: list[tuple[ast.Call, tuple[str, ...]]] = []
-
-            def visit_Call(self, node: ast.Call) -> None:
-                self.calls.append((node, self.scope))
-                if not self.scope and isinstance(node.func, ast.Name):
-                    self.invocations.setdefault(node.func.id, []).append(
-                        (node.lineno, node.col_offset)
-                    )
-                self.generic_visit(node)
-
-            def _record_binding(
-                self, name: str, value: ast.expr, node: ast.AST
-            ) -> None:
-                position = (
-                    getattr(node, "end_lineno", None) or getattr(node, "lineno", 0),
-                    getattr(node, "end_col_offset", None) or 0,
+            elif isinstance(node, ast.Call):
+                drivername = _url_create_drivername(node)
+                match = (
+                    _SQLALCHEMY_DRIVERNAME_RE.fullmatch(drivername)
+                    if drivername is not None
+                    else None
                 )
-                self.bindings.setdefault(self.scope, []).append((position, name, value))
-                self.local_names.setdefault(self.scope, set()).add(name)
-
-            def _record_target_mutations(self, target: ast.AST) -> None:
-                if isinstance(target, ast.Name):
-                    self.local_names.setdefault(self.scope, set()).add(target.id)
-                elif isinstance(target, (ast.Subscript, ast.Attribute)):
-                    base = (
-                        target.value
-                        if isinstance(target, ast.Subscript)
-                        else target.value
-                    )
-                    if isinstance(base, ast.Name):
-                        position = (
-                            getattr(target, "lineno", 0),
-                            getattr(target, "col_offset", 0),
-                        )
-                        self.mutations.append((position, base.id, self.scope))
-
-            def visit_Assign(self, node: ast.Assign) -> None:
-                self.visit(node.value)
-                for target in node.targets:
-                    if isinstance(target, ast.Name):
-                        self._record_binding(target.id, node.value, node)
-                        if isinstance(node.value, ast.Dict):
-                            self.dict_contexts[id(node.value)] = (
-                                self.scope,
-                                (
-                                    node.end_lineno or node.lineno,
-                                    node.end_col_offset or 0,
-                                ),
-                            )
-                            self.dict_bindings[target.id] = id(node.value)
-                        elif (
-                            isinstance(node.value, ast.Name)
-                            and node.value.id in self.dict_bindings
-                        ):
-                            self.dict_bindings[target.id] = self.dict_bindings[
-                                node.value.id
-                            ]
-                        else:
-                            self.dict_bindings.pop(target.id, None)
-                    else:
-                        self._record_target_mutations(target)
-                for target in node.targets:
-                    self.visit(target)
-
-            def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
-                if node.value is not None:
-                    self.visit(node.value)
-                    if isinstance(node.target, ast.Name):
-                        self._record_binding(node.target.id, node.value, node)
-                    else:
-                        self._record_target_mutations(node.target)
-                self.visit(node.target)
-
-            def visit_For(self, node: ast.For) -> None:
-                self._record_target_mutations(node.target)
-                self.visit(node.iter)
-                for statement in node.body:
-                    self.visit(statement)
-                for statement in node.orelse:
-                    self.visit(statement)
-
-            def visit_AsyncFor(self, node: ast.AsyncFor) -> None:
-                self.visit_For(node)  # type: ignore[arg-type]
-
-            def visit_AugAssign(self, node: ast.AugAssign) -> None:
-                self._record_target_mutations(node.target)
-                self.generic_visit(node)
-
-            def visit_Delete(self, node: ast.Delete) -> None:
-                for target in node.targets:
-                    self._record_target_mutations(target)
-                self.generic_visit(node)
-
-            def _visit_scoped_body(
-                self,
-                node: ast.AST,
-                body: list[ast.stmt],
-                parameters: set[str] | None = None,
-            ) -> None:
-                if isinstance(
-                    node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
-                ):
-                    for decorator in node.decorator_list:
-                        self.visit(decorator)
-                    for base in getattr(node, "bases", []):
-                        self.visit(base)
-                    node_name = getattr(node, "name", "scope")
-                    node_line = getattr(node, "lineno", 0)
-                    self.scope += (f"{node_name}:{node_line}",)
-                    if parameters:
-                        self.parameters[self.scope] = set(parameters)
-                        self.local_names.setdefault(self.scope, set()).update(
-                            parameters
-                        )
-                    for statement in body:
-                        self.visit(statement)
-                    self.scope = self.scope[:-1]
-
-            def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
-                self.function_definitions[node.name] = (node.lineno, node.col_offset)
-                for default in (*node.args.defaults, *node.args.kw_defaults):
-                    if default is not None:
-                        self.visit(default)
-                parameters = {
-                    arg.arg
-                    for arg in (
-                        *node.args.posonlyargs,
-                        *node.args.args,
-                        *node.args.kwonlyargs,
-                    )
-                }
-                if node.args.vararg:
-                    parameters.add(node.args.vararg.arg)
-                if node.args.kwarg:
-                    parameters.add(node.args.kwarg.arg)
-                self._visit_scoped_body(node, node.body, parameters)
-
-            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
-                self.visit_FunctionDef(node)
-
-            def visit_ClassDef(self, node: ast.ClassDef) -> None:
-                self._visit_scoped_body(node, node.body)
-
-        source = _SourceBindings()
-        source.visit(tree)
-        for binding_list in source.bindings.values():
-            binding_list.sort(key=lambda item: item[0])
-
-        def value_at(
-            node: ast.AST,
-            scope: tuple[str, ...],
-            position: tuple[int, int],
-            seen: frozenset[str] = frozenset(),
-        ) -> ast.AST:
-            if not isinstance(node, ast.Name) or node.id in seen:
-                return node
-            for depth in range(len(scope), -1, -1):
-                binding_scope = scope[:depth]
-                if binding_scope and node.id in source.local_names.get(
-                    binding_scope, set()
-                ):
-                    choices = [
-                        item
-                        for item in source.bindings.get(binding_scope, [])
-                        if item[1] == node.id and item[0] < position
-                    ]
-                    if choices:
-                        return value_at(
-                            choices[-1][2],
-                            binding_scope,
-                            choices[-1][0],
-                            seen | {node.id},
-                        )
-                    return node
-                if depth == len(scope) and node.id in source.parameters.get(
-                    binding_scope, set()
-                ):
-                    return node
-                resolution_position = position
-                if depth == 0 and scope:
-                    function_name = scope[0].split(":", 1)[0]
-                    definition_position = source.function_definitions.get(function_name)
-                    invocation_positions = source.invocations.get(function_name, [])
-                    if definition_position is None:
-                        return node
-                    calls_after_definition = [
-                        call_position
-                        for call_position in invocation_positions
-                        if call_position > definition_position
-                    ]
-                    if not calls_after_definition:
-                        return node
-                    resolution_position = min(calls_after_definition)
-                choices = [
-                    item
-                    for item in source.bindings.get(binding_scope, [])
-                    if item[1] == node.id and item[0] < resolution_position
-                ]
-                if choices:
-                    resolution_position = choices[-1][0]
-                    return value_at(
-                        choices[-1][2],
-                        binding_scope,
-                        resolution_position,
-                        seen | {node.id},
-                    )
-            return node
-
-        def literal_values(
-            node: ast.AST,
-            scope: tuple[str, ...],
-            position: tuple[int, int],
-            *,
-            allow_formatted_prefix: bool = True,
-        ) -> list[str]:
-            node = value_at(node, scope, position)
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
-                return [node.value]
-            if isinstance(node, ast.JoinedStr):
-                if not allow_formatted_prefix:
-                    return []
-                prefix = ""
-                for value in node.values:
-                    if isinstance(value, ast.Constant) and isinstance(value.value, str):
-                        prefix += value.value
-                    else:
-                        break
-                return [prefix] if prefix else []
-            if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
-                left = literal_values(
-                    node.left,
-                    scope,
-                    position,
-                    allow_formatted_prefix=allow_formatted_prefix,
-                )
-                right = literal_values(
-                    node.right,
-                    scope,
-                    position,
-                    allow_formatted_prefix=allow_formatted_prefix,
-                )
-                return [a + b for a in left for b in right]
-            return []
-
-        def collect_url(value: str) -> None:
-            for match in _SQLALCHEMY_DIALECT_RE.finditer(value):
-                drivers.add(match.group(1))
-            for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(value):
-                dialect, driver = match.group(1), match.group(2)
-                dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
-
-        def is_engine_from_config(func: ast.AST) -> bool:
-            if isinstance(func, ast.Name):
-                return func.id in engine_from_config_factories
-            return (
-                isinstance(func, ast.Attribute)
-                and func.attr == "engine_from_config"
-                and isinstance(func.value, ast.Name)
-                and func.value.id in sqlalchemy_modules
-            )
-
-        def is_url_factory(func: ast.AST) -> bool:
-            if isinstance(func, ast.Name):
-                return func.id in engine_factories
-            if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
-                return (
-                    func.attr
-                    in {
-                        "create_engine",
-                        "create_async_engine",
-                        "engine_from_config",
-                        "make_url",
-                    }
-                    and func.value.id in engine_factories
-                ) or (
-                    func.attr in {"create_engine", "create_async_engine", "make_url"}
-                    and func.value.id in sqlalchemy_modules
-                )
-            return False
-
-        def argument_values(
-            node: ast.AST,
-            scope: tuple[str, ...],
-            position: tuple[int, int],
-        ) -> list[str]:
-            return literal_values(node, scope, position)
-
-        def engine_from_config_urls(
-            call: ast.Call,
-            scope: tuple[str, ...],
-            position: tuple[int, int],
-        ) -> list[str]:
-            configuration = call.args[0] if call.args else None
-            if configuration is None:
-                configuration = next(
-                    (
-                        keyword.value
-                        for keyword in call.keywords
-                        if keyword.arg == "configuration"
-                    ),
-                    None,
-                )
-            if configuration is None:
-                return []
-            prefix_node = call.args[1] if len(call.args) > 1 else None
-            if prefix_node is None:
-                prefix_node = next(
-                    (
-                        keyword.value
-                        for keyword in call.keywords
-                        if keyword.arg == "prefix"
-                    ),
-                    None,
-                )
-            config_node = value_at(configuration, scope, position)
-            construction = source.dict_contexts.get(id(config_node))
-            construction_scope, construction_position = (
-                construction if construction is not None else (scope, position)
-            )
-            config_binding = (
-                source.dict_bindings.get(configuration.id)
-                if isinstance(configuration, ast.Name)
-                else None
-            )
-            if config_binding is not None and any(
-                source.dict_bindings.get(mutation_name) == config_binding
-                and mutation_scope == scope[: len(mutation_scope)]
-                and mutation_position < position
-                for mutation_position, mutation_name, mutation_scope in source.mutations
-            ):
-                return []
-            prefixes = (
-                argument_values(prefix_node, scope, position)
-                if prefix_node
-                else ["sqlalchemy."]
-            )
-            mapping = value_at(configuration, scope, position)
-            if not isinstance(mapping, ast.Dict):
-                return []
-            matches: list[ast.expr] = []
-            for key, value in zip(mapping.keys, mapping.values):
-                if key is None:
-                    return []
-                for prefix in prefixes:
-                    if argument_values(
-                        key, construction_scope, construction_position
-                    ) == [f"{prefix}url"]:
-                        matches.append(value)
-            if len(matches) != 1:
-                return []
-            return argument_values(
-                matches[0], construction_scope, construction_position
-            )
-
-        for call, scope in source.calls:
-            func = call.func
-            position = (call.lineno, call.col_offset)
-            if is_engine_from_config(func):
-                for value in engine_from_config_urls(call, scope, position):
-                    collect_url(value)
-            elif is_url_factory(func):
-                url_arg = call.args[0] if call.args else None
-                if url_arg is None:
-                    url_arg = next(
-                        (
-                            keyword.value
-                            for keyword in call.keywords
-                            if keyword.arg in {"url", "name_or_url"}
-                        ),
-                        None,
-                    )
-                if url_arg is not None:
-                    for value in argument_values(url_arg, scope, position):
-                        collect_url(value)
-            elif (
-                isinstance(func, ast.Attribute)
-                and func.attr == "create"
-                and isinstance(func.value, ast.Name)
-                and func.value.id in url_classes
-            ):
-                drivername = (
-                    call.args[0]
-                    if call.args
-                    else next(
-                        (
-                            keyword.value
-                            for keyword in call.keywords
-                            if keyword.arg == "drivername"
-                        ),
-                        None,
-                    )
-                )
-                if drivername is not None:
-                    for value in literal_values(
-                        drivername,
-                        scope,
-                        position,
-                        allow_formatted_prefix=False,
-                    ):
-                        match = _SQLALCHEMY_DRIVERNAME_RE.fullmatch(value)
-                        if match is None:
-                            continue
-                        dialect, driver = match.groups()
-                        dialect_names.add(f"{dialect}.{driver}" if driver else dialect)
-                        if driver:
-                            drivers.add(driver)
+                if match is not None:
+                    dialect_names.add(_dialect_entry_point_name(*match.groups()))
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+                for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
+                    drivers.add(match.group(1))
+                if id(node) in docstrings:
+                    continue
+                for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
+                    dialect_names.add(_dialect_entry_point_name(*match.groups()))
+    if "sqlalchemy" not in modules:
+        dialect_names = set()
     return modules, drivers, dialect_names
 
 
