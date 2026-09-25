@@ -1670,6 +1670,57 @@ def test_preflight_says_what_answered_an_unexpected_status_and_redacts_keys():
     assert "sk-abc123XYZ" not in key and "sk-…" in key
 
 
+def test_every_gateway_request_carries_the_lens_user_agent(monkeypatch):
+    """Cloudflare bans Python's default urllib signature (error 1010): every
+    completion and metadata request must identify itself as lens."""
+    import urllib.request  # noqa: PLC0415 - patched below
+
+    seen: list[str] = []
+
+    class _Resp:
+        status = 200
+        headers: dict[str, str] = {}
+
+        def read(self):
+            return b'{"data": [], "output": [], "usage": {}}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def fake_urlopen(req, timeout=None):
+        seen.append(req.get_header("User-agent") or "")
+        return _Resp()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        base_url="https://gw.test",
+        api_key="k",
+        api="responses",
+    )
+    c.preflight(min_budget_usd=0.01)
+    c.complete("x", [{"role": "user", "content": "hi"}], max_tokens=5)
+    assert seen and all(ua.startswith("lens/") for ua in seen)
+    assert not any("Python-urllib" in ua for ua in seen)
+
+
+def test_preflight_names_cloudflare_error_1010():
+    c = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script(),
+        meta_transport=lambda path: (403, "error code: 1010"),
+    )
+    c.preflight(min_budget_usd=0.05)
+    assert "Cloudflare error 1010" in c.diagnostics[0]
+
+
 def test_a_failed_preflight_sends_no_request_and_turns_the_status_error(repo: Path):
     gh = FakeGitHub()
     cfg = cfg_for(repo)
