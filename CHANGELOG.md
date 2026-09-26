@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.39.1 (September 26, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.0...v3.39.1
+
+### Bug Fixes
+
+- honour exclude_table_regex from the connector form in SqlApp (FND-2733) (#3955) (by @vaibhavatlan in [c6d47bd](https://github.com/atlanhq/application-sdk/commit/c6d47bd))
+
+
 ## v3.39.0 (September 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0
