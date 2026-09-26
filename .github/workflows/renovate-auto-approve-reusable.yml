@@ -58,6 +58,16 @@
 #      failed post-upgrade task from auto-merging
 #   7. atlan-ci has not already posted an APPROVED review with this signature
 #
+# Conformance-resync PRs (FND-2848) — a separate, narrower path:
+#   A PR by connectivity-ai[bot] on bot/conformance-resync (connector-pulse's
+#   resync lane) skips conditions 1–7 and is judged by
+#   .github/scripts/resync_approval_conditions.py instead. Author and branch
+#   only route it there; the approval rests on re-rendering `bootstrap --resync`
+#   from the PR's parent at the conformance version its uv.lock pins and
+#   requiring the PR tree to be byte-identical, plus a single lane commit on
+#   main's history, no lost per-repo settings and green required checks. It is
+#   posted with its own signature ("**Conformance resync auto-approval:**").
+#
 # Where that logic lives:
 #   .github/scripts/renovate_approval_conditions.py, unit-tested by
 #   .github/scripts/tests/test_renovate_approval_conditions.py — per
@@ -135,7 +145,10 @@ permissions:
 jobs:
   renovate-auto-approve:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10, not 5: a conformance-resync PR is verified by re-rendering
+    # `bootstrap --resync` (uvx install + render), which the Renovate path
+    # never pays for. See .github/scripts/resync_approval_conditions.py.
+    timeout-minutes: 10
     # Serialize concurrent runs for the same SHA so the idempotency check
     # is reliable — two workflow completions for the same HEAD can't both
     # pass the "no approval yet" guard in parallel.
@@ -169,6 +182,14 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: .sdk-scripts
+
+      # uvx runs the independent `bootstrap --resync` render that proves a
+      # conformance-resync PR (resync_approval_conditions.py). Renovate PRs
+      # never invoke it.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.18"
 
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
