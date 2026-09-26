@@ -1,0 +1,66 @@
+{
+  "execution_mode": "automation-engine",
+  "dag": {
+    "extract": {
+      "activity_name": "execute_workflow",
+      "activity_display_name": "Extract Streaming Dispatch Example Metadata",
+      "app_name": "streaming",
+      "inputs": {
+        "workflow_type": "example-app:cdc-stream",
+        "app_name": "streaming",
+        "app_id": "",
+        "argo_workflow_slug": "",
+        "task_queue": "atlan-streaming-{deployment_name}",
+        "args": {
+          "batch": "$.event.batch",
+          "app_name": "streaming",
+          "credential": "{{credential}}",
+          "agent_json": "{{agent-json}}",
+          "extraction_method": "{{extraction-method}}",
+          "target": "{{target}}"
+        }
+      },
+      "error_handling": {
+        "start_to_close_timeout_seconds": 86400
+      }
+    }
+  },
+  "triggers": {
+    "events": [
+      {
+        "name": "cdc-user-streaming",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.user_realtime"
+        },
+        "trigger_config": {
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 1,
+          "streaming_batch_wait_seconds": 0,
+          "streaming_events_per_signal": 500
+        },
+        "status": "ACTIVE"
+      },
+      {
+        "name": "cdc-audit-streaming-batched",
+        "source": {
+          "name": "atlan-kafka",
+          "topic": "example.cdc.audit"
+        },
+        "trigger_config": {
+          "ack_paths": [
+            ""
+          ],
+          "streaming_enabled": true,
+          "streaming_batch_size": 200,
+          "streaming_batch_wait_seconds": 2,
+          "streaming_events_per_signal": 500
+        },
+        "status": "ACTIVE"
+      }
+    ]
+  }
+}
