@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -1208,6 +1209,46 @@ def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
         "NoSuchAlias",
         "dict[str, Any]",
     )
+    assert "B005" in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "FilterMap = str",
+        "FilterMap: type = str",
+        "def FilterMap() -> None: ...",
+        "class FilterMap: ...",
+        "from somepkg.types import FilterMap",
+        "if True:\n    FilterMap = str",
+    ],
+)
+def test_b005_rebound_sdk_alias_is_not_expanded(tmp_path: Path, rebinding: str) -> None:
+    """A later module-level binding shadows the import, so the SDK target is gone."""
+    findings = _scan_imported(
+        tmp_path,
+        f"from application_sdk.templates.contracts import FilterMap\n{rebinding}",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_unshadowed_sdk_alias_matching_the_ledger_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
+    alias = "Filter = dict[str, str]\nFilter = str"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, str]")
     assert "B005" in _ids(findings)
 
 

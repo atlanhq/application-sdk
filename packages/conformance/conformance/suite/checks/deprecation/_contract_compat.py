@@ -364,6 +364,49 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, TypeAliasDef]:
     return aliases
 
 
+def _binding_counts(tree: ast.AST) -> dict[str, int]:
+    """How many times each name is bound anywhere in *tree*.
+
+    Counts assignment targets, ``def``/``class`` names, imports, ``except …
+    as`` and ``match`` captures.  Function-local bindings are counted too, which
+    only ever makes an alias look shadowed — the safe direction.
+    """
+    counts: dict[str, int] = {}
+
+    def bump(name: str | None) -> None:
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bump(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bump(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bump(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ExceptHandler):
+            bump(node.name)
+        elif isinstance(node, (ast.MatchAs, ast.MatchStar)):
+            bump(node.name)
+    return counts
+
+
+def _unshadowed(
+    aliases: dict[str, TypeAliasDef], tree: ast.AST
+) -> dict[str, TypeAliasDef]:
+    """Drop every alias whose name is bound more than once in the module.
+
+    ``from application_sdk… import FilterMap`` followed by ``FilterMap = str``
+    (or a local alias later rebound to a non-alias) no longer means the alias
+    target.  Which binding is live at the annotation is not worth modelling:
+    dropping the alias leaves the field compared unexpanded, so B005 fires as
+    it would without alias support — never quieter.
+    """
+    counts = _binding_counts(tree)
+    return {name: a for name, a in aliases.items() if counts.get(name, 0) <= 1}
+
+
 _ALIAS_EXPANSION_BUDGET = 2_000
 
 
@@ -495,10 +538,10 @@ def scan_contract_compat(
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         file_aliases[path] = aliases
-        file_type_aliases[path] = {
-            **collect_sdk_imported_aliases(tree),
-            **collect_type_aliases(tree),
-        }
+        file_type_aliases[path] = _unshadowed(
+            {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
+            tree,
+        )
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
