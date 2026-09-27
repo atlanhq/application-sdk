@@ -1246,6 +1246,68 @@ def test_b005_unshadowed_sdk_alias_matching_the_ledger_is_not_a_break(
     assert "B005" not in _ids(findings)
 
 
+@pytest.mark.parametrize(
+    "unrelated",
+    [
+        "def helper():\n    FilterMap = str",
+        "async def helper():\n    FilterMap = str",
+        "helper = lambda FilterMap: FilterMap",
+        "names = [FilterMap for FilterMap in ()]",
+        "class Other:\n    def m(self):\n        FilterMap = str",
+        "from local_types import *",
+    ],
+)
+def test_b005_binding_that_cannot_shadow_the_annotation_keeps_the_sdk_alias(
+    tmp_path: Path, unrelated: str
+) -> None:
+    """A function-local binding, or a star import the explicit import overrides."""
+    findings = _scan_imported(
+        tmp_path,
+        f"{unrelated}\nfrom application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "from local_types import *",
+        "def helper():\n    global FilterMap\n    FilterMap = str",
+    ],
+)
+def test_b005_star_import_or_global_rebinding_shadows_the_sdk_alias(
+    tmp_path: Path, rebinding: str
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        f"from application_sdk.templates.contracts import FilterMap\n{rebinding}",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_class_body_rebinding_shadows_the_sdk_alias(tmp_path: Path) -> None:
+    ledger = _make_ledger(
+        ContractField("MyInput", "field", "dict[str, list[str]]", "active")
+    )
+    src = """\
+from application_sdk.app import App
+from application_sdk.templates.contracts import FilterMap
+
+class MyInput:
+    FilterMap = str
+    field: FilterMap
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+    assert "B005" in _ids(_scan(tmp_path, {"app.py": src}, ledger))
+
+
 def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
     alias = "Filter = dict[str, str]\nFilter = str"
     findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, str]")
