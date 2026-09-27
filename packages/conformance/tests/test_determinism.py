@@ -779,6 +779,29 @@ def test_p023_flags_a_walrus_bound_session() -> None:
     assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
 
 
+def test_p023_walrus_in_a_comprehension_binds_the_enclosing_function() -> None:
+    stmts = "[(s := requests.Session()) for _ in (0,)]\n        s.get('x')"
+    assert len(_rule(_p023_async_task("import requests\n", stmts), "P023")) == 1
+
+
+def test_p023_loop_iterable_resolves_before_the_target() -> None:
+    header = "import requests\n"
+    for_loop = "s = requests.Session()\n        for s in s.get('x'):\n            pass"
+    comprehension = "s = requests.Session()\n        r = [s for s in s.get('x')]"
+    nested_generator = (
+        "s = requests.Session()\n        r = [t for _ in (0,) for s in s.get('x')]"
+    )
+    assert len(_rule(_p023_async_task(header, for_loop), "P023")) == 1
+    assert len(_rule(_p023_async_task(header, comprehension), "P023")) == 1
+    assert len(_rule(_p023_async_task(header, nested_generator), "P023")) == 1
+
+
+def test_p023_flags_sends_through_a_dotted_submodule_import() -> None:
+    header = "import requests.api\n"
+    for call in ("requests.api.get('x')", "requests.get('x')"):
+        assert len(_rule(_p023_async_task(header, call), "P023")) == 1, call
+
+
 def test_p023_self_lookup_stops_at_a_nested_class() -> None:
     def nested(receiver: str, bind: str) -> str:
         return (

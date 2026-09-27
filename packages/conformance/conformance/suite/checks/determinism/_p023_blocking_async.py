@@ -92,9 +92,8 @@ _BRIDGE_ATTR = "run_until_complete"
 _BLOCKING_EXACT = frozenset({"time.sleep"})
 # Only the calls that send a request. Constructors (`requests.Session`,
 # `requests.adapters.HTTPAdapter`, `urllib.request.Request`, ...) do no I/O:
-# connections open lazily on the first send. Matched on the root plus the last
-# segment, because `import urllib.request` binds `urllib` to `urllib.request`
-# and the resolved target repeats the submodule.
+# connections open lazily on the first send. Targets resolve against
+# `_module_bindings`, so `import requests.api` does not repeat the submodule.
 _REQUESTS_VERBS = frozenset(
     {"get", "post", "put", "patch", "delete", "head", "options", "request"}
 )
@@ -122,6 +121,23 @@ def _is_blocking_network(target: str) -> bool:
         target.startswith("urllib.request.")
         and target.rsplit(".", 1)[-1] in _URLLIB_BLOCKING
     )
+
+
+def _module_bindings(tree: ast.AST) -> dict[str, str]:
+    """Import bindings with a plain ``import a.b`` bound the way Python binds it.
+
+    The shared ``collect_import_bindings`` maps ``a`` to ``a.b``, so the call
+    ``a.b.f()`` resolves to ``a.b.b.f`` and ``a.f()`` to ``a.b.f`` — neither is
+    the function called. ``import a.b`` binds ``a`` to the package ``a``.
+    """
+    bindings = collect_import_bindings(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname is None and "." in alias.name:
+                    root = alias.name.split(".")[0]
+                    bindings[root] = root
+    return bindings
 
 
 def _client_kind(target: str | None) -> str | None:
@@ -334,6 +350,7 @@ class _Visitor(ast.NodeVisitor):
         self._class_clients: list[dict[str, str]] = []
         self._class_floors: list[int] = []
         self._class_bodies: set[int] = set()
+        self._comprehensions: set[int] = set()
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -352,7 +369,25 @@ class _Visitor(ast.NodeVisitor):
         # is never an Await operand.
         if isinstance(node.iter, ast.Call):
             self._awaited.add(id(node.iter))
-        self.generic_visit(node)
+        self._visit_loop(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop(node)
+
+    # Loops and comprehension clauses visit the iterable before the target: it
+    # is evaluated first, so `for s in s.get(u)` resolves `s` against the
+    # session, not the loop variable. `generic_visit` would go target-first.
+    def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for stmt in [*node.body, *node.orelse]:
+            self.visit(stmt)
+
+    def visit_comprehension(self, node: ast.comprehension) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for condition in node.ifs:
+            self.visit(condition)
 
     # No `visit_AsyncWith`: nothing in the inventory is plausible as an async
     # context expression. The idiom that would need one is
@@ -405,7 +440,9 @@ class _Visitor(ast.NodeVisitor):
     def _visit_comprehension(
         self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
     ) -> None:
-        self._scopes.append({})
+        scope: dict[str, str | None] = {}
+        self._comprehensions.add(id(scope))
+        self._scopes.append(scope)
         for generator in node.generators:
             self.visit(generator)
         results = (
@@ -414,6 +451,7 @@ class _Visitor(ast.NodeVisitor):
         for result in results:
             self.visit(result)
         self._scopes.pop()
+        self._comprehensions.discard(id(scope))
 
     visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = (
         _visit_comprehension
@@ -425,10 +463,18 @@ class _Visitor(ast.NodeVisitor):
 
     # Assignments visit the value before the target: the RHS runs first, so
     # `s = s.get(u)` must resolve `s` against the session, not the new binding.
+    # A walrus target binds in the scope containing any comprehensions it sits
+    # in, not in the comprehension (PEP 572), so `s` from
+    # `[(s := requests.Session()) for _ in xs]` outlives the comprehension.
     def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
         self.visit(node.value)
-        self.visit(node.target)
-        self._bind(node.target, node.value)
+        scope = next(
+            (s for s in reversed(self._scopes) if id(s) not in self._comprehensions),
+            None,
+        )
+        key = self._binding_key(node.target)
+        if scope is not None and key is not None:
+            scope[key] = self._client_call(node.value)
 
     def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
         if node.name and self._scopes:
@@ -632,7 +678,7 @@ def check_p023(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
     """Emit P023 findings for event-loop bridges and blocking sync I/O in async defs."""
-    bindings = collect_import_bindings(tree)
+    bindings = _module_bindings(tree)
     workflow_ids = frozenset(id(n) for n in workflow_method_nodes(tree))
     visitor = _Visitor(filename, directives, bindings, workflow_ids)
     visitor.visit(tree)
