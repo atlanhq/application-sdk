@@ -56,7 +56,7 @@ class AuthOutput(BaseModel):
 
 Each `HandlerCredential` has a `key: str` and `value: str`.
 
-`AuthOutput.error` is additive (`None` by default). Success paths that omit it are unchanged. On a failed result, `error.message` overwrites `message`, so HTTP and SDR callers read the same text. Pass a `FailureDetails` (or a bare `AppError`, which is coerced). For a failed `test_auth`, return `error=err` and `message=err.message` rather than a fixed string.
+`AuthOutput.error` is additive (`None` by default). Success paths that omit it are unchanged. On a failed result, `error.message` overwrites `message`, so HTTP and SDR callers read the same text. For a failed `test_auth`, return `error=err.to_failure_details()`: the field is typed `FailureDetails | None`, and no separate `message=` is needed because `error.message` fills it. A bare `AppError` is also coerced at runtime, but type-checkers reject it. Avoid a fixed string, which throws away the reason.
 
 ### PreflightInput / PreflightOutput
 
@@ -274,7 +274,7 @@ class MySQLHandler(Handler):
         except Exception as exc:
             err = AuthError(message="Could not connect to the database.", cause=exc)
             return AuthOutput(
-                status=AuthStatus.FAILED, error=err, message=err.message
+                status=AuthStatus.FAILED, error=err.to_failure_details()
             )
 
     async def fetch_metadata(self, input: MetadataInput) -> SqlMetadataOutput:
