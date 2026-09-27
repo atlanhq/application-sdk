@@ -129,13 +129,15 @@ def _module_bindings(tree: ast.AST) -> dict[str, str]:
     The shared ``collect_import_bindings`` maps ``a`` to ``a.b``, so the call
     ``a.b.f()`` resolves to ``a.b.b.f`` and ``a.f()`` to ``a.b.f`` — neither is
     the function called. ``import a.b`` binds ``a`` to the package ``a``.
+    Only a name whose final binding is that dotted import is rewritten, so a
+    later ``from x import a`` keeps its own origin.
     """
     bindings = collect_import_bindings(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.asname is None and "." in alias.name:
-                    root = alias.name.split(".")[0]
+                root = alias.name.split(".")[0]
+                if alias.asname is None and bindings.get(root) == alias.name != root:
                     bindings[root] = root
     return bindings
 

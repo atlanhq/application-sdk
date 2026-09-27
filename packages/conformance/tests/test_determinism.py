@@ -802,6 +802,12 @@ def test_p023_flags_sends_through_a_dotted_submodule_import() -> None:
         assert len(_rule(_p023_async_task(header, call), "P023")) == 1, call
 
 
+def test_p023_dotted_import_does_not_erase_a_later_rebinding() -> None:
+    header = "import requests.api\nfrom mylib import requests\n"
+    src = _p023_async_task(header, "requests.get('x')")
+    assert _rule(src, "P023") == []
+
+
 def test_p023_self_lookup_stops_at_a_nested_class() -> None:
     def nested(receiver: str, bind: str) -> str:
         return (
