@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.39.1 (September 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.0...v3.39.1
+
+### Bug Fixes
+
+- honour exclude_table_regex from the connector form in SqlApp (FND-2733) (#3955) (by @vaibhavatlan in [c6d47bd](https://github.com/atlanhq/application-sdk/commit/c6d47bd))
+- FND-2570 bind activity log context instead of passing it to loguru format (#3987) (by @sachi-atlan in [b677246](https://github.com/atlanhq/application-sdk/commit/b677246))
+
+
 ## v3.39.0 (September 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0
