@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compute the ``app-runtime-base`` tag ladder for a Harbor/GHCR release.
+"""Compute the ``app-runtime-base`` tag ladder for a base-image release.
 
 Lifted verbatim out of the inline shell in
 ``.github/workflows/harbor-release.yaml``: the tag-prefix branch and the
@@ -19,8 +19,9 @@ Two decisions live here.
   operator's input would publish a tag they did not ask for.
 * otherwise -> the branch name, with every other character collapsed to ``-``.
 
-**The ladder** is published to both registries (identical manifest, see
-``docs/standards/build-security.md``):
+**The ladder** is published to GHCR, which is also what
+``registry.atlan.com/public/app-runtime-base`` serves through the registry
+gateway (see ``docs/standards/build-security.md``):
 
 * stable release -> ``:latest``, ``:X.Y.Z``, ``:X.Y``, ``:X``, ``:sha-<sha>``.
 * pre-release (any version containing ``-``, e.g. ``3.1.0-rc1``) -> ``:X.Y.Z``
@@ -41,11 +42,11 @@ import re
 import secrets
 import sys
 
-#: Registries that receive the identical manifest for every tag below.
-REPOS = (
-    "registry.atlan.com/public/app-runtime-base",
-    "ghcr.io/atlanhq/app-runtime-base",
-)
+#: Repositories that receive the manifest for every tag below. GHCR only:
+#: ``registry.atlan.com`` is now the registry gateway in front of GHCR, so the
+#: public ``registry.atlan.com/public/app-runtime-base`` reference resolves to
+#: this repository without a second push.
+REPOS = ("ghcr.io/atlanhq/app-runtime-base",)
 
 #: Characters legal in a tag prefix. Matches the grep in the shell this replaces.
 _PREFIX_RE = re.compile(r"^[A-Za-z0-9._-]+$")
