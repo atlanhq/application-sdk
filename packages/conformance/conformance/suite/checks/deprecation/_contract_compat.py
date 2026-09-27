@@ -39,6 +39,7 @@ from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
 from ._ledger_schema import ContractField, ContractLedger, regen_command
+from ._sdk_type_aliases import TypeAliasDef, collect_sdk_imported_aliases
 
 # ── Main scan function ────────────────────────────────────────────────────────
 
@@ -256,16 +257,63 @@ def _is_type_alias_call(node: ast.Call) -> bool:
     return name == "TypeAliasType"
 
 
-def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
+_TYPE_VAR_FACTORIES = frozenset({"TypeVar", "ParamSpec", "TypeVarTuple"})
+
+
+def _collect_type_vars(tree: ast.Module) -> frozenset[str]:
+    """Names bound at module level by ``X = TypeVar(...)`` and its siblings."""
+    names: set[str] = set()
+    for stmt in tree.body:
+        if (
+            isinstance(stmt, ast.Assign)
+            and len(stmt.targets) == 1
+            and isinstance(stmt.targets[0], ast.Name)
+            and isinstance(stmt.value, ast.Call)
+        ):
+            func = stmt.value.func
+            name = (
+                func.id if isinstance(func, ast.Name) else getattr(func, "attr", None)
+            )
+            if name in _TYPE_VAR_FACTORIES:
+                names.add(stmt.targets[0].id)
+    return frozenset(names)
+
+
+def _free_type_vars(value: ast.expr, type_vars: frozenset[str]) -> tuple[str, ...]:
+    """Type variables in *value*, in order of first appearance (typing's rule)."""
+    seen: list[str] = []
+    for node in ast.walk(value):
+        if isinstance(node, ast.Name) and node.id in type_vars and node.id not in seen:
+            seen.append(node.id)
+    return tuple(seen)
+
+
+def _explicit_params(nodes: list[ast.expr] | list[ast.AST]) -> tuple[str, ...]:
+    names: list[str] = []
+    for node in nodes:
+        name = getattr(node, "name", None) or getattr(node, "id", None)
+        if isinstance(name, str):
+            names.append(name)
+    return tuple(names)
+
+
+def collect_type_aliases(tree: ast.AST) -> dict[str, TypeAliasDef]:
     """Module-level type aliases, mapped to the expression they stand for.
 
     Recognizes ``X = TypeAliasType("X", <expr>)``, ``X: TypeAlias = <expr>``,
     ``type X = <expr>``, and a plain ``X = <expr>`` whose value is a subscript
     or ``|`` union (the only plain assignments that are unambiguously types).
+    Type parameters come from ``type X[K, V]`` / ``type_params=(K, V)`` when
+    declared, else from the module's ``TypeVar``s in order of first appearance.
     """
-    aliases: dict[str, ast.expr] = {}
+    aliases: dict[str, TypeAliasDef] = {}
     if not isinstance(tree, ast.Module):
         return aliases
+    type_vars = _collect_type_vars(tree)
+
+    def implicit(value: ast.expr) -> TypeAliasDef:
+        return TypeAliasDef(value, _free_type_vars(value, type_vars))
+
     for stmt in tree.body:
         if isinstance(stmt, ast.Assign):
             if len(stmt.targets) != 1 or not isinstance(stmt.targets[0], ast.Name):
@@ -273,15 +321,24 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
             name, value = stmt.targets[0].id, stmt.value
             if isinstance(value, ast.Call) and _is_type_alias_call(value):
                 target = value.args[1] if len(value.args) > 1 else None
+                declared: tuple[str, ...] | None = None
                 for kw in value.keywords:
                     if kw.arg == "value":
                         target = kw.value
+                    elif kw.arg == "type_params" and isinstance(
+                        kw.value, (ast.Tuple, ast.List)
+                    ):
+                        declared = _explicit_params(kw.value.elts)
                 if target is not None:
-                    aliases[name] = target
+                    aliases[name] = (
+                        TypeAliasDef(target, declared)
+                        if declared is not None
+                        else implicit(target)
+                    )
             elif isinstance(value, ast.Subscript) or (
                 isinstance(value, ast.BinOp) and isinstance(value.op, ast.BitOr)
             ):
-                aliases[name] = value
+                aliases[name] = implicit(value)
         elif isinstance(stmt, ast.AnnAssign):
             if (
                 isinstance(stmt.target, ast.Name)
@@ -297,12 +354,63 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, ast.expr]:
                     )
                 )
             ):
-                aliases[stmt.target.id] = stmt.value
+                aliases[stmt.target.id] = implicit(stmt.value)
         elif isinstance(stmt, getattr(ast, "TypeAlias", ())) and isinstance(
             stmt.name, ast.Name
         ):
-            aliases[stmt.name.id] = stmt.value
+            aliases[stmt.name.id] = TypeAliasDef(
+                stmt.value, _explicit_params(getattr(stmt, "type_params", []))
+            )
     return aliases
+
+
+def _binding_counts(tree: ast.AST) -> tuple[dict[str, int], bool]:
+    """How many times each name is bound anywhere in *tree*, and any star import.
+
+    Deliberately flat: every scope counts — a function local, a class
+    attribute, a walrus in a default — with no attempt to decide which binding
+    a given annotation resolves to.
+    """
+    counts: dict[str, int] = {}
+    star = False
+
+    def bump(name: str | None) -> None:
+        if name:
+            counts[name] = counts.get(name, 0) + 1
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bump(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bump(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    star = True
+                else:
+                    bump(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            bump(node.name)
+    return counts, star
+
+
+def _unshadowed(
+    aliases: dict[str, TypeAliasDef], tree: ast.AST
+) -> dict[str, TypeAliasDef]:
+    """Keep only aliases whose name is bound exactly once in the file.
+
+    Any other binding of the name anywhere in the file, or any
+    ``from x import *``, disables expansion.  Modelling which binding a given
+    annotation actually sees means re-implementing Python's name resolution,
+    and every approximation either hides a real break or blocks a valid fix.
+    This rule only errs toward the second, and there B005 behaves exactly as
+    it did before alias expansion existed.  Runtime writes such as
+    ``globals()["X"] = ...`` are not visible to any static rule.
+    """
+    counts, star = _binding_counts(tree)
+    if star:
+        return {}
+    return {name: a for name, a in aliases.items() if counts.get(name, 0) == 1}
 
 
 _ALIAS_EXPANSION_BUDGET = 2_000
@@ -312,10 +420,19 @@ class _AliasBudgetExceeded(Exception):
     pass
 
 
+class _Substitute(ast.NodeTransformer):
+    def __init__(self, bindings: dict[str, ast.expr]) -> None:
+        self._bindings = bindings
+
+    def visit_Name(self, node: ast.Name) -> ast.expr:
+        bound = self._bindings.get(node.id)
+        return copy.deepcopy(bound) if bound is not None else node
+
+
 class _AliasExpander(ast.NodeTransformer):
     def __init__(
         self,
-        aliases: dict[str, ast.expr],
+        aliases: dict[str, TypeAliasDef],
         expanding: frozenset[str] = frozenset(),
         spent: list[int] | None = None,
     ) -> None:
@@ -323,23 +440,49 @@ class _AliasExpander(ast.NodeTransformer):
         self._expanding = expanding
         self._spent = spent if spent is not None else [0]
 
-    def visit_Name(self, node: ast.Name) -> ast.expr:
-        target = self._aliases.get(node.id)
-        if target is None or node.id in self._expanding:
-            return node
-        self._spent[0] += sum(1 for _ in ast.walk(target))
+    def _expand(self, name: str, args: list[ast.expr]) -> ast.expr:
+        alias = self._aliases[name]
+        self._spent[0] += sum(1 for _ in ast.walk(alias.value))
         if self._spent[0] > _ALIAS_EXPANSION_BUDGET:
             raise _AliasBudgetExceeded
-        return _AliasExpander(
-            self._aliases, self._expanding | {node.id}, self._spent
-        ).visit(copy.deepcopy(target))
+        expanded = _AliasExpander(
+            self._aliases, self._expanding | {name}, self._spent
+        ).visit(copy.deepcopy(alias.value))
+        if not alias.params:
+            return expanded
+        fill = args or [ast.Name(id="Any", ctx=ast.Load()) for _ in alias.params]
+        return _Substitute(dict(zip(alias.params, fill, strict=True))).visit(expanded)
+
+    def _expandable(self, node: ast.expr) -> str | None:
+        if not isinstance(node, ast.Name) or node.id in self._expanding:
+            return None
+        return node.id if node.id in self._aliases else None
+
+    def visit_Subscript(self, node: ast.Subscript) -> ast.expr:
+        name = self._expandable(node.value)
+        if name is None or not self._aliases[name].params:
+            visited = self.generic_visit(node)
+            return visited if isinstance(visited, ast.expr) else node
+        raw = node.slice.elts if isinstance(node.slice, ast.Tuple) else [node.slice]
+        if len(raw) != len(self._aliases[name].params):
+            return node
+        return self._expand(name, [self.visit(arg) for arg in raw])
+
+    def visit_Name(self, node: ast.Name) -> ast.expr:
+        name = self._expandable(node)
+        return node if name is None else self._expand(name, [])
 
 
-def _expand_aliases(annotation: ast.expr, aliases: dict[str, ast.expr]) -> str | None:
+def _expand_aliases(
+    annotation: ast.expr, aliases: dict[str, TypeAliasDef]
+) -> str | None:
     """Canonical type of *annotation* with same-module aliases expanded.
 
     Alias chains are followed; an alias already being expanded is left as its
-    name, so self- and mutually-referential aliases terminate.  An expansion
+    name, so self- and mutually-referential aliases terminate.  A generic
+    alias takes its subscript's arguments (``BoundedDict[str, int]``), or
+    ``Any`` for each parameter when used bare; an argument count that does not
+    match its parameters leaves the subscript unexpanded.  An expansion
     that grows past ``_ALIAS_EXPANSION_BUDGET`` nodes is abandoned and the
     annotation is compared unexpanded, so a dense chain cannot blow up.
     """
@@ -371,7 +514,7 @@ def scan_contract_compat(
     file_trees: dict[Path, ast.AST] = {}
     file_directives: dict[Path, dict[int, _IgnoreDirective]] = {}
     file_aliases: dict[Path, dict[str, str]] = {}
-    file_type_aliases: dict[Path, dict[str, ast.expr]] = {}
+    file_type_aliases: dict[Path, dict[str, TypeAliasDef]] = {}
     by_name: dict[str, ClassRecord] = {}
     # Every declaration per class name, not just the first. The ledger keys
     # fields by BARE class name, so a name declared in two modules makes the
@@ -401,7 +544,10 @@ def scan_contract_compat(
             rel = str(path)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
         file_aliases[path] = aliases
-        file_type_aliases[path] = collect_type_aliases(tree)
+        file_type_aliases[path] = _unshadowed(
+            {**collect_sdk_imported_aliases(tree), **collect_type_aliases(tree)},
+            tree,
+        )
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)

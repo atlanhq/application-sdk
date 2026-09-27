@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -1121,6 +1122,240 @@ def test_b005_chained_type_alias_with_a_different_outer_shape_still_fires(
 def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
     alias = "A = list[B]\nB = list[A]"
     findings = _scan_aliased(tmp_path, alias, "A", "dict[str, Any]")
+    assert "B005" in _ids(findings)
+
+
+_EP_IMPORTED_ALIAS = """\
+from application_sdk.app import App
+{import_line}
+
+class MyInput:
+    field: {ann}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_imported(tmp_path: Path, import_line: str, ann: str, ledger_type: str):
+    ledger = _make_ledger(ContractField("MyInput", "field", ledger_type, "active"))
+    src = _EP_IMPORTED_ALIAS.format(import_line=import_line, ann=ann)
+    return _scan(tmp_path, {"app.py": src}, ledger)
+
+
+def test_b005_sdk_alias_imported_via_reexport_off_any_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_imported_from_defining_module_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts.sql_metadata import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_renamed_sdk_alias_import_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap as Tags",
+        "Tags",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "list[str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_alias_imported_from_outside_the_sdk_is_not_expanded(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from somepkg.types import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import NoSuchAlias",
+        "NoSuchAlias",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "FilterMap = str",
+        "FilterMap: type = str",
+        "def FilterMap() -> None: ...",
+        "class FilterMap: ...",
+        "from somepkg.types import FilterMap",
+        "if True:\n    FilterMap = str",
+        "def helper():\n    global FilterMap\n    FilterMap = str",
+        "def helper(v=(FilterMap := str)): ...",
+        "class Other:\n    FilterMap = str",
+        # Can't shadow the annotation, but still disables expansion: the rule is
+        # deliberately flat, and B005 then fires exactly as it did before.
+        "def helper():\n    FilterMap = str",
+        "names = [FilterMap for FilterMap in ()]",
+    ],
+)
+def test_b005_any_other_binding_of_the_name_disables_expansion(
+    tmp_path: Path, rebinding: str
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        f"from application_sdk.templates.contracts import FilterMap\n{rebinding}",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" in _ids(findings)
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_b005_any_star_import_disables_expansion(tmp_path: Path, position: str) -> None:
+    sdk = "from application_sdk.templates.contracts import FilterMap"
+    star = "from local_types import *"
+    lines = f"{star}\n{sdk}" if position == "before" else f"{sdk}\n{star}"
+    findings = _scan_imported(tmp_path, lines, "FilterMap", "dict[str, list[str]]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_class_body_rebinding_disables_expansion(tmp_path: Path) -> None:
+    ledger = _make_ledger(
+        ContractField("MyInput", "field", "dict[str, list[str]]", "active")
+    )
+    src = """\
+from application_sdk.app import App
+from application_sdk.templates.contracts import FilterMap
+
+class MyInput:
+    FilterMap = str
+    field: FilterMap
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+    assert "B005" in _ids(_scan(tmp_path, {"app.py": src}, ledger))
+
+
+def test_b005_sdk_alias_bound_once_matching_the_ledger_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap\n"
+        "helper = lambda value: value",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
+    alias = "Filter = dict[str, str]\nFilter = str"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, str]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, Any]",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts.types import BoundedList",
+        "BoundedList[str]",
+        "list[Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_bare_generic_sdk_alias_defaults_its_parameters_to_any(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict",
+        "dict[Any, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedList",
+        "BoundedList[str]",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, int]",
+        "dict[str, str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_local_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_local_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, str]")
     assert "B005" in _ids(findings)
 
 
