@@ -364,114 +364,53 @@ def collect_type_aliases(tree: ast.AST) -> dict[str, TypeAliasDef]:
     return aliases
 
 
-class _ModuleBindings(ast.NodeVisitor):
-    """Where each name is bound in the scopes a class-body annotation reads.
+def _binding_counts(tree: ast.AST) -> tuple[dict[str, int], bool]:
+    """How many times each name is bound anywhere in *tree*, and any star import.
 
-    A contract field's annotation resolves in its class body, then the module,
-    so only bindings there can shadow an alias: module-level statements (under
-    ``if``/``try``/``with`` too) and class bodies.  A function's locals and a
-    comprehension's variables live in their own scope and are skipped — except
-    names a function declares ``global``, and ``:=`` targets, which bind the
-    enclosing scope.  ``from x import *`` is recorded by line: it rebinds
-    whatever it exports, so it shadows every alias bound before it.
+    Deliberately flat: every scope counts — a function local, a class
+    attribute, a walrus in a default — with no attempt to decide which binding
+    a given annotation resolves to.
     """
+    counts: dict[str, int] = {}
+    star = False
 
-    def __init__(self) -> None:
-        self.lines: dict[str, list[int]] = {}
-        self.star_lines: list[int] = []
-
-    def _bind(self, name: str | None, node: ast.AST) -> None:
+    def bump(name: str | None) -> None:
         if name:
-            self.lines.setdefault(name, []).append(getattr(node, "lineno", 0))
+            counts[name] = counts.get(name, 0) + 1
 
-    def visit_Name(self, node: ast.Name) -> None:
-        if isinstance(node.ctx, ast.Store):
-            self._bind(node.id, node)
-
-    def _visit_function(self, node: ast.FunctionDef | ast.AsyncFunctionDef) -> None:
-        self._bind(node.name, node)
-        declared = {
-            name
-            for sub in ast.walk(node)
-            if isinstance(sub, ast.Global)
-            for name in sub.names
-        }
-        for sub in ast.walk(node):
-            if (
-                isinstance(sub, ast.Name)
-                and isinstance(sub.ctx, ast.Store)
-                and sub.id in declared
-            ):
-                self._bind(sub.id, sub)
-
-    visit_FunctionDef = _visit_function
-    visit_AsyncFunctionDef = _visit_function
-
-    def visit_Lambda(self, node: ast.Lambda) -> None:
-        return
-
-    def _visit_comprehension(self, node: ast.expr) -> None:
-        for sub in ast.walk(node):
-            if isinstance(sub, ast.NamedExpr) and isinstance(sub.target, ast.Name):
-                self._bind(sub.target.id, sub.target)
-
-    visit_ListComp = _visit_comprehension
-    visit_SetComp = _visit_comprehension
-    visit_DictComp = _visit_comprehension
-    visit_GeneratorExp = _visit_comprehension
-
-    def visit_ClassDef(self, node: ast.ClassDef) -> None:
-        self._bind(node.name, node)
-        for stmt in node.body:
-            self.visit(stmt)
-
-    def _visit_import(self, node: ast.Import | ast.ImportFrom) -> None:
-        for alias in node.names:
-            if alias.name == "*":
-                self.star_lines.append(node.lineno)
-            else:
-                self._bind(alias.asname or alias.name.split(".", 1)[0], node)
-
-    visit_Import = _visit_import
-    visit_ImportFrom = _visit_import
-
-    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
-        self._bind(node.name, node)
-        self.generic_visit(node)
-
-    def visit_MatchAs(self, node: ast.MatchAs) -> None:
-        self._bind(node.name, node)
-        self.generic_visit(node)
-
-    def visit_MatchStar(self, node: ast.MatchStar) -> None:
-        self._bind(node.name, node)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            bump(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bump(node.name)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    star = True
+                else:
+                    bump(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)):
+            bump(node.name)
+    return counts, star
 
 
 def _unshadowed(
     aliases: dict[str, TypeAliasDef], tree: ast.AST
 ) -> dict[str, TypeAliasDef]:
-    """Drop every alias a contract annotation might not actually see.
+    """Keep only aliases whose name is bound exactly once in the file.
 
-    ``from application_sdk… import FilterMap`` followed by ``FilterMap = str``
-    (or a local alias later rebound to a non-alias, or a later
-    ``from x import *``) no longer means the alias target.  Which binding is
-    live at the annotation is not worth modelling: a name bound more than once
-    in the scopes the annotation reads is dropped, which leaves the field
-    compared unexpanded, so B005 fires as it would without alias support —
-    never quieter.
+    Any other binding of the name anywhere in the file, or any
+    ``from x import *``, disables expansion.  Modelling which binding a given
+    annotation actually sees means re-implementing Python's name resolution,
+    and every approximation either hides a real break or blocks a valid fix.
+    This rule only errs toward the second, and there B005 behaves exactly as
+    it did before alias expansion existed.  Runtime writes such as
+    ``globals()["X"] = ...`` are not visible to any static rule.
     """
-    scan = _ModuleBindings()
-    scan.visit(tree)
-    kept: dict[str, TypeAliasDef] = {}
-    for name, alias in aliases.items():
-        lines = scan.lines.get(name, [])
-        if len(lines) > 1:
-            continue
-        bound_at = lines[0] if lines else 0
-        if any(star > bound_at for star in scan.star_lines):
-            continue
-        kept[name] = alias
-    return kept
+    counts, star = _binding_counts(tree)
+    if star:
+        return {}
+    return {name: a for name, a in aliases.items() if counts.get(name, 0) == 1}
 
 
 _ALIAS_EXPANSION_BUDGET = 2_000

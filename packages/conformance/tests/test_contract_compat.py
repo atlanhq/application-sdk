@@ -1221,63 +1221,16 @@ def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
         "class FilterMap: ...",
         "from somepkg.types import FilterMap",
         "if True:\n    FilterMap = str",
-    ],
-)
-def test_b005_rebound_sdk_alias_is_not_expanded(tmp_path: Path, rebinding: str) -> None:
-    """A later module-level binding shadows the import, so the SDK target is gone."""
-    findings = _scan_imported(
-        tmp_path,
-        f"from application_sdk.templates.contracts import FilterMap\n{rebinding}",
-        "FilterMap",
-        "dict[str, list[str]]",
-    )
-    assert "B005" in _ids(findings)
-
-
-def test_b005_unshadowed_sdk_alias_matching_the_ledger_is_not_a_break(
-    tmp_path: Path,
-) -> None:
-    findings = _scan_imported(
-        tmp_path,
-        "from application_sdk.templates.contracts import FilterMap",
-        "FilterMap",
-        "dict[str, list[str]]",
-    )
-    assert "B005" not in _ids(findings)
-
-
-@pytest.mark.parametrize(
-    "unrelated",
-    [
-        "def helper():\n    FilterMap = str",
-        "async def helper():\n    FilterMap = str",
-        "helper = lambda FilterMap: FilterMap",
-        "names = [FilterMap for FilterMap in ()]",
-        "class Other:\n    def m(self):\n        FilterMap = str",
-        "from local_types import *",
-    ],
-)
-def test_b005_binding_that_cannot_shadow_the_annotation_keeps_the_sdk_alias(
-    tmp_path: Path, unrelated: str
-) -> None:
-    """A function-local binding, or a star import the explicit import overrides."""
-    findings = _scan_imported(
-        tmp_path,
-        f"{unrelated}\nfrom application_sdk.templates.contracts import FilterMap",
-        "FilterMap",
-        "dict[str, Any]",
-    )
-    assert "B005" not in _ids(findings)
-
-
-@pytest.mark.parametrize(
-    "rebinding",
-    [
-        "from local_types import *",
         "def helper():\n    global FilterMap\n    FilterMap = str",
+        "def helper(v=(FilterMap := str)): ...",
+        "class Other:\n    FilterMap = str",
+        # Can't shadow the annotation, but still disables expansion: the rule is
+        # deliberately flat, and B005 then fires exactly as it did before.
+        "def helper():\n    FilterMap = str",
+        "names = [FilterMap for FilterMap in ()]",
     ],
 )
-def test_b005_star_import_or_global_rebinding_shadows_the_sdk_alias(
+def test_b005_any_other_binding_of_the_name_disables_expansion(
     tmp_path: Path, rebinding: str
 ) -> None:
     findings = _scan_imported(
@@ -1289,7 +1242,16 @@ def test_b005_star_import_or_global_rebinding_shadows_the_sdk_alias(
     assert "B005" in _ids(findings)
 
 
-def test_b005_class_body_rebinding_shadows_the_sdk_alias(tmp_path: Path) -> None:
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_b005_any_star_import_disables_expansion(tmp_path: Path, position: str) -> None:
+    sdk = "from application_sdk.templates.contracts import FilterMap"
+    star = "from local_types import *"
+    lines = f"{star}\n{sdk}" if position == "before" else f"{sdk}\n{star}"
+    findings = _scan_imported(tmp_path, lines, "FilterMap", "dict[str, list[str]]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_class_body_rebinding_disables_expansion(tmp_path: Path) -> None:
     ledger = _make_ledger(
         ContractField("MyInput", "field", "dict[str, list[str]]", "active")
     )
@@ -1306,6 +1268,19 @@ class MyApp(App):
         pass
 """
     assert "B005" in _ids(_scan(tmp_path, {"app.py": src}, ledger))
+
+
+def test_b005_sdk_alias_bound_once_matching_the_ledger_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap\n"
+        "helper = lambda value: value",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" not in _ids(findings)
 
 
 def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
