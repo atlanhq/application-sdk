@@ -1211,6 +1211,76 @@ def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+def test_b005_generic_sdk_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, Any]",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts.types import BoundedList",
+        "BoundedList[str]",
+        "list[Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_bare_generic_sdk_alias_defaults_its_parameters_to_any(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict",
+        "dict[Any, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedList",
+        "BoundedList[str]",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, int]",
+        "dict[str, str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_local_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_local_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, str]")
+    assert "B005" in _ids(findings)
+
+
 def test_split_union_does_not_tear_nested_brackets() -> None:
     """A naive split on '|' would break dict[str, int | None] apart."""
     from conformance.suite.checks.deprecation._contract_compat import _split_union

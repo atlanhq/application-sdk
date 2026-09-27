@@ -29,6 +29,7 @@ import ast
 import copy
 import importlib.resources as _ir
 import json
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
@@ -37,6 +38,19 @@ SDK_PACKAGE = "application_sdk"
 _DATA_RELPATH: tuple[str, ...] = ("data", "sdk_type_aliases.json")
 
 _REEXPORT_PASSES = 8
+
+
+@dataclass(frozen=True)
+class TypeAliasDef:
+    """A type alias's target and its type parameters, in subscript order.
+
+    ``params`` is empty for a non-generic alias.  A generic alias used with a
+    subscript (``BoundedDict[str, int]``) has each parameter replaced by the
+    matching argument; used bare, each parameter becomes ``Any``.
+    """
+
+    value: ast.expr
+    params: tuple[str, ...] = ()
 
 
 def _data_path() -> Path:
@@ -64,13 +78,15 @@ def _absolute_source(module: str, is_package: bool, stmt: ast.ImportFrom) -> str
     return f"{package}.{stmt.module}" if stmt.module else package
 
 
-def build_sdk_type_aliases(sdk_root: Path) -> dict[str, str]:
+def build_sdk_type_aliases(sdk_root: Path) -> dict[str, TypeAliasDef]:
     """Map ``module.Name`` to the source of every public SDK type alias.
 
     Each alias is expanded through its own module's aliases first, so the stored
     expression never names another SDK alias.  Public re-exports
     (``from .sql_metadata import FilterMap`` in a package ``__init__``) are added
     under the re-exporting module's path too, since that is the path apps import.
+    A generic alias keeps its type parameters so a subscripted use
+    (``BoundedDict[str, int]``) can substitute its arguments.
     """
     from conformance.suite.checks.deprecation._contract_compat import (
         _AliasBudgetExceeded,
@@ -90,19 +106,19 @@ def build_sdk_type_aliases(sdk_root: Path) -> dict[str, str]:
             continue
         modules[module] = (tree, py.name == "__init__.py")
 
-    table: dict[str, str] = {}
+    table: dict[str, TypeAliasDef] = {}
     for module, (tree, _) in modules.items():
         local = collect_type_aliases(tree)
-        for name, expr in local.items():
+        for name, alias in local.items():
             if name.startswith("_"):
                 continue
             try:
                 expanded = _AliasExpander(local, frozenset({name})).visit(
-                    copy.deepcopy(expr)
+                    copy.deepcopy(alias.value)
                 )
             except _AliasBudgetExceeded:
-                expanded = expr
-            table[f"{module}.{name}"] = ast.unparse(expanded)
+                expanded = alias.value
+            table[f"{module}.{name}"] = TypeAliasDef(expanded, alias.params)
 
     for _ in range(_REEXPORT_PASSES):
         added = False
@@ -127,13 +143,17 @@ def build_sdk_type_aliases(sdk_root: Path) -> dict[str, str]:
     return dict(sorted(table.items()))
 
 
-def serialize(table: dict[str, str]) -> str:
+def serialize(table: dict[str, TypeAliasDef]) -> str:
     """Deterministic JSON so ``--check`` is a stable staleness gate."""
-    return json.dumps({"type_aliases": table}, indent=2, sort_keys=True) + "\n"
+    data = {
+        "type_aliases": {q: ast.unparse(a.value) for q, a in table.items()},
+        "type_params": {q: list(a.params) for q, a in table.items() if a.params},
+    }
+    return json.dumps(data, indent=2, sort_keys=True) + "\n"
 
 
 @lru_cache(maxsize=1)
-def load_sdk_type_aliases() -> dict[str, ast.expr]:
+def load_sdk_type_aliases() -> dict[str, TypeAliasDef]:
     """The committed table, parsed; empty when absent or unparseable."""
     try:
         data = json.loads(DATA_PATH.read_text(encoding="utf-8"))
@@ -142,32 +162,39 @@ def load_sdk_type_aliases() -> dict[str, ast.expr]:
     raw = data.get("type_aliases") if isinstance(data, dict) else None
     if not isinstance(raw, dict):
         return {}
-    parsed: dict[str, ast.expr] = {}
+    raw_params = data.get("type_params")
+    params_by_name = raw_params if isinstance(raw_params, dict) else {}
+    parsed: dict[str, TypeAliasDef] = {}
     for qualname, source in raw.items():
         if not isinstance(qualname, str) or not isinstance(source, str):
             continue
+        params = params_by_name.get(qualname, [])
+        if not isinstance(params, list) or not all(isinstance(p, str) for p in params):
+            continue
         try:
-            parsed[qualname] = ast.parse(source, mode="eval").body
+            parsed[qualname] = TypeAliasDef(
+                ast.parse(source, mode="eval").body, tuple(params)
+            )
         except SyntaxError:
             continue
     return parsed
 
 
-def collect_sdk_imported_aliases(tree: ast.AST) -> dict[str, ast.expr]:
+def collect_sdk_imported_aliases(tree: ast.AST) -> dict[str, TypeAliasDef]:
     """SDK type aliases this module binds by ``from application_sdk… import``."""
     if not isinstance(tree, ast.Module):
         return {}
     table = load_sdk_type_aliases()
     if not table:
         return {}
-    bound: dict[str, ast.expr] = {}
+    bound: dict[str, TypeAliasDef] = {}
     for stmt in tree.body:
         if not isinstance(stmt, ast.ImportFrom) or stmt.level != 0 or not stmt.module:
             continue
         if stmt.module != SDK_PACKAGE and not stmt.module.startswith(f"{SDK_PACKAGE}."):
             continue
         for alias in stmt.names:
-            expr = table.get(f"{stmt.module}.{alias.name}")
-            if expr is not None:
-                bound[alias.asname or alias.name] = expr
+            sdk_alias = table.get(f"{stmt.module}.{alias.name}")
+            if sdk_alias is not None:
+                bound[alias.asname or alias.name] = sdk_alias
     return bound

@@ -77,5 +77,57 @@
     "application_sdk.validation.parquet.ArtifactDeclaration": "Union[FieldMapDeclaration, ModelDeclaration]",
     "application_sdk.validation.protocols.ArtifactDeclaration": "Union[FieldMapDeclaration, ModelDeclaration]",
     "application_sdk.validation.wrapper.ArtifactDeclaration": "Union[FieldMapDeclaration, ModelDeclaration]"
+  },
+  "type_params": {
+    "application_sdk.contracts.BoundedDict": [
+      "K",
+      "V"
+    ],
+    "application_sdk.contracts.BoundedList": [
+      "T"
+    ],
+    "application_sdk.contracts.types.BoundedDict": [
+      "K",
+      "V"
+    ],
+    "application_sdk.contracts.types.BoundedList": [
+      "T"
+    ],
+    "application_sdk.storage.rolling.FlushFn": [
+      "T"
+    ],
+    "application_sdk.testing.e2e.base.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.e2e.client.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.Probe": [
+      "T"
+    ],
+    "application_sdk.testing.harness.atlas.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.atlas.Reading": [
+      "T"
+    ],
+    "application_sdk.testing.harness.automation_engine.client.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.outcome.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.preconditions.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.waiting.Outcome": [
+      "T"
+    ],
+    "application_sdk.testing.harness.waiting.Probe": [
+      "T"
+    ]
   }
 }

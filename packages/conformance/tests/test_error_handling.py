@@ -2146,6 +2146,25 @@ def test_e019_prescribes_the_statically_typed_error_form() -> None:
         assert "message=err.message" not in text
 
 
+def test_e019_finding_prescribes_the_statically_typed_error_form() -> None:
+    (finding,) = [
+        f
+        for f in scan_text(
+            """\
+try:
+    authenticate()
+except ValueError as e:
+    return AuthOutput(status="FAILED", message=str(e))
+""",
+            "fake.py",
+        )
+        if f.rule_id == "E019"
+    ]
+    assert "error=err.to_failure_details()" in finding.message
+    assert "error=err;" not in finding.message
+    assert "message=err.message" not in finding.message
+
+
 def test_e019_str_exc_in_returned_contract() -> None:
     # `return AuthOutput(message=str(e))` inside an except block leaks exc text.
     # E004 (broad except) co-fires — assert E019 membership, like the E015 tests.

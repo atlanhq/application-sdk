@@ -55,7 +55,7 @@ def test_table_holds_filter_map_under_both_import_paths() -> None:
         "application_sdk.templates.contracts.sql_metadata.FilterMap",
     ):
         assert path in table, path
-        assert ast.unparse(table[path]).startswith("Annotated[dict[str,")
+        assert ast.unparse(table[path].value).startswith("Annotated[dict[str,")
 
 
 def test_only_sdk_imports_are_bound() -> None:
