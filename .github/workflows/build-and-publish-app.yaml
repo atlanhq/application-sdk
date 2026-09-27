@@ -88,7 +88,7 @@ on:
         type: boolean
         default: false
       use_ghcr_base:
-        description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to always pull through the gateway. See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
+        description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to skip the preflight and build from the Dockerfile's reference as written (a `FROM ghcr.io/atlanhq/app-runtime-base` still pulls from GHCR). See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
         required: false
         type: boolean
         default: true

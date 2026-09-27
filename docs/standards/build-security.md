@@ -64,7 +64,7 @@ GHCR directly is not reverted; the redirect then has nothing to do and says so.)
 `build-and-publish-app.yaml`'s `use_ghcr_base` input, **default `true`**, drives a
 BuildKit named context that fetches the layers from GHCR directly instead of through the
 gateway, without changing what is built. An app can opt out by passing
-`use_ghcr_base: false`; its builds then pull through the gateway.
+`use_ghcr_base: false`; builds then use the Dockerfile's reference as written.
 
 The preflight (`resolve_base_redirect.py`) resolves only GHCR. It never fails a build
 over the base: anything it cannot handle leaves the Dockerfile's reference in charge.
