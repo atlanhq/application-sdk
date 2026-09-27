@@ -88,7 +88,7 @@ on:
         type: boolean
         default: false
       use_ghcr_base:
-        description: "Resolve the SDK base image from GHCR instead of Harbor during the image build. Default TRUE — the soak is over and the fleet now pulls the base from GHCR, which is free from GitHub-hosted runners where Harbor's S3-backed blobs are not. The base itself is unchanged: harbor-release.yaml publishes both registries at one digest and the preflight verifies that parity per build, failing closed on skew. A Dockerfile the redirect cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from Harbor as before, so turning this on fleet-wide cannot fail a build merely because the base is spelled differently. Pass false to pin an app to Harbor. See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the two-registry layout."
+        description: "Resolve the SDK base image from GHCR directly during the image build, instead of through the registry gateway at registry.atlan.com that serves the same GHCR package. Default TRUE. The preflight pins the GHCR digest for `FROM registry.atlan.com/public/app-runtime-base:3`; a Dockerfile it cannot rewrite (a pinned patch tag, a digest-pinned base) is not an error — it warns and builds from the Dockerfile's reference as written. Pass false to always pull through the gateway. See the 'Resolve GHCR base redirect' step for the mechanics and docs/standards/build-security.md for the registry layout."
         required: false
         type: boolean
         default: true
@@ -972,8 +972,8 @@ jobs:
       release_tags:     ${{ steps.tags.outputs.release_tags }}
       gm_version:       ${{ steps.tags.outputs.gm_version }}
       commit_sha:       ${{ steps.tags.outputs.commit_sha }}
-      # Empty unless use_ghcr_base is set AND the preflight below proved the
-      # redirect both fires and resolves the same digest Harbor serves.
+      # Empty unless use_ghcr_base is set AND the preflight below matched the
+      # Dockerfile's base and resolved its GHCR digest.
       base_build_contexts: ${{ steps.base_redirect.outputs.build_contexts }}
 
     steps:
@@ -1016,39 +1016,31 @@ jobs:
         run: python3 .sdk-entrypoint/.github/scripts/validate_atlan_yaml.py
 
       - name: Resolve GHCR base redirect
-        # Preflight for the use_ghcr_base opt-in. Produces the build-contexts
-        # mapping consumed by the build job, and refuses to hand back a mapping
-        # that would be a no-op or would resolve a base other than Harbor's.
+        # Preflight for use_ghcr_base. Produces the build-contexts mapping
+        # consumed by the build job: `registry.atlan.com/public/app-runtime-base:3`
+        # pinned to the GHCR digest it resolves to.
         #
         # It runs HERE rather than in the build job on purpose: the build job
         # sends `context: .` to BuildKit, so checking the SDK scripts out there
-        # would add files to every opted-in app's build context and bust the
-        # layer cache this change exists to protect. prepare already has both
-        # the caller checkout and .sdk-entrypoint, and running once (instead of
-        # per-arch) also guarantees both architectures pin the same digest.
+        # would add files to every app's build context and bust the layer
+        # cache. prepare already has both the caller checkout and
+        # .sdk-entrypoint, and running once (instead of per-arch) also
+        # guarantees both architectures pin the same digest.
         #
-        # Two gates, both fail-closed — see resolve_base_redirect.py, covered by
+        # See resolve_base_redirect.py, covered by
         # tests/test_resolve_base_redirect.py in the SDK repo:
         #   * match coverage — named-context substitution is reference-specific,
-        #     so an opted-in Dockerfile pinning another tag would silently keep
-        #     pulling from Harbor. The script expands global ARG defaults the way
-        #     BuildKit does and errors when it can prove nothing matches.
-        #   * digest parity — the cross-registry publish is not transactional
-        #     (docs/standards/build-security.md), so it compares the tag on both
-        #     registries and errors on skew rather than building on a stale base.
-        # On parity it pins the immutable digest, so a base release landing
-        # mid-build cannot change what this build resolves to.
-        #
-        # A registry it cannot reach is *unknown*, not skew: if GHCR cannot be
-        # resolved the script warns and emits an empty mapping, degrading to the
-        # pre-redirect Harbor pull. Harbor is the one exception — with the
-        # redirect's source unreachable there is no baseline to verify parity
-        # against, so it fails closed rather than ride the redirect unproven.
+        #     so the script expands global ARG defaults the way BuildKit does and
+        #     warns when nothing matches.
+        #   * digest pin — the immutable GHCR digest, so a base release landing
+        #     mid-build cannot change what this build resolves to.
+        # Only GHCR is resolved. registry.atlan.com is the registry gateway in
+        # front of the same package, so it is not consulted, and a GHCR lookup
+        # that fails degrades to the Dockerfile's reference rather than failing
+        # the build.
         id: base_redirect
         if: ${{ inputs.use_ghcr_base }}
         env:
-          # Harbor's public project is pulled anonymously (this workflow never
-          # logs into Harbor); only the GHCR leg needs a credential.
           GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
           GHCR_USER: ${{ github.actor }}
         run: |
@@ -1292,42 +1284,25 @@ jobs:
           file: ${{ needs.prepare.outputs.dockerfile }}
           platforms: ${{ matrix.platform }}
           push: true
-          # Resolve the SDK base image from GHCR instead of Harbor, when the
-          # caller opts in via use_ghcr_base. Empty (the default, and any run
-          # where the preflight declined) leaves the build resolving from Harbor
-          # exactly as before.
+          # Resolve the SDK base image from GHCR directly (use_ghcr_base,
+          # default on). Empty (a run where the preflight declined, or the flag
+          # is off) leaves the build resolving the Dockerfile's reference.
           #
           # The value is computed by the 'Resolve GHCR base redirect' step in
           # prepare, not written literally here: it pins the GHCR *digest* that
-          # step verified equal to Harbor's, and that step fails the build rather
-          # than emit a mapping that would silently no-op or straddle a
-          # cross-registry skew. Read that step's comment for the two gates.
-          #
-          # Harbor is S3-backed and 307-redirects blobs to presigned S3 URLs, so
-          # the bytes go S3 -> runner and bill as S3 DataTransfer-Out. GHCR pulls
-          # from GitHub-hosted runners are free. Both registries carry the same
-          # digest (published together in harbor-release.yaml), so this changes
-          # only where the layers are fetched from, not what is built.
+          # step resolved. Read that step's comment for the mechanics.
           #
           # Apps keep `FROM registry.atlan.com/public/app-runtime-base:3` in their
           # Dockerfiles -- BuildKit matches that reference (after ARG expansion)
           # and substitutes the source below. That split is deliberate: the
           # Dockerfile reference stays the public interface partners build
-          # against, while retrieval is an internal detail we can repoint. When
-          # the public base moves off Harbor, update the left-hand side here --
-          # a rate-limited public registry makes this more necessary, not less.
-          #
-          # Rollout: every app repo pins this workflow at @main, so an ungated
-          # redirect would switch ~96 builds in one merge with no way back other
-          # than a revert that each app picks up on its next build. The flag
-          # inverts that -- canaries opt in per repo, and flipping the default
-          # later is a one-line change here rather than a fleet-wide event.
+          # against, served by the registry gateway from GHCR, while retrieval
+          # here goes to GHCR without the gateway hop.
           #
           # BuildKit treats an unmatched substitution as a silent no-op, so a
           # green build is not on its own evidence the redirect fired. The
-          # preflight is what makes it evidence: it prints the resolved base
-          # references and the pinned digest, and fails when the mapping cannot
-          # apply. S3 egress on the apps account remains the end-to-end signal.
+          # preflight's log is: it prints the resolved base references and the
+          # pinned digest, or a warning saying why it did not pin one.
           build-contexts: ${{ needs.prepare.outputs.base_build_contexts }}
           tags: ${{ needs.prepare.outputs.ghcr_base }}:${{ needs.prepare.outputs.branch }}-${{ needs.prepare.outputs.image_tag }}-${{ matrix.arch }}
           cache-from: type=gha,scope=${{ matrix.platform }}
