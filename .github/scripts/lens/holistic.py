@@ -125,7 +125,7 @@ def build_input(
     ws: Workspace, files: list[FileDiff], pr_meta: dict, max_input_tokens: int
 ) -> str:
     title = (pr_meta.get("title") or "")[:200]
-    body = (pr_meta.get("body") or "")[:2000]
+    body = (pr_meta.get("body") or "")[:4000]
     listing = "\n".join(
         f"- {f.status:<8} {f.path} (+{f.additions}/-{f.deletions})" for f in files[:80]
     )

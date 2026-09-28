@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.39.1] - 2026-09-27
+
+### Bug fixes
+
+- FND-2570 expand SDK-imported aliases in B005 and correct E019's fix form (#3988) ([5a5c880](https://github.com/atlanhq/application-sdk/commit/5a5c880))
+- FND-2584 P023 flags only blocking requests calls, not constructors (#3974) ([98c4217](https://github.com/atlanhq/application-sdk/commit/98c4217))
+- FND-2584 F008 resolves SDK error ancestry for caught-type matching (#3973) ([71472e8](https://github.com/atlanhq/application-sdk/commit/71472e8))
+- D003 recognises SQLAlchemy entry-point dialects as used (#3967) ([0e488cc](https://github.com/atlanhq/application-sdk/commit/0e488cc))
+
+### Other changes
+
+- chore(deps): update dependency ruff to v0.16.9 (#4010) ([af034be](https://github.com/atlanhq/application-sdk/commit/af034be))
+- chore(contract-toolkit): release v0.27.0 (#3991) ([1f9a363](https://github.com/atlanhq/application-sdk/commit/1f9a363))
+
 ## [0.39.0] - 2026-09-24
 
 ### Features

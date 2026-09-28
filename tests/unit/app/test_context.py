@@ -421,10 +421,9 @@ class TestWorkflowSafeLoggerActivityPath:
         fake_loguru = MagicMock()
         log._structlog_logger = fake_loguru
         log.info("hello", foo="bar")
-        fake_loguru.info.assert_called_once()
-        args, kwargs = fake_loguru.info.call_args
-        assert args[0] == "hello"
-        assert kwargs.get("foo") == "bar"
+        assert fake_loguru.bind.call_args.kwargs.get("foo") == "bar"
+        bound = fake_loguru.bind.return_value
+        bound.info.assert_called_once_with("hello")
 
     def test_printf_style_args_are_pre_formatted(self, reset_execution_context) -> None:
         log = _WorkflowSafeLogger("n", "app", "run", "corr")
@@ -446,8 +445,8 @@ class TestWorkflowSafeLoggerActivityPath:
             fake_loguru = MagicMock()
             log._structlog_logger = fake_loguru
             log.info("hi")
-            _args, kwargs = fake_loguru.info.call_args
-            assert kwargs.get("correlation_id") == "ctxvar-corr"
+            bind_kwargs = fake_loguru.bind.call_args.kwargs
+            assert bind_kwargs.get("correlation_id") == "ctxvar-corr"
         finally:
             set_correlation_context(CorrelationContext(correlation_id=""))
 
@@ -458,8 +457,8 @@ class TestWorkflowSafeLoggerActivityPath:
             fake_loguru = MagicMock()
             log._structlog_logger = fake_loguru
             log.info("hi", correlation_id="explicit")
-            _args, kwargs = fake_loguru.info.call_args
-            assert kwargs.get("correlation_id") == "explicit"
+            bind_kwargs = fake_loguru.bind.call_args.kwargs
+            assert bind_kwargs.get("correlation_id") == "explicit"
         finally:
             set_correlation_context(CorrelationContext(correlation_id=""))
 
@@ -477,6 +476,102 @@ class TestWorkflowSafeLoggerActivityPath:
         fake_loguru.info.assert_called_once()
         fake_loguru.warning.assert_called_once()
         fake_loguru.error.assert_called_once()
+
+
+@pytest.fixture
+def loguru_messages():
+    """Capture rendered messages from the real loguru logger."""
+    from loguru import logger as real_loguru
+
+    messages: list[str] = []
+    sink_id = real_loguru.add(
+        lambda m: messages.append(m.record["message"]), level="DEBUG"
+    )
+    yield messages
+    real_loguru.remove(sink_id)
+
+
+@pytest.fixture
+def correlation_set():
+    set_correlation_context(CorrelationContext(correlation_id="ctxvar-corr"))
+    yield
+    set_correlation_context(CorrelationContext(correlation_id=""))
+
+
+class TestWorkflowSafeLoggerBraces:
+    """Braces that are not format placeholders must never reach str.format."""
+
+    def test_printf_arg_with_braces_under_correlation(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info("payload %s", {"k": 1})
+        assert loguru_messages[-1] == "payload {'k': 1}"
+
+    def test_literal_braces_under_correlation(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info("sql {x} and {0}")
+        assert loguru_messages[-1] == "sql {x} and {0}"
+
+    def test_printf_arg_with_braces_and_user_kwargs(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info("row %s", '{"a": 1}', table="t")
+        assert loguru_messages[-1] == 'row {"a": 1}'
+
+    def test_printf_arg_with_braces_without_correlation(
+        self, reset_execution_context, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info("payload %s", {"k": 1})
+        assert loguru_messages[-1] == "payload {'k': 1}"
+
+    def test_fstring_with_braces_and_exc_info(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        err = KeyError("{credentialGuid}")
+        log.error(f"failed: {err}", exc_info=True)
+        assert loguru_messages[-1] == "failed: '{credentialGuid}'"
+
+    def test_fstring_with_braces_and_context_kwarg(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info(f"done {({'a': 1})}", records=3)
+        assert loguru_messages[-1] == "done {'a': 1}"
+
+    def test_keyword_arguments_are_context_not_placeholders(
+        self, reset_execution_context, correlation_set, loguru_messages
+    ) -> None:
+        log = _WorkflowSafeLogger("n", "app", "run", "")
+        log.info("n={n}", n=3)
+        assert loguru_messages[-1] == "n={n}"
+
+
+class TestWorkflowSafeLoggerExcInfo:
+    def test_exc_info_records_the_active_exception(
+        self, reset_execution_context
+    ) -> None:
+        from loguru import logger as real_loguru
+
+        records: list = []
+        sink_id = real_loguru.add(lambda m: records.append(m.record), level="DEBUG")
+        try:
+            log = _WorkflowSafeLogger("n", "app", "run", "")
+            try:
+                raise ValueError("boom")
+            except ValueError:
+                log.error("probe failed", exc_info=True)
+        finally:
+            real_loguru.remove(sink_id)
+        assert records[-1]["message"] == "probe failed"
+        assert records[-1]["exception"] is not None
+        assert records[-1]["exception"].type is ValueError
+        assert "exc_info" not in records[-1]["extra"]
 
 
 # ---------------------------------------------------------------------------

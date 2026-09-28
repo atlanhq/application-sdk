@@ -440,7 +440,7 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.18"
+          version: "0.12.19"
 
       # Only the D-series leg materialises the caller's environment (the detect
       # action's needs-env `uv sync`); the other series run from an isolated
@@ -571,7 +571,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.18"
+          version: "0.12.19"
 
       - name: "Guard contract_schema.lock.json (published package)"
         if: inputs.conformance-ref == ''

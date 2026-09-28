@@ -34,6 +34,51 @@ def _origins(tree: ast.Module) -> dict[str, str]:
     return result
 
 
+_SDK_ERRORS = "application_sdk.errors."
+_SDK_ERROR_BASES: dict[str, tuple[str, ...]] = {
+    "AppError": (),
+    "TaskStalledError": ("AppTimeoutError",),
+    "InvalidInputValueError": ("InvalidInputError", "ValueError"),
+    "ColdStartRaceError": ("DependencyUnavailableError",),
+    "DaprSidecarUnreachableError": ("ColdStartRaceError",),
+    "ObjectStoreReadError": ("DependencyUnavailableError",),
+    "ObjectStoreDownloadError": ("DependencyUnavailableError",),
+    "DiskFullError": ("ResourceExhaustedError",),
+    "LocalVolumeUnwritableError": ("ResourceExhaustedError",),
+}
+_BUILTIN_ERROR_BASES = frozenset({"ValueError", "Exception", "BaseException"})
+
+
+def _sdk_error_leaf(name: str) -> str | None:
+    leaf = name.rsplit(".", 1)[-1]
+    if name.startswith(_SDK_ERRORS) and leaf.endswith("Error"):
+        return leaf
+    return None
+
+
+def _canonical_error(name: str) -> str:
+    leaf = _sdk_error_leaf(name)
+    return _SDK_ERRORS + leaf if leaf is not None else name
+
+
+def sdk_error_ancestry(name: str) -> set[str]:
+    """Return the SDK error's MRO names: SDK classes canonicalised, builtins bare.
+
+    The suite runs without SDK source, so the non-``AppError`` parents are
+    tabled here and pinned to the runtime ``__mro__`` by a drift test.
+    """
+    result = {"Exception", "BaseException"}
+    pending = [name.rsplit(".", 1)[-1]]
+    while pending:
+        leaf = pending.pop()
+        if leaf in _BUILTIN_ERROR_BASES:
+            result.add(leaf)
+            continue
+        result.add(_SDK_ERRORS + leaf)
+        pending.extend(_SDK_ERROR_BASES.get(leaf, ("AppError",)))
+    return result
+
+
 def _qualified(src: Source, node: ast.AST | None) -> str:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         try:
@@ -139,10 +184,8 @@ class _Checker:
 
     def error_names(self, src: Source, node: ast.AST, visited=frozenset()) -> set[str]:
         name = _qualified(src, node)
-        if name.startswith("application_sdk.errors.") and name.rsplit(".", 1)[
-            -1
-        ].endswith("Error"):
-            return {name, "Exception", "BaseException"}
+        if _sdk_error_leaf(name) is not None:
+            return sdk_error_ancestry(name) | {name}
         resolved = self.symbol(src, node)
         if resolved is None:
             return set()
@@ -443,7 +486,9 @@ class _Checker:
                         else [handler.type]
                     )
                     handled.update(
-                        _qualified(src, t) if t is not None else "BaseException"
+                        _canonical_error(_qualified(src, t))
+                        if t is not None
+                        else "BaseException"
                         for t in types
                     )
                 for stmt in node.body:
