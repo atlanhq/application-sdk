@@ -194,6 +194,32 @@ def _sev_at_least(sev: str, floor: str) -> bool:
     )
 
 
+def head_side_text(
+    gh: GitHub, files: list[FileDiff], head: str, max_files: int
+) -> dict[str, str]:
+    """The PR-head text of each changed file, "" for a path the PR removes.
+
+    The checkout is the base branch, and this map overlays it (reads, file
+    listing, search, the index), so anything missing here reads as the base
+    branch's copy. A renamed file's old path is removed by the PR just like a
+    deletion. Without it the old file stays visible, and a finding that says
+    "this file is still here" can never be verified fixed. Old paths cost no
+    request, so every rename in the diff is covered, not only the first
+    `max_files` changed files. A file the PR adds back at an old path keeps its
+    head text.
+    """
+    head_text: dict[str, str] = {}
+    for fd in files[:max_files]:
+        if fd.status == "deleted":
+            head_text[fd.path] = ""
+        elif not fd.is_binary:
+            head_text[fd.path] = gh.file_at(fd.path, head) or ""
+    for fd in files:
+        if fd.status == "renamed" and fd.old_path and fd.old_path != fd.path:
+            head_text.setdefault(fd.old_path, "")
+    return head_text
+
+
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
     for c in gh.issue_comments(number):
         body = c.get("body") or ""
@@ -358,12 +384,7 @@ def run(
     )
 
     # ---- head text for changed files (data only; never executed) -----------
-    head_text: dict[str, str] = {}
-    for fd in full_files[: cfg.max_changed_files]:
-        if fd.status == "deleted":
-            head_text[fd.path] = ""
-        elif not fd.is_binary:
-            head_text[fd.path] = gh.file_at(fd.path, head) or ""
+    head_text = head_side_text(gh, full_files, head, cfg.max_changed_files)
 
     # ---- free resolution: the quoted code is gone ------------------------
     touched = {fd.path for fd in all_files}
