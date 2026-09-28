@@ -1087,9 +1087,11 @@ path component, and this rule governs that package's sources too).
 
          ref, inline = route_credentials(input)
 
-     Pass `ref_field="<app>_credential"` only when the input carries more than
-     one populated `CredentialRef` field; `route_credentials` otherwise finds the
-     toolkit-generated one itself.  On the task side, replace the
+     Declare `run_credential_field: ClassVar[str] = "<app>_credential"` on the
+     input class only when it carries more than one `CredentialRef` field;
+     `route_credentials` otherwise finds the toolkit-generated one itself.  It is
+     a class declaration, not a call argument, so the preflight gate makes the
+     same choice.  On the task side, replace the
      `resolve_credential_raw(ref)`-or-inline branch with
      `self.context.resolve_credential_raw_or_inline(ref, inline)`.  A `SqlApp`
      subclass that only needs the ref already has

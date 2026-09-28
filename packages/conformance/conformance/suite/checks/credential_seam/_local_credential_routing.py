@@ -198,6 +198,13 @@ def _is_credentials_iterable(node: ast.expr) -> bool:
     return bool(_CREDENTIALS_ITERABLE_RE.search(ast.unparse(node)))
 
 
+def _parameter_names(node: _FunctionNode) -> set[str]:
+    args = node.args
+    params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    params += [a for a in (args.vararg, args.kwarg) if a is not None]
+    return {a.arg for a in params}
+
+
 @dataclass
 class _Scope:
     """The routing sites seen in one function, in source order."""
@@ -206,6 +213,9 @@ class _Scope:
     sites: list[tuple[ast.AST, str]] = field(default_factory=list)
     guid_names: set[str] = field(default_factory=set)
     """Names bound in this function from an own-GUID read."""
+    shadowed: set[str] = field(default_factory=set)
+    """Parameters and every name this function assigns — they hide a module
+    name of the same spelling, whatever the module bound it to."""
 
     def anchor(self) -> ast.AST:
         return min(
@@ -227,13 +237,18 @@ class _RoutingVisitor(ast.NodeVisitor):
         self._module_guid_names: set[str] = set()
 
     def _guid_names(self) -> frozenset[str]:
-        """Own-GUID names visible here: the current function's, then the module's."""
-        local = self._stack[-1].guid_names if self._stack else set()
-        return frozenset(local | self._module_guid_names)
+        """Own-GUID names visible here: the current function's, then the module's
+        names it does not shadow with a parameter or an assignment of its own."""
+        if not self._stack:
+            return frozenset(self._module_guid_names)
+        scope = self._stack[-1]
+        return frozenset(scope.guid_names | (self._module_guid_names - scope.shadowed))
 
     def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
         if not isinstance(target, ast.Name) or value is None:
             return
+        if self._stack:
+            self._stack[-1].shadowed.add(target.id)
         names = self._stack[-1].guid_names if self._stack else self._module_guid_names
         if _is_own_guid_read(value) or (
             isinstance(value, ast.Name) and value.id in self._guid_names()
@@ -262,7 +277,7 @@ class _RoutingVisitor(ast.NodeVisitor):
             self.scopes.append(_Scope(function=None, sites=[(node, shape)]))
 
     def _visit_function(self, node: _FunctionNode) -> None:
-        scope = _Scope(function=node)
+        scope = _Scope(function=node, shadowed=_parameter_names(node))
         self._stack.append(scope)
         self.generic_visit(node)
         self._stack.pop()
@@ -296,11 +311,13 @@ class _RoutingVisitor(ast.NodeVisitor):
         produced: list[ast.AST] = (
             [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
         )
+        # Filters read the pair too: ``{i["key"]: v for i in creds if (v := i["value"])}``.
+        filters: list[ast.AST] = [cond for gen in node.generators for cond in gen.ifs]
         for gen in node.generators:
             if (
                 isinstance(gen.target, ast.Name)
                 and _is_credentials_iterable(gen.iter)
-                and _reads_pair(produced, gen.target.id)
+                and _reads_pair(produced + filters, gen.target.id)
             ):
                 self._record(node, _INLINE_SHAPE)
                 break
@@ -319,7 +336,8 @@ def _routing_message(shapes: list[str], function: str | None) -> str:
         f"{where} a workflow input's credential channels itself ({listed}) instead "
         "of through the SDK's credential seam. Use "
         "`ref, inline = route_credentials(input)` from application_sdk.credentials "
-        "— it prefers a pre-built CredentialRef field (ref_field=), routes "
+        "— it prefers a pre-built CredentialRef field (run_credential_field "
+        "ClassVar when there are several), routes "
         "credential_guid / agent_json through CredentialRef.resolve, and normalises "
         "inline credentials into one CredentialMap (normalize_inline_credentials "
         "does that half alone for a dict-shaped payload) — and read the pair on the "

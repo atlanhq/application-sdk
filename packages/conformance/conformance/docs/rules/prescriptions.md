@@ -2634,10 +2634,11 @@ from application_sdk.credentials import route_credentials
 ref, inline = route_credentials(input)
 ```
 
-`route_credentials` prefers a pre-built `CredentialRef` field (`ref_field=` names one
-the toolkit generated, e.g. `<app>_credential`), routes `credential_guid` / `agent_json`
-through `CredentialRef.resolve`, and normalises inline `credentials` into one flat,
-dotted-key `CredentialMap`.  On the task side,
+`route_credentials` prefers a pre-built `CredentialRef` field (the toolkit-generated
+`<app>_credential`; an input with several names the run's one with
+`run_credential_field: ClassVar[str]`, which the preflight gate reads too), routes
+`credential_guid` / `agent_json` through `CredentialRef.resolve`, and normalises inline
+`credentials` into one flat, dotted-key `CredentialMap`.  On the task side,
 `self.context.resolve_credential_raw_or_inline(ref, inline)` reads either path through
 one parser.  Type contract fields with `CredentialValue` / `CredentialMap` /
 `InlineCredentials` from `application_sdk.credentials` rather than a local alias.  A

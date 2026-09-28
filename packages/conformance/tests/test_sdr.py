@@ -832,16 +832,61 @@ _CREDS_ROUTE_CREDENTIALS = (
 
 
 @pytest.mark.parametrize(
-    "call",
-    ["route_credentials(input_obj)", "credentials.route_credentials(input_obj)"],
+    ("extra_import", "call"),
+    [
+        ("", "route_credentials(input_obj)"),
+        (
+            "from application_sdk.credentials import route_credentials as route\n",
+            "route(input_obj)",
+        ),
+        (
+            "from application_sdk import credentials\n",
+            "credentials.route_credentials(input_obj)",
+        ),
+        (
+            "import application_sdk.credentials\n",
+            "application_sdk.credentials.route_credentials(input_obj)",
+        ),
+    ],
+    ids=["bare", "aliased", "module-qualified", "fully-qualified"],
 )
-def test_p037_silent_when_route_credentials_used(tmp_path: Path, call: str) -> None:
+def test_p037_silent_when_route_credentials_used(
+    tmp_path: Path, extra_import: str, call: str
+) -> None:
     # route_credentials routes through CredentialRef.resolve, so an app that has
     # migrated onto it is agent-aware — P037 must not send it back to a
     # hand-rolled CredentialRef.resolve, which P053 then flags.
-    src = _CREDS_ROUTE_CREDENTIALS.replace("route_credentials(input_obj)", call)
+    src = extra_import + _CREDS_ROUTE_CREDENTIALS.replace(
+        "route_credentials(input_obj)", call
+    )
     _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
     assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A local helper that happens to share the name.
+        "from application_sdk.credentials import CredentialRef\n"
+        "def route_credentials(x):\n"
+        "    return None\n"
+        "def _route(input_obj):\n"
+        "    return route_credentials(input_obj)\n"
+        "async def _named(context):\n"
+        '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n',
+        # An attribute on something that is not an SDK module.
+        "from application_sdk.credentials import CredentialRef\n"
+        "from app import helpers\n"
+        "def _route(input_obj):\n"
+        "    return helpers.route_credentials(input_obj)\n"
+        "async def _named(context):\n"
+        '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n',
+    ],
+    ids=["local-function", "non-sdk-module"],
+)
+def test_p037_ignores_a_same_named_non_sdk_callable(tmp_path: Path, src: str) -> None:
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
 def test_p037_still_fires_without_route_credentials(tmp_path: Path) -> None:

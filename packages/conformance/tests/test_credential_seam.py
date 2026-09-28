@@ -289,10 +289,38 @@ def test_p053_silent_on_second_credential_guid() -> None:
         "    return CredentialRef(credential_guid=guid)\n",
         # A literal.
         'REF = CredentialRef(name="g", credential_guid="g")\n',
+        # A module-level own-GUID name, shadowed by a helper's parameter.
+        "guid = ARGS.credential_guid\n"
+        "def _ref(guid):\n"
+        "    return CredentialRef(credential_guid=guid)\n",
+        # ... and shadowed by a local rebinding to something else.
+        "guid = ARGS.credential_guid\n"
+        "def _ref(source):\n"
+        "    guid = source.cloud_source\n"
+        "    return CredentialRef(credential_guid=guid)\n",
     ],
 )
 def test_p053_silent_on_guid_not_from_the_input_channel(src: str) -> None:
     assert _p053(src) == []
+
+
+def test_p053_module_guid_name_still_reaches_an_unshadowing_function() -> None:
+    src = (
+        "from application_sdk.credentials import CredentialRef\n"
+        "guid = ARGS.credential_guid\n"
+        "def _ref():\n"
+        "    return CredentialRef(credential_guid=guid)\n"
+    )
+    assert len(_live(src)) == 1
+
+
+# F-f3ea21: the value read may sit in the comprehension's filter.
+def test_p053_fires_when_the_pair_value_is_read_in_a_filter() -> None:
+    src = (
+        "def flatten(credentials):\n"
+        '    return {i["key"]: v for i in credentials if (v := i["value"])}\n'
+    )
+    assert len(_live(src)) == 1
 
 
 def test_p053_module_level_call_fires() -> None:
@@ -440,9 +468,17 @@ def test_p053_fires_at_or_above_the_sdk_floor(tmp_path: Path, version: str) -> N
         _uv_lock("3.28.0"),
         _uv_lock(None),  # SDK not in the lock
         "this is : not valid = toml [",
+        "package = 1\n",  # valid TOML, but `package` is not a list
         None,  # no lock at all
     ],
-    ids=["below-floor", "far-below", "sdk-absent", "unparseable", "no-lock"],
+    ids=[
+        "below-floor",
+        "far-below",
+        "sdk-absent",
+        "unparseable",
+        "package-not-a-list",
+        "no-lock",
+    ],
 )
 def test_p053_silent_when_seam_not_confirmed(tmp_path: Path, lock: str | None) -> None:
     root = _app(tmp_path, lock)

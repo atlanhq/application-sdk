@@ -827,6 +827,43 @@ _AGENT_AWARE_RESOLVER_ATTRS = frozenset(
 _ROUTE_CREDENTIALS = "route_credentials"
 
 
+def _sdk_route_credentials_names(
+    tree: ast.AST,
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Names through which this module reaches the SDK's ``route_credentials``.
+
+    Returns ``(callables, modules)``: local names bound to ``route_credentials``
+    by ``from application_sdk... import route_credentials [as X]``, and local
+    names bound to an SDK module (``import application_sdk.credentials as c``,
+    ``from application_sdk import credentials``) whose ``.route_credentials``
+    attribute is the SDK's.  A same-named callable from anywhere else is not
+    the SDK router and proves nothing about agent routing.
+    """
+    callables: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            if node.module.split(".")[0] != "application_sdk":
+                continue
+            for alias in node.names:
+                bound = alias.asname or alias.name
+                if alias.name == _ROUTE_CREDENTIALS:
+                    callables.add(bound)
+                else:
+                    modules.add(bound)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "application_sdk":
+                    modules.add(alias.asname or alias.name.split(".")[0])
+    return frozenset(callables), frozenset(modules)
+
+
+def _attribute_root(node: ast.expr) -> str | None:
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
+
 def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, bool]:
     """Scan one module AST for the two P037 signals.
 
@@ -846,13 +883,15 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
     """
     custom_site: tuple[int, str] | None = None
     agent_aware = False
+    route_callables, route_modules = _sdk_route_credentials_names(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
-        # The SDK's credential seam called bare (``from application_sdk.credentials
-        # import route_credentials``); the module-qualified form is matched below.
-        if isinstance(func, ast.Name) and func.id == _ROUTE_CREDENTIALS:
+        # The SDK's credential seam called through a name imported from it
+        # (``from application_sdk.credentials import route_credentials [as r]``);
+        # the module-qualified form is matched below.
+        if isinstance(func, ast.Name) and func.id in route_callables:
             agent_aware = True
         # Direct constructor: CredentialRef(...)
         elif isinstance(func, ast.Name) and func.id == "CredentialRef":
@@ -865,7 +904,10 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
             if attr == "resolve_credential_raw":
                 if custom_site is None:
                     custom_site = (node.lineno, "resolve_credential_raw(...)")
-            elif attr in _AGENT_AWARE_RESOLVER_ATTRS or attr == _ROUTE_CREDENTIALS:
+            elif attr in _AGENT_AWARE_RESOLVER_ATTRS or (
+                attr == _ROUTE_CREDENTIALS
+                and _attribute_root(func.value) in route_modules
+            ):
                 agent_aware = True
             elif (
                 attr == "resolve"

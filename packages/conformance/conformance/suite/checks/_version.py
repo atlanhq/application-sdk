@@ -77,8 +77,12 @@ def locked_sdk_version(root: Path) -> str | None:
         doc = tomllib.loads(lock.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return None
+    packages = doc.get("package", [])
+    if not isinstance(packages, list):
+        # Valid TOML, wrong shape (``package = 1``): unreadable, not a crash.
+        return None
     target = _normalise_pkg_name(SDK_DISTRIBUTION)
-    for pkg in doc.get("package", []):
+    for pkg in packages:
         if not isinstance(pkg, dict):
             continue
         if _normalise_pkg_name(str(pkg.get("name", ""))) == target:
