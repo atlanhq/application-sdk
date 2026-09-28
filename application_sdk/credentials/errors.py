@@ -43,7 +43,7 @@ class CredentialRoutingError(InvalidInputError):
     code: ClassVar[str] = "INVALID_INPUT_CREDENTIAL_ROUTING"
     message: str = (
         "No routable credential source: need extraction_method='agent' with a "
-        "non-empty agent_json, or extraction_method='direct' with a non-empty credential_guid"
+        "non-empty agent_json, or any other extraction_method with a non-empty credential_guid"
     )
     field: str | None = "extraction_method"
 

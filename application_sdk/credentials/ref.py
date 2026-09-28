@@ -118,6 +118,14 @@ class CredentialRef(BaseModel, frozen=True):
         Input must satisfy :class:`CredentialResolvable` — ``ExtractionInput``
         and subclasses work automatically.
 
+        Only ``extraction_method="agent"`` routes to the agent spec; every other
+        value routes by GUID. Some apps put a non-credential axis in that
+        field — a miner's ``query_history`` or ``s3`` says where query history
+        is read from, and the run still needs its database credential — so
+        anything that is not ``agent`` is read as ``direct``. Agent mode stays
+        strict: an unpopulated ``agent_json`` raises even when a GUID is
+        present, rather than silently sending an agent run to the vault.
+
         Args:
             source: A model satisfying :class:`CredentialResolvable` with
                 ``extraction_method``, ``agent_json``, and
@@ -146,7 +154,7 @@ class CredentialRef(BaseModel, frozen=True):
             return cls(agent_spec=agent)
 
         guid = source.credential_guid or ""
-        if method == "direct" and guid:
+        if method != "agent" and guid:
             return cls(
                 name=guid,
                 credential_type="unknown",
