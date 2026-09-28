@@ -95,7 +95,9 @@ def resync_command(suite: str, resolved_at: str) -> list[str]:
     at = datetime.strptime(resolved_at, "%Y-%m-%dT%H:%M:%SZ")
     cutoff = (at - RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
     first_party = [
-        arg for pkg in FIRST_PARTY for arg in ("--exclude-newer-package", f"{pkg}={resolved_at}")
+        arg
+        for pkg in FIRST_PARTY
+        for arg in ("--exclude-newer-package", f"{pkg}={resolved_at}")
     ]
     return [
         "uvx",

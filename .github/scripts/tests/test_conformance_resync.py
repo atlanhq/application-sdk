@@ -367,7 +367,9 @@ def test_pr_matches_render_detects_changed_content_or_paths():
 def test_withdraw_closes_the_lane_pr_and_never_dispatches():
     runner = FakeRunner()
     result: dict = {"trace": []}
-    lane.withdraw_lane_pr(REPO, _pr(7, gate.RESYNC_BRANCH), "held", False, runner, result)
+    lane.withdraw_lane_pr(
+        REPO, _pr(7, gate.RESYNC_BRANCH), "held", False, runner, result
+    )
     assert result["closed"] == 7
     assert not any("workflow" in c for c in runner.calls)
 

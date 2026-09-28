@@ -426,14 +426,21 @@ def pr_matches_render(
         return False
     for path in staged:
         ours = git(["rev-parse", f"HEAD:{path}"], work, runner, check=False).strip()
-        theirs = git(["rev-parse", f"FETCH_HEAD:{path}"], work, runner, check=False).strip()
+        theirs = git(
+            ["rev-parse", f"FETCH_HEAD:{path}"], work, runner, check=False
+        ).strip()
         if not ours or ours != theirs:
             return False
     return True
 
 
 def withdraw_lane_pr(
-    repo: str, keep: dict | None, reason: str, dry_run: bool, runner: Runner, result: dict
+    repo: str,
+    keep: dict | None,
+    reason: str,
+    dry_run: bool,
+    runner: Runner,
+    result: dict,
 ) -> None:
     """A held or ineligible repo must not keep an approvable lane PR open."""
     if not keep:
@@ -595,7 +602,12 @@ def process_repo(
                 action="skipped", reason="bootstrap reported the repo as out of scope"
             )
             withdraw_lane_pr(
-                repo, keep, "bootstrap reports the repo out of scope", dry_run, runner, result
+                repo,
+                keep,
+                "bootstrap reports the repo out of scope",
+                dry_run,
+                runner,
+                result,
             )
             return result
 
@@ -616,7 +628,12 @@ def process_repo(
                 + "; ".join(f"{p}: {', '.join(m)}" for p, m in sorted(lost.items())),
             )
             withdraw_lane_pr(
-                repo, keep, "the resync would drop per-repo settings", dry_run, runner, result
+                repo,
+                keep,
+                "the resync would drop per-repo settings",
+                dry_run,
+                runner,
+                result,
             )
             return result
 

@@ -25,7 +25,9 @@ REPO = "atlanhq/atlan-example-app"
 HEAD = "h" * 40
 PARENT = "p" * 40
 RESOLVED_AT = "2026-09-28T12:00:00Z"
-MARKER = f"<!-- conformance-resync-lane suite=0.39.0 resolved-at={RESOLVED_AT} -->\nbody"
+MARKER = (
+    f"<!-- conformance-resync-lane suite=0.39.0 resolved-at={RESOLVED_AT} -->\nbody"
+)
 
 
 def meta(**over):
@@ -55,7 +57,13 @@ class FakeRunner:
     captured in ``approved`` so tests can assert it never happened."""
 
     def __init__(
-        self, *, commits=None, compare="ahead", checks_rc=0, reviews=None, live_head=HEAD
+        self,
+        *,
+        commits=None,
+        compare="ahead",
+        checks_rc=0,
+        reviews=None,
+        live_head=HEAD,
     ):
         self.commits = [commit()] if commits is None else commits
         self.live_head = live_head
@@ -119,7 +127,7 @@ def test_approves_only_when_every_condition_holds():
     assert render.calls == [(REPO, PARENT, HEAD, "0.39.0", RESOLVED_AT)]
     post = runner.calls[-1]
     assert f"commit_id={HEAD}" in post and "event=APPROVE" in post
-    body = next(a for a in post if a.startswith("body="))[len("body="):]
+    body = next(a for a in post if a.startswith("body="))[len("body=") :]
     assert body.startswith(resync.RESYNC_SIGNATURE)
 
 
@@ -139,7 +147,7 @@ def test_marker_without_resolved_at_never_approves():
     approved, runner, render = run(
         meta(body="<!-- conformance-resync-lane suite=0.39.0 -->\nbody")
     )
-    assert not approved and render.calls == []
+    assert not approved and not runner.approved and render.calls == []
 
 
 def test_resync_command_fences_third_party_and_exempts_first_party():
