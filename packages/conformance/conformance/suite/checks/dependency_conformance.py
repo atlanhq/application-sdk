@@ -1508,14 +1508,16 @@ _SQLALCHEMY_DRIVERNAME_RE = re.compile(
     r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
 )
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
-# Modules that create a SQLAlchemy engine on the repo's behalf. A connector built
-# on the SDK's ``BaseSQLClient`` loads its dialect through SQLAlchemy without
-# ever importing ``sqlalchemy`` itself.
-_SQLALCHEMY_LOADER_MODULES = ("application_sdk.clients.sql",)
-# The same classes re-exported by a public package, keyed by that package.
-_SQLALCHEMY_LOADER_REEXPORTS: dict[str, frozenset[str]] = {
-    "application_sdk.clients": frozenset({"BaseSQLClient", "AsyncBaseSQLClient"}),
-}
+# SDK classes that create a SQLAlchemy engine on the repo's behalf. A connector
+# built on ``BaseSQLClient`` loads its dialect through SQLAlchemy without ever
+# importing ``sqlalchemy`` itself. Importing the module is not enough: the SDK
+# imports SQLAlchemy lazily, inside ``BaseSQLClient.load()``.
+_SQLALCHEMY_LOADER_CLASSES = frozenset({"BaseSQLClient", "AsyncBaseSQLClient"})
+# Modules those classes are importable from: the defining module and the
+# public package that re-exports them.
+_SQLALCHEMY_LOADER_MODULES = frozenset(
+    {"application_sdk.clients.sql", "application_sdk.clients"}
+)
 
 
 def _dialect_entry_point_name(dialect: str, driver: str | None) -> str:
@@ -1584,8 +1586,8 @@ def _collect_source_usage(
     matching (WARN-tier): a scheme only ever clears the finding for a
     dependency that registers a ``sqlalchemy.dialects`` entry point under that
     exact name. Two sound exclusions bound it: docstrings are not evidence, and
-    no name is credited unless the repo imports ``sqlalchemy`` or the SDK's SQL
-    client module (``_SQLALCHEMY_LOADER_MODULES``) somewhere — without
+    no name is credited unless the repo imports ``sqlalchemy`` or references an
+    SDK SQL client class (``_SQLALCHEMY_LOADER_CLASSES``) somewhere — without
     SQLAlchemy nothing loads a dialect entry point. The gate is repo-wide
     because a URL constant often lives in a config module that never imports
     SQLAlchemy itself.
@@ -1611,16 +1613,9 @@ def _collect_source_usage(
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     modules.add(alias.name.split(".", 1)[0])
-                    loads_sqlalchemy |= _is_sqlalchemy_loader(alias.name)
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module.split(".", 1)[0])
-                    reexports = _SQLALCHEMY_LOADER_REEXPORTS.get(node.module, ())
-                    loads_sqlalchemy |= _is_sqlalchemy_loader(node.module) or any(
-                        alias.name in reexports
-                        or _is_sqlalchemy_loader(f"{node.module}.{alias.name}")
-                        for alias in node.names
-                    )
             elif isinstance(node, ast.Call):
                 drivername = _url_create_drivername(node)
                 match = (
@@ -1637,17 +1632,64 @@ def _collect_source_usage(
                     continue
                 for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
                     dialect_names.add(_dialect_entry_point_name(*match.groups()))
+        loads_sqlalchemy = loads_sqlalchemy or _references_sdk_sql_client(tree)
     if "sqlalchemy" not in modules and not loads_sqlalchemy:
         dialect_names = set()
     return modules, drivers, dialect_names
 
 
-def _is_sqlalchemy_loader(module: str) -> bool:
-    """Whether importing *module* means the repo loads SQLAlchemy through it."""
-    return any(
-        module == loader or module.startswith(loader + ".")
-        for loader in _SQLALCHEMY_LOADER_MODULES
-    )
+def _references_sdk_sql_client(tree: ast.AST) -> bool:
+    """Whether *tree* uses an SDK SQL client class, not merely imports it.
+
+    A use is a load of a name bound to ``BaseSQLClient``/``AsyncBaseSQLClient``
+    by ``from <loader module> import …`` (subclassing or calling it), or an
+    attribute access such as ``sql.BaseSQLClient`` whose owner resolves to a
+    loader module through the file's imports. An import statement alone never
+    counts, because the SDK only imports SQLAlchemy when a client loads.
+    """
+    class_names: set[str] = set()
+    bound_modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bound_modules[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    bound_modules[top] = top
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if (
+                    node.module in _SQLALCHEMY_LOADER_MODULES
+                    and alias.name in _SQLALCHEMY_LOADER_CLASSES
+                ):
+                    class_names.add(local)
+                else:
+                    bound_modules[local] = f"{node.module}.{alias.name}"
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name):
+            if isinstance(node.ctx, ast.Load) and node.id in class_names:
+                return True
+        elif isinstance(node, ast.Attribute):
+            if (
+                node.attr in _SQLALCHEMY_LOADER_CLASSES
+                and _resolve_dotted(node.value, bound_modules)
+                in _SQLALCHEMY_LOADER_MODULES
+            ):
+                return True
+    return False
+
+
+def _resolve_dotted(node: ast.expr, bound_modules: dict[str, str]) -> str | None:
+    """Resolve ``a.b.c`` to a dotted module path through the file's imports."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in bound_modules:
+        return None
+    return ".".join([bound_modules[node.id], *reversed(parts)])
 
 
 def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:

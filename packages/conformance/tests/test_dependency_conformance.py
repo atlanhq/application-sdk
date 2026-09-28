@@ -1570,29 +1570,38 @@ def _d003_scan_source(tmp_path: Path, source: str) -> list[str]:
     [
         pytest.param(_SDK_SQL_CLIENT_SOURCE, id="from-sql-module-import-class"),
         pytest.param(
-            "import application_sdk.clients.sql\n" 'URL = "crate://{host}:{port}/"\n',
-            id="import-sql-module",
+            "import application_sdk.clients.sql\n"
+            "class C(application_sdk.clients.sql.BaseSQLClient): ...\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="import-sql-module-attribute",
+        ),
+        pytest.param(
+            "import application_sdk.clients.sql as sdk_sql\n"
+            "client = sdk_sql.AsyncBaseSQLClient()\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="import-sql-module-as-alias",
         ),
         pytest.param(
             "from application_sdk.clients import sql\n"
+            "class C(sql.BaseSQLClient): ...\n"
             'URL = "crate://{host}:{port}/"\n',
             id="from-clients-import-sql",
         ),
         pytest.param(
             "from application_sdk.clients import BaseSQLClient\n"
+            "class C(BaseSQLClient): ...\n"
             'URL = "crate://{host}:{port}/"\n',
             id="public-reexport-base-sql-client",
         ),
         pytest.param(
-            "from application_sdk.clients import AsyncBaseSQLClient\n"
+            "from application_sdk.clients import AsyncBaseSQLClient as Base\n"
+            "client = Base()\n"
             'URL = "crate://{host}:{port}/"\n',
-            id="public-reexport-async-base-sql-client",
+            id="public-reexport-async-base-sql-client-aliased",
         ),
     ],
 )
-def test_d003_sdk_sql_client_import_loads_sqlalchemy(
-    tmp_path: Path, source: str
-) -> None:
+def test_d003_sdk_sql_client_use_loads_sqlalchemy(tmp_path: Path, source: str) -> None:
     """A client built on the SDK's ``BaseSQLClient`` loads its dialect through
     SQLAlchemy without the repo importing ``sqlalchemy`` itself, so the scheme
     in its ``DatabaseConfig`` template is evidence."""
@@ -1623,16 +1632,38 @@ def test_d003_sdk_sql_client_import_loads_sqlalchemy(
             id="lookalike-module-prefix",
         ),
         pytest.param(
-            "from application_sdk.clients.sql import BaseSQLClient\n",
-            id="sdk-sql-import-without-scheme",
+            "import application_sdk.clients.sql\n" 'URL = "crate://{host}:{port}/"\n',
+            id="bare-sql-module-import",
+        ),
+        pytest.param(
+            "from application_sdk.clients import sql\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="bare-from-clients-import-sql",
+        ),
+        pytest.param(
+            "from application_sdk.clients.sql import BaseSQLClient\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="class-imported-never-used",
+        ),
+        pytest.param(
+            "from application_sdk.clients import base\n"
+            "class C(base.BaseSQLClient): ...\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="class-name-on-non-sql-module",
+        ),
+        pytest.param(
+            _SDK_SQL_CLIENT_SOURCE.replace('template="crate://{host}:{port}/"', ""),
+            id="sdk-sql-client-without-scheme",
         ),
     ],
 )
 def test_d003_sdk_import_without_sql_client_or_scheme_is_not_evidence(
     tmp_path: Path, source: str
 ) -> None:
-    """Only the SDK's SQL client module counts as loading SQLAlchemy, and it
-    still needs a scheme that selects the registered dialect."""
+    """Importing the SDK's SQL client module does not load SQLAlchemy — the SDK
+    imports it lazily when a client loads — so only a use of
+    ``BaseSQLClient``/``AsyncBaseSQLClient`` counts, and it still needs a
+    scheme that selects the registered dialect."""
     flagged = _d003_scan_source(tmp_path, source)
     assert any("sqlalchemy-cratedb" in m for m in flagged)
 
