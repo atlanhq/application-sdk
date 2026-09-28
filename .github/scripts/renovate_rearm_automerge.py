@@ -52,6 +52,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Optional
@@ -72,7 +73,8 @@ MAX_EJECTIONS = 3
 # Re-arms attempted per run. Each costs two GraphQL calls against the fleet
 # App's hourly budget, the same budget the Renovate sweep needs. A normal hour
 # has zero to a handful of candidates; a release fan-out that ejected the fleet
-# can have dozens, and those drain over the next few hourly runs.
+# can have dozens, and those drain over the next few hourly runs (see
+# select_batch for why they drain rather than repeat).
 DEFAULT_MAX_REARMS = 25
 
 _PR_STATE_QUERY = """
@@ -118,6 +120,9 @@ class Outcome(str, Enum):
     DRAFT = "draft"
     REPO_DISALLOWS = "repo_disallows_automerge"
     TOO_MANY_EJECTIONS = "too_many_ejections"
+    # The fleet App's budget is spent. Every later call this run would fail the
+    # same way, so the run stops (see main).
+    RATE_LIMITED = "rate_limited"
     ERROR = "error"
 
 
@@ -198,6 +203,56 @@ def _graphql_errors(response: dict) -> str:
     return "; ".join(str(e.get("message", e)) for e in errors)
 
 
+def _is_rate_limited(response: Optional[dict], text: str) -> bool:
+    """Is this failure the App's budget running out, not a real refusal?
+
+    GitHub signals it two ways. The primary GraphQL limit comes back as an
+    ``errors`` entry of type ``RATE_LIMITED``. The secondary limit comes back as
+    an HTTP 403, which ``_post_graphql`` does not retry and raises as a
+    RuntimeError whose message carries the body ("You have exceeded a secondary
+    rate limit"). Either way the message names the rate limit; a permission
+    refusal ("Resource not accessible by integration") does not.
+    """
+    for error in (response or {}).get("errors") or []:
+        if isinstance(error, dict) and error.get("type") == "RATE_LIMITED":
+            return True
+    return "rate limit" in text.lower()
+
+
+def _failure(candidate: Candidate, response: Optional[dict], detail: str) -> Result:
+    outcome = (
+        Outcome.RATE_LIMITED if _is_rate_limited(response, detail) else Outcome.ERROR
+    )
+    return Result(candidate, outcome, detail)
+
+
+def select_batch(found: list[Candidate], cap: int, run_index: int) -> list[Candidate]:
+    """Up to ``cap`` candidates, starting at a window that moves every run.
+
+    A plain ``found[:cap]`` would hand the same PRs to every run. PRs past the
+    ejection cap stay classified ``automerge_not_armed`` for good, so 25 of them
+    early in the sorted list would take every slot every hour and nothing after
+    them would ever be reached. Moving the window by ``cap`` each run reaches
+    every candidate within ``ceil(len(found) / cap)`` runs, with no state to
+    keep between runs. ``run_index`` is the hour, so consecutive hourly runs get
+    consecutive windows.
+    """
+    if cap <= 0 or not found:
+        return []
+    if len(found) <= cap:
+        return list(found)
+    start = (run_index * cap) % len(found)
+    rotated = found[start:] + found[:start]
+    return rotated[:cap]
+
+
+def _non_negative_int(value: str) -> int:
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError(f"must be 0 or more, got {number}")
+    return number
+
+
 def rearm(
     token: str,
     candidate: Candidate,
@@ -220,13 +275,13 @@ def rearm(
             },
         )
     except RuntimeError as exc:
-        return Result(candidate, Outcome.ERROR, f"state query: {exc}")
+        return _failure(candidate, None, f"state query: {exc}")
 
     errors = _graphql_errors(response)
     repo = (response.get("data") or {}).get("repository") or {}
     pr = repo.get("pullRequest") or {}
     if errors or not pr:
-        return Result(candidate, Outcome.ERROR, f"state query: {errors or 'no PR'}")
+        return _failure(candidate, response, f"state query: {errors or 'no PR'}")
 
     if pr.get("state") != "OPEN":
         return Result(candidate, Outcome.NOT_OPEN, str(pr.get("state")))
@@ -257,14 +312,18 @@ def rearm(
             },
         )
     except RuntimeError as exc:
-        return Result(candidate, Outcome.ERROR, f"enable: {exc}")
+        return _failure(candidate, None, f"enable: {exc}")
     errors = _graphql_errors(response)
     if errors:
-        return Result(candidate, Outcome.ERROR, f"enable: {errors}")
+        return _failure(candidate, response, f"enable: {errors}")
     return Result(candidate, Outcome.ARMED, method)
 
 
-def main(argv: Optional[list[str]] = None, post: PostFn = _post_graphql) -> int:
+def main(
+    argv: Optional[list[str]] = None,
+    post: PostFn = _post_graphql,
+    run_index: Optional[int] = None,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--out-dir",
@@ -273,7 +332,9 @@ def main(argv: Optional[list[str]] = None, post: PostFn = _post_graphql) -> int:
     )
     parser.add_argument(
         "--max-rearms",
-        type=int,
+        # Not plain int: a negative value would turn found[:cap]-style slicing
+        # into "all but the last N" and walk straight past the budget cap.
+        type=_non_negative_int,
         default=DEFAULT_MAX_REARMS,
         help=f"cap on PRs handled per run (default {DEFAULT_MAX_REARMS})",
     )
@@ -288,7 +349,9 @@ def main(argv: Optional[list[str]] = None, post: PostFn = _post_graphql) -> int:
         return 2
 
     found = candidates(args.out_dir)
-    todo = found[: args.max_rearms]
+    if run_index is None:
+        run_index = int(time.time() // 3600)
+    todo = select_batch(found, args.max_rearms, run_index)
     print(f"not-armed PRs: {len(found)}, handling {len(todo)}")
     if len(found) > len(todo):
         print(
@@ -296,7 +359,21 @@ def main(argv: Optional[list[str]] = None, post: PostFn = _post_graphql) -> int:
             "next run (per-run cap)"
         )
 
-    results = [rearm(token, c, dry_run=args.dry_run, post=post) for c in todo]
+    results: list[Result] = []
+    for index, candidate in enumerate(todo):
+        result = rearm(token, candidate, dry_run=args.dry_run, post=post)
+        results.append(result)
+        if result.outcome is Outcome.RATE_LIMITED:
+            # Stop rather than sleep to the reset. Every later call would fail
+            # the same way, and waiting would hold this budget against the
+            # Renovate sweep that shares it. The rest go to the next hourly run,
+            # which is the retry.
+            print(
+                f"::warning::fleet App rate limit hit; stopping with "
+                f"{len(todo) - index - 1} PR(s) left for the next run: "
+                f"{result.detail}"
+            )
+            break
     for r in results:
         detail = f" ({r.detail})" if r.detail else ""
         print(f"  {r.candidate.repo}#{r.candidate.number}  {r.outcome.value}{detail}")

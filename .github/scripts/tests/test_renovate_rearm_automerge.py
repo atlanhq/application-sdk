@@ -82,7 +82,9 @@ class FakeGitHub:
         state: Optional[dict] = None,
         enable_response: Optional[dict] = None,
         raise_on: str = "",
+        raise_message: str = "GraphQL request failed: 502 Bad Gateway",
     ) -> None:
+        self.raise_message = raise_message
         self.state = state if state is not None else _state()
         self.enable_response = (
             enable_response
@@ -97,7 +99,7 @@ class FakeGitHub:
         is_mutation = "enablePullRequestAutoMerge" in payload["query"]
         kind = "enable" if is_mutation else "state"
         if self.raise_on == kind:
-            raise RuntimeError(f"GraphQL request failed: 502 Bad Gateway ({kind})")
+            raise RuntimeError(f"{self.raise_message} ({kind})")
         return self.enable_response if is_mutation else self.state
 
     @property
@@ -280,6 +282,97 @@ def test_main_requires_a_token_unless_dry_run(tmp_path, monkeypatch) -> None:
     gh = FakeGitHub()
     assert rearm.main(["--out-dir", str(tmp_path), "--dry-run"], post=gh) == 0
     assert gh.mutations == []
+
+
+_SECONDARY_403 = (
+    "GraphQL request failed: 403 Forbidden: "
+    '{"message":"You have exceeded a secondary rate limit."}'
+)
+_PRIMARY_LIMITED = {
+    "data": None,
+    "errors": [{"type": "RATE_LIMITED", "message": "API rate limit already exceeded"}],
+}
+
+
+@pytest.mark.parametrize("raise_on", ["state", "enable"])
+def test_secondary_rate_limit_403_is_rate_limited(raise_on) -> None:
+    gh = FakeGitHub(raise_on=raise_on, raise_message=_SECONDARY_403)
+    assert rearm.rearm("t", _CANDIDATE, post=gh).outcome is rearm.Outcome.RATE_LIMITED
+
+
+def test_primary_rate_limit_error_type_is_rate_limited() -> None:
+    gh = FakeGitHub(state=_PRIMARY_LIMITED)
+    assert rearm.rearm("t", _CANDIDATE, post=gh).outcome is rearm.Outcome.RATE_LIMITED
+    gh = FakeGitHub(enable_response=_PRIMARY_LIMITED)
+    assert rearm.rearm("t", _CANDIDATE, post=gh).outcome is rearm.Outcome.RATE_LIMITED
+
+
+def test_permission_403_stays_a_plain_error() -> None:
+    gh = FakeGitHub(
+        raise_on="enable",
+        raise_message="GraphQL request failed: 403 Forbidden: "
+        '{"message":"Resource not accessible by integration"}',
+    )
+    assert rearm.rearm("t", _CANDIDATE, post=gh).outcome is rearm.Outcome.ERROR
+
+
+def test_main_stops_the_run_on_a_rate_limit(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("GH_TOKEN", "t")
+    _write_repo_report(tmp_path, "app-one", [_pr(n) for n in range(1, 6)])
+    gh = FakeGitHub(raise_on="state", raise_message=_SECONDARY_403)
+    assert rearm.main(["--out-dir", str(tmp_path)], post=gh, run_index=0) == 0
+    # One call, then stop: the other four would have hit the same wall.
+    assert len(gh.calls) == 1
+    out = capsys.readouterr().out
+    assert "rate limit hit; stopping with 4 PR(s) left for the next run" in out
+
+
+def test_main_keeps_going_past_a_permission_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("GH_TOKEN", "t")
+    _write_repo_report(tmp_path, "app-one", [_pr(n) for n in range(1, 4)])
+    gh = FakeGitHub(raise_on="enable", raise_message="Resource not accessible")
+    assert rearm.main(["--out-dir", str(tmp_path)], post=gh, run_index=0) == 0
+    assert len(gh.mutations) == 3
+
+
+def _cands(n: int) -> list[rearm.Candidate]:
+    return [rearm.Candidate(repo="atlanhq/app", number=i, url="") for i in range(n)]
+
+
+def test_select_batch_reaches_every_candidate_across_runs() -> None:
+    found = _cands(60)
+    seen: set[int] = set()
+    for run in range(3):  # ceil(60 / 25)
+        batch = rearm.select_batch(found, 25, run)
+        assert len(batch) == 25
+        seen.update(c.number for c in batch)
+    assert seen == set(range(60))
+
+
+def test_terminal_prefix_cannot_starve_later_candidates() -> None:
+    """25 capped PRs first in sort order must not take every slot every run."""
+    found = _cands(26)  # 0..24 stuck at the ejection cap, 25 re-armable
+    reached = any(
+        25 in {c.number for c in rearm.select_batch(found, 25, run)} for run in range(2)
+    )
+    assert reached
+
+
+@pytest.mark.parametrize(
+    ("n", "cap", "expected"), [(0, 25, 0), (3, 25, 3), (30, 0, 0), (30, 25, 25)]
+)
+def test_select_batch_sizes(n, cap, expected) -> None:
+    assert len(rearm.select_batch(_cands(n), cap, 7)) == expected
+
+
+def test_negative_max_rearms_is_rejected(tmp_path, monkeypatch, capsys) -> None:
+    monkeypatch.setenv("GH_TOKEN", "t")
+    gh = FakeGitHub()
+    with pytest.raises(SystemExit) as exc:
+        rearm.main(["--out-dir", str(tmp_path), "--max-rearms", "-1"], post=gh)
+    assert exc.value.code == 2
+    assert "must be 0 or more" in capsys.readouterr().err
+    assert gh.calls == []
 
 
 @pytest.mark.skipif(_BlockingReason is None, reason="conformance not importable")
