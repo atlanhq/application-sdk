@@ -236,8 +236,10 @@ def run(
     # ---- admission (0 model calls) --------------------------------------
     # Only a different MODEL is a different reviewer. A lens config change (cards,
     # prompts, limits) does not re-open code an earlier round already passed: that
-    # moved the goalposts on reviewed code. It applies from the next new commits;
-    # `/lens force` re-reviews the whole PR under the new config.
+    # moved the goalposts on reviewed code. It applies from the next new commits.
+    # `/lens force` only lifts the skip and round-cap rules: after new commits it
+    # reviews just those (the cheap way to get an approval back after a small push);
+    # on an unchanged head it re-reviews the whole PR under the current config.
     same_reviewer = state.model == cfg.model
     # A head already reviewed is skipped — unless part of it was left unreviewed by a
     # failure, in which case only those files are retried (never the whole PR again).
@@ -291,7 +293,6 @@ def run(
         and bool(state.reviewed_head)
         and same_reviewer
         and ancestry == "ahead"
-        and not force  # `/lens force` re-reviews the whole PR
     )
     mode = "retry" if retry_only else ("incremental" if incremental else "full")
     mode_label = describe_mode(

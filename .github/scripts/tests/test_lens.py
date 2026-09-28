@@ -4144,7 +4144,10 @@ def test_the_round_diff_is_bounded_and_puts_finding_files_first():
     assert review_mod.round_diff(files, []) == ""  # nothing open: nothing to show
 
 
-def test_force_is_a_full_re_review(repo: Path):
+def test_force_after_new_commits_reviews_only_those_commits(repo: Path):
+    """How `/lens force` is used: after a small push (a docs commit) to get the approval
+    back. It lifts the skip and round-cap rules but reviews only the new commits, so it
+    is cheap and cannot reopen code an earlier round already passed."""
     gh = FakeGitHub()
     rules = load_rules(repo / ".github" / "lens")
     run(
@@ -4165,7 +4168,30 @@ def test_force_is_a_full_re_review(repo: Path):
         client_factory=_factory(Script()),
         force=True,
     )
-    assert (
-        res.mode == "full"
-        and res.mode_label == "re-review · full, because requested with force"
+    assert res.mode == "incremental"
+    assert res.mode_label == "re-review · only commits since h1"
+
+
+def test_force_on_an_unchanged_head_re_reviews_the_whole_pr(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
     )
+    gh.status = "identical"  # what GitHub's compare says for the same commit
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+        force=True,
+    )
+    assert res.mode == "full"
+    assert res.mode_label == "re-review · full, because requested with force"
