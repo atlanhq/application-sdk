@@ -1611,7 +1611,10 @@ def _collect_source_usage(
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module.split(".", 1)[0])
-                    loads_sqlalchemy |= _is_sqlalchemy_loader(node.module)
+                    loads_sqlalchemy |= _is_sqlalchemy_loader(node.module) or any(
+                        _is_sqlalchemy_loader(f"{node.module}.{alias.name}")
+                        for alias in node.names
+                    )
             elif isinstance(node, ast.Call):
                 drivername = _url_create_drivername(node)
                 match = (

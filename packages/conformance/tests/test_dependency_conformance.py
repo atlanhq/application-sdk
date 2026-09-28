@@ -1565,11 +1565,28 @@ def _d003_scan_source(tmp_path: Path, source: str) -> list[str]:
     return [f.message for f in findings if f.rule_id == "D003"]
 
 
-def test_d003_sdk_sql_client_import_loads_sqlalchemy(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(_SDK_SQL_CLIENT_SOURCE, id="from-sql-module-import-class"),
+        pytest.param(
+            "import application_sdk.clients.sql\n" 'URL = "crate://{host}:{port}/"\n',
+            id="import-sql-module",
+        ),
+        pytest.param(
+            "from application_sdk.clients import sql\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="from-clients-import-sql",
+        ),
+    ],
+)
+def test_d003_sdk_sql_client_import_loads_sqlalchemy(
+    tmp_path: Path, source: str
+) -> None:
     """A client built on the SDK's ``BaseSQLClient`` loads its dialect through
     SQLAlchemy without the repo importing ``sqlalchemy`` itself, so the scheme
     in its ``DatabaseConfig`` template is evidence."""
-    flagged = _d003_scan_source(tmp_path, _SDK_SQL_CLIENT_SOURCE)
+    flagged = _d003_scan_source(tmp_path, source)
     assert not any("sqlalchemy-cratedb" in m for m in flagged)
 
 
@@ -1586,8 +1603,9 @@ def test_d003_sdk_sql_client_import_loads_sqlalchemy(tmp_path: Path) -> None:
             id="non-sql-sdk-client",
         ),
         pytest.param(
-            "import application_sdk_clients_sql\n" 'URL = "crate://{host}:{port}/"\n',
-            id="lookalike-module-name",
+            "import application_sdk.clients.sqlite\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="lookalike-module-prefix",
         ),
         pytest.param(
             "from application_sdk.clients.sql import BaseSQLClient\n",
