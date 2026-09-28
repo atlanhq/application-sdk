@@ -23,7 +23,6 @@ import time
 from typing import Any, ClassVar
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.clients.models import DatabaseConfig
 from application_sdk_api.clients.sql import BaseSQLClient
 from application_sdk_api.errors.leaves import InvalidInputError
@@ -41,6 +40,7 @@ from application_sdk_api.handler.contracts import (
 )
 from application_sdk_api.handler.sql import SQLHandler
 from application_sdk_api.server import build_asgi_app
+from fastapi.testclient import TestClient
 
 # ---------------------------------------------------------------------------
 # Stub client — records queries, never touches a network

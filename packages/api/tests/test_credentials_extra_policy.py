@@ -15,11 +15,11 @@ from __future__ import annotations
 import logging
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.credentials.utils import parse_credentials_extra
 from application_sdk_api.errors.leaves import InvalidInputError
 from application_sdk_api.handler.base import DefaultHandler
 from application_sdk_api.server import build_asgi_app
+from fastapi.testclient import TestClient
 
 GOOD = {"database": "dev", "ssl_mode": "require"}
 

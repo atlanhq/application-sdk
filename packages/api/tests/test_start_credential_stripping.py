@@ -17,11 +17,11 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.handler.base import DefaultHandler
 from application_sdk_api.handler.contracts import normalize_credentials
 from application_sdk_api.server import build_asgi_app
 from application_sdk_api.workflow import StartResult
+from fastapi.testclient import TestClient
 
 SECRET = "hunter2-REAL-SECRET"
 

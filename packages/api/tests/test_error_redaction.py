@@ -126,12 +126,12 @@ def test_depth_is_bounded() -> None:
 
 
 def test_no_secret_reaches_the_failure_envelope() -> None:
+    # Evidence rides on the leaf's own dataclass fields. ``endpoint`` embeds the
+    # DSN; the message does too. Neither may reach the wire unredacted.
     err = SourceUnavailableError(
-        f"could not connect: {DSN}",
-        dsn=DSN,
-        db_password="hunter2",
-        api_key="AKIA-LIVE-KEY",
-        host="warehouse.internal",
+        message=f"could not connect: {DSN}",
+        endpoint=DSN,
+        source_type="warehouse.internal",
     )
     blob = _wire_blob(err.to_failure_details().model_dump(mode="json"))
     assert not [s for s in SECRETS if s in blob], blob
@@ -147,7 +147,7 @@ def test_preflight_check_message_is_scrubbed() -> None:
 
 
 def test_cause_repr_never_reaches_the_http_caller() -> None:
-    err = SourceUnavailableError("warehouse is resuming")
+    err = SourceUnavailableError(message="warehouse is resuming")
     fd = err.to_failure_details().model_copy(
         update={"cause_repr": "OperationalError: " + DSN}
     )
@@ -175,7 +175,7 @@ def test_failed_check_error_message_beats_its_plain_message() -> None:
         passed=False,
         message="generic failure",
         error=SourceUnavailableError(
-            "warehouse is resuming", suggested_action="retry in 60s"
+            message="warehouse is resuming", suggested_action="retry in 60s"
         ),
     )
     assert check.resolved_message == "warehouse is resuming"
@@ -192,7 +192,7 @@ def test_a_passing_check_keeps_its_own_message() -> None:
 
 
 def test_an_app_error_is_coerced_into_failure_details() -> None:
-    check = PreflightCheck(name="auth", passed=False, error=AuthError("denied"))
+    check = PreflightCheck(name="auth", passed=False, error=AuthError(message="denied"))
     assert isinstance(check.error, FailureDetails)
     assert check.error.category is AuthError.category
 
@@ -264,7 +264,7 @@ def test_no_route_ships_the_dsn_password(path: str) -> None:
 def test_an_app_error_message_is_redacted_at_construction() -> None:
     """str(exc) feeds every route's HTTPException detail and log line, so the
     redaction has to happen once, in the constructor."""
-    err = SourceUnavailableError(f"could not connect: {DSN}")
+    err = SourceUnavailableError(message=f"could not connect: {DSN}")
     assert "sup3rs3cr3t" not in str(err)
     assert "sup3rs3cr3t" not in err.message
     assert "warehouse.internal" in err.message  # diagnostic survives
@@ -654,9 +654,7 @@ def test_a_nested_non_str_key_does_not_raise_out_of_the_validator() -> None:
     that this module's mask-instead-of-reject divergence exists to prevent.
     ``{57014: n}`` is the realistic shape: a connector counting rows by SQLSTATE.
     """
-    masked = mask_secret_named_keys(
-        {"rows_by_sqlstate": {57014: 3}, "password": "p"}
-    )
+    masked = mask_secret_named_keys({"rows_by_sqlstate": {57014: 3}, "password": "p"})
     assert masked["password"] == "***"
     assert masked["rows_by_sqlstate"] == {57014: 3}
 
@@ -704,7 +702,13 @@ def test_a_redaction_failure_drops_the_payload_instead_of_the_process() -> None:
     from application_sdk_api.observability import logger_adaptor
 
     record = logging.LogRecord(
-        "application_sdk_api.tests.boom", logging.ERROR, __file__, 1, f"dsn={DSN}", None, None
+        "application_sdk_api.tests.boom",
+        logging.ERROR,
+        __file__,
+        1,
+        f"dsn={DSN}",
+        None,
+        None,
     )
     with mock.patch.object(
         logger_adaptor, "redact_secrets", side_effect=RuntimeError("regex blew up")

@@ -176,7 +176,10 @@ def test_it_defers_when_application_sdk_is_installed(
 
 def test_the_redaction_filter_is_attached_either_way() -> None:
     """Deferring root configuration must not cost the redaction."""
-    from application_sdk_api.observability.logger_adaptor import _RedactingFilter, get_logger
+    from application_sdk_api.observability.logger_adaptor import (
+        _RedactingFilter,
+        get_logger,
+    )
 
     logger = get_logger("application_sdk_api.filter.probe")
     assert any(isinstance(f, _RedactingFilter) for f in logger.filters)
@@ -201,7 +204,9 @@ def test_the_fallback_sink_covers_the_window_then_steps_aside() -> None:
     import io
     import logging
 
-    from application_sdk_api.observability.logger_adaptor import _UntilRootIsClaimedHandler
+    from application_sdk_api.observability.logger_adaptor import (
+        _UntilRootIsClaimedHandler,
+    )
 
     buf = io.StringIO()
     handler = _UntilRootIsClaimedHandler(buf)

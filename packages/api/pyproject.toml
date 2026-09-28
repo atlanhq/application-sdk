@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "atlan-application-sdk-api"
-version = "0.1.0"
+version = "3.39.0"
 description = "Consolidated API server runtime for Atlan app servers — the auth / preflight / metadata handler surface plus FastAPI assembly, with no worker or data-processing dependencies"
 license = "Apache-2.0"
 authors = [

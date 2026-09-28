@@ -44,7 +44,11 @@ from application_sdk_api.revision import (
     source_digest_from_record,
     source_digest_from_tree,
 )
-from application_sdk_api.server import APP_VERSION_HEADER, SERVER_REVISION_HEADER, build_asgi_app
+from application_sdk_api.server import (
+    APP_VERSION_HEADER,
+    SERVER_REVISION_HEADER,
+    build_asgi_app,
+)
 
 # ===========================================================================
 # Fixtures / builders

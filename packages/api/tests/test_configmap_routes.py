@@ -16,9 +16,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.handler.base import DefaultHandler
 from application_sdk_api.server import _is_form_configmap, _norm_cm_id, build_asgi_app
+from fastapi.testclient import TestClient
 
 FORM = {"config": {"steps": [{"id": "auth"}]}, "defaultConnectorType": "snowflake"}
 

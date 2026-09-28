@@ -87,9 +87,7 @@ def _configure() -> None:
         # before any handler ran.
         level, _requested, _unusable = _resolve_level()
         pkg = logging.getLogger("application_sdk_api")
-        if not any(
-            isinstance(h, _UntilRootIsClaimedHandler) for h in pkg.handlers
-        ):
+        if not any(isinstance(h, _UntilRootIsClaimedHandler) for h in pkg.handlers):
             handler = _UntilRootIsClaimedHandler()
             handler.setFormatter(
                 logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")

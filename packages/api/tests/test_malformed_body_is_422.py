@@ -12,9 +12,9 @@ a 500 is indistinguishable from a host fault, so it gets triaged as one.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.handler.base import Handler
 from application_sdk_api.server import build_asgi_app
+from fastapi.testclient import TestClient
 
 MALFORMED = [
     pytest.param("{not json", id="unparseable"),

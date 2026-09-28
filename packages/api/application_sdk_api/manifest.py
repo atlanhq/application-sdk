@@ -37,10 +37,10 @@ from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import Response
 from application_sdk_api.observability.logger_adaptor import get_logger
 from application_sdk_api.revision import ServerRevision
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import Response
 
 logger = get_logger(__name__)
 

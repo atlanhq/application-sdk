@@ -14,11 +14,14 @@ path hands the raw list to HandlerCredential, whose key/value are ``str``.
 from __future__ import annotations
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.handler.base import DefaultHandler
 from application_sdk_api.handler.contracts import AuthInput
-from application_sdk_api.handler.request_contract import RequestContractError, validate_request
+from application_sdk_api.handler.request_contract import (
+    RequestContractError,
+    validate_request,
+)
 from application_sdk_api.server import build_asgi_app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture
@@ -88,6 +91,7 @@ def test_a_valid_body_is_untouched(client: TestClient) -> None:
 def test_validate_request_raises_the_marker() -> None:
     with pytest.raises(RequestContractError) as caught:
         validate_request(AuthInput, {"timeout_seconds": "soon"})
+    assert caught.value.cause is not None
     assert caught.value.cause.errors()[0]["loc"] == ("timeout_seconds",)
 
 

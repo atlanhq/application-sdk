@@ -38,7 +38,7 @@ wheels = [
 ]
 
 [[package]]
-name = "atlan-application-sdk-server"
+name = "atlan-application-sdk-api"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -78,7 +78,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "atlan-application-sdk-server", extras = ["sql", "aws", "workflow"], marker = "extra == 'test'" },
+    { name = "atlan-application-sdk-api", extras = ["sql", "aws", "workflow"], marker = "extra == 'test'" },
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.34.0" },
     { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
     { name = "httpx2", marker = "extra == 'test'", specifier = ">=0.28.0" },
@@ -236,8 +236,8 @@ name = "httpcore2"
 version = "2.12.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "h11" },
-    { name = "truststore" },
+    { name = "h11", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
+    { name = "truststore", marker = "python_full_version < '3.12' or sys_platform != 'emscripten'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/be/ad/f4f0e57345f1870f3e8cb624e058d7eca6e5a27d33bcc3311d9b618734cd/httpcore2-2.12.0.tar.gz", hash = "sha256:9293522bba0aa7c4c8e9e3f040c16575bd8868e155a77fa30c7a9085a5eae648", size = 67548, upload-time = "2026-08-18T13:22:08.211Z" }
 wheels = [

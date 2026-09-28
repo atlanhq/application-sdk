@@ -12,9 +12,9 @@ import json
 import logging
 
 import pytest
+from application_sdk_api.manifest import register_manifest_routes
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from application_sdk_api.manifest import register_manifest_routes
 
 QUEUE = "atlan-{app_name}-{deployment_name}"
 

@@ -26,12 +26,12 @@ from uuid import uuid4
 if TYPE_CHECKING:
     from application_sdk_api.workflow.temporal import TemporalWorkflowStarter
 
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse
 from application_sdk_api.handler.contracts import normalize_credentials
+from application_sdk_api.handler.request_contract import read_json_object
 from application_sdk_api.manifest import ENTRYPOINT_NAME_RE
 from application_sdk_api.observability.logger_adaptor import get_logger
-from application_sdk_api.handler.request_contract import read_json_object
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 
 logger = get_logger(__name__)
 

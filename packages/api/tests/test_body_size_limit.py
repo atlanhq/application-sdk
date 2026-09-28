@@ -11,9 +11,9 @@ from __future__ import annotations
 import json
 
 import pytest
-from fastapi.testclient import TestClient
 from application_sdk_api.handler.base import DefaultHandler
 from application_sdk_api.server import MAX_REQUEST_BODY_BYTES, build_asgi_app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

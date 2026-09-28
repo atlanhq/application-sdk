@@ -1,25 +1,88 @@
-"""Typed failure envelope — the model ``PreflightCheck.error`` holds.
-
-Frozen + ``extra="forbid"`` so it validates strictly. Only ``message`` and
-``suggested_action`` are load-bearing for the preflight message-resolution
-rule, but the full field set is carried on the wire when a failed check
-serializes its typed error.
-"""
+"""FailureDetails — Pydantic wire envelope carried in ApplicationError.details."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from application_sdk_api.errors.base import redact_secrets
 from application_sdk_api.errors.categories import Audience, FailureCategory
-from application_sdk_api.errors.redaction import (
-    mask_secret_named_keys,
-    redact_secrets,
-    redact_wire_value,
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+# Keys that may carry secrets — rejected at envelope construction.
+_EVIDENCE_KEY_DENYLIST: frozenset[str] = frozenset(
+    {
+        "auth_header",
+        "authorization",
+        "cookie",
+        "token",
+        "password",
+        "secret",
+        "api_key",
+        "private_key",
+    }
 )
+
+# Compound variants like ``client_secret`` or ``db_password``, matched by
+# suffix so generic names such as ``object_key`` or ``cache_key`` still pass.
+_EVIDENCE_KEY_SUFFIX_DENYLIST: tuple[str, ...] = ("_secret", "_password", "_token")
+
+
+def secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]:
+    """Return the ``evidence`` keys :class:`FailureDetails` rejects as secret-named.
+
+    The envelope's validator refuses secret-named keys outright, so a producer
+    holding a rejected verdict has no way to ask *which* key was the problem
+    without re-deriving the denylist. Exposing the predicate keeps that single
+    source of truth here, at the wire layer where the rule lives.
+
+    Args:
+        evidence: Candidate evidence mapping, keyed by the producing
+            dataclass's field names.
+
+    Returns:
+        The offending keys, empty when the mapping is acceptable.
+
+    Example:
+        >>> sorted(secret_named_evidence_keys({"host": "db", "api_key": "x"}))
+        ['api_key']
+    """
+    return frozenset(
+        k
+        for k in evidence
+        if k.lower() in _EVIDENCE_KEY_DENYLIST
+        or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+    )
 
 
 class FailureDetails(BaseModel):
+    """Pydantic envelope serialized into ``ApplicationError.details=[…]``.
+
+    Round-trips through ``pydantic_data_converter`` without any dict adapter.
+    Consumers read routing fields (``category``, ``code``, ``retryable``,
+    ``audience``) as typed attributes; per-error context lives in ``evidence``,
+    whose keys match the dataclass fields of the Error that produced it.
+
+    Field semantics:
+    - ``category``: the closed FailureCategory enum — what happened.
+    - ``audience``: who needs to act (USER / PLATFORM / APP_OWNER). Closed
+      three-value enum; every leaf must pick one. There is no UNKNOWN
+      escape hatch — if the locus is unclear the answer is APP_OWNER
+      (the team that wrote the code investigates and reclassifies).
+    - ``code``: app-owned string for fine-grained identification.
+    - ``suggested_action``: optional imperative hint ("regrant Glue read access").
+      The voice shifts with the audience: customer-facing text when
+      ``audience=USER``, engineer-facing remediation when ``audience=APP_OWNER``,
+      runbook hint when ``audience=PLATFORM``.
+    - ``evidence``: per-error context whose schema is the producing dataclass.
+
+    Tenant identity is intentionally NOT carried on this envelope. Per-tenant
+    attribution is the consumer's job — the producer (the failing app) does
+    not know or carry tenant context. The Automation Engine (or any other
+    consumer that reads ``ApplicationError.details``) attaches tenant from
+    its own context when it ingests the failure.
+    """
+
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     category: FailureCategory
@@ -33,19 +96,28 @@ class FailureDetails(BaseModel):
     run_id: str | None = None
     cause_repr: str | None = None
 
-    # Scrub at the envelope, not at the producer: _summarize_check serialises
-    # this whole model into the /check response body, and a driver exception
-    # carrying a DSN would otherwise ship the source password to the caller.
-    # Validating here covers every construction path, including a connector
-    # building FailureDetails directly.
+    @field_validator("message", "suggested_action")
+    @classmethod
+    def _redact_free_text(cls, v: str | None) -> str | None:
+        """Scrub credentials out of the handler-authored strings, once, here.
+
+        These two fields are the only free text on the envelope and both are
+        written by the app, so a driver's connection string or a presigned URL
+        lands in them routinely. This model is what reaches Temporal history,
+        the Automation Engine and every log row, so redacting where it is built
+        covers every consumer at once — including the ones not written yet.
+        Idempotent, so an envelope replayed off the wire is unchanged.
+        ``evidence`` is handled below by key name instead: it is structured,
+        and a secret-named key is a producer bug worth rejecting, not masking.
+        """
+        return v if v is None else redact_secrets(v)
+
     @field_validator("evidence")
     @classmethod
-    def _scrub_evidence(cls, v: dict[str, Any]) -> dict[str, Any]:
-        return mask_secret_named_keys(redact_wire_value(v))
-
-    @field_validator("message", "cause_repr", "suggested_action")
-    @classmethod
-    def _scrub_text(cls, v: str | None) -> str | None:
-        # message is the likeliest carrier: the documented default for a SQL
-        # connector is `message=str(exc)`, and a driver's str() embeds the DSN.
-        return redact_secrets(v) if isinstance(v, str) else v
+    def _no_secret_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
+        bad = secret_named_evidence_keys(v)
+        if bad:
+            raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
+                "evidence keys may not use secret-named fields: %s" % sorted(bad)
+            )
+        return v
