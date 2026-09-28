@@ -26,12 +26,15 @@ context, which the Temporal interceptor already populates:
 * ``last_sync_workflow_name`` ← the **AE-dispatched workflow's Temporal
   id**, picked up via ``parent_workflow_id`` when a connector workflow is
   running inside an AE-spawned child (``workflow.info().parent``);
-  otherwise the top-level ``workflow_id``.  This is a run-unique UUID
-  (e.g. ``4b9eade4-de53-4b69-9010-2446e0a8f85c``) — clickable from an
-  asset back to that exact AE run's history in Temporal UI for debugging.
+  otherwise the top-level ``workflow_id``.  Under AE this is the
+  workflow *version* GUID (e.g. ``4b9eade4-de53-4b69-9010-2446e0a8f85c``):
+  it identifies the AE workflow, and every run of that version shares it.
+  It is not run-unique — ``last_sync_run`` is the field that names a run.
 * ``last_sync_run`` ← the correlation id that ties the full end-to-end
   run (extract + publish) together; propagated through Temporal headers
-  + memo by the correlation interceptor.
+  + memo by the correlation interceptor.  For AE-dispatched runs AE sets
+  it to the WorkflowRun GUID — the same ``runId`` the Atlan UI's native
+  runs page links by.
 * ``last_sync_run_at`` ← the current UTC epoch in milliseconds (pyatlan
   / pydantic auto-converts to a ``datetime`` internally).
 
@@ -57,12 +60,15 @@ and a single API enforces that.  See BLDX-1229.
 Trade-offs to be aware of:
 
 * ``last_sync_run`` defaults to the SDK correlation id (end-to-end span
-  across extract + publish) rather than the Temporal ``run_id`` that
-  appears in the Atlan UI's runs-page URL.  Callers that want UI
-  clickthrough semantics should pass ``run=<temporal_run_id>``
-  explicitly.
-* ``workflow_name`` returns the **AE Temporal workflow_id** — a
-  run-unique UUID — *not* the Atlan UI's workflow slug (the
+  across extract + publish).  For AE-dispatched runs that is the
+  WorkflowRun GUID, which is the ``runId`` in the native runs-page URL
+  (``…/runs?runId=<guid>&engine=native``) — so the default already
+  gives UI clickthrough.  Do not override it with the Temporal
+  ``run_id``: that id appears in no Atlan UI URL, and substituting it
+  breaks the link.
+* ``workflow_name`` returns the **AE Temporal workflow_id** — the
+  workflow version GUID, shared by every run of that version — *not*
+  the Atlan UI's workflow slug (the
   ``<connector>-<short>`` string in URLs like
   ``…/workflows/profile/dbt-AMBSvQPJ/…``).  The UI slug isn't plumbed
   through to the SDK today.  Connection identity is already carried on
@@ -128,8 +134,11 @@ class LastSyncDetails:
 
     Attributes:
         run: Correlation id tying the full run together (extract + publish).
+            Under AE, the WorkflowRun GUID the UI's runs page links by.
             Empty string when no correlation context is set.
-        workflow_name: AE-assigned workflow id (UUID, run-unique).
+        workflow_name: AE-assigned workflow id — the workflow version
+            GUID, shared across every run of that version (not
+            run-unique; ``run`` identifies the run).
             Resolves to the topmost workflow id — ``parent_workflow_id``
             when running inside a child workflow, ``workflow_id`` when
             running at the top.  Empty string outside Temporal.
