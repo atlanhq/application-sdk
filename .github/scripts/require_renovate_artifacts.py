@@ -20,10 +20,14 @@ Behaviour
   call the API.
 * Renovate PR: read ``renovate/artifacts`` on the head SHA. Renovate pushes the
   branch before it posts statuses, so an absent or ``pending`` context is
-  polled for a bounded time, long enough to outlast application-sdk's
-  lock-cooldown carry-forward (``carry_artifact_status.py``). ``success`` passes; anything else fails, including
-  still-absent once the poll is spent. Failing on absent is only safe because
-  the fleet preset sets ``statusCheckWhen.artifactError = "always"``.
+  polled for up to a minute. Renovate posts it seconds after the push, so the
+  poll only runs out when the status is never coming. ``success`` passes;
+  anything else fails, including still-absent once the poll is spent. Failing
+  on absent is only safe because the fleet preset sets
+  ``statusCheckWhen.artifactError = "always"``.
+* Renovate stamps ``renovate/artifacts`` only on commits it authored, so a
+  commit pushed to a ``renovate/*`` branch by a human or another bot leaves the
+  head unstamped and this gate red; recover by having Renovate rebase the PR.
 """
 
 from __future__ import annotations
@@ -46,7 +50,7 @@ RENOVATE_PREFIX = "renovate/"
 SUCCESS = "success"
 WAIT_STATES = frozenset({ARTIFACT_MISSING, "pending"})
 
-POLL_ATTEMPTS = 126
+POLL_ATTEMPTS = 6
 POLL_INTERVAL_SECONDS = 10
 
 sleep = time.sleep

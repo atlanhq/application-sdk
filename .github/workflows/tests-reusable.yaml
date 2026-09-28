@@ -3138,7 +3138,7 @@ jobs:
   renovate-artifacts:
     name: Renovate artifacts
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 5
     permissions:
       contents: read
       statuses: read

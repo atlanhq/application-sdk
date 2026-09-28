@@ -158,11 +158,6 @@ def _timeout_minutes(workflow: str, job: str) -> int:
     return int(jobs[job]["timeout-minutes"])
 
 
-def test_default_wait_outlasts_the_lock_cooldown_carry_forward():
-    cooldown = _timeout_minutes("renovate-lock-cooldown.yaml", "bound") * 60
-    assert gate.POLL_ATTEMPTS * gate.POLL_INTERVAL_SECONDS >= cooldown
-
-
 def test_job_timeout_outlasts_the_wait():
     wait = gate.POLL_ATTEMPTS * gate.POLL_INTERVAL_SECONDS
     assert _timeout_minutes("tests-reusable.yaml", "renovate-artifacts") * 60 > wait
