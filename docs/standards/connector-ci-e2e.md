@@ -33,7 +33,7 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 
 `application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (looker, saperp at time of writing; domo migrated to `testing/e2e` in atlanhq/atlan-domo-app#130) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
 
-The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating the three remaining suites instead.
+The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating the two remaining suites instead.
 
 ### The SDR base class
 
