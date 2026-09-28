@@ -11,6 +11,7 @@ stage/commit the way that gate expects, which is why it imports
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -147,7 +148,6 @@ def test_marker_round_trip_and_body_leads_with_marker():
         lost={},
         automerge=True,
         automerge_reason="",
-        run_url="https://example.invalid/run",
     )
     assert body.startswith(gate.pr_marker("0.39.0"))
     assert gate.marker_suite_version(body) == "0.39.0"
@@ -161,10 +161,60 @@ def test_body_flags_lost_settings_and_holds_automerge():
         lost={".github/workflows/tests.yaml": ["unit: 95"]},
         automerge=False,
         automerge_reason="settings would be lost",
-        run_url="https://example.invalid/run",
     )
     assert "unit: 95" in body
     assert "not armed" in body
+
+
+def test_body_is_stable_across_runs():
+    kwargs = dict(
+        suite_version="0.39.0",
+        touched=["renovate.json"],
+        lost={},
+        automerge=True,
+        automerge_reason="",
+    )
+    assert lane.render_pr_body(**kwargs) == lane.render_pr_body(**kwargs)
+    assert "actions/runs" not in lane.render_pr_body(**kwargs)
+
+
+def _commits_runner(commits: list[dict]) -> FakeRunner:
+    return FakeRunner(
+        {
+            (
+                "gh",
+                "api",
+                f"repos/{REPO}/pulls/7/commits",
+                "--paginate",
+                "--slurp",
+            ): subprocess.CompletedProcess([], 0, stdout=json.dumps([commits])),
+        }
+    )
+
+
+def _commit(sha: str, parents: int = 1, author: str = BOT) -> dict:
+    return {
+        "sha": sha,
+        "author": {"login": author},
+        "parents": [{"sha": f"p{i}" * 20} for i in range(parents)],
+    }
+
+
+def test_lane_commits_ok_for_the_single_lane_commit():
+    head = "h" * 40
+    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner([_commit(head)])) is True
+
+
+def test_lane_commits_not_ok_after_update_branch_merge():
+    head = "h" * 40
+    commits = [_commit("a" * 40), _commit(head, parents=2)]
+    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner(commits)) is False
+
+
+def test_lane_commits_not_ok_for_foreign_commit():
+    head = "h" * 40
+    commits = [_commit(head, author="someone")]
+    assert lane.lane_commits_ok(REPO, 7, head, _commits_runner(commits)) is False
 
 
 def test_pr_title_names_the_pinned_version():

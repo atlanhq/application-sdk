@@ -322,7 +322,6 @@ def render_pr_body(
     lost: dict[str, list[str]],
     automerge: bool,
     automerge_reason: str,
-    run_url: str,
 ) -> str:
     lines = [
         gate.pr_marker(suite_version),
@@ -370,7 +369,7 @@ def render_pr_body(
         "already carries the changes. Please don't push to this branch — the "
         "next run force-pushes over it.",
         "",
-        f"Opened by application-sdk `conformance-resync.yml` · [run]({run_url})",
+        "Opened by application-sdk `conformance-resync.yml`.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -397,6 +396,18 @@ def should_dispatch_approval(
     if not head_sha or not checks_ok:
         return False
     return gate.count_resync_approvals(reviews, head_sha) == 0
+
+
+def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) -> bool:
+    commits = _flatten(
+        gh_json(
+            ["api", f"repos/{repo}/pulls/{pr_number}/commits", "--paginate", "--slurp"],
+            runner,
+            what="reading lane PR commits",
+        )
+    )
+    ok, _, _ = gate.check_commits(str(pr_number), commits, head_sha)
+    return ok
 
 
 def checks_all_green(repo: str, pr_number: int, runner: Runner) -> bool:
@@ -454,7 +465,6 @@ def process_repo(
     repo: str,
     *,
     identity: tuple[str, str],
-    run_url: str,
     dry_run: bool,
     automerge_enabled: bool,
     diffs_dir: pathlib.Path | None,
@@ -619,6 +629,10 @@ def process_repo(
                 git(["rev-parse", "FETCH_HEAD^{tree}"], work, runner).strip()
                 == new_tree
             )
+            if same_content and not lane_commits_ok(
+                repo, keep["number"], remote_sha, runner
+            ):
+                same_content = False
             if same_content:
                 detail = gh_json(
                     ["api", f"repos/{repo}/pulls/{keep['number']}"],
@@ -668,7 +682,6 @@ def process_repo(
         lost={},
         automerge=automerge,
         automerge_reason=automerge_reason,
-        run_url=run_url,
     )
     if keep:
         if keep.get("title") != title or keep.get("body") != body:
@@ -866,12 +879,6 @@ def main() -> int:
         if args.dry_run
         else bot_identity(gate.RESYNC_AUTHOR, runner)
     )
-    run_url = (
-        f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/"
-        f"{os.environ.get('GITHUB_REPOSITORY', 'atlanhq/application-sdk')}/actions/runs/"
-        f"{os.environ.get('GITHUB_RUN_ID', '')}"
-    )
-
     try:
         roster = discover_roster(scoped, runner)
     except discover.DiscoveryError as exc:
@@ -885,7 +892,6 @@ def main() -> int:
             r = process_repo(
                 repo,
                 identity=identity,
-                run_url=run_url,
                 dry_run=args.dry_run,
                 automerge_enabled=automerge_enabled,
                 diffs_dir=diffs_dir,
