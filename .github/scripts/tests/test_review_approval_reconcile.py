@@ -1745,3 +1745,37 @@ def test_a_stalled_sdk_review_approve_ends_the_attempt_instead_of_hanging():
     outcomes = run_sweep(gh)
 
     assert [o.action for o in outcomes] == [reconcile.FAILED]
+
+
+# --- lens review round 7 (PR #4035) ----------------------------------------
+
+
+def test_stamp_bounds_its_runner_whatever_the_caller_passes():
+    """F-0796f6: `stamp` hands its runner to the stamper, which calls `gh`
+    itself. It bounds the runner there, so a raw `subprocess.run`-style runner
+    from any caller still gets the timeout on every call, the APPROVE included."""
+    recorder = _KwargsRecorder(base_gh())
+
+    stamped = reconcile.stamp(
+        REPO, PR, HEAD, recorder, sleeper=lambda _s: None, clock=NOW.timestamp
+    )
+
+    assert stamped.action == approve.APPROVED
+    assert any(is_approve(argv) for argv, _ in recorder.seen)
+    assert [
+        argv
+        for argv, kw in recorder.seen
+        if kw.get("timeout") != reconcile.GH_TIMEOUT_SECONDS
+    ] == []
+
+
+def test_a_runner_bounded_twice_passes_one_timeout():
+    seen: list[dict] = []
+
+    def raw(argv, **kwargs):
+        seen.append(kwargs)
+        return ok()
+
+    reconcile.bounded(reconcile.bounded(raw))(["gh", "api", "x"], check=False)
+
+    assert seen == [{"check": False, "timeout": reconcile.GH_TIMEOUT_SECONDS}]

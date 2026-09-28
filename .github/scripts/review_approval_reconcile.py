@@ -233,7 +233,9 @@ def run_gh(runner: Runner, argv: list[str], **kwargs) -> subprocess.CompletedPro
     failed result (exit 124, like coreutils `timeout`), so each caller's own
     failure handling covers a stalled CLI too."""
     try:
-        return runner(argv, timeout=GH_TIMEOUT_SECONDS, **kwargs)
+        # setdefault, so a runner bounded twice passes one timeout, not two.
+        kwargs.setdefault("timeout", GH_TIMEOUT_SECONDS)
+        return runner(argv, **kwargs)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             args=argv,
@@ -409,7 +411,9 @@ def stamp(
         "APPROVE_MAX_WAIT_SECONDS": "45",
     }
     with stamper_env(env):
-        return approve.stamp_verdict(runner=runner, sleeper=sleeper, now=clock)
+        # Bounded here, where the stamper gets it, whatever the caller passed:
+        # it calls `gh` itself, the APPROVE included.
+        return approve.stamp_verdict(runner=bounded(runner), sleeper=sleeper, now=clock)
 
 
 def _blocked_outcome(
@@ -487,8 +491,7 @@ def sdk_review_verdict(
     if approve.APPROVED_LABEL not in label_names(pr):
         return None
 
-    runner = bounded(runner)
-    client = approve.Client(repo, str(number), runner)
+    client = approve.Client(repo, str(number), bounded(runner))
 
     comment = client.latest_summary_comment()
     if comment is None:
