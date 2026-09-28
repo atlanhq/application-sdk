@@ -311,6 +311,86 @@ def test_snippet_in_text_detects_removed_code():
 # ---- selection & grouping ------------------------------------------------------------
 
 
+RENAME_DIFF = (
+    "diff --git a/.github/workflows/old-name.yml b/.github/workflows/new-name.yml\n"
+    "similarity index 90%\n"
+    "rename from .github/workflows/old-name.yml\n"
+    "rename to .github/workflows/new-name.yml\n"
+    "--- a/.github/workflows/old-name.yml\n"
+    "+++ b/.github/workflows/new-name.yml\n"
+    "@@ -1,2 +1,2 @@\n"
+    "-name: old\n"
+    "+name: new\n"
+    " on: push\n"
+)
+
+
+def _renamed_workspace(tmp_path, extra_diff: str = "", max_files: int = 50):
+    """A base checkout that still has the old file, and the PR renaming it."""
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    (tmp_path / ".github/workflows/old-name.yml").write_text("name: old\non: push\n")
+    gh = FakeGitHub(
+        files={(".github/workflows/new-name.yml", "h1"): "name: new\non: push\n"}
+    )
+    files = parse_unified_diff(RENAME_DIFF + extra_diff)
+    head = review_mod.head_side_text(gh, files, "h1", max_files)
+    return Workspace(root=tmp_path, head_text=head, diffs={}, index=None), head
+
+
+def test_a_renamed_file_is_gone_from_its_old_path(tmp_path):
+    """The base checkout still has the old file. Without this, every lookup
+    reads the base branch's copy, and a finding saying "the old file is still
+    here" can never be verified fixed (seen on a PR that renamed a workflow)."""
+    ws, _ = _renamed_workspace(tmp_path)
+
+    assert ws.text(".github/workflows/old-name.yml") is None
+    assert ws.text(".github/workflows/new-name.yml") == "name: new\non: push\n"
+    assert ".github/workflows/old-name.yml" not in ws.files()
+    assert ".github/workflows/new-name.yml" in ws.files()
+    assert read_file(ws, ".github/workflows/old-name.yml").startswith(
+        "ERROR: cannot read"
+    )
+
+
+def test_a_rename_past_the_changed_file_cap_still_hides_its_old_path(tmp_path):
+    """Old paths cost no request, so the cap on head-text reads does not
+    apply to them."""
+    ws, head = _renamed_workspace(tmp_path, max_files=0)
+
+    assert head == {".github/workflows/old-name.yml": ""}
+    assert ws.text(".github/workflows/old-name.yml") is None
+
+
+def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path):
+    added = (
+        "diff --git a/.github/workflows/old-name.yml b/.github/workflows/old-name.yml\n"
+        "new file mode 100644\n"
+        "--- /dev/null\n"
+        "+++ b/.github/workflows/old-name.yml\n"
+        "@@ -0,0 +1 @@\n"
+        "+name: replacement\n"
+    )
+    (tmp_path / ".github" / "workflows").mkdir(parents=True)
+    gh = FakeGitHub(
+        files={
+            (".github/workflows/new-name.yml", "h1"): "name: new\n",
+            (".github/workflows/old-name.yml", "h1"): "name: replacement\n",
+        }
+    )
+    head = review_mod.head_side_text(
+        gh, parse_unified_diff(RENAME_DIFF + added), "h1", 50
+    )
+
+    assert head[".github/workflows/old-name.yml"] == "name: replacement\n"
+
+    # F-1d0386: the add-back sits past the head-text cap. It is not read, and
+    # it must not be marked removed either.
+    capped = review_mod.head_side_text(
+        gh, parse_unified_diff(RENAME_DIFF + added), "h1", 1
+    )
+    assert ".github/workflows/old-name.yml" not in capped
+
+
 def test_select_skips_lockfiles_binaries_and_deletions():
     d = DIFF + (
         "diff --git a/uv.lock b/uv.lock\n--- a/uv.lock\n+++ b/uv.lock\n@@ -1 +1 @@\n-a\n+b\n"
