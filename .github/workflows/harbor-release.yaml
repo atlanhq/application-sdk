@@ -1,5 +1,9 @@
 # Publishes `app-runtime-base` — the image every Atlan app Dockerfile builds
-# FROM — to Harbor and GHCR under an identical manifest digest.
+# FROM — to GHCR. Apps reference it as
+# `registry.atlan.com/public/app-runtime-base`, which the registry gateway now
+# serves from `ghcr.io/atlanhq/app-runtime-base`; Harbor no longer answers at
+# that host, so there is no second registry to push. (The filename and run name
+# still say Harbor so external references to them keep resolving.)
 #
 # ONE ARCHITECTURE PER JOB, EACH ON A RUNNER NATIVE TO IT.
 #
@@ -11,21 +15,12 @@
 # only slow, so nothing reports the regression if a future edit collapses the
 # matrix back onto ubuntu-latest; test_base_image_native_builds pins it.
 #
-# Splitting the build means the two registries can no longer be fed by one
-# `buildx --push`. The shape is now build -> merge:
+# The shape is build -> merge:
 #
 #   prepare  computes the tag ladder (harbor_release_tags.py).
-#   build    per-arch, native. Pushes ONLY arch-suffixed staging tags, and only
-#            to GHCR — Harbor's project is the public, partner-facing catalog
-#            and must not accumulate `-amd64`/`-arm64` half-images.
+#   build    per-arch, native. Pushes ONLY arch-suffixed staging tags.
 #   merge    joins the two staging images into an index and writes it under
-#            every ladder tag on BOTH registries
-#            (create_multiarch_manifest.py).
-#
-# Digest parity survives that change: an index's bytes are a function of its
-# child digests, so the same two children pushed to two registries produce the
-# same index digest. resolve_base_redirect.py fails closed on any skew, and
-# docs/standards/build-security.md documents the property and the recovery.
+#            every ladder tag (create_multiarch_manifest.py).
 
 name: Publish Harbor Image (Release)
 
@@ -107,8 +102,6 @@ jobs:
         id: buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      # Harbor is deliberately absent here: this job pushes staging tags to GHCR
-      # only. The merge job holds the Harbor credential.
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -175,13 +168,6 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
-      - name: Log in to Atlan Harbor Registry
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: registry.atlan.com
-          username: ${{ secrets.HARBOR_USERNAME }}
-          password: ${{ secrets.HARBOR_PASSWORD }}
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -189,12 +175,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.ORG_PAT_GITHUB }}
 
-      # One `imagetools create` per repository, each attaching that repository's
-      # whole ladder in a single call — see create_multiarch_manifest.py for why
-      # the grouping matters. Not transactional across registries: if the Harbor
-      # leg lands and the GHCR leg fails, RE-RUN this job rather than cutting a
-      # new release. Every tag is rewritten from the same two staging images, so
-      # the operation is idempotent. See docs/standards/build-security.md.
+      # One `imagetools create` per repository, attaching the whole ladder in a
+      # single call — see create_multiarch_manifest.py for why the grouping
+      # matters. If it fails, RE-RUN this job rather than cutting a new release:
+      # every tag is rewritten from the same two staging images, so the
+      # operation is idempotent. See docs/standards/build-security.md.
       - name: Create and push multi-arch manifests
         env:
           TAGS: ${{ needs.prepare.outputs.tags }}

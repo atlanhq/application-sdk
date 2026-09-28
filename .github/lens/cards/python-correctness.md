@@ -1,0 +1,12 @@
+# python-correctness: Generic bugs, edge cases, async, leaks
+- Flag: logic errors: off-by-one, inverted conditions, `and`/`or` precedence, truthiness checks that drop valid `0`/`False`/`""`.
+- Flag: unguarded None/empty/missing-key paths on external data (`d[k]`, `x[0]`, unchecked `.get()`).
+- Flag: mutable default args (`def f(x=[])`); module-level or `self` state shared across requests/threads.
+- Flag: files, httpx clients, DB connections, temp files not closed on error paths (use `with`/`finally`).
+- Flag: `asyncio.create_task` with no kept reference or error handling; state shared between async code and `run_in_thread` code; a missing `await` in `tests/` or `.github/` (pyright does not check those).
+- Flag: `flush|close|shutdown|stop|drain` paths awaiting external I/O without `timeout=`/`asyncio.wait_for`.
+- Flag: `match`/`if-elif` over an Enum/status set that misses variants and has no default recording the unknown value.
+- Flag: `AppRegistry`/`TaskRegistry` or other singletons mutated without a lock; check-then-act races.
+- Flag: TODO/FIXME/HACK without an issue ref; commented-out or dead code; `# noqa`/`# type: ignore`/`# pragma: no cover` with no reason.
+- Don't flag (ruff/pyright own them): formatting, imports, typing syntax, `is` against a literal, except-pass.
+- Severity: critical if data loss/corruption or crash on a common path; high if users hit wrong behaviour, a leak or a race; medium for edge cases; low otherwise.

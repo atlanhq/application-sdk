@@ -187,13 +187,18 @@ they hit with zero changes on their side.
   was WIDENED (including nested containers), an INHERITED field whose base class changed
   the type, and a move OFF `Any` that keeps the same outer shape (`Any` replaced in
   place; a type alias declared at the top level of the same module, including a chain of
-  such aliases, is expanded to its target before the comparison — the ledger side is not
-  expanded, and an alias declared under `if TYPE_CHECKING:` / `try`, as a string, or as
-  a plain `X = <name>` such as `Ident = str` is not recognised, and a chain that expands
-  past a size budget is compared unexpanded). To retire a field deliberately, mark it
-  `sunset` in contract_schema.lock.json. Before treating a removal as dead code, grep
-  the whole repo — including scripts/ and *.sh JSONPath args like
-  $.extract.outputs.<field> — for readers the contract does not know about.
+  such aliases, or a public SDK type alias bound by `from application_sdk… import X`
+  (such as `FilterMap`), is expanded to its target before the comparison, a generic
+  alias taking its subscript's arguments (`BoundedDict[str, str]`) or `Any` for each
+  parameter when used bare — the ledger side is not expanded, and an alias declared
+  under `if TYPE_CHECKING:` / `try`, as a string, or as a plain `X = <name>` such as
+  `Ident = str` is not recognised, an alias whose name is bound more than once anywhere
+  in the file (in any scope, even a function local), or any alias in a file with a `from
+  x import *`, is not expanded, and a chain that expands past a size budget is compared
+  unexpanded). To retire a field deliberately, mark it `sunset` in
+  contract_schema.lock.json. Before treating a removal as dead code, grep the whole repo
+  — including scripts/ and *.sh JSONPath args like $.extract.outputs.<field> — for
+  readers the contract does not know about.
 
 Fires when a ledger entry for an entrypoint contract field is either:
 

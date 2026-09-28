@@ -61,18 +61,10 @@ jobs:
     # `<!-- SDK_REVIEW -->` and the legacy `<!-- TEST_SDK_REVIEW -->`
     # for in-flight PRs.
     #
-    # `atlan-app-fleet[bot]` is the @sdk-loop lane: its review phase posts the
-    # identical marker set using a token minted from the fleet App, so without
-    # it here a loop verdict of READY_TO_MERGE never became an atlan-ci
-    # approval and the PR stayed blocked with nothing saying why. Identity is
-    # still the gate — this widens WHO may produce a verdict, not what counts
-    # as one.
+    # The author login must match `VERDICT_AUTHORS` in sdk_review_approve.py.
     if: >-
       github.event.issue.pull_request != null
-      && (
-        github.event.comment.user.login == 'mothership-ai[bot]'
-        || github.event.comment.user.login == 'atlan-app-fleet[bot]'
-      )
+      && github.event.comment.user.login == 'mothership-ai[bot]'
       && (
         contains(github.event.comment.body, '<!-- SDK_REVIEW -->')
         || contains(github.event.comment.body, '<!-- TEST_SDK_REVIEW -->')

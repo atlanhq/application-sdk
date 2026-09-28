@@ -1,0 +1,70 @@
+# lens configuration. Read from the BASE branch only — a PR cannot retune its own reviewer.
+# Any change here (or in rules.toml) changes the config hash, which forces the next run on
+# every open PR to be a full review rather than an incremental one.
+
+[model]
+name = "gpt-6-luna"
+reasoning_effort = "max"  # luna's highest; verified 2026-09-25: max + tools works on /v1/responses via our gateway
+# "responses" (/v1/responses): the only API on which luna reasons AND calls tools; reasoning
+# is also carried between turns. "chat" (/v1/chat/completions): tools only work with
+# reasoning_effort "none" there. If the gateway does not serve /v1/responses, lens falls back
+# to chat (reasoning "none") once per run and says so in the summary.
+api = "responses"
+
+# gpt-6-luna list prices, USD per million tokens (OpenAI pricing docs, 2026-09-25; LiteLLM's
+# model_prices_and_context_window.json carries the same). Used to RESERVE a call's worst case
+# against the per-PR cap before it is sent; the cost actually booked is what LiteLLM reports
+# (x-litellm-response-cost). Cache writes bill at 1.25x input; the reservation allows for it.
+[model.price]
+input_per_mtok = 0.10
+cached_input_per_mtok = 0.01
+cache_write_per_mtok = 0.125
+output_per_mtok = 0.50
+
+[budget]
+cap_usd_per_pr = 1.0      # every round of every run on one PR, combined
+first_round_share = 0.6   # round 1 may use at most this share; later rounds get what is left
+
+[rounds]
+max_rounds = 5                    # invocations per PR; `/lens force` bypasses (the $ cap still holds)
+later_round_min_severity = "high" # after round 1, only critical/high may be newly raised
+
+[scope]
+max_bundles = 8
+concurrency = 4
+max_changed_files = 60
+exclude = [
+  ".mothership/**",
+  "conformance/**/fixtures/**",
+  "tests/**/fixtures/**",
+  "tests/**/golden/**",
+]
+
+[stages]
+reflect = true   # filter-only fact check of each bundle's comments
+verify = true    # one call per round checking still-open findings in touched files
+approach = true  # understand the problem + judge the approach: once per PR, first, advisory only
+
+[agent]
+# Turn budget per bundle scales with its size: base + 1 per extra file + 1 per 150 changed
+# lines, capped. It is a safety net, not a target: the model is never told it and stops
+# itself with task_done (observed 7-9 turns; none forced). What bounds cost is the bundle's
+# $ share, context_limit_tokens and the per-PR $ cap, whatever this says.
+max_tool_turns = 16
+turns_per_extra_file = 1
+lines_per_extra_turn = 150
+max_tool_turns_cap = 30
+max_empty_turns = 2
+context_limit_tokens = 60000
+review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort
+reflect_max_tokens = 8000
+max_comments = 12
+max_nits = 5              # low-severity (nit) findings kept per bundle
+# Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
+plan = 1
+plan_min_lines = 60
+plan_max_tokens = 8000
+# Second pass ("what did you miss?") on large bundles. Off until the replay bench shows it
+# finds real defects the first pass misses at an acceptable cost.
+second_pass = 0
+second_pass_min_lines = 300

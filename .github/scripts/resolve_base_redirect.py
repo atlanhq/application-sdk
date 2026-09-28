@@ -1,41 +1,30 @@
 #!/usr/bin/env python3
 """Resolve the GHCR base-image redirect for an app build.
 
-Emits the ``build-contexts`` mapping that redirects the SDK base image from
-Harbor to GHCR, after proving the redirect is both *applicable* and *safe*:
+Emits the ``build-contexts`` mapping that makes BuildKit fetch the SDK base
+image straight from GHCR when an app's Dockerfile names it by its public
+reference, ``registry.atlan.com/public/app-runtime-base``.
 
-1. **Match coverage.** BuildKit's named-context substitution is reference
-   specific: it only fires when the Dockerfile's ``FROM`` reference is exactly
-   the mapping's left-hand side. This script parses the Dockerfile (expanding
-   global ``ARG`` defaults the way BuildKit does) and, when no ``FROM`` matches
-   the supported reference, **warns and emits no mapping** — the build pulls
-   from Harbor exactly as it did before the redirect existed.
+That public reference is served by the registry gateway, which fronts the same
+``ghcr.io/atlanhq/app-runtime-base`` package, so the redirect does not change
+*what* is built — only that the pull skips the gateway hop. It used to route
+around Harbor's S3-backed blob egress and to prove cross-registry digest
+parity; Harbor has since been retired behind the gateway, so there is one
+backend and no parity left to prove.
 
-   That used to fail closed, on the reasoning that a caller who opted in and
-   still pulled from Harbor had a silent no-op to fix. The reasoning does not
-   survive the default flipping to true: nobody opts in per app any more, so
-   failing a build the redirect merely cannot *rewrite* punishes an app for a
-   fleet-wide default. A digest-pinned base is the case that made this
-   concrete — conformance I001 accepts it, and it does not match a tag
-   mapping, so a fail-closed preflight would have broken those builds the
-   moment the default turned on. Parity (below) is a different question and
-   still fails closed: that one is about whether the image is *right*, not
-   about whether the redirect applies.
+**Match coverage.** BuildKit's named-context substitution is reference
+specific: it only fires when the Dockerfile's ``FROM`` reference is exactly
+the mapping's left-hand side. This script parses the Dockerfile (expanding
+global ``ARG`` defaults the way BuildKit does) and, when no ``FROM`` matches
+the supported reference, **warns and emits no mapping** — the build pulls
+through ``registry.atlan.com`` as written. A digest-pinned base is the common
+case: conformance I001 accepts it, and it cannot match a tag mapping.
 
-2. **Cross-registry parity.** ``harbor-release.yaml`` pushes both registries
-   from one buildx invocation, but the push is not transactional: a GHCR-leg
-   failure after the Harbor names land leaves GHCR's floating ``:3`` on a
-   stale digest. This script resolves the tag on *both* registries and fails
-   closed on skew, pointing at the documented re-run recovery. On parity it
-   pins the named context to the **immutable digest** rather than the mutable
-   tag, so the build cannot race a concurrent base release.
-
-Registry unavailability is not skew — but it is not always a degrade either.
-If GHCR cannot be resolved the script warns and emits an empty mapping,
-degrading to the pre-redirect behaviour (pull from Harbor) instead of failing
-the app build. If *Harbor* cannot be resolved there is no working baseline to
-verify parity against, so the script fails closed — an unverified redirect is
-indistinguishable from a stale one.
+**Digest pin.** On a match the script resolves the tag on GHCR and pins the
+named context to the **immutable digest** rather than the mutable tag, so the
+build cannot race a concurrent base release. If GHCR cannot be resolved it
+warns and emits an empty mapping; the build then pulls through the gateway.
+Nothing here fails a build except an unreadable Dockerfile.
 
 Environment:
     GHCR_TOKEN     Token for ghcr.io registry auth (optional; anonymous when unset)
@@ -49,9 +38,9 @@ Usage (from within a workflow step)::
 Writes ``build_contexts`` (the mapping, or empty) and ``base_digest`` to
 ``$GITHUB_OUTPUT``.
 
-See ``docs/standards/build-security.md`` for the two-registry layout and the
-partial-publish recovery, and ``docs/standards/ci.md`` for why this logic lives
-in a tested script rather than inline workflow shell.
+See ``docs/standards/build-security.md`` for the registry layout, and
+``docs/standards/ci.md`` for why this logic lives in a tested script rather
+than inline workflow shell.
 """
 
 from __future__ import annotations
@@ -69,8 +58,9 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
-# The base image, as apps reference it (Harbor) and as CI retrieves it (GHCR).
-HARBOR_REPO = "registry.atlan.com/public/app-runtime-base"
+# The base image, as apps reference it (the public reference, served by the
+# registry gateway) and as CI retrieves it (GHCR, the gateway's backend).
+PUBLIC_REPO = "registry.atlan.com/public/app-runtime-base"
 GHCR_REPO = "ghcr.io/atlanhq/app-runtime-base"
 
 # Registry host that gets a credential. Compared against the parsed host, never
@@ -81,7 +71,7 @@ GHCR_HOST = "ghcr.io"
 # Tags the redirect supports. Deliberately narrow: `refactor-v3-latest` is a
 # workflow_dispatch branch build, so redirecting it would change *which* image a
 # repo resolves to, not just where the layers come from. Widening this set means
-# confirming harbor-release.yaml publishes the tag to both registries.
+# confirming harbor-release.yaml publishes the tag.
 SUPPORTED_TAGS = ("3",)
 
 # Manifest media types to accept — the base is a multi-arch index, but accept the
@@ -336,7 +326,7 @@ def registry_digest(
     Returns:
         The ``sha256:…`` digest, or ``None`` when the tag or registry could not
         be reached (missing tag, auth failure, network error). Callers treat
-        ``None`` as *unknown*, never as *skew*.
+        ``None`` as *unknown*.
     """
     host = registry_host(repo)
     path = repo.partition("/")[2]
@@ -388,48 +378,43 @@ class Decision:
     build_contexts: str = ""
     digest: str = ""
     warnings: list[str] = field(default_factory=list)
-    errors: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     """Informational: printed plainly, never as annotations, never fatal."""
-
-    @property
-    def ok(self) -> bool:
-        return not self.errors
 
 
 def decide(
     refs: list[BaseRef],
     *,
-    harbor_repo: str = HARBOR_REPO,
+    public_repo: str = PUBLIC_REPO,
     ghcr_repo: str = GHCR_REPO,
     supported_tags: tuple[str, ...] = SUPPORTED_TAGS,
     resolve_digest: Callable[[str, str], Optional[str]] = lambda repo, tag: None,
 ) -> Decision:
-    """Decide the ``build-contexts`` value for an opted-in build.
+    """Decide the ``build-contexts`` value for a build.
 
     Args:
         refs: Base references parsed from the caller's Dockerfile.
-        harbor_repo: Repository apps reference in their ``FROM``.
+        public_repo: Repository apps reference in their ``FROM``.
         ghcr_repo: Repository CI should retrieve the layers from.
         supported_tags: Tags the redirect is allowed to rewrite.
         resolve_digest: ``(repo, tag) -> digest | None`` — injected so the
             decision logic is testable without network access.
 
     Returns:
-        A :class:`Decision`. ``errors`` non-empty means fail the build.
+        A :class:`Decision`. It never fails the build: every outcome other than
+        a pinned mapping leaves the Dockerfile's own reference in charge.
     """
     decision = Decision()
 
-    supported_refs = {(harbor_repo, tag) for tag in supported_tags}
+    supported_refs = {(public_repo, tag) for tag in supported_tags}
     matched = [ref for ref in refs if split_ref(ref.resolved) in supported_refs]
 
     if not matched:
-        # A Dockerfile that already names the GHCR mirror has nothing to
+        # A Dockerfile that already names the GHCR package has nothing to
         # redirect: BuildKit pulls the base from GHCR on its own. That is the
-        # state the redirect exists to reach, not a misconfiguration -- and now
-        # that conformance I001 accepts the mirror, Dockerfiles will land here
-        # legitimately. A Harbor match, if any, still wins above: a multi-stage
-        # file naming both is redirected on its Harbor stage.
+        # state the redirect exists to reach, not a misconfiguration. A public
+        # match, if any, still wins above: a multi-stage file naming both is
+        # redirected on its public stage.
         on_ghcr = [ref for ref in refs if split_ref(ref.resolved)[0] == ghcr_repo]
         if on_ghcr:
             named = ", ".join(f"{r.raw} (line {r.line})" for r in on_ghcr)
@@ -440,73 +425,44 @@ def decide(
             return decision
         listed = ", ".join(f"{r.raw} (line {r.line})" for r in refs) or "none"
         unresolved = [r for r in refs if r.unresolved]
-        supported = ", ".join(f"{harbor_repo}:{t}" for t in supported_tags)
+        supported = ", ".join(f"{public_repo}:{t}" for t in supported_tags)
         if unresolved:
             decision.warnings.append(
                 f"No FROM statically matches {supported}, "
                 f"and {len(unresolved)} reference(s) resolve only inside BuildKit "
-                f"({', '.join(r.raw for r in unresolved)}). Building from Harbor "
-                "unchanged. Confirm the base tag or pass it as a Dockerfile ARG "
-                "default so this check can see it."
+                f"({', '.join(r.raw for r in unresolved)}). Building from the "
+                "Dockerfile's reference unchanged. Confirm the base tag or pass it "
+                "as a Dockerfile ARG default so this check can see it."
             )
             return decision
-        # Not an error: see the module docstring. With the redirect on by
-        # default, a base this script cannot rewrite is an app spelling its
-        # base differently -- not a misconfiguration to fail the build over.
+        # Not an error: see the module docstring. A base this script cannot
+        # rewrite is an app spelling its base differently, not a
+        # misconfiguration to fail the build over.
         decision.warnings.append(
             f"No FROM in this Dockerfile references {supported}, so the base "
-            f"cannot be redirected and this build pulls it from Harbor as "
-            f"before. Found: {listed}. Repin the base to a supported reference "
-            "to move this app's base pulls to GHCR."
+            f"cannot be redirected and this build pulls it as written. "
+            f"Found: {listed}. Repin the base to a supported reference to pull "
+            "it from GHCR directly."
         )
         return decision
 
     tag = split_ref(matched[0].resolved)[1]
-    harbor_digest = resolve_digest(harbor_repo, tag)
     ghcr_digest = resolve_digest(ghcr_repo, tag)
 
     if ghcr_digest is None:
         decision.warnings.append(
             f"{ghcr_repo}:{tag} could not be resolved, so the redirect is skipped "
-            "and this build pulls from Harbor as before. If this persists, check "
-            "that harbor-release.yaml published the GHCR leg."
-        )
-        return decision
-
-    if harbor_digest is None:
-        # Harbor is the redirect's *source*: when it cannot be resolved there is
-        # nothing to verify the GHCR tag against, so parity is unknowable and
-        # the pinned GHCR digest could be the stale leg of a partial publish.
-        # Degrading to a Harbor pull is not an option either — Harbor is the
-        # unreachable side — so the parity gate fails closed here, exactly as it
-        # does on proven skew. Only GHCR-unresolvable degrades (above).
-        decision.errors.append(
-            f"{harbor_repo}:{tag} could not be resolved, so cross-registry "
-            "parity cannot be verified — this build would ride the GHCR "
-            "redirect on an unproven base. Harbor unreachable is treated like "
-            "skew: re-run once Harbor recovers. Unsetting use_ghcr_base does "
-            "not help while Harbor is down — it moves the failure from this "
-            "check to the base-image pull. See docs/standards/build-security.md."
-        )
-        return decision
-
-    if harbor_digest != ghcr_digest:
-        decision.errors.append(
-            f"Cross-registry digest skew on :{tag} — {harbor_repo} serves "
-            f"{harbor_digest} but {ghcr_repo} serves {ghcr_digest}. The base "
-            "publish is not transactional across registries, so a GHCR-leg failure "
-            "can leave the floating tag stale. Re-run the failed harbor-release "
-            "run (do not cut a new release) to restore parity — see "
-            "docs/standards/build-security.md."
+            f"and this build pulls {public_repo}:{tag} through the registry "
+            "gateway. If this persists, check that harbor-release.yaml published "
+            "the tag."
         )
         return decision
 
     decision.digest = ghcr_digest
     # Pin the immutable digest, not the mutable tag: a base release landing
-    # mid-build cannot change what this build resolves to, and the digest is the
-    # one just verified equal to Harbor's.
+    # mid-build cannot change what this build resolves to.
     decision.build_contexts = (
-        f"{harbor_repo}:{tag}=docker-image://{ghcr_repo}@{ghcr_digest}"
+        f"{public_repo}:{tag}=docker-image://{ghcr_repo}@{ghcr_digest}"
     )
     return decision
 
@@ -530,8 +486,8 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the Dockerfile the build will use.",
     )
     parser.add_argument(
-        "--harbor-repo",
-        default=HARBOR_REPO,
+        "--public-repo",
+        default=PUBLIC_REPO,
         help="Repository apps reference in their FROM (redirect source).",
     )
     parser.add_argument(
@@ -558,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def resolve_digest(repo: str, tag: str) -> Optional[str]:
         # Host equality, not a prefix test on the reference: only the real GHCR
-        # gets the credential. Harbor's public project is pulled anonymously.
+        # gets the credential.
         is_ghcr = registry_host(repo) == GHCR_HOST
         digest = registry_digest(
             repo,
@@ -571,7 +527,7 @@ def main(argv: list[str] | None = None) -> int:
 
     decision = decide(
         refs,
-        harbor_repo=args.harbor_repo,
+        public_repo=args.public_repo,
         ghcr_repo=args.ghcr_repo,
         resolve_digest=resolve_digest,
     )
@@ -580,20 +536,16 @@ def main(argv: list[str] | None = None) -> int:
         print(note)
     for warning in decision.warnings:
         print(f"::warning::{warning}")
-    for error in decision.errors:
-        print(f"::error::{error}")
 
     _write_output("build_contexts", decision.build_contexts)
     _write_output("base_digest", decision.digest)
 
-    if not decision.ok:
-        return 1
     if decision.build_contexts:
         print(f"Redirect active: {decision.build_contexts}")
     elif decision.notes:
         print("Redirect not needed: the Dockerfile already builds from GHCR.")
     else:
-        print("Redirect inactive: building from Harbor as before.")
+        print("Redirect inactive: building from the Dockerfile's reference as written.")
     return 0
 
 

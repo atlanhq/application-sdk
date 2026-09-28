@@ -138,10 +138,6 @@ Runner = Callable[..., subprocess.CompletedProcess]
 Sleeper = Callable[[float], None]
 
 APPROVED = "approved"
-#: Mirrors sdk_loop_findings.MARK_AB. Duplicated rather than imported: this
-#: script runs under `python3` on a bare runner and must stay import-free of
-#: the loop lane, whose modules pull in PyYAML.
-MARK_AB = "<!-- SDK_LOOP_AB -->"
 SKIPPED = "skipped"
 FAILED = "failed"
 
@@ -176,18 +172,14 @@ SUMMARY_MARKERS = ("<!-- SDK_REVIEW -->", "<!-- TEST_SDK_REVIEW -->")
 # supersede detection, and (on the slow path, COMMENT_BODY empty) to re-read the
 # verdict itself. That read path must apply the same author check, or a forged
 # `<!-- SDK_REVIEW -->` comment from anyone else would be treated as a verdict
-# and could drive the atlan-ci APPROVE. Both entries are trusted bot identities
-# owned by this org; neither can be assumed by a PR author.
+# and could drive the atlan-ci APPROVE. The entry is a trusted bot identity
+# owned by this org; it cannot be assumed by a PR author.
 #
-# `atlan-app-fleet[bot]` is here because @sdk-loop posts its round verdicts
-# under the fleet App token rather than through the mothership sandbox. While
-# this was a single login, every consumer that FINDS a verdict by listing
-# comments — `latest_summary_comment()`, and so `sdk_review_reconcile.py` —
-# was blind to every loop verdict, and a loop approval lost to an `atlan-ci`
-# rate limit could never be reconciled. `sdk-review-approve-on-verdict.yml`
-# has accepted both logins in its `if:` since the loop shipped, so this
-# constant was the outlier, not the change.
-VERDICT_AUTHORS = frozenset({"mothership-ai[bot]", "atlan-app-fleet[bot]"})
+# Kept in step with the `if:` in `sdk-review-approve-on-verdict.yml`: every
+# consumer that FINDS a verdict by listing comments — `latest_summary_comment()`,
+# and so `sdk_review_reconcile.py` — reads this set, so a login admitted there
+# but missing here produces a verdict nothing can reconcile.
+VERDICT_AUTHORS = frozenset({"mothership-ai[bot]"})
 
 
 def _is_verdict_comment(comment: dict) -> bool:
@@ -827,17 +819,6 @@ def stamp_verdict(
                 f"posting)."
             )
             return StampOutcome(SKIPPED, 0, "no summary comment")
-
-    # Before the verdict is even read. A review-only run stamps this on its
-    # comment so the A/B can review merged PRs; the verdict is a measurement,
-    # not a decision, and nothing here — label, approval, status — may act on
-    # it. Checked first so no later guard can be argued into approving it.
-    if MARK_AB in body:
-        print(
-            f"PR #{pr_number}: verdict carries {MARK_AB} — a review-only run. "
-            "Nothing to stamp."
-        )
-        return StampOutcome(SKIPPED, 0, "review-only verdict")
 
     verdict = extract_verdict(body)
     if not verdict:
