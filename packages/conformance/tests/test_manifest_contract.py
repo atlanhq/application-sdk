@@ -17,10 +17,31 @@ since K006 needs real ``inputs.args`` JSONPath strings.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
+import pytest
+from conformance.suite.checks._entrypoint_contract_classes import (
+    CodeContractScan,
+    scan_file_for_entrypoint_contracts,
+)
+from conformance.suite.checks._entrypoint_contract_fields import (
+    collect_entrypoint_contract_names,
+)
 from conformance.suite.checks.manifest_contract import scan_all
+from conformance.suite.checks.preflight._common import (
+    build_registry,
+    collect_entrypoint_input_contract_names,
+)
+from conformance.suite.checks.prescriptions._decorator_provenance import (
+    collect_import_provenance,
+)
+from conformance.suite.checks.prescriptions._error_code_prefix import (
+    ClassRecord,
+    collect_classes,
+    collect_import_aliases,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 
@@ -526,3 +547,167 @@ def test_k006_suppression_directive_on_output_class(tmp_path: Path) -> None:
     assert k006
     assert all(f.suppressed for f in k006)
     assert "K006" not in _ids(findings)
+
+
+# ---------------------------------------------------------------------------
+# Implicit run() on an SDK App-template base
+# ---------------------------------------------------------------------------
+
+# An undecorated ``async def run`` is the entrypoint of any class whose base is
+# an SDK App-family class imported from ``application_sdk`` — ``App`` itself or
+# one of the templates (``SqlApp``, ``BaseMetadataExtractor``, ...). The
+# templates live outside the scanned repo, so the in-repo class registry alone
+# can never prove that ancestry; import provenance has to.
+
+_TEMPLATE_RUN_APP = """\
+{imports}
+from application_sdk.contracts.base import Input, Output
+
+class MyInput(Input):
+    foo: str = ""
+
+class MyOutput(Output):
+    bar: str = ""
+
+{prelude}class MyApp({base}):
+{decorator}    {kw}def run(self, input: MyInput) -> MyOutput:
+        pass
+"""
+
+
+def _template_run_app(
+    base: str,
+    *,
+    imports: str | None = None,
+    prelude: str = "",
+    decorator: str = "",
+    kw: str = "async ",
+) -> str:
+    return _TEMPLATE_RUN_APP.format(
+        imports=(
+            imports
+            if imports is not None
+            else f"from application_sdk.templates import {base}"
+        ),
+        base=base,
+        prelude=prelude,
+        decorator=decorator,
+        kw=kw,
+    )
+
+
+_TEMPLATE_BASES = [
+    "BaseMetadataExtractor",
+    "SqlApp",
+    "SqlMetadataExtractor",
+    "IncrementalSqlMetadataExtractor",
+    "SqlQueryExtractor",
+]
+
+_RECOGNISED = {f"template-{b}": _template_run_app(b) for b in _TEMPLATE_BASES} | {
+    "aliased-template": _template_run_app(
+        "Base",
+        imports="from application_sdk.templates import SqlApp as Base",
+    ),
+    "template-submodule": _template_run_app(
+        "BaseMetadataExtractor",
+        imports=(
+            "from application_sdk.templates.base_metadata_extractor "
+            "import BaseMetadataExtractor"
+        ),
+    ),
+}
+
+_NOT_RECOGNISED = {
+    "local-class-named-like-template": _template_run_app(
+        "BaseMetadataExtractor",
+        imports="",
+        prelude="class BaseMetadataExtractor:\n    pass\n\n",
+    ),
+    "undefined-name-like-template": _template_run_app("SqlApp", imports=""),
+    "non-sdk-module": _template_run_app(
+        "SqlApp", imports="from other_sdk.templates import SqlApp"
+    ),
+    "relative-import": _template_run_app(
+        "SqlApp", imports="from .templates import SqlApp"
+    ),
+    "same-name-attribute-of-other-module": _template_run_app(
+        "other_sdk.SqlApp",
+        imports="import other_sdk\nfrom application_sdk.templates import SqlApp",
+    ),
+    "sync-run": _template_run_app("SqlApp", kw=""),
+    "task-decorated-run": _template_run_app(
+        "SqlApp",
+        imports=(
+            "from application_sdk.templates import SqlApp\n"
+            "from application_sdk.app import task"
+        ),
+        decorator="    @task\n",
+    ),
+}
+
+
+def _entrypoint_inputs_by_scan(tmp_path: Path, src: str) -> dict[str, set[str]]:
+    """Resolve *src*'s entrypoint Input names through every shared scan."""
+    path = tmp_path / "app.py"
+    path.write_text(src, encoding="utf-8")
+    tree = ast.parse(src)
+    aliases = collect_import_aliases(tree)
+    by_name: dict[str, ClassRecord] = {
+        rec.name: rec for rec in collect_classes(tree, "app.py", aliases)
+    }
+
+    k_scan = CodeContractScan()
+    scan_file_for_entrypoint_contracts(
+        tree,
+        "app.py",
+        aliases,
+        collect_import_provenance(tree),
+        by_name,
+        {},
+        k_scan,
+    )
+    return {
+        "k_series": {
+            ep.input_class_name for ep in k_scan.entrypoints if ep.input_class_name
+        },
+        "contract_names": set(collect_entrypoint_contract_names({path: tree}, by_name))
+        - {"MyOutput"},
+        "preflight_inputs": set(
+            collect_entrypoint_input_contract_names(build_registry([path], tmp_path))
+        ),
+    }
+
+
+@pytest.mark.parametrize("src", _RECOGNISED.values(), ids=_RECOGNISED.keys())
+def test_implicit_run_on_sdk_template_base_is_an_entrypoint(
+    tmp_path: Path, src: str
+) -> None:
+    resolved = _entrypoint_inputs_by_scan(tmp_path, src)
+    assert resolved == {
+        "k_series": {"MyInput"},
+        "contract_names": {"MyInput"},
+        "preflight_inputs": {"MyInput"},
+    }
+
+
+@pytest.mark.parametrize("src", _NOT_RECOGNISED.values(), ids=_NOT_RECOGNISED.keys())
+def test_implicit_run_near_misses_are_not_entrypoints(tmp_path: Path, src: str) -> None:
+    resolved = _entrypoint_inputs_by_scan(tmp_path, src)
+    assert resolved == {
+        "k_series": set(),
+        "contract_names": set(),
+        "preflight_inputs": set(),
+    }
+
+
+def test_k006_resolves_output_of_run_on_sdk_template_base(tmp_path: Path) -> None:
+    paths = _write_py(tmp_path, {"app.py": _template_run_app("BaseMetadataExtractor")})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node(), "publish": _publish_node(["bar", "missing"])},
+    )
+    k006 = _k006(scan_all(paths, tmp_path))
+    assert len(k006) == 1
+    assert "$.extract.outputs.missing" in k006[0].message
+    assert "'MyOutput'" in k006[0].message

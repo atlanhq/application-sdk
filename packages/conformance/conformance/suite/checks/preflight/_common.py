@@ -12,7 +12,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    _parse_directives,
+    sdk_app_base_bindings,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     _SDK_CONTRACT_MODULE_PREFIXES,
     ImportProvenance,
@@ -384,6 +388,7 @@ def collect_entrypoint_input_contract_names(reg: Registry) -> frozenset[str]:
     contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
     for src in reg.sources:
+        sdk_bases = sdk_app_base_bindings(src.tree)
         for cls in _class_defs(src.tree):
             for func in _iter_class_body_methods(cls):
                 is_ep = False
@@ -402,6 +407,9 @@ def collect_entrypoint_input_contract_names(reg: Registry) -> frozenset[str]:
                         )
                         if bname is None:
                             continue
+                        if isinstance(base, ast.Name) and base.id in sdk_bases:
+                            is_ep = True
+                            break
                         bname = src.aliases.get(bname, bname)
                         if (
                             bname == "App"

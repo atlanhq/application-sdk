@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -734,6 +735,62 @@ def test_k018_silent_when_two_live_contracts_are_ambiguous(tmp_path: Path) -> No
         {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+# An app that overrides ``run`` on an SDK template base binds *that* method's
+# Input. The toolkit-generated ``AppInputContract`` beside it is the app's only
+# ExtractionInput descendant, so a scan that misses the override falls back to
+# the generated stub and flags every key the real contract declares.
+_TEMPLATE_RUN_OVERRIDE_APP = """\
+from application_sdk.templates import {base}
+from application_sdk.contracts.base import Input, Output
+
+class MyInput(Input):
+    connection: str = ""
+    workspace_id: str = ""
+
+class MyOutput(Output):
+    pass
+
+class MyApp({base}):
+    async def run(self, input: MyInput) -> MyOutput:
+        pass
+"""
+
+_GENERATED_INPUT_STUB = """\
+from application_sdk.templates.contracts import ExtractionInput
+
+class AppInputContract(ExtractionInput):
+    pass
+"""
+
+
+@pytest.mark.parametrize("base", ["BaseMetadataExtractor", "SqlApp"])
+def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
+    tmp_path: Path, base: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_APP.format(base=base),
+            "app/generated/_input.py": _GENERATED_INPUT_STUB,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "connection": "{{connection}}",
+                    "workspace_id": "{{workspace-id}}",
+                    "not_on_my_input": "{{not-on-my-input}}",
+                }
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"not_on_my_input"}
+    assert all(f.file == "app/workflow.py" for f in findings)
 
 
 # ---------------------------------------------------------------------------

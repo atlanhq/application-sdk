@@ -20,9 +20,10 @@ FP-avoidance: a class name that is *not* in the scanned tree and is *not* a
 clearly-untyped annotation is assumed OK (third-party / generated code we cannot
 follow). Only names resolvable within the scanned universe are flagged.
 
-P013 also covers the **implicit ``run()`` entrypoint**: a method named ``run``
-on a class whose base chain transitively reaches ``App`` is treated as an
-implicit entrypoint and checked under P013.
+P013 also covers the **implicit ``run()`` entrypoint**: an ``async def run``
+on a class whose base chain transitively reaches ``App``, or whose base is an
+SDK App template (``SqlApp``, ``BaseMetadataExtractor``, ...) imported from
+``application_sdk``, is treated as an implicit entrypoint and checked under P013.
 
 Decorator provenance
 --------------------
@@ -53,7 +54,11 @@ import ast
 from pathlib import Path
 from typing import Iterator
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    make_finding,
+    sdk_app_base_bindings,
+)
 from conformance.suite.schema.findings import Finding
 
 from ._contract_common import _terminal_name, _unwrap_annotated, _unwrap_optional_node
@@ -413,6 +418,7 @@ def check_p013_p014(
         in_cache = {} if shadows else input_cache
         out_cache = {} if shadows else output_cache
         this_app_cache = {} if shadows else app_cache
+        sdk_bases = sdk_app_base_bindings(tree)
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
@@ -443,6 +449,9 @@ def check_p013_p014(
                             base_name = base.attr
                         if base_name is None:
                             continue
+                        if isinstance(base, ast.Name) and base.id in sdk_bases:
+                            rule_id = "P013"
+                            break
                         # De-alias before comparing: handles `App as BaseApp`.
                         base_name = aliases.get(base_name, base_name)
                         if (

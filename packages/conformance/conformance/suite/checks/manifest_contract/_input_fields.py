@@ -393,10 +393,11 @@ def _pair_manifests_with_contracts(
 
     Two resolution paths, in order of confidence:
 
-    1. an explicit ``@entrypoint`` in the app's own source names the contract
-       (the same resolution K006 uses); or
-    2. the app inherits its entrypoint from an SDK template, so there is no
-       decorator to read — fall back to the app's sole ``ExtractionInput``
+    1. an explicit ``@entrypoint``, or an ``async def run`` override on an SDK
+       App-family base, in the app's own source names the contract (the same
+       resolution K006 uses); or
+    2. the app inherits ``run`` from an SDK template unchanged, so there is no
+       method to read — fall back to the app's sole ``ExtractionInput``
        descendant. Restricted to single-entrypoint apps: in multi-entrypoint
        mode there is no way to map one contract onto N manifests.
     """

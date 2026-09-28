@@ -36,6 +36,7 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
+from conformance.suite.checks._ast_common import sdk_app_base_bindings
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
     is_entrypoint_decorator,
@@ -137,9 +138,11 @@ def scan_file_for_entrypoint_contracts(
 
     Mirrors the entrypoint-detection logic in
     ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` (decorator
-    provenance + implicit ``App.run()``), but keeps the wire name and Output
-    class name paired per entrypoint instead of flattening into a name set.
+    provenance + implicit ``run()`` on an ``App``-family base), but keeps the
+    wire name and Output class name paired per entrypoint instead of flattening
+    into a name set.
     """
+    sdk_bases = sdk_app_base_bindings(tree)
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef):
             continue
@@ -167,6 +170,9 @@ def scan_file_for_entrypoint_contracts(
                     bname = _base_name(base)
                     if bname is None:
                         continue
+                    if isinstance(base, ast.Name) and base.id in sdk_bases:
+                        is_ep = True
+                        break
                     bname = aliases.get(bname, bname)
                     if (
                         bname == "App"

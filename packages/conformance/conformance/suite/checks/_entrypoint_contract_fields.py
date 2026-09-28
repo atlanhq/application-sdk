@@ -37,6 +37,7 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
+from conformance.suite.checks._ast_common import sdk_app_base_bindings
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
@@ -502,6 +503,7 @@ def collect_entrypoint_contract_names(
     for path, tree in file_trees.items():
         prov: ImportProvenance = collect_import_provenance(tree)
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        sdk_bases = sdk_app_base_bindings(tree)
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
@@ -522,6 +524,9 @@ def collect_entrypoint_contract_names(
                         bname = _base_name(base)
                         if bname is None:
                             continue
+                        if isinstance(base, ast.Name) and base.id in sdk_bases:
+                            is_ep = True
+                            break
                         bname = aliases.get(bname, bname)
                         if (
                             bname == "App"

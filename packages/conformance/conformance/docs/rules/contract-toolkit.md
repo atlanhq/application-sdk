@@ -1123,6 +1123,14 @@ Keys still inside an `args.metadata` envelope are **not** checked here: an app s
 emitting that envelope consumes it by design until it migrates, so demanding flat
 declarations of those keys would be wrong. The envelope itself is K020.
 
+**Which contract.** The entrypoint's `Input` is the first parameter annotation of its
+`@entrypoint` method, or of an undecorated `async def run` on a class whose base is
+`App` or an SDK App template (`SqlApp`, `BaseMetadataExtractor`, `SqlMetadataExtractor`,
+`IncrementalSqlMetadataExtractor`, `SqlQueryExtractor`) imported from `application_sdk`.
+A same-named local class, or one imported from any other module, is not an App base.
+Only when the app declares no entrypoint at all (it inherits `run` from the template
+unchanged) does the rule fall back to the app's sole live `ExtractionInput` descendant.
+
 **Scope.** This rule checks only that the app can *receive* the payload the Automation
 Engine sends it. A filter can also be lost upstream, in the platform's workflow
 re-render, before the payload is built at all (CONNECT-1318 / APPPLAT-371) — same

@@ -27,7 +27,7 @@ from ._pytest_collection import (
     is_test_function,
 )
 from ._scope import SDK_PACKAGE_PREFIX, detect_scope, is_sdk_package_name
-from ._sdk_app import SDK_APP_BASE_NAMES
+from ._sdk_app import SDK_APP_BASE_NAMES, sdk_app_base_bindings
 from ._toml_suppress import (
     SuppressionsMap,
     _is_suppressed,
@@ -62,4 +62,5 @@ __all__ = [
     "parse_toml_suppressions",
     "qualify_chained_attr_call",
     "register_alias_records",
+    "sdk_app_base_bindings",
 ]
