@@ -27,7 +27,8 @@ _WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
 def payload(state: str | None) -> str:
     statuses = [{"context": "renovate/artifacts", "state": state}] if state else []
     statuses.append({"context": "renovate/stability-days", "state": "success"})
-    return json.dumps({"state": "success", "statuses": statuses})
+    # --paginate --slurp: an array of page objects.
+    return json.dumps([{"state": "success", "statuses": statuses}])
 
 
 class Gh:
@@ -86,7 +87,40 @@ def test_non_renovate_ref_passes_without_api_call(stub, head_ref):
 def test_success_passes(stub):
     gh = stub(Gh(ok("success")))
     assert gate.main(["--head-ref", BRANCH, "--repo", REPO, "--sha", SHA]) == 0
-    assert gh.calls == [["gh", "api", f"repos/{REPO}/commits/{SHA}/status"]]
+    assert gh.calls == [
+        [
+            "gh",
+            "api",
+            f"repos/{REPO}/commits/{SHA}/status?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    ]
+
+
+def test_artifact_status_on_a_later_page_is_found(stub):
+    other = [{"context": f"ci/{i}", "state": "success"} for i in range(100)]
+    pages = [
+        {"state": "success", "statuses": other},
+        {
+            "state": "success",
+            "statuses": [{"context": "renovate/artifacts", "state": "success"}],
+        },
+    ]
+    gh = stub(Gh(subprocess.CompletedProcess([], 0, json.dumps(pages), "")))
+    assert gate.main(["--head-ref", BRANCH, "--repo", REPO, "--sha", SHA]) == 0
+    assert len(gh.calls) == 1
+
+
+def test_stalled_api_call_is_a_failed_fetch(monkeypatch):
+    def stall(*args, **kwargs):
+        assert kwargs["timeout"] == gate.API_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(args[0], kwargs["timeout"])
+
+    monkeypatch.setattr(gate.subprocess, "run", stall)
+    result = gate.run(["gh", "api", "x"])
+    assert result.returncode != 0
+    assert gate.fetch_status(REPO, SHA) is None
 
 
 @pytest.mark.parametrize("state", ["failure", "error"])

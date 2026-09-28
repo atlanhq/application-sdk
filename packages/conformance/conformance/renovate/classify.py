@@ -503,7 +503,11 @@ def auto_merge_expected(
     what lets the update:<type> labels go (FND-2201); it is also simply correct.
     """
     if repo_automerge_mode == "soft":
-        return False
+        # The soft template carves conformance minor/patch back out under
+        # groupName "conformance package" with automerge on, so that one lane
+        # still auto-merges. Its majors stay in "atlan platform", which
+        # classifies as ATLAN_PLATFORM and falls through to False here.
+        return category == Category.CONFORMANCE_PACKAGE
     if category == Category.LOCK_MAINTENANCE:
         return True
     if category == Category.GITHUB_ACTIONS:

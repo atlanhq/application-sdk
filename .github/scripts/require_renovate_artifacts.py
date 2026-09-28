@@ -52,16 +52,44 @@ WAIT_STATES = frozenset({ARTIFACT_MISSING, "pending"})
 
 POLL_ATTEMPTS = 6
 POLL_INTERVAL_SECONDS = 10
+API_TIMEOUT_SECONDS = 20
 
 sleep = time.sleep
 
 
 def run(command: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(command, capture_output=True, text=True, check=False)
+    # A stalled call is a failed fetch, not a hung job: without this bound one
+    # stuck request would hold the required check until the job timeout.
+    try:
+        return subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=API_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            command, 1, "", f"timed out after {API_TIMEOUT_SECONDS}s"
+        )
 
 
 def fetch_status(repo: str, sha: str) -> Any:
-    result = run(["gh", "api", f"repos/{repo}/commits/{sha}/status"])
+    """Return the combined status with every page's ``statuses`` merged.
+
+    The endpoint pages its ``statuses`` list, so a SHA with many contexts can
+    carry ``renovate/artifacts`` past the first page; reading only that page
+    would fail a healthy PR as missing.
+    """
+    result = run(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/commits/{sha}/status?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
     if result.returncode != 0:
         print(
             f"Could not read statuses for {sha[:7]}: {result.stderr.strip()}",
@@ -69,10 +97,19 @@ def fetch_status(repo: str, sha: str) -> Any:
         )
         return None
     try:
-        return json.loads(result.stdout)
+        pages = json.loads(result.stdout)
     except json.JSONDecodeError:
         print(f"Status payload for {sha[:7]} was not JSON.", file=sys.stderr)
         return None
+    if not isinstance(pages, list):
+        return None
+    statuses = [
+        entry
+        for page in pages
+        if isinstance(page, dict) and isinstance(page.get("statuses"), list)
+        for entry in page["statuses"]
+    ]
+    return {"statuses": statuses}
 
 
 def await_artifact_state(repo: str, sha: str, attempts: int, interval: float) -> str:

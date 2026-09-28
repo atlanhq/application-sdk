@@ -389,6 +389,31 @@ def test_soft_mode_repo_is_never_auto_merge_expected() -> None:
     assert pr.blocking_reason is BlockingReason.AWAITING_HUMAN_REVIEW
 
 
+def test_soft_mode_conformance_carve_out_is_auto_merge_expected() -> None:
+    # The soft template's carve-out keeps conformance minor/patch auto-merged
+    # in its own "conformance package" group, so an unarmed one is stuck, not
+    # waiting on a human.
+    pr = classify(
+        make_pr(
+            branch="renovate/conformance-package",
+            files=["uv.lock"],
+            review_decision="",
+            auto_merge_enabled=False,
+            repo_automerge_mode="soft",
+            created_at=_OLD,
+        )
+    )
+    assert pr.auto_merge_expected is True
+    assert pr.blocking_reason is BlockingReason.AUTOMERGE_NOT_ARMED
+
+
+def test_soft_mode_atlan_platform_is_human() -> None:
+    # SDK and toolkit are opted out in soft mode, so the grouped PR waits on a
+    # human.
+    pr = classify(make_pr(branch="renovate/atlan-platform", repo_automerge_mode="soft"))
+    assert pr.auto_merge_expected is False
+
+
 def test_auto_mode_repo_still_reports_not_armed() -> None:
     # Same PR in a repo that DOES arm auto-merge: this is the fault the signal
     # exists for, and the soft-mode gate above must not swallow it.
