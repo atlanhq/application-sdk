@@ -640,11 +640,12 @@ class LensSource:
        already catch; the ruleset's dismiss-on-push only affects approvals on
        older heads.
 
-    Right before the APPROVE, guard 1 is read again: a `/lens` round that
-    started after the first read and ended not ready on this head leaves no
-    approval to withdraw, only its status. `lens.approve.approve_ready_head`
-    then re-checks against fresh reads (open, not a draft, head unchanged, not
-    self-approval, no approval and no withdrawal on the head) and posts.
+    `lens.approve.approve_ready_head` then re-checks against fresh reads (open,
+    not a draft, head unchanged, not self-approval, no approval and no
+    withdrawal on the head), reads guard 1 again last, and posts. A `/lens`
+    round that ends not ready on this head before the approval exists leaves
+    nothing to withdraw, only its status, so guard 1 is read once more after
+    the POST and the approval is dismissed if the verdict changed meanwhile.
 
     A status or summary that cannot be read is a blocked approval, aged from
     the prefilter's timestamp: deferred while young, red once it outlives a
@@ -773,27 +774,18 @@ class LensSource:
             "round": state.round,
         }
 
-        status_unreadable = False
-
         def still_ready() -> str:
-            # Re-read lens's verdict as the last read before the APPROVE. A
-            # `/lens` round that started after the reads above and finished not
-            # ready on this head has no approval to withdraw, so the review
-            # listing cannot show it; its status can. A round still running
-            # shows `pending`.
-            #
-            # What is left is the POST itself, and that gap is closed by lens:
-            # every round sets `pending` when it starts, before it can reach a
-            # not-ready verdict, so a round cannot both start and finish inside
-            # it. A round that starts after this read therefore ends after the
-            # APPROVE, and if it is not ready its withdraw dismisses that
-            # approval, which carries lens's signature like its own.
-            nonlocal status_unreadable
+            # lens's verdict, re-read by the approve step twice: last before the
+            # POST, and again after it (see `approve_ready_head`). A `/lens`
+            # round that ends not ready on this head leaves no approval to
+            # withdraw if it ends before ours exists; its status is what shows
+            # it. A round still running shows `pending`.
             try:
                 current = self.green_status(head)
-            except GitHubError:
-                status_unreadable = True
-                return "the lens status is unreadable at approval time"
+            except GitHubError as exc:
+                raise lens_approve.VerdictUnreadable(
+                    f"the lens status is unreadable: {exc}"
+                ) from exc
             if isinstance(current, str):
                 return f"the lens verdict changed before approval: {current}"
             return ""
@@ -807,12 +799,13 @@ class LensSource:
                     refuse_after_withdrawal=True,
                     still_ready=still_ready,
                 )
+            except lens_approve.VerdictUnreadable as exc:
+                # Only the pre-POST read raises: nothing was posted.
+                return DEFERRED, str(exc)
             except GitHubError as exc:
-                return FAILED, f"approval could not be posted: {exc}"
+                return FAILED, f"the approval step failed: {exc}"
             if approval.posted:
                 return RECONCILED, approval.detail
-            if status_unreadable:
-                return DEFERRED, approval.detail
             return SKIPPED, f"lens declined — {approval.detail}"
 
         return Owed(number, LENS, age, post)

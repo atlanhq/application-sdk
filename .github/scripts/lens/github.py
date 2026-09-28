@@ -228,12 +228,14 @@ class GitHub:
                 return out
             page += 1
 
-    def approve(self, number: int, head: str, body: str) -> None:
-        self._call(
+    def approve(self, number: int, head: str, body: str) -> int:
+        """Posts an APPROVE review; returns its id (0 if GitHub did not say)."""
+        out = self._call(
             "POST",
             f"/repos/{self.repo}/pulls/{number}/reviews",
             {"commit_id": head, "event": "APPROVE", "body": body},
         )
+        return int((out or {}).get("id") or 0)
 
     def dismiss_review(self, number: int, review_id: int, message: str) -> None:
         self._call(

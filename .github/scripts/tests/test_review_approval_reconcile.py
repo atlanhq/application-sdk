@@ -790,6 +790,10 @@ class FakeLensAPI:
         # Runs when the approve step reads the PR: a hook for a change that
         # lands between that read and the POST.
         self.on_pr_read = None
+        # Runs once the APPROVE has landed: a round finishing while it was in
+        # flight.
+        self.on_post = None
+        self.dismissed: list[tuple[str, int]] = []
 
     def transport(self, token: str):
         def call(method, path, body=None, accept=""):
@@ -814,7 +818,18 @@ class FakeLensAPI:
                 status, text = self.approve_response
                 if status < 300:
                     self.reviews.append(lens_review(review_id=99))
+                    if self.on_post is not None:
+                        self.on_post()
+                    return status, json.dumps({"id": 99})
                 return status, text
+            dismissal = f"{base}/pulls/{PR}/reviews/"
+            if method == "PUT" and path.startswith(dismissal):
+                review_id = int(path[len(dismissal) :].split("/")[0])
+                for review in self.reviews:
+                    if review["id"] == review_id:
+                        review["state"] = "DISMISSED"
+                self.dismissed.append((token, review_id))
+                return 200, "{}"
             raise AssertionError(f"unexpected lens call: {method} {path}")
 
         return call
@@ -1096,7 +1111,7 @@ def test_a_failed_lens_approve_is_a_failure_when_quota_remains():
     outcomes = run_lens_sweep(lens_gh(), api)
 
     assert [o.action for o in outcomes] == [reconcile.FAILED]
-    assert "could not be posted" in outcomes[0].reason
+    assert "approval step failed" in outcomes[0].reason
 
 
 def test_a_lens_approve_losing_the_quota_race_is_a_deferral():
@@ -1515,12 +1530,116 @@ def test_an_unreadable_status_during_the_approve_reads_defers():
     assert api.approvals() == []
 
 
-def test_the_status_is_read_after_every_other_approve_read():
+def test_the_status_brackets_the_post():
+    """Read last before the POST (after the reviews and PR reads), and first
+    after it."""
     api = FakeLensAPI()
     verdict = _owed_lens_verdict(api)
     api.calls.clear()
 
     assert verdict.post()[0] == reconcile.RECONCILED
-    reads = [path for _token, method, path in api.calls if method == "GET"]
-    assert "/statuses" in reads[-1]
-    assert [c[1] for c in api.calls][-1] == "POST"
+    kinds = [
+        "status" if "/statuses" in path else method
+        for _token, method, path in api.calls
+    ]
+    post = kinds.index("POST")
+    assert kinds[post - 1] == "status" and kinds[post + 1] == "status"
+    assert "status" not in kinds[: post - 1], "no stale early read left over"
+
+
+# --- lens review round 3 (PR #4035) ----------------------------------------
+
+
+@pytest.mark.parametrize("state", ["pending", "failure", "error"])
+def test_a_lens_round_finishing_while_the_post_is_in_flight_is_undone(state):
+    """F-2c4c08: a round can start, publish not ready and run its withdraw
+    (finding nothing) while the APPROVE is still in flight. No read before the
+    POST can see that, so the verdict is read again after it, and the approval
+    just posted is dismissed."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.on_post = lambda: api.statuses.insert(0, lens_status(state=state))
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.SKIPPED
+    assert "withdrew the approval just posted" in detail and state in detail
+    assert api.dismissed == [(APP_TOKEN, 99)], "dismissed by the App, not the PAT"
+    assert [r["state"] for r in api.reviews] == ["DISMISSED"]
+
+
+def test_an_undone_replay_is_never_retried_by_a_later_tick():
+    """The dismissal leaves a withdrawn lens approval on the head, which the
+    solo-approval guard reads as "only a new lens round may approve"."""
+    api = FakeLensAPI()
+    api.on_post = lambda: api.statuses.insert(0, lens_status(state="failure"))
+    run_lens_sweep(lens_gh(), api)
+    api.on_post = None
+    api.statuses = [lens_status()]  # even if the status went green again
+    api.calls.clear()
+
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "withdrawn" in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def test_a_new_ready_round_during_the_post_keeps_the_approval():
+    """A newer green status from lens is a verdict that still stands."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.on_post = lambda: api.statuses.insert(0, lens_status())
+
+    assert verdict.post()[0] == reconcile.RECONCILED
+    assert api.dismissed == []
+
+
+def test_an_unreadable_status_after_the_post_keeps_the_approval_and_says_so():
+    """Dismissing on an unreadable read would leave a withdrawn approval that
+    blocks this replay for good; the approval stays and the detail says it was
+    not re-confirmed."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+
+    def break_statuses():
+        api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+
+    api.on_post = break_statuses
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.RECONCILED
+    assert "could not re-confirm" in detail
+    assert api.dismissed == []
+
+
+def test_a_failed_undo_is_a_failure_not_a_recovery():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+
+    def verdict_changes_and_dismissal_breaks():
+        api.statuses.insert(0, lens_status(state="failure"))
+        api.fail[f"/repos/{REPO}/pulls/{PR}/reviews/99/dismissals"] = (500, "boom")
+
+    api.on_post = verdict_changes_and_dismissal_breaks
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.FAILED
+    assert "approval step failed" in detail
+
+
+def test_lens_own_last_step_does_not_re_read_after_posting():
+    """`still_ready` is the reconciler's; lens's own step acts on a fresh
+    verdict and keeps its one-POST shape."""
+    api = FakeLensAPI()
+    gh = LensGitHub(REPO, token=APP_TOKEN, transport=api.transport(APP_TOKEN))
+    approver = LensGitHub(REPO, token=PAT, transport=api.transport(PAT))
+
+    out = lens_approve.apply(
+        gh, approver, {"action": "approve", "pr": PR, "head": HEAD, "round": 3}
+    )
+
+    assert out.startswith("approved ")
+    assert [c for c in api.calls if "/statuses" in c[2]] == []

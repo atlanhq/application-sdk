@@ -86,6 +86,10 @@ def _signed(
     ]
 
 
+class VerdictUnreadable(GitHubError):
+    """A `still_ready` check could not read the verdict it guards."""
+
+
 @dataclass(frozen=True)
 class Approval:
     """What an approve decision came to. `posted` is True only when this call
@@ -134,9 +138,21 @@ def approve_ready_head(
     the withdrawal. A replayed verdict is not, so a dismissed lens approval on
     the head (lens's withdraw, or a person dismissing it) stops it.
 
-    `still_ready` is that caller's check that the verdict still stands: "" to
-    go ahead, else why not. It runs after every other read, so it is the last
-    thing before the POST."""
+    `still_ready` is that caller's check that the verdict still stands: "" if
+    it does, else why not; it raises VerdictUnreadable when it cannot tell. It
+    runs twice:
+
+    - last before the POST, after every other read, so nothing already
+      decided against the verdict is approved over;
+    - again after the POST, because no read before it can see a round that
+      completes while the POST is in flight. If the verdict no longer stands,
+      the approval just posted is dismissed. A round that publishes after this
+      second read runs its own withdraw after the approval exists, and dismisses
+      it itself. Between the two, every ordering ends without a stale approval.
+
+    If the second read is unreadable the approval stays, and the detail says
+    it could not be re-confirmed. Dismissing it would leave a withdrawn lens
+    approval on the head, which permanently blocks the replay it came from."""
     number = int(decision.get("pr") or 0)
     reviews = gh.reviews(number)
     pr = gh.pr(number)
@@ -161,13 +177,39 @@ def approve_ready_head(
         why_not = still_ready()
         if why_not:
             return Approval(False, f"not approving: {why_not}")
-    approver.approve(
+    review_id = approver.approve(
         number,
         head,
         f"{SIGNATURE} — every finding at every level is resolved "
         f"(round {decision.get('round', '?')}).",
     )
-    return Approval(True, f"approved {head[:9]} as {login}")
+    approved = f"approved {head[:9]} as {login}"
+    if still_ready is None:
+        return Approval(True, approved)
+    try:
+        why_not = still_ready()
+    except VerdictUnreadable as exc:
+        return Approval(
+            True, f"{approved}; could not re-confirm the verdict after posting: {exc}"
+        )
+    if not why_not:
+        return Approval(True, approved)
+    ids = (
+        [review_id]
+        if review_id
+        else [
+            int(r["id"])
+            for r in _signed(gh.reviews(number), login, "APPROVED")
+            if r.get("commit_id") == head
+        ]
+    )
+    for rid in ids:
+        gh.dismiss_review(
+            number, rid, "lens: the verdict changed while this approval was posted."
+        )
+    return Approval(
+        False, f"withdrew the approval just posted: the verdict changed ({why_not})"
+    )
 
 
 def run_step(repo: str, decision_path: str) -> int:
