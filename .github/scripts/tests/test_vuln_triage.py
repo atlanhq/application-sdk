@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -738,6 +739,60 @@ def test_selftest_dry_run_opens_nothing(repo):
     out, _ = _run_selftest(repo, r, dry=True)
     assert not r.cmds("git", "push") and not r.cmds("gh", "pr", "create")
     assert out.allowlist_entries and r.cmds("uv", "lock", "--upgrade-package")
+
+
+def test_selftest_fails_when_the_case1_bump_is_not_exercised(repo):
+    # The allowlist PR alone (e.g. from the base-image CVE) is not a pass.
+    r = FakeRunner(repo, uv_rc=1)
+    with pytest.raises(SystemExit, match="Case-1 bump PR was not produced"):
+        _run_selftest(repo, r)
+    assert r.cmds("gh", "pr", "close")  # the allowlist PR it did open is still closed
+
+
+def test_selftest_fails_when_no_upgrade_can_drive_case1(repo):
+    r = FakeRunner(repo, upgrade_plan="")
+    with pytest.raises(SystemExit, match="Case-1 bump cannot be exercised"):
+        _run_selftest(repo, r)
+    assert not r.cmds("gh", "pr", "create")
+
+
+def test_selftest_dry_run_verdict_requires_both_paths(repo, capsys):
+    r = FakeRunner(repo)
+    _run_selftest(repo, r, dry=True)
+    assert "Self-test passed (dry run)" in capsys.readouterr().out
+
+
+def test_run_removes_its_temp_dirs(repo, monkeypatch, tmp_path):
+    scratch = tmp_path / "tmpdir"
+    scratch.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(scratch))
+    _run_selftest(repo, FakeRunner(repo))
+    assert list(scratch.iterdir()) == []
+
+
+def test_dry_run_still_runs_the_checks_when_prs_are_already_open(repo):
+    r = FakeRunner(
+        repo,
+        open_prs={"chore/allowlist-cve-1-cve-2": [], "fix/bump-requests-fnd-1": []},
+    )
+    out, _ = _run(repo, r, dry=True)
+    assert r.cmds("python3") and r.cmds("uv", "lock", "--upgrade-package")
+    assert (
+        "would reuse the open https://gh/existing/chore/allowlist" in out.allowlist_pr
+    )
+    assert "would reuse the open https://gh/existing/fix/bump" in out.bump_pr
+
+
+def test_cli_requires_a_ticket_unless_selftest(monkeypatch):
+    seen = []
+    monkeypatch.setattr(cli, "run", lambda ctx, deps: seen.append(ctx))
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["--repo", "o/r", "--root", "."])
+    assert exc.value.code == 2 and not seen
+    with pytest.raises(SystemExit):
+        cli.main(["--repo", "o/r", "--root", ".", "--ticket", "  "])
+    cli.main(["--repo", "o/r", "--root", ".", "--selftest", "true"])
+    assert seen and seen[0].selftest is True and seen[0].ticket == ""
 
 
 def test_run_refuses_a_dirty_checkout(repo):

@@ -174,9 +174,11 @@ def _allowlist_pr(
     branch, existing = _free_branch(
         ctx, ctx.branch(ALLOWLIST_BRANCH) + _slug(ids), deps
     )
-    if existing:
+    if existing and not ctx.dry_run:
         out.allowlist_pr = existing.url
         return
+    # A dry run still does the edit and runs the validator when a PR already exists:
+    # "every check ran" has to hold whatever state the repo is in.
     effects.reset_to(base, deps.runner)
     path.write_text(
         json.dumps(allowlist.apply(data, plan.entries, ctx.now.date()), indent=2) + "\n"
@@ -211,6 +213,8 @@ def _allowlist_pr(
         body="\n".join(lines),
         labels=[cfg.label],
     )
+    if existing:  # dry run only: say which PR a live run would reuse
+        out.allowlist_pr += f"; a live run would reuse the open {existing.url}"
 
 
 def _bump_pr(
@@ -238,13 +242,14 @@ def _bump_pr(
     branch, existing = _free_branch(
         ctx, ctx.branch(BUMP_BRANCH) + _slug(pkgs, 2) + "-" + ctx.ticket.lower(), deps
     )
-    if existing:
+    if existing and not ctx.dry_run:
         # Report what the open PR actually carries: one opened inside the cooldown has
         # no label and still needs a human.
         out.bump_pr = existing.url
         out.bump_labelled = cfg.label in existing.labels
         return
 
+    # As for the allowlist: a dry run runs the lock regen and its checks regardless.
     effects.reset_to(base, deps.runner)
     pyproject = ctx.root / "pyproject.toml"
     lock_path = ctx.root / "uv.lock"
@@ -312,6 +317,8 @@ def _bump_pr(
         body="\n".join(body),
         labels=labels,
     )
+    if existing:  # dry run only
+        out.bump_pr += f"; a live run would reuse the open {existing.url}"
 
 
 def _rooted(deps: Deps, root: Path) -> Deps:
@@ -330,29 +337,42 @@ def _rooted(deps: Deps, root: Path) -> Deps:
     )
 
 
-def _selftest_failures(out: report.Outcome) -> list[str]:
-    """What a self-test run must have done; empty when it passed."""
+def _selftest_failures(out: report.Outcome, dry_run: bool) -> list[str]:
+    """What a self-test must have exercised; empty when it passed.
+
+    Both PR paths are required, not "at least one PR": the base-image CVE alone yields
+    an allowlist PR, so a self-test that silently skipped the Case-1 bump (and with it
+    the constraint edit, `uv lock` and the lock checks) would otherwise pass."""
     problems = []
-    if not out.selftest_prs:
-        problems.append("opened no PR")
-    unclosed = [u for u in out.selftest_prs if u not in out.selftest_closed]
-    if unclosed:
-        problems.append("left PR(s) open: " + ", ".join(unclosed))
+    if not out.allowlist_pr:
+        problems.append("no allowlist PR")
+    if not out.bump_pr:
+        why = f" ({out.bump_problem})" if out.bump_problem else ""
+        problems.append("the Case-1 bump PR was not produced" + why)
+    if not dry_run:
+        unclosed = [u for u in out.selftest_prs if u not in out.selftest_closed]
+        if unclosed:
+            problems.append("left PR(s) open: " + ", ".join(unclosed))
     return problems
 
 
 def run(ctx: Context, deps: Deps) -> report.Outcome:
+    # The downloaded scan and the self-test fixture live here, outside the checkout, and
+    # are removed however the run ends.
+    with tempfile.TemporaryDirectory(prefix="vuln-triage-") as tmp:
+        return _run(ctx, deps, Path(tmp))
+
+
+def _run(ctx: Context, deps: Deps, tmp: Path) -> report.Outcome:
     deps = _rooted(deps, ctx.root)
     cfg = config.load(ctx.root)
     out = report.Outcome(dry_run=ctx.dry_run, selftest=ctx.selftest)
     if ctx.selftest:
         # Built fresh from the live uv.lock each run, so the fixture never goes stale.
-        fixture = selftest.build(
-            ctx.root,
-            Path(tempfile.mkdtemp(prefix="vuln-triage-selftest-")),
-            ctx.now,
-            deps.runner,
-        )
+        try:
+            fixture = selftest.build(ctx.root, tmp / "selftest", ctx.now, deps.runner)
+        except selftest.SelftestUnavailable as e:
+            raise SystemExit(f"::error::self-test failed: {e}") from e
         ctx.ticket = fixture.ticket["identifier"]
         ctx.scan_dir = fixture.scan_dir
         deps = Deps(
@@ -369,7 +389,7 @@ def run(ctx: Context, deps: Deps) -> report.Outcome:
         return out
 
     # Outside the checkout, so a hand run leaves nothing in the working tree.
-    scan_dir = ctx.scan_dir or Path(tempfile.mkdtemp(prefix="vuln-triage-scan-"))
+    scan_dir = ctx.scan_dir or tmp / "scan"
     if ctx.scan_dir is None:
         rid = effects.download_scan(ctx.repo, ctx.scan_run_id, scan_dir, deps.runner)
         print(f"Read scan run {rid}.")
@@ -433,9 +453,12 @@ def run(ctx: Context, deps: Deps) -> report.Outcome:
     if summary:
         with open(summary, "a") as fh:
             fh.write(body + "\n")
-    if ctx.selftest and not ctx.dry_run:
-        problems = _selftest_failures(out)
+    if ctx.selftest:
+        problems = _selftest_failures(out, ctx.dry_run)
         if problems:
             raise SystemExit("::error::self-test failed: " + "; ".join(problems))
-        print(f"Self-test passed: opened and closed {len(out.selftest_prs)} PR(s).")
+        if ctx.dry_run:
+            print("Self-test passed (dry run): allowlist and Case-1 bump both checked.")
+        else:
+            print(f"Self-test passed: opened and closed {len(out.selftest_prs)} PR(s).")
     return out

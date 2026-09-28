@@ -29,6 +29,10 @@ TICKET = "SELFTEST"
 _UPDATE = re.compile(r"^Update (\S+) v(\S+) -> v(\S+)$")
 
 
+class SelftestUnavailable(RuntimeError):
+    """The live lock cannot drive every case; a partial self-test is not a pass."""
+
+
 @dataclass
 class Fixture:
     ticket: dict[str, Any]
@@ -120,9 +124,10 @@ def fixture_scan(
 
 def build(root: Path, out_dir: Path, now: datetime, runner: Runner) -> Fixture:
     locked = registry_packages((root / "uv.lock").read_text())
+    # check=True: a failed probe must fail the self-test, not quietly drop the Case-1 CVE.
     res = runner(
         ["uv", "lock", "--upgrade", "--dry-run"],
-        check=False,
+        check=True,
         capture_output=True,
         text=True,
     )
@@ -130,6 +135,11 @@ def build(root: Path, out_dir: Path, now: datetime, runner: Runner) -> Fixture:
     upgrades = resolvable_upgrades(
         (res.stdout or "") + "\n" + (res.stderr or ""), locked
     )
+    if not upgrades:
+        raise SelftestUnavailable(
+            "no locked registry package has a resolvable upgrade, so the Case-1 bump "
+            "cannot be exercised; a partial self-test is not a pass"
+        )
     fs, image, ids, summary = fixture_scan(upgrades, locked)
     out_dir.mkdir(parents=True, exist_ok=True)
     (out_dir / scan.FS_FILE).write_text(
