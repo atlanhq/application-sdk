@@ -13,7 +13,7 @@ detector canonicalises the module path it read and keeps matching the prefix it
 always matched.  It is deliberately a pure string rewrite of the import root —
 ``application_sdk_api.X`` → ``application_sdk.X`` — and nothing else.
 
-Rules whose subject *is* the choice of import path (B009, P053) must not route
+Rules whose subject *is* the choice of import path (B009, P054) must not route
 through this helper: they need the raw spelling to tell the two apart.
 """
 

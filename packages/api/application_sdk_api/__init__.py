@@ -125,7 +125,7 @@ if TYPE_CHECKING:
         starter_from_env,
     )
 
-__version__ = "3.39.0"
+__version__ = "3.39.1"
 
 __all__ = [
     # assembly

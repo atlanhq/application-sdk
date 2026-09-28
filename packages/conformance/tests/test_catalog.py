@@ -365,6 +365,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # mint asset qualifiedNames; the SDK is the framework, not an asset author
     # (BLDX-1499). P052: asset serialization that bypasses entity_bytes —
     # only apps map and write assets; the SDK owns the seam (FND-2725).
+    # P053: local credential routing — only apps route their own inputs'
+    # credential channels; the SDK is the router (route_credentials) and defines
+    # CredentialValue by definition (FND-2949).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -470,7 +473,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
     assert app_scoped == {
-        "P053",
+        "P054",
         "D016",
         "B009",
         "B001",
@@ -487,6 +490,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P049",
         "P051",
         "P052",
+        "P053",
         "C002",
         "D001",
         "D002",
@@ -766,7 +770,12 @@ def test_catalog_p_series_present() -> None:
     P052 is EntitySerializationBypass — app code serializing a pyatlan asset
     itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
     instead of through the SDK's entity_bytes seam (FND-2725).
-    P053 is HostedApiMemberNotThin — a hosted atlan.app_api member importing
+    P053 is LocalCredentialRouting — app code routing a workflow input's
+    credential channels itself (CredentialRef.resolve / resolve_or_none,
+    CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
+    declaring its own CredentialValue alias, instead of the SDK's
+    route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
+    P054 is HostedApiMemberNotThin — a hosted atlan.app_api member importing
     application_sdk or the worker package, reading the environment at import,
     or named unlike the app; not evaluated without the entry point (FND-2964).
     A stray or renumbered P-id would slip past a subset check while
@@ -822,6 +831,7 @@ def test_catalog_p_series_present() -> None:
         "P051",
         "P052",
         "P053",
+        "P054",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"

@@ -106,6 +106,57 @@ class MyConnector(App):
 
 ---
 
+## Routing a Workflow Input's Credentials
+
+A connector input can name its credential four ways: a pre-built `CredentialRef` (the generic `credential_ref` field, or the `<app>_credential` field the contract toolkit generates), a `credential_guid`, an `agent_json` spec, or inline `credentials`. Do not write your own routing function for these. Call `route_credentials` in the entry point, pass the `(ref, inline)` pair to each `@task` input, and resolve it in the task with `resolve_credential_raw_or_inline`:
+
+```python
+from pydantic import Field
+
+from application_sdk.contracts.base import Input
+from application_sdk.credentials import (
+    CredentialMap,
+    CredentialRef,
+    InlineCredentials,
+    route_credentials,
+)
+
+
+class MyInput(AppInputContract):  # generated: credential_guid, agent_json, my_credential, ...
+    credentials: InlineCredentials = Field(default_factory=list)
+
+
+class MyTaskInput(Input):
+    credential_ref: CredentialRef | None = None
+    inline_credentials: CredentialMap = Field(default_factory=dict)
+
+
+class MyApp(App):
+    @entrypoint
+    async def run(self, input: MyInput) -> MyOutput:
+        ref, inline = route_credentials(input)
+        await self.extract(MyTaskInput(credential_ref=ref, inline_credentials=inline))
+        ...
+
+    @task
+    async def extract(self, input: MyTaskInput) -> ExtractOutput:
+        raw = await self.context.resolve_credential_raw_or_inline(
+            input.credential_ref, input.inline_credentials
+        )
+        client = MyClient.from_credentials(raw)  # same nested shape on both paths
+        ...
+```
+
+`route_credentials` tries each source in this order:
+
+1. **A pre-built ref wins.** `credential_ref` is checked first, then the one other populated `CredentialRef` field. If the input has several, name the one the run uses with a class attribute: `run_credential_field: ClassVar[str] = "my_credential"`. The preflight gate reads the same attribute, so the gate and the tasks always check the same credential.
+2. **Strict routing.** A `credential_guid`, agent mode, or a populated `agent_json` goes through `CredentialRef.resolve`, the same call the preflight gate uses. `extraction_method="agent"` routes to the agent spec. `direct`, and a miner's `query_history` or `s3`, route by GUID. Any other value raises `CredentialRoutingError`, so a misspelled mode is refused rather than guessed. A misrouted agent run (agent mode with an empty spec) raises straight away too. It never falls back to the GUID or to inline credentials.
+3. **Inline, for local dev and tests only.** If the input names no credential, the `credentials` field is used. Production never gets here: `/workflows/v1/start` strips `credentials` from every request, and the platform always sends a GUID or an agent spec. Inline credentials only reach a workflow started in-process, such as an `AppExecutor` integration test or a unit test.
+
+Inline credentials always come out in one shape: a flat dict with dotted keys, like `{"host": "h", "extra.client_id": "c"}`. The same keys result whether the input sent `[{key, value}]` pairs, a nested dict, or `extra` as a JSON string. That shape fits `CredentialMap`, a bounded contract type that holds only scalar values (`CredentialValue = str | int | float | bool | None`), so it can pass through a `@task` input. `CredentialMap` also flattens a nested dict when it is assigned. `flatten_dotted_keys` and `expand_dotted_keys` convert losslessly between the flat and nested shapes. `resolve_credential_raw_or_inline` uses `expand_dotted_keys` to turn inline credentials back into the nested shape that `resolve_raw` returns.
+
+---
+
 ## Custom Credential Types
 
 Register custom credential types via `register_credential_type`:

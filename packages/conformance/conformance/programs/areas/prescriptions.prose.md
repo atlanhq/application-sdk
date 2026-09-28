@@ -94,6 +94,17 @@ deliberate is the developer's call.  Both draft a proposal for human review and
 never auto-apply.  (These rules are backed by a separate
 `suite.checks.persistence_seam` check — see its module docs.)
 
+The credential-seam rule (P053, FND-2949) is also P-series and suggest-only:
+the fix replaces an app's own credential router with
+`application_sdk.credentials.route_credentials`, which can change which
+credential a given input resolves to (the local copy may have skipped agent
+routing, resolved leniently, or flattened inline pairs differently), so whether
+the app's tests still describe the intended behaviour is the developer's call.
+It drafts a proposal for human review and never auto-applies.  (This rule is
+backed by a separate `suite.checks.credential_seam` check, which is silent
+unless the app's `uv.lock` resolves `atlan-application-sdk` >= 3.40.0 — see its
+module docs.)
+
 The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
 P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
 has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
@@ -454,12 +465,12 @@ is always `"judgment"`:
   stop re-exporting it) — a public-contract refactor. Route to residue with that
   guidance. Do not attempt a mechanical edit.
 
-**Hosted API member rule (P053)** — detect-only, scope=app, BLOCK-tier;
+**Hosted API member rule (P054)** — detect-only, scope=app, BLOCK-tier;
 `not_remediable = true`, every finding routes to **residue**.  It is backed by
 its own `suite.checks.api_member` check and reports nothing unless the repo
 declares a `[project.entry-points."atlan.app_api"]` entry point.
 
-- **P053 HostedApiMemberNotThin** (app) — the hosted `api/<pkg>/` member
+- **P054 HostedApiMemberNotThin** (app) — the hosted `api/<pkg>/` member
   imports `application_sdk[.*]` or the worker package `app[.*]`, reads
   `os.environ` / `os.getenv` at import time, or its entry-point name differs
   from the app's `atlan.yaml` name.  **Do not edit** — each fix is a design
@@ -630,7 +641,8 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`),
+  `run_until_complete`), a blocking sync call (`requests.get`/`post`/…,
+  `urllib.request.urlopen`, `time.sleep`),
   tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
   `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
   `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
@@ -640,7 +652,13 @@ drafting.
 
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
-    `App.run_in_thread()` inside a `@task`.
+    `App.run_in_thread()` inside a `@task`.  Only the send is a finding
+    (`requests.get`, `s.get`/`s.send` on a `requests.Session()`, or `o.open`
+    on a urllib `build_opener()`, whether the client is built inline, in the
+    same or an enclosing function, or on a `self.<attr>` in the class):
+    building a `requests.Session()`, `HTTPAdapter()` or `build_opener()` does
+    no I/O and is not flagged, so never move a constructor behind a sync
+    helper to clear P023.
   - *tree op, data-scale I/O, whole-file, serialization* — offload with the
     callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
     `await run_in_thread(pd.read_parquet, path)`,
@@ -694,7 +712,14 @@ the blind gate cannot tell a correct hop from a plausible one.
   `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
   thread, exactly as P023 prescribes.  A `run_in_executor` whose first
   argument is a *real* executor the app owns is a deliberate choice, not this
-  defect — say so and route to residue rather than rewriting it.  Mirror
+  defect — say so and route to residue rather than rewriting it.  On a
+  preflight path, F011 sees the swapped call too: use the module-level
+  `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
+  `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
+  deadline, so the draft must keep or add an enclosing
+  `asyncio.wait_for(..., timeout=...)` or `async with asyncio.timeout(...)`
+  sized from the remaining preflight budget; a swap without one moves F011 to
+  the new line rather than clearing it.  Mirror
   `atlan-openapi-app app/connector.py`.  Cite as evidence
   `application_sdk/execution/heartbeat.py` (`run_in_thread`) and that call
   site.
@@ -1067,3 +1092,66 @@ path component, and this rule governs that package's sources too).
   today.**  So a P049 finding is new code, not inherited drift: treat a
   suppression proposal as the exception it is, and never propose one without
   reading the enclosing function.
+
+- **P053 LocalCredentialRouting** (WARN) — app code turns a workflow input's
+  credential channels (a pre-built `CredentialRef` field, `credential_guid`,
+  `agent_json`, inline `credentials`) into a credential itself, or declares its
+  own copy of the credential types.  The finding names which shape fired:
+  `CredentialRef.resolve(...)` / `CredentialRef.resolve_or_none(...)`,
+  `CredentialRef(credential_guid=...)`, `inline [{key, value}] flattening`
+  (grouped per function, anchored at the first site), or a module-level
+  `CredentialValue` / `CredentialMap` / `InlineCredentials` / `Bounded*Credential*`
+  alias.  It only fires when the app's `uv.lock` resolves
+  `atlan-application-sdk` >= 3.40.0, so the seam is importable.
+
+  Draft, by shape:
+
+  1. **A local router** (`build_credential_ref(input)` and relatives) —
+     replace the body with the seam and delete the local copy::
+
+         from application_sdk.credentials import route_credentials
+
+         ref, inline = route_credentials(input)
+
+     Declare `run_credential_field: ClassVar[str] = "<app>_credential"` on the
+     input class only when it carries more than one `CredentialRef` field;
+     `route_credentials` otherwise finds the toolkit-generated one itself.  It is
+     a class declaration, not a call argument, so the preflight gate makes the
+     same choice.  On the task side, replace the
+     `resolve_credential_raw(ref)`-or-inline branch with
+     `self.context.resolve_credential_raw_or_inline(ref, inline)`.  A `SqlApp`
+     subclass that only needs the ref already has
+     `self.resolve_credential_ref(input)`.  Return `outcome = "fix"`.
+
+  2. **Inline flattening over a dict payload** (`workflow_args.get("credentials",
+     [])` iterated into a dict) — `route_credentials` reads attributes, not
+     dict keys, so propose `normalize_inline_credentials(raw)` from
+     `application_sdk.credentials` for that half, and say in the residue that
+     the dict-shaped router should move onto the typed input so the whole
+     function can become `route_credentials(input)`.  Return
+     `outcome = "fix"`.
+
+  3. **A local type alias** — replace the alias with an import of
+     `CredentialValue` / `CredentialMap` / `InlineCredentials` from
+     `application_sdk.credentials`.  The SDK's `CredentialValue` also admits
+     `float`, so a field retyped onto it accepts slightly more than a local
+     `str | int | bool | None` did; name that in the proposal.  Return
+     `outcome = "fix"`.
+
+  **Say what the migration changes.**  The local copies disagreed on
+  behaviour, not just shape: one that built `CredentialRef(credential_guid=...)`
+  directly never routed `agent_json`, so after the fix an agent-mode run
+  resolves through the agent for the first time; one that used
+  `resolve_or_none` swallowed a misrouted input that `route_credentials` now
+  raises on (`CredentialRoutingError`, naming the cause).  A proposal that does
+  not name which of these applies is not reviewable.  Never claim the edit is
+  mechanical.
+
+  **Fallback** — a second, per-source credential GUID carried in some other
+  field (`CredentialRef(credential_guid=input.cloud_source)`) never fires: the
+  rule only matches the input's own `credential_guid` channel.  What can still
+  fire outside the seam's model is `CredentialRef.resolve` over an object that
+  is not the entry-point input; for that, propose an inline
+  `# conformance: ignore[P053] <reason>` naming what is resolved, and return
+  `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
+  the tier is already WARN for that.

@@ -250,7 +250,9 @@ def test_the_guard_actually_finds_uploads_and_retries():
         first_attempts, retries = _classify(steps)
         total_first += len(first_attempts)
         total_retries += sum(len(v) for v in retries.values())
-    assert total_first >= 10, f"only {total_first} first-attempt uploads found"
+    # Floor was 10 until FND-2871 removed @sdk-loop, whose phase workflow
+    # carried three first-attempt uploads.
+    assert total_first >= 8, f"only {total_first} first-attempt uploads found"
     # Floor was 10 until FND-2661 retired the three per-series conformance
     # reusables (conformance-ci / -error-handling / -logging), which carried a
     # retry upload each. Any floor above zero proves the classifier is live;

@@ -35,6 +35,7 @@ from conformance.suite.checks import (
     bootstrap_drift,
     client_seam,
     coverage_config,
+    credential_seam,
     dependency_conformance,
     deprecation,
     determinism,
@@ -118,6 +119,12 @@ _CHECKS: list[CheckRegistration] = [
         series=persistence_seam.SERIES,
         discover=persistence_seam.discover,
         scan_path=persistence_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=credential_seam.SERIES,
+        discover=credential_seam.discover,
+        scan_path=credential_seam.scan_path,
+        scan_all=credential_seam.scan_all,
     ),
     CheckRegistration(
         series=download_retry.SERIES,

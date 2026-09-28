@@ -26,6 +26,17 @@ class CredentialResolvable(Protocol):
 
 logger = get_logger(__name__)
 
+GUID_ROUTED_EXTRACTION_METHODS: frozenset[str] = frozenset(
+    {"direct", "query_history", "s3"}
+)
+"""``extraction_method`` values :meth:`CredentialRef.resolve` routes by GUID.
+
+``direct`` is the credential-routing value. ``query_history`` and ``s3`` are a
+miner's extraction-approach values: they say where query history is read from,
+and the run still authenticates with its database credential. An allowlist, so
+a value nobody has classified raises instead of being guessed at.
+"""
+
 
 class CredentialRef(BaseModel, frozen=True):
     """A reference to a credential in the secret store.
@@ -118,6 +129,16 @@ class CredentialRef(BaseModel, frozen=True):
         Input must satisfy :class:`CredentialResolvable` — ``ExtractionInput``
         and subclasses work automatically.
 
+        ``extraction_method="agent"`` routes to the agent spec; the methods in
+        :data:`GUID_ROUTED_EXTRACTION_METHODS` route by GUID. Besides
+        ``direct``, that set holds the miner values that put a non-credential
+        axis in the same field — ``query_history`` or ``s3`` says where query
+        history is read from, and the run still needs its database credential.
+        Any other value raises, so a misspelled or unsupported mode is refused
+        rather than read as ``direct``. Agent mode stays strict too: an
+        unpopulated ``agent_json`` raises even when a GUID is present, rather
+        than silently sending an agent run to the vault.
+
         Args:
             source: A model satisfying :class:`CredentialResolvable` with
                 ``extraction_method``, ``agent_json``, and
@@ -146,7 +167,7 @@ class CredentialRef(BaseModel, frozen=True):
             return cls(agent_spec=agent)
 
         guid = source.credential_guid or ""
-        if method == "direct" and guid:
+        if method in GUID_ROUTED_EXTRACTION_METHODS and guid:
             return cls(
                 name=guid,
                 credential_type="unknown",

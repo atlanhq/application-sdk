@@ -1,13 +1,13 @@
-"""Hosted API member rule definition (P053, FND-2964).
+"""Hosted API member rule definition (P054, FND-2964).
 
 An app hosted on the consolidated API server ships its handler as a uv workspace
 member under ``api/<pkg>/`` and names it with a
 ``[project.entry-points."atlan.app_api"]`` entry point.  The server imports that
 package — and only that package — into a process shared with every other hosted
-app, without the worker's dependency tree.  P053 keeps the member importable
+app, without the worker's dependency tree.  P054 keeps the member importable
 there.
 
-Like the orchestration-seam rules, P053 is a P-series (prescription) rule in its
+Like the orchestration-seam rules, P054 is a P-series (prescription) rule in its
 own module, backed by its own ``suite.checks.api_member`` registration: it reads
 ``pyproject.toml`` entry points and ``atlan.yaml`` as well as Python sources,
 which none of the per-file P checks do.  P-ids are a permanent public contract
@@ -25,7 +25,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P053",
+        id="P054",
         canonical_reference=(
             "application_sdk packages/api/pyproject.toml — the api distribution the "
             "consolidated server installs declares no temporalio, dapr, daft, "
@@ -96,7 +96,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "package both depend on that does not import ``application_sdk``);\n"
             "read configuration inside the handler methods; rename the entry\n"
             "point to the app's name.  Suppress a reviewed exception with\n"
-            "``# conformance: ignore[P053] <reason>`` on the line (in\n"
+            "``# conformance: ignore[P054] <reason>`` on the line (in\n"
             "``pyproject.toml`` for the name sub-check).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p053",

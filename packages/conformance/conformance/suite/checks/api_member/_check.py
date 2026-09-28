@@ -1,4 +1,4 @@
-"""P053 HostedApiMemberNotThin — check implementation.
+"""P054 HostedApiMemberNotThin — check implementation.
 
 Reads every ``[project.entry-points."atlan.app_api"]`` table, resolves each
 ``<pkg>:<attr>`` target to a package directory next to the declaring
@@ -31,7 +31,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.checks.app_name_alignment._contract_app_name import scan_contract
 from conformance.suite.schema.findings import Finding
 
-RULE_ID = "P053"
+RULE_ID = "P054"
 ENTRY_POINT_GROUP = "atlan.app_api"
 
 _FORBIDDEN_ROOTS = ("application_sdk", "app")
@@ -300,7 +300,7 @@ def _name_findings(eps: list[ApiEntryPoint], root: Path) -> list[Finding]:
 
 
 def scan(paths: list[Path], root: Path) -> list[Finding]:
-    """Return P053 findings; ``[]`` (not evaluated) with no ``atlan.app_api`` entry point."""
+    """Return P054 findings; ``[]`` (not evaluated) with no ``atlan.app_api`` entry point."""
     eps = entry_points([p for p in paths if p.name == "pyproject.toml"])
     if not eps:
         return []
