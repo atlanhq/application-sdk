@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -123,6 +124,7 @@ def approve_ready_head(
     login: str = APPROVER_LOGIN,
     *,
     refuse_after_withdrawal: bool = False,
+    still_ready: Callable[[], str] | None = None,
 ) -> Approval:
     """Post the APPROVE for an `approve` decision, after re-checking the PR.
 
@@ -130,7 +132,11 @@ def approve_ready_head(
     acting on a fresh one (`review_approval_reconcile.py`). lens's own last step
     may re-approve a head it withdrew from, because its decision is newer than
     the withdrawal. A replayed verdict is not, so a dismissed lens approval on
-    the head (lens's withdraw, or a person dismissing it) stops it."""
+    the head (lens's withdraw, or a person dismissing it) stops it.
+
+    `still_ready` is that caller's check that the verdict still stands: "" to
+    go ahead, else why not. It runs after every other read, so it is the last
+    thing before the POST."""
     number = int(decision.get("pr") or 0)
     reviews = gh.reviews(number)
     pr = gh.pr(number)
@@ -151,6 +157,10 @@ def approve_ready_head(
         return Approval(
             False, "not approving: a lens approval on this head was withdrawn"
         )
+    if still_ready is not None:
+        why_not = still_ready()
+        if why_not:
+            return Approval(False, f"not approving: {why_not}")
     approver.approve(
         number,
         head,

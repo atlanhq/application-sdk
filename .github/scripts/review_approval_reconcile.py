@@ -773,25 +773,46 @@ class LensSource:
             "round": state.round,
         }
 
-        def post() -> tuple[str, str]:
-            # Re-read lens's verdict right before the APPROVE. A `/lens` round
-            # that started after the read above and finished not ready on this
-            # head has no approval to withdraw, so the review listing cannot
-            # show it; its status can. A round still running shows `pending`.
+        status_unreadable = False
+
+        def still_ready() -> str:
+            # Re-read lens's verdict as the last read before the APPROVE. A
+            # `/lens` round that started after the reads above and finished not
+            # ready on this head has no approval to withdraw, so the review
+            # listing cannot show it; its status can. A round still running
+            # shows `pending`.
+            #
+            # What is left is the POST itself, and that gap is closed by lens:
+            # every round sets `pending` when it starts, before it can reach a
+            # not-ready verdict, so a round cannot both start and finish inside
+            # it. A round that starts after this read therefore ends after the
+            # APPROVE, and if it is not ready its withdraw dismisses that
+            # approval, which carries lens's signature like its own.
+            nonlocal status_unreadable
             try:
                 current = self.green_status(head)
             except GitHubError:
-                return DEFERRED, "the lens status is unreadable at approval time"
+                status_unreadable = True
+                return "the lens status is unreadable at approval time"
             if isinstance(current, str):
-                return SKIPPED, f"the lens verdict changed before approval: {current}"
+                return f"the lens verdict changed before approval: {current}"
+            return ""
+
+        def post() -> tuple[str, str]:
             try:
                 approval = lens_approve.approve_ready_head(
-                    self.gh, self.approver, decision, refuse_after_withdrawal=True
+                    self.gh,
+                    self.approver,
+                    decision,
+                    refuse_after_withdrawal=True,
+                    still_ready=still_ready,
                 )
             except GitHubError as exc:
                 return FAILED, f"approval could not be posted: {exc}"
             if approval.posted:
                 return RECONCILED, approval.detail
+            if status_unreadable:
+                return DEFERRED, approval.detail
             return SKIPPED, f"lens declined — {approval.detail}"
 
         return Owed(number, LENS, age, post)

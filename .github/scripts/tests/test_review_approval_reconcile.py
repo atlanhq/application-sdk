@@ -787,6 +787,9 @@ class FakeLensAPI:
         self.approve_response: tuple[int, str] = (200, "{}")
         self.fail: dict[str, tuple[int, str]] = {}
         self.calls: list[tuple[str, str, str]] = []
+        # Runs when the approve step reads the PR: a hook for a change that
+        # lands between that read and the POST.
+        self.on_pr_read = None
 
     def transport(self, token: str):
         def call(method, path, body=None, accept=""):
@@ -804,6 +807,8 @@ class FakeLensAPI:
             if method == "GET" and path.startswith(f"{base}/pulls/{PR}/reviews"):
                 return 200, json.dumps(self.reviews)
             if method == "GET" and path == f"{base}/pulls/{PR}":
+                if self.on_pr_read is not None:
+                    self.on_pr_read()
                 return 200, json.dumps(self.pr)
             if method == "POST" and path == f"{base}/pulls/{PR}/reviews":
                 status, text = self.approve_response
@@ -1477,3 +1482,45 @@ def test_a_stalled_quota_read_is_treated_as_unreadable_not_empty():
     outcomes = run_sweep(gh)
 
     assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+
+
+# --- lens review round 2 (PR #4035) ----------------------------------------
+
+
+@pytest.mark.parametrize("state", ["pending", "failure", "error"])
+def test_a_lens_round_landing_during_the_approve_reads_stops_the_post(state):
+    """F-0ff5f4: the status is the last thing read before the POST, after the
+    approve step's own reviews and PR reads, not before them."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.on_pr_read = lambda: api.statuses.insert(0, lens_status(state=state))
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.SKIPPED
+    assert "changed before approval" in detail and state in detail
+    assert api.approvals() == []
+
+
+def test_an_unreadable_status_during_the_approve_reads_defers():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+
+    def break_statuses():
+        api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+
+    api.on_pr_read = break_statuses
+
+    assert verdict.post()[0] == reconcile.DEFERRED
+    assert api.approvals() == []
+
+
+def test_the_status_is_read_after_every_other_approve_read():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.calls.clear()
+
+    assert verdict.post()[0] == reconcile.RECONCILED
+    reads = [path for _token, method, path in api.calls if method == "GET"]
+    assert "/statuses" in reads[-1]
+    assert [c[1] for c in api.calls][-1] == "POST"
