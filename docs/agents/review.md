@@ -111,8 +111,8 @@ honouring the override. Logged for audit trail.
 
 ## Required configuration
 
-The `sdk-review` and `sdk-evolution-cron` workflows (both mothership
-flows) need these repo-level secrets and variables.
+The `sdk-review` workflow (a mothership flow) needs these repo-level
+secrets and variables.
 
 | Kind | Name | Purpose |
 |---|---|---|

@@ -81,9 +81,8 @@ COMMENTER, COMMENT_ID, COMMENTER_INTENT
    Do **not** warm dependencies. This playbook never runs `pytest` or
    `pre-commit` — §9 is explicit that the review does not run them — so the
    `uv sync --all-extras` that used to sit here bought nothing and competed
-   with the review for I/O on every single run. `pr-resolve` and
-   `sdk-evolution` DO run them and warm deps for that reason; this playbook
-   is not those.
+   with the review for I/O on every single run. `pr-resolve` DOES run them
+   and warms deps for that reason; this playbook is not that.
 
 1b. **Start the budget clock** — do this before any other work, so the
     elapsed number covers the whole run. Defaults to the Small hard stop;
