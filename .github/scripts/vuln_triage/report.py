@@ -21,6 +21,9 @@ class Outcome:
     bump_labelled: bool = False
     bump_problem: str = ""  # why there is no (auto-mergeable) bump PR
     dry_run: bool = False
+    selftest: bool = False
+    selftest_prs: list[str] = field(default_factory=list)  # opened as drafts
+    selftest_closed: list[str] = field(default_factory=list)  # closed again
 
 
 def state_of(t: Triage, o: Outcome) -> str:
@@ -69,7 +72,8 @@ def needs_human(triages: list[Triage], o: Outcome) -> list[str]:
         out.append("Update outside the root lock: " + ", ".join(other) + ".")
     if o.bump_problem:
         out.append(f"Case-1 bump: {o.bump_problem}")
-    if o.bump_pr and not o.bump_labelled:
+    # A self-test strips labels on purpose; that is not a PR waiting on a human.
+    if o.bump_pr and not o.bump_labelled and not o.selftest:
         out.append(f"Review and merge the bump PR {o.bump_pr} (not auto-merged).")
     breached = [c for c, why in o.allowlist_skipped.items() if why.startswith("SLA")]
     if breached:
@@ -103,9 +107,15 @@ def render(ticket: str, triages: list[Triage], o: Outcome, run_url: str) -> str:
         "killed": sum(1 for t in triages if t.case == KILLED),
     }
     human = needs_human(triages, o)
+    mode = ""
+    if o.selftest:
+        mode = " (self-test: fake CVEs" + (
+            ", dry run)" if o.dry_run else "; draft PRs opened and closed)"
+        )
+    elif o.dry_run:
+        mode = " (dry run: every check ran, nothing pushed)"
     parts = [
-        f"## Vuln triage: {ticket}"
-        + (" (dry run, nothing pushed)" if o.dry_run else ""),
+        f"## Vuln triage: {ticket}{mode}",
         "",
         f"{len(triages)} CVE(s): {counts['allowlisted']} newly allowlisted, "
         f"{counts['bump']} bump PR, {counts['tracked']} tracked only, "
@@ -120,6 +130,12 @@ def render(ticket: str, triages: list[Triage], o: Outcome, run_url: str) -> str:
     parts += rows + ["", "### Why", ""] + detail
     if human:
         parts += ["", "### Needs a human", ""] + [f"- {h}" for h in human]
+    if o.selftest_prs:
+        parts += ["", "### Self-test PRs", ""] + [
+            f"- {u}: "
+            + ("closed, branch deleted" if u in o.selftest_closed else "**still open**")
+            for u in o.selftest_prs
+        ]
     parts += [
         "",
         "Leave this ticket open: reconciliation closes it once a release no longer "

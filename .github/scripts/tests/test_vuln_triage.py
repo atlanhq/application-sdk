@@ -13,7 +13,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import vuln_triage.__main__ as cli  # noqa: E402
-from vuln_triage import allowlist, bump, classify, report, scan  # noqa: E402
+from vuln_triage import allowlist, bump, classify, report, scan, selftest  # noqa: E402
 from vuln_triage.effects import newest_successful_run, parse_open_pr  # noqa: E402
 from vuln_triage.run import Context, Deps, _listing, _slug, _uv_cause, run  # noqa: E402
 
@@ -408,14 +408,24 @@ class FakeRunner:
     """Records commands; answers the few whose output run() reads."""
 
     def __init__(
-        self, root: Path, *, open_prs=(), remote=(), uv_version="2.32.4", uv_rc=0
+        self,
+        root: Path,
+        *,
+        open_prs=(),
+        remote=(),
+        uv_version="2.32.4",
+        uv_rc=0,
+        close_rc=0,
+        upgrade_plan="Update requests v2.32.3 -> v2.32.4\n",
     ):
         # open_prs: {branch: [labels]} (or an iterable of branches, labelled)
         if not isinstance(open_prs, dict):
             open_prs = {b: ["vuln-auto-merge"] for b in open_prs}
         self.root, self.open_prs, self.remote = root, open_prs, set(remote)
         self.uv_version, self.uv_rc = uv_version, uv_rc
+        self.close_rc, self.upgrade_plan = close_rc, upgrade_plan
         self.calls: list[list[str]] = []
+        self.pristine: dict[str, str] = {}
 
     def __call__(self, cmd, **kw):
         self.calls.append(cmd)
@@ -434,6 +444,14 @@ class FakeRunner:
             out = "sha\trefs/heads/x" if cmd[-1] in self.remote else ""
         elif cmd[:3] == ["gh", "pr", "create"]:
             out = f"https://gh/pr/{cmd[cmd.index('--head') + 1]}\n"
+        elif cmd[:3] == ["gh", "pr", "close"]:
+            rc = self.close_rc
+            return subprocess.CompletedProcess(cmd, rc, stdout="", stderr="")
+        elif cmd == ["uv", "lock", "--upgrade", "--dry-run"]:
+            # what selftest.build reads: uv prints the plan on stderr
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="", stderr="Resolved 3 packages\n" + self.upgrade_plan
+            )
         elif cmd[:2] == ["uv", "lock"]:
             rc = self.uv_rc
             if rc == 0:
@@ -443,8 +461,8 @@ class FakeRunner:
                         'version = "2.32.3"', f'version = "{self.uv_version}"'
                     )
                 )
-        elif cmd[:2] == ["git", "checkout"] and "-B" in cmd:
-            # a fresh branch from base: restore the tracked files the test mutates
+        elif cmd[:2] == ["git", "checkout"] and "--force" in cmd:
+            # back to base: restore the tracked files the test mutates
             for name, text in self.pristine.items():
                 (self.root / name).write_text(text)
         return subprocess.CompletedProcess(
@@ -603,6 +621,123 @@ def test_run_dry_run_pushes_and_comments_nothing(repo, capsys):
     )
     assert set(out.allowlist_entries) == {"CVE-1", "CVE-2"}
     assert "dry run" in capsys.readouterr().out
+    # ...but every local step still ran: the validator, the real lock regen, and the
+    # tree is restored to base afterwards.
+    assert r.cmds("python3") and r.cmds("uv", "lock", "--upgrade-package")
+    assert not r.cmds("git", "commit")
+    assert out.bump_pr.startswith("(dry run: would open `chore(deps): bump requests")
+    assert (repo / "uv.lock").read_text() == LOCK
+    assert r.calls[-1][:3] == ["git", "checkout", "--force"]
+
+
+def test_run_restores_the_callers_branch(repo):
+    class OnBranch(FakeRunner):
+        def __call__(self, cmd, **kw):
+            if cmd == ["git", "branch", "--show-current"]:
+                return subprocess.CompletedProcess(
+                    cmd, 0, stdout="my-work\n", stderr=""
+                )
+            return super().__call__(cmd, **kw)
+
+    r = OnBranch(repo)
+    _run(repo, r, dry=True)
+    assert r.calls[-1] == ["git", "checkout", "--force", "my-work"]
+
+
+def test_run_dry_run_still_reports_a_failed_bump(repo):
+    r = FakeRunner(repo, uv_rc=1)
+    out, _ = _run(repo, r, dry=True)
+    assert not out.bump_pr and "could not resolve" in out.bump_problem
+
+
+# --------------------------------------------------------------------------- self-test
+
+
+def test_resolvable_upgrades_keeps_locked_registry_packages_only():
+    plan = (
+        "Resolved 245 packages in 1s\n"
+        "Update atlan-application-sdk-conformance v0.39.0 -> v0.39.1\n"
+        "Update boto3 v1.43.102 -> v1.43.103\n"
+        "Update caio v0.12.4 -> v0.12.9\n"
+    )
+    locked = {"boto3": "1.43.102", "caio": "0.12.0"}  # caio locked at another version
+    assert selftest.resolvable_upgrades(plan, locked) == [
+        ("boto3", "1.43.102", "1.43.103")
+    ]
+
+
+def test_fixture_scan_covers_every_triage_branch():
+    fs, image, ids, _ = selftest.fixture_scan(
+        [("requests", "2.32.3", "2.32.4")], {"requests": "2.32.3", "a": "1", "b": "2"}
+    )
+    assert ids[-1] == "CVE-SELFTEST-6"  # on the ticket, in no scan
+    assert {v["VulnerabilityID"] for v in fs + image} == set(ids) - {"CVE-SELFTEST-6"}
+    assert any(v["PkgName"] == "dapr" for v in image)
+
+
+def test_fixture_scan_without_an_upgrade_skips_case1():
+    _, _, ids, summary = selftest.fixture_scan([], {"a": "1"})
+    assert "CVE-SELFTEST-1" not in ids and "no resolvable upgrade" in summary
+
+
+def _run_selftest(repo, runner, dry=False):
+    runner.pristine = {
+        n: (repo / n).read_text()
+        for n in ("uv.lock", "pyproject.toml", ".security/base-allowlist.json")
+    }
+    comments = []
+    ctx = Context(
+        repo="o/r",
+        root=repo,
+        ticket="",
+        run_url="https://run",
+        run_id="42",
+        dry_run=dry,
+        selftest=True,
+        now=NOW,
+    )
+    deps = Deps(
+        runner=runner,
+        fetch_issue=lambda _t: pytest.fail("a self-test must not read Linear"),
+        comment=lambda i, b: comments.append((i, b)),
+        upstream=alive,
+    )
+    return run(ctx, deps), comments
+
+
+def test_selftest_opens_draft_unlabelled_prs_off_the_gate_path_and_closes_them(
+    repo, capsys
+):
+    r = FakeRunner(repo)
+    out, comments = _run_selftest(repo, r)
+    creates = r.cmds("gh", "pr", "create")
+    assert len(creates) == 2  # the allowlist PR and the Case-1 bump PR
+    for c in creates:
+        assert "--draft" in c and "--label" not in c
+        assert c[c.index("--title") + 1].startswith("[selftest] ")
+        # never a branch vuln-auto-merge.yml wakes for
+        assert c[c.index("--head") + 1].startswith("selftest/vuln-triage-42/")
+    closes = r.cmds("gh", "pr", "close")
+    assert len(closes) == 2 and all("--delete-branch" in c for c in closes)
+    assert out.selftest_closed == out.selftest_prs
+    assert not comments  # printed, never posted
+    printed = capsys.readouterr().out
+    assert "Self-test passed: opened and closed 2 PR(s)." in printed
+    assert "self-test" in printed
+
+
+def test_selftest_fails_the_run_when_a_pr_cannot_be_closed(repo):
+    r = FakeRunner(repo, close_rc=1)
+    with pytest.raises(SystemExit, match="left PR"):
+        _run_selftest(repo, r)
+    assert len(r.cmds("gh", "pr", "close")) == 2  # tried every one
+
+
+def test_selftest_dry_run_opens_nothing(repo):
+    r = FakeRunner(repo)
+    out, _ = _run_selftest(repo, r, dry=True)
+    assert not r.cmds("git", "push") and not r.cmds("gh", "pr", "create")
+    assert out.allowlist_entries and r.cmds("uv", "lock", "--upgrade-package")
 
 
 def test_run_refuses_a_dirty_checkout(repo):

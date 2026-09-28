@@ -1,5 +1,5 @@
 name: Vuln Triage
-run-name: "vuln triage ${{ inputs.ticket }}"
+run-name: "vuln triage ${{ inputs.selftest && 'SELFTEST' || inputs.ticket }}${{ inputs.dry_run && ' (dry run)' || '' }}"
 
 # Deterministic CVE triage for one security-scan Linear ticket
 # (.github/scripts/vuln_triage, config in .github/vuln-triage/config.toml).
@@ -23,14 +23,23 @@ run-name: "vuln triage ${{ inputs.ticket }}"
 #   * The gate, not this job, is the safety boundary: it auto-merges only an allowlist-only
 #     or a pyproject.toml/uv.lock-only PR, and only once required CI is green.
 #   * The job's own GITHUB_TOKEN only reads: the checkout and the scan artifact.
+#
+# Testing it:
+#   * dry_run: every real step and check runs (allowlist edit + validator, `uv lock` +
+#     lock checks) on the runner; nothing is pushed, opened or commented.
+#   * selftest: a fake ticket and scan built from the live uv.lock (vuln_triage/selftest.py)
+#     cover every case. Real PRs are opened, but as drafts, without the auto-merge label,
+#     on selftest/ branches the gate never matches, and the same run closes them and
+#     deletes the branches. No Linear call. Combine with dry_run to skip the PRs too.
 
 on:
   workflow_dispatch:
     inputs:
       ticket:
-        description: Linear ticket identifier to triage (e.g. FND-1234)
-        required: true
+        description: Linear ticket identifier to triage (e.g. FND-1234); not needed with selftest
+        required: false
         type: string
+        default: ""
       severity:
         description: Severity bucket of the ticket (CRITICAL/HIGH/MEDIUM/LOW)
         required: false
@@ -42,7 +51,12 @@ on:
         type: string
         default: ""
       dry_run:
-        description: Classify and print the ticket comment to the job summary; push, open and comment nothing
+        description: Run every step and check and print the ticket comment; push, open and comment nothing
+        required: false
+        type: boolean
+        default: false
+      selftest:
+        description: Fake ticket + scan; opens draft PRs and closes them again (never merged)
         required: false
         type: boolean
         default: false
@@ -53,7 +67,7 @@ permissions:
 
 # Two runs on one ticket would race to open the same branches.
 concurrency:
-  group: vuln-triage-${{ inputs.ticket }}
+  group: vuln-triage-${{ inputs.selftest && 'selftest' || inputs.ticket }}
   cancel-in-progress: false
 
 jobs:
@@ -97,7 +111,7 @@ jobs:
         working-directory: .github/scripts
         env:
           GH_TOKEN: ${{ github.token }} # artifact download and read-only gh calls
-          PR_AUTHOR_TOKEN: ${{ steps.app.outputs.token }} # `gh pr create` only
+          PR_AUTHOR_TOKEN: ${{ steps.app.outputs.token }} # PR list/create/close only
           LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
           REPO: ${{ github.repository }}
           ROOT: ${{ github.workspace }}
@@ -109,6 +123,7 @@ jobs:
           # "true"/"false". The scan's dispatch omits it, so the input default (false)
           # applies; the CLI rejects any other value rather than running live.
           DRY_RUN: ${{ inputs.dry_run }}
+          SELFTEST: ${{ inputs.selftest }}
         run: >-
           python3 -m vuln_triage
           --repo "$REPO"
@@ -119,3 +134,4 @@ jobs:
           --run-url "$RUN_URL"
           --run-id "$RUN_ID"
           --dry-run "$DRY_RUN"
+          --selftest "$SELFTEST"

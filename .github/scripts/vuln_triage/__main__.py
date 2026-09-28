@@ -24,7 +24,7 @@ def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="vuln_triage")
     p.add_argument("--repo", required=True)
     p.add_argument("--root", required=True, type=Path)
-    p.add_argument("--ticket", required=True)
+    p.add_argument("--ticket", default="", help="required unless --selftest")
     p.add_argument("--severity", default="")
     p.add_argument("--scan-run-id", default="")
     p.add_argument(
@@ -41,9 +41,19 @@ def main(argv: list[str] | None = None) -> int:
         const=True,
         default=False,
         type=parse_bool,
-        help="classify, read Linear, print the comment; push and comment nothing",
+        help="run every step and check, print the comment; push, open, comment nothing",
+    )
+    p.add_argument(
+        "--selftest",
+        nargs="?",
+        const=True,
+        default=False,
+        type=parse_bool,
+        help="fake ticket + scan (selftest.py); draft PRs opened then closed",
     )
     a = p.parse_args(argv)
+    if not a.selftest and not a.ticket.strip():
+        p.error("--ticket is required (or pass --selftest)")
     ctx = Context(
         repo=a.repo,
         root=a.root.resolve(),
@@ -54,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         run_url=a.run_url,
         run_id=a.run_id,
         dry_run=a.dry_run,
+        selftest=a.selftest,
     )
     run(ctx, Deps(runner=subprocess.run))
     return 0

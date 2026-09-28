@@ -226,9 +226,11 @@ def remote_branch_exists(branch: str, runner: Runner) -> bool:
     return bool((out.stdout or "").strip())
 
 
-def start_branch(branch: str, base: str, runner: Runner) -> None:
-    """A fresh branch from the base commit, with a clean tree."""
-    runner(["git", "checkout", "--force", "-B", branch, base], check=True)
+def reset_to(base: str, runner: Runner) -> None:
+    """A clean tree at the base commit, detached. Each change is committed there and
+    pushed as `HEAD:refs/heads/<branch>`, so no local branch is left behind (a dry run
+    on a laptop leaves nothing to clean up)."""
+    runner(["git", "checkout", "--force", "--detach", base], check=True)
 
 
 def commit_and_push(
@@ -241,7 +243,13 @@ def commit_and_push(
 
 
 def create_pr(
-    repo: str, branch: str, title: str, body: str, labels: list[str], runner: Runner
+    repo: str,
+    branch: str,
+    title: str,
+    body: str,
+    labels: list[str],
+    runner: Runner,
+    draft: bool = False,
 ) -> str:
     """Open the PR as the fleet App (PR_AUTHOR_TOKEN), which vuln_auto_merge_gate.py
     trusts. atlan-ci must not author it: it is the approver and cannot approve its own PR.
@@ -263,8 +271,33 @@ def create_pr(
     ]
     for label in labels:
         cmd += ["--label", label]
+    if draft:
+        cmd.append("--draft")
     out = runner(cmd, check=True, capture_output=True, text=True, env=_author_env())
     return (out.stdout or "").strip().splitlines()[-1] if out.stdout else ""
+
+
+def close_pr(repo: str, url: str, runner: Runner) -> bool:
+    """Close a self-test PR and delete its branch. Returns whether it worked; never
+    raises, so one failed close cannot stop the others."""
+    out = runner(
+        [
+            "gh",
+            "pr",
+            "close",
+            url,
+            "-R",
+            repo,
+            "--delete-branch",
+            "--comment",
+            "Self-test complete; closing (fake CVEs, never merged).",
+        ],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=_author_env(),
+    )
+    return out.returncode == 0
 
 
 def uv_lock_upgrade(packages: list[str], runner: Runner) -> subprocess.CompletedProcess:
