@@ -34,7 +34,7 @@ def _load(name: str):
 
 
 approve = _load("sdk_review_approve")
-reconcile = _load("sdk_review_reconcile")
+reconcile = _load("review_approval_reconcile")
 
 
 REPO = "atlanhq/application-sdk"
@@ -701,3 +701,513 @@ def test_min_age_is_configurable():
     outcomes = run_sweep(gh, min_age=timedelta(seconds=30))
 
     assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+
+
+# === lens ==================================================================
+#
+# The same regression for the second source: lens's last step posts its
+# `atlan-ci` APPROVE and, when that one POST fails, only warns. These pin that a
+# standing lens verdict gets its approval back, and that every way a lens
+# approval is invalidated keeps the reconciler from replaying it.
+
+from lens import approve as lens_approve  # noqa: E402
+from lens.findings import Finding, PRState  # noqa: E402
+from lens.github import GitHub as LensGitHub  # noqa: E402
+from lens.review import SUMMARY_MARKER  # noqa: E402
+
+LENS_BOT = "atlan-app-fleet[bot]"
+
+
+def lens_state(**overrides) -> PRState:
+    fields = {
+        "reviewed_head": HEAD,
+        "round": 3,
+        "history": [{"round": 3, "head": HEAD[:12], "incomplete": False}],
+    }
+    fields.update(overrides)
+    return PRState(**fields)
+
+
+def lens_summary(state: PRState | None = None, login: str = LENS_BOT) -> dict:
+    return {
+        "id": 11,
+        "body": f"{SUMMARY_MARKER}\n## lens\nReady to merge\n"
+        + (state or lens_state()).encode(),
+        "created_at": OLD,
+        "user": {"login": login},
+    }
+
+
+def lens_status(
+    state: str = "success", created_at: str = OLD, creator: str = LENS_BOT
+) -> dict:
+    return {
+        "context": "lens",
+        "state": state,
+        "created_at": created_at,
+        "creator": {"login": creator},
+    }
+
+
+def lens_review(state: str = "APPROVED", head: str = HEAD, review_id: int = 51) -> dict:
+    return {
+        "id": review_id,
+        "state": state,
+        "commit_id": head,
+        "user": {"login": "atlan-ci"},
+        "body": lens_approve.SIGNATURE + " — every finding at every level is resolved.",
+    }
+
+
+class FakeLensAPI:
+    """The REST API behind lens's own client, answering per token.
+
+    Each `LensGitHub` gets a transport bound to its token, so a test can prove
+    the `atlan-ci` PAT is spent on the APPROVE and nothing else.
+    """
+
+    def __init__(
+        self,
+        *,
+        statuses: list[dict] | None = None,
+        comments: list[dict] | None = None,
+        reviews: list[dict] | None = None,
+        pr: dict | None = None,
+    ) -> None:
+        self.statuses = [lens_status()] if statuses is None else statuses
+        self.comments = [lens_summary()] if comments is None else comments
+        self.reviews = list(reviews or [])
+        self.pr = pr or {
+            "number": PR,
+            "state": "open",
+            "draft": False,
+            "head": {"sha": HEAD},
+            "user": {"login": "a-contributor"},
+        }
+        self.approve_response: tuple[int, str] = (200, "{}")
+        self.fail: dict[str, tuple[int, str]] = {}
+        self.calls: list[tuple[str, str, str]] = []
+
+    def transport(self, token: str):
+        def call(method, path, body=None, accept=""):
+            self.calls.append((token, method, path))
+            for prefix, response in self.fail.items():
+                if path.startswith(prefix):
+                    return response
+            base = f"/repos/{REPO}"
+            if method == "GET" and path.startswith(f"{base}/commits/{HEAD}/statuses"):
+                return 200, json.dumps(self.statuses)
+            if method == "GET" and path.startswith(f"{base}/issues/{PR}/comments"):
+                return 200, json.dumps(self.comments)
+            if method == "GET" and path.startswith(f"{base}/pulls/{PR}/reviews"):
+                return 200, json.dumps(self.reviews)
+            if method == "GET" and path == f"{base}/pulls/{PR}":
+                return 200, json.dumps(self.pr)
+            if method == "POST" and path == f"{base}/pulls/{PR}/reviews":
+                status, text = self.approve_response
+                if status < 300:
+                    self.reviews.append(lens_review(review_id=99))
+                return status, text
+            raise AssertionError(f"unexpected lens call: {method} {path}")
+
+        return call
+
+    def source(self):
+        return reconcile.LensSource(
+            LensGitHub(REPO, token=APP_TOKEN, transport=self.transport(APP_TOKEN)),
+            LensGitHub(REPO, token=PAT, transport=self.transport(PAT)),
+        )
+
+    def approvals(self) -> list[tuple[str, str, str]]:
+        return [c for c in self.calls if c[1] == "POST"]
+
+    def pat_calls(self) -> list[tuple[str, str, str]]:
+        return [c for c in self.calls if c[0] == PAT]
+
+
+def is_graphql(argv) -> bool:
+    return argv[1] == "api" and argv[2] == "graphql"
+
+
+def lens_node(number: int = PR, head: str = HEAD, state: str = "SUCCESS") -> dict:
+    return {
+        "number": number,
+        "headRefOid": head,
+        "commits": {
+            "nodes": [
+                {"commit": {"oid": head, "status": {"context": {"state": state}}}}
+            ]
+        },
+    }
+
+
+def lens_gh(
+    nodes: list[dict] | None = None, prs: list[dict] | None = None, **kwargs
+) -> FakeGH:
+    """PR #7 has a green lens verdict and no sdk-review label."""
+    gh = base_gh(prs=prs if prs is not None else [pull(labels=[])], **kwargs)
+    gh.on(
+        is_graphql,
+        ok(
+            "\n".join(
+                json.dumps(n) for n in (nodes if nodes is not None else [lens_node()])
+            )
+        ),
+    )
+    return gh
+
+
+def run_lens_sweep(gh: FakeGH, api: FakeLensAPI, **kwargs) -> list:
+    return run_sweep(gh, lens=api.source(), **kwargs)
+
+
+# --- the recovery -----------------------------------------------------------
+
+
+def test_a_lost_lens_approval_is_reposted_by_the_code_owner():
+    gh, api = lens_gh(), FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [(o.number, o.action, o.source) for o in outcomes] == [
+        (PR, reconcile.RECONCILED, reconcile.LENS)
+    ]
+    # One APPROVE, on the reviewed head, and it is the only thing the PAT did.
+    assert api.pat_calls() == [(PAT, "POST", f"/repos/{REPO}/pulls/{PR}/reviews")]
+    assert api.approvals() == api.pat_calls()
+
+
+def test_a_lens_recovery_runs_no_model_and_touches_no_lens_state():
+    """It replays the posted verdict: no comment, status or dismissal writes."""
+    gh, api = lens_gh(), FakeLensAPI()
+    run_lens_sweep(gh, api)
+
+    writes = [c for c in api.calls if c[1] != "GET"]
+    assert writes == [(PAT, "POST", f"/repos/{REPO}/pulls/{PR}/reviews")]
+
+
+def test_a_healthy_lens_pr_costs_nothing_past_the_prefilter():
+    """No green lens status on the head: not one lens REST read."""
+    gh, api = lens_gh(nodes=[lens_node(state="FAILURE")]), FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api)
+
+    assert outcomes == []
+    assert api.calls == []
+
+
+# --- never re-approves when ------------------------------------------------
+
+
+def test_lens_head_moved_past_the_verdict_is_never_approved():
+    api = FakeLensAPI(comments=[lens_summary(lens_state(reviewed_head=OTHER))])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "head moved" in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def test_lens_prefilter_ignores_a_green_status_on_an_older_head():
+    """The GraphQL head disagrees with the listing: nothing is read or posted."""
+    gh = lens_gh(nodes=[lens_node(head=OTHER)])
+    api = FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api)
+
+    assert outcomes == []
+    assert api.calls == []
+
+
+def test_a_withdrawn_lens_approval_is_never_replayed():
+    """lens withdrew its approval on this head (or a person dismissed it).
+    Only a new lens round may approve that head again."""
+    api = FakeLensAPI(reviews=[lens_review(state="DISMISSED")])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "withdrawn" in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def test_a_withdrawal_on_an_older_head_does_not_block_the_new_one():
+    """The ruleset dismisses approvals on push; that dismissal is about the
+    old head, not the head lens has since passed."""
+    api = FakeLensAPI(reviews=[lens_review(state="DISMISSED", head=OTHER)])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+
+
+def test_a_withdrawal_landing_after_the_sweep_read_is_still_caught():
+    """The approve step re-reads the reviews itself and refuses a replay."""
+    api = FakeLensAPI()
+    source = api.source()
+    verdict = source.verdict(
+        pull(labels=[]),
+        {(PR, HEAD)},
+        min_age=timedelta(minutes=12),
+        stale_after=timedelta(minutes=90),
+        now=NOW,
+    )
+    assert isinstance(verdict, reconcile.Owed)
+    api.reviews.append(lens_review(state="DISMISSED"))
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.SKIPPED
+    assert "withdrawn" in detail
+    assert api.approvals() == []
+
+
+@pytest.mark.parametrize(
+    "state, why",
+    [
+        (
+            lens_state(findings=[Finding("a.py", 1, "low", "style", "t", "b", "e")]),
+            "open finding",
+        ),
+        (
+            lens_state(findings=[Finding("a.py", 1, "high", "bug", "t", "b", "e")]),
+            "open finding",
+        ),
+        (lens_state(pending_files=["a.py"]), "pending"),
+        (lens_state(history=[{"round": 3, "incomplete": True}]), "incomplete"),
+    ],
+)
+def test_lens_is_never_approved_while_anything_is_open(state, why):
+    api = FakeLensAPI(comments=[lens_summary(state)])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert why in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def test_a_resolved_finding_does_not_block_the_approval():
+    fixed = Finding("a.py", 1, "high", "bug", "t", "b", "e", status="fixed")
+    api = FakeLensAPI(comments=[lens_summary(lens_state(findings=[fixed]))])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+
+
+def test_an_existing_lens_approval_on_the_head_is_a_no_op():
+    api = FakeLensAPI(reviews=[lens_review()])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert outcomes[0].reason == "already approved"
+    assert api.approvals() == []
+
+
+@pytest.mark.parametrize(
+    "status, why",
+    [
+        # A round is running on this head: never race it.
+        (lens_status(state="pending"), "pending"),
+        # A round failed or never started (lens withdraws, its state is unchanged).
+        (lens_status(state="error"), "error"),
+        (lens_status(state="failure"), "failure"),
+        # Anyone with statuses:write can set a `lens` status; only lens's App counts.
+        (lens_status(creator="github-actions[bot]"), "not lens"),
+    ],
+)
+def test_the_lens_status_must_be_lens_own_green(status, why):
+    """The GraphQL prefilter is only a prefilter: the newest status is re-read."""
+    api = FakeLensAPI(statuses=[status, lens_status()])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert why in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def test_a_summary_not_posted_by_lens_is_not_trusted():
+    api = FakeLensAPI(comments=[lens_summary(login="github-actions[bot]")])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert api.approvals() == []
+
+
+def test_a_recent_lens_verdict_is_left_to_its_own_run():
+    api = FakeLensAPI(statuses=[lens_status(created_at=RECENT)])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "too recent" in outcomes[0].reason
+    assert api.approvals() == []
+
+
+@pytest.mark.parametrize(
+    "pr, why",
+    [
+        ({"state": "closed"}, "closed or a draft"),
+        ({"draft": True}, "closed or a draft"),
+        ({"user": {"login": "atlan-ci"}}, "authored this PR"),
+        ({"head": {"sha": OTHER}}, "head moved"),
+    ],
+)
+def test_the_approve_step_rechecks_the_pr_itself(pr, why):
+    api = FakeLensAPI()
+    api.pr = {**api.pr, **pr}
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert why in outcomes[0].reason
+    assert api.approvals() == []
+
+
+# --- failures and the shared quota ----------------------------------------
+
+
+def test_an_unreadable_lens_review_listing_never_approves_blind():
+    api = FakeLensAPI()
+    api.fail[f"/repos/{REPO}/pulls/{PR}/reviews"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [(o.action, o.source) for o in outcomes] == [
+        (reconcile.DEFERRED, reconcile.LENS)
+    ]
+    assert api.approvals() == []
+
+
+def test_an_unreadable_lens_listing_outlasting_a_window_reds_the_run():
+    api = FakeLensAPI(statuses=[lens_status(created_at="2026-08-17T09:00:00Z")])
+    api.fail[f"/repos/{REPO}/pulls/{PR}/reviews"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+
+
+def test_a_failed_lens_approve_is_a_failure_when_quota_remains():
+    api = FakeLensAPI()
+    api.approve_response = (422, "Validation Failed")
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+    assert "could not be posted" in outcomes[0].reason
+
+
+def test_a_lens_approve_losing_the_quota_race_is_a_deferral():
+    gh, api = lens_gh(), FakeLensAPI()
+    api.approve_response = (403, "API rate limit exceeded")
+    reads = {"n": 0}
+
+    def meter():
+        reads["n"] += 1
+        return ok(f"{0 if reads['n'] > 1 else 4999}\n{RESET}\n")
+
+    gh.on(is_rate_limit, meter)
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [o.action for o in outcomes] == [reconcile.DEFERRED]
+
+
+def test_one_quota_read_covers_both_sources():
+    """sdk-review owed on #7, lens owed on #7 too: one meter read, and each
+    source posts its own approval (see the module docstring for why)."""
+    gh = lens_gh(prs=[pull()])
+    api = FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [(o.source, o.action) for o in outcomes] == [
+        (reconcile.SDK_REVIEW, reconcile.RECONCILED),
+        (reconcile.LENS, reconcile.RECONCILED),
+    ]
+    assert len(gh.called(is_rate_limit)) == 1
+    assert len(gh.called(is_approve)) == 1
+    assert len(api.approvals()) == 1
+
+
+def test_a_spent_quota_defers_both_sources_without_a_single_approve():
+    gh = lens_gh(prs=[pull()], quota_remaining=0)
+    api = FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [(o.source, o.action) for o in outcomes] == [
+        (reconcile.SDK_REVIEW, reconcile.DEFERRED),
+        (reconcile.LENS, reconcile.DEFERRED),
+    ]
+    assert len(gh.called(is_rate_limit)) == 1
+    assert gh.called(is_approve) == []
+    assert api.approvals() == []
+    assert api.pat_calls() == []
+
+
+def test_main_stays_green_when_both_sources_defer(monkeypatch):
+    monkeypatch.setattr(
+        reconcile,
+        "sweep",
+        lambda *args, **kwargs: [
+            reconcile.Outcome(PR, reconcile.DEFERRED, "quota", reconcile.SDK_REVIEW),
+            reconcile.Outcome(PR, reconcile.DEFERRED, "quota", reconcile.LENS),
+        ],
+    )
+    assert reconcile.main(["--repo", REPO]) == 0
+
+
+# --- dry run and reporting ------------------------------------------------
+
+
+def test_dry_run_lists_what_each_source_would_reconcile(tmp_path, monkeypatch):
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    gh = lens_gh(prs=[pull()])
+    api = FakeLensAPI()
+    outcomes = run_lens_sweep(gh, api, dry_run=True)
+    reconcile.report(outcomes, REPO)
+
+    assert [(o.source, o.reason) for o in outcomes] == [
+        (reconcile.SDK_REVIEW, reconcile.DRY_RUN_REASON),
+        (reconcile.LENS, reconcile.DRY_RUN_REASON),
+    ]
+    assert gh.called(is_approve) == [] and api.approvals() == []
+    assert gh.called(is_rate_limit) == []
+    written = summary.read_text()
+    assert "(sdk-review)" in written and "(lens)" in written
+
+
+def test_a_lens_recovery_is_annotated_as_lens(capsys):
+    reconcile.report(
+        [reconcile.Outcome(PR, reconcile.RECONCILED, "approved", reconcile.LENS)],
+        REPO,
+    )
+    out = capsys.readouterr().out
+    assert "::warning::" in out and "lens ready-to-merge verdict" in out
+
+
+# --- the prefilter --------------------------------------------------------
+
+
+def test_lens_prefilter_failure_is_loud():
+    gh = lens_gh()
+    gh.on(is_graphql, fail("boom"))
+
+    with pytest.raises(SystemExit, match="failed to list lens verdicts"):
+        run_lens_sweep(gh, FakeLensAPI())
+
+
+def test_lens_prefilter_keeps_only_green_heads():
+    gh = FakeGH()
+    gh.on(
+        is_graphql,
+        ok(
+            "\n".join(
+                json.dumps(n)
+                for n in [
+                    lens_node(number=1),
+                    lens_node(number=2, state="PENDING"),
+                    {"number": 3, "headRefOid": HEAD, "commits": {"nodes": []}},
+                    {
+                        "number": 4,
+                        "headRefOid": HEAD,
+                        "commits": {
+                            "nodes": [{"commit": {"oid": HEAD, "status": None}}]
+                        },
+                    },
+                ]
+            )
+        ),
+    )
+    assert reconcile.lens_ready_heads(REPO, gh) == {(1, HEAD)}
+    [argv] = gh.called(is_graphql)
+    assert "--paginate" in argv and 'context(name: "lens")' in " ".join(argv)

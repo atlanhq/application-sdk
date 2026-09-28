@@ -27,12 +27,16 @@ Approve only when ALL hold:
 
 When a review is not ready, lens withdraws its earlier approvals (e.g. after
 `/lens force` on the same head finds a new problem).
+
+A failed APPROVE only warns here. `review_approval_reconcile.py` (on a cron)
+re-posts it later through `approve_ready_head`, with the same re-checks.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -68,14 +72,26 @@ def write_decision(path: str | None, pr: int, decision: dict[str, Any]) -> None:
         Path(path).write_text(json.dumps({"pr": pr, **decision}), encoding="utf-8")
 
 
-def _lens_approvals(gh: GitHub, number: int, login: str) -> list[dict[str, Any]]:
+def _signed(
+    reviews: list[dict[str, Any]], login: str, state: str
+) -> list[dict[str, Any]]:
+    """lens's own reviews in `state`: posted as `login` and carrying the signature."""
     return [
         r
-        for r in gh.reviews(number)
+        for r in reviews
         if (r.get("user") or {}).get("login") == login
-        and r.get("state") == "APPROVED"
+        and r.get("state") == state
         and (r.get("body") or "").startswith(SIGNATURE)
     ]
+
+
+@dataclass(frozen=True)
+class Approval:
+    """What an approve decision came to. `posted` is True only when this call
+    posted the APPROVE; otherwise `detail` says why it did not."""
+
+    posted: bool
+    detail: str
 
 
 def apply(
@@ -86,34 +102,62 @@ def apply(
     action, number = decision.get("action"), int(decision.get("pr") or 0)
     if action not in ("approve", "withdraw") or not number:
         return "nothing to do"
-    mine = _lens_approvals(gh, number, login)
-    if action == "withdraw":
-        for r in mine:
-            gh.dismiss_review(
-                number, int(r["id"]), "lens: the latest review is not ready to merge."
-            )
-        return (
-            f"withdrew {len(mine)} lens approval(s)"
-            if mine
-            else "no lens approval to withdraw"
+    if action == "approve":
+        return approve_ready_head(gh, approver, decision, login).detail
+    mine = _signed(gh.reviews(number), login, "APPROVED")
+    for r in mine:
+        gh.dismiss_review(
+            number, int(r["id"]), "lens: the latest review is not ready to merge."
         )
+    return (
+        f"withdrew {len(mine)} lens approval(s)"
+        if mine
+        else "no lens approval to withdraw"
+    )
+
+
+def approve_ready_head(
+    gh: GitHub,
+    approver: GitHub,
+    decision: dict[str, Any],
+    login: str = APPROVER_LOGIN,
+    *,
+    refuse_after_withdrawal: bool = False,
+) -> Approval:
+    """Post the APPROVE for an `approve` decision, after re-checking the PR.
+
+    `refuse_after_withdrawal` is for a caller that replays a verdict instead of
+    acting on a fresh one (`review_approval_reconcile.py`). lens's own last step
+    may re-approve a head it withdrew from, because its decision is newer than
+    the withdrawal. A replayed verdict is not, so a dismissed lens approval on
+    the head (lens's withdraw, or a person dismissing it) stops it."""
+    number = int(decision.get("pr") or 0)
+    reviews = gh.reviews(number)
     pr = gh.pr(number)
     head = (pr.get("head") or {}).get("sha")
     if pr.get("state") != "open" or pr.get("draft"):
-        return "not approving: the PR is closed or a draft"
+        return Approval(False, "not approving: the PR is closed or a draft")
     if head != decision.get("head"):
-        return "not approving: the PR head moved since lens reviewed it"
+        return Approval(
+            False, "not approving: the PR head moved since lens reviewed it"
+        )
     if (pr.get("user") or {}).get("login") == login:
-        return "not approving: the approver authored this PR"
-    if any(r.get("commit_id") == head for r in mine):
-        return "already approved this head"
+        return Approval(False, "not approving: the approver authored this PR")
+    if any(r.get("commit_id") == head for r in _signed(reviews, login, "APPROVED")):
+        return Approval(False, "already approved this head")
+    if refuse_after_withdrawal and any(
+        r.get("commit_id") == head for r in _signed(reviews, login, "DISMISSED")
+    ):
+        return Approval(
+            False, "not approving: a lens approval on this head was withdrawn"
+        )
     approver.approve(
         number,
         head,
         f"{SIGNATURE} — every finding at every level is resolved "
         f"(round {decision.get('round', '?')}).",
     )
-    return f"approved {head[:9]} as {login}"
+    return Approval(True, f"approved {head[:9]} as {login}")
 
 
 def run_step(repo: str, decision_path: str) -> int:

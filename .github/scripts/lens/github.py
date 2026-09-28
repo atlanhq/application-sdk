@@ -124,6 +124,14 @@ class GitHub:
                 return out
             page += 1
 
+    def statuses(self, sha: str) -> list[dict[str, Any]]:
+        """Commit statuses on `sha`, newest first. One page: lens sets a handful
+        per head (pending, then its verdict), so its newest is on the first."""
+        return list(
+            self._call("GET", f"/repos/{self.repo}/commits/{sha}/statuses?per_page=100")
+            or []
+        )
+
     def workflow_runs(self, workflow_file: str) -> list[dict[str, Any]]:
         """Recent runs of one workflow, newest first (one page is enough: a
         run this call must see is at most minutes old)."""
