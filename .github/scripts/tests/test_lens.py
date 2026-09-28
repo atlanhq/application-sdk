@@ -4233,3 +4233,142 @@ def test_a_dismissal_keeps_the_location_links(repo: Path):
     )
     body = gh.comments[0]["body"]
     assert "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4" in body
+
+
+# ---- verify sees the paths the PR removes ----------------------------------------
+
+
+def test_removed_paths_lists_deletions_and_renames_but_not_add_backs():
+    added_back = (
+        "diff --git a/.github/workflows/old-name.yml b/.github/workflows/old-name.yml\n"
+        "new file mode 100644\n--- /dev/null\n+++ b/.github/workflows/old-name.yml\n"
+        "@@ -0,0 +1 @@\n+name: replacement\n"
+    )
+    gone = (
+        "diff --git a/gone.py b/gone.py\ndeleted file mode 100644\n"
+        "--- a/gone.py\n+++ /dev/null\n@@ -1 +0,0 @@\n-x\n"
+    )
+    assert review_mod.removed_paths(parse_unified_diff(RENAME_DIFF + gone)) == (
+        "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml\n"
+        "deleted: gone.py"
+    )
+    assert review_mod.removed_paths(parse_unified_diff(RENAME_DIFF + added_back)) == ""
+    assert review_mod.removed_paths(parse_unified_diff(DIFF)) == ""
+
+
+def test_verify_is_told_which_paths_no_longer_exist(repo: Path):
+    """A finding saying "the old file is still present" could never be judged:
+    verify sees the finding's site and this round's diff, never the repo. The
+    removed paths lead the call, before the changes, so batches share a prefix."""
+    ws, _ = _ws(repo)
+    f = Finding(
+        ".github/workflows/new-name.yml",
+        1,
+        "high",
+        "bug",
+        "Old workflow still present",
+        "old-name.yml is still in the repo and still scheduled.",
+        "name: new",
+    )
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": f.id, "status": "fixed"}]})])
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    removed = review_mod.removed_paths(parse_unified_diff(RENAME_DIFF))
+
+    assert review_mod._verify(client, ws, [f], "--- a.py", removed=removed) == [f.id]
+    user = script.requests[0]["messages"][1]["content"]
+    assert (
+        "<paths_removed_by_this_pr>\n"
+        "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml\n"
+        "</paths_removed_by_this_pr>"
+    ) in user
+    assert user.index("<paths_removed_by_this_pr>") < user.index("<changes_this_round>")
+    assert "paths_removed_by_this_pr" in script.requests[0]["messages"][0]["content"]
+
+
+def test_verify_gets_no_removed_block_when_nothing_was_removed(repo: Path):
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+
+    review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert (
+        "<paths_removed_by_this_pr>" not in script.requests[0]["messages"][1]["content"]
+    )
+
+
+def test_a_round_two_verify_lists_a_rename_from_the_whole_pr(repo: Path):
+    """End to end through `run`: the PR's diff renames a workflow, and the
+    verify call for the open finding is told the old path is gone."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_elsewhere(gh)
+    gh.diffs[("h1", "h2")] += RENAME_DIFF
+    gh.diffs[("b0", "h2")] += RENAME_DIFF
+    gh.files[(".github/workflows/new-name.yml", "h2")] = "name: new\non: push\n"
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    sent = json.dumps(verify)
+    assert f'finding id=\\"{fid}\\"' in sent
+    assert (
+        "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml"
+        in sent
+    )
+
+
+def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
+    """The list is the whole PR's, not the round's: round 2 touches another
+    file, but the rename made in round 1 is still in effect at the head."""
+    gh = FakeGitHub()
+    gh.diffs[("b0", "h1")] = DIFF + RENAME_DIFF
+    gh.files[(".github/workflows/new-name.yml", "h1")] = "name: new\non: push\n"
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert first.state.findings, "round 1 must leave a finding open to re-check"
+    _round_two_elsewhere(gh)
+    gh.files[(".github/workflows/new-name.yml", "h2")] = "name: new\non: push\n"
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+
+    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    assert (
+        "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml"
+        in json.dumps(verify)
+    )
