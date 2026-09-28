@@ -243,6 +243,18 @@ def run_gh(runner: Runner, argv: list[str], **kwargs) -> subprocess.CompletedPro
         )
 
 
+def bounded(runner: Runner) -> Runner:
+    """`runner` with every call under GH_TIMEOUT_SECONDS, for code that calls
+    `gh` itself: the sdk-review stamper, including its APPROVE. A POST that
+    times out may still have landed; the stamper's own "already approved"
+    check makes the next tick a no-op in that case."""
+
+    def call(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+        return run_gh(runner, argv, **kwargs)
+
+    return call
+
+
 def list_open_prs(repo: str, runner: Runner) -> list[dict]:
     """Every open PR, with `head` and `labels` already populated.
 
@@ -475,6 +487,7 @@ def sdk_review_verdict(
     if approve.APPROVED_LABEL not in label_names(pr):
         return None
 
+    runner = bounded(runner)
     client = approve.Client(repo, str(number), runner)
 
     comment = client.latest_summary_comment()

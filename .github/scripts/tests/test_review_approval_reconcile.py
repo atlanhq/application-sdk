@@ -1707,3 +1707,41 @@ def test_no_delay_when_nothing_was_posted():
     run_lens_sweep(lens_gh(), api)
 
     assert api.slept == []
+
+
+# --- lens review round 6 (PR #4035) ----------------------------------------
+
+
+def test_every_gh_call_the_sdk_review_stamper_makes_is_bounded():
+    """F-0796f6: the stamper calls `gh` itself, APPROVE included, so it gets
+    the bounded runner too, not the raw one."""
+    recorder = _KwargsRecorder(base_gh())
+    outcomes = reconcile.sweep(
+        REPO,
+        runner=recorder,
+        now=NOW,
+        sleeper=lambda _s: None,
+        lens=FakeLensAPI().source(),
+    )
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    stamper_calls = [
+        (argv, kwargs)
+        for argv, kwargs in recorder.seen
+        if not (is_pr_list(argv) or is_graphql(argv) or is_rate_limit(argv))
+    ]
+    assert any(is_approve(argv) for argv, _ in stamper_calls)
+    unbounded = [
+        argv
+        for argv, kw in stamper_calls
+        if kw.get("timeout") != reconcile.GH_TIMEOUT_SECONDS
+    ]
+    assert unbounded == []
+
+
+def test_a_stalled_sdk_review_approve_ends_the_attempt_instead_of_hanging():
+    gh = base_gh()
+    gh.on(is_approve, _stall)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
