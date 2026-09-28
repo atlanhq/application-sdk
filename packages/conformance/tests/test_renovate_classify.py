@@ -555,6 +555,31 @@ def test_dep_files_allowed() -> None:
     assert pr.blocking_reason is not BlockingReason.NON_DEP_FILES
 
 
+def test_atlan_platform_generated_files_are_dep_files() -> None:
+    pr = classify(
+        make_pr(
+            branch="renovate/atlan-platform",
+            files=[
+                "uv.lock",
+                "contract/PklProject",
+                "contract/PklProject.deps.json",
+                "app/generated/contract.json",
+                "atlan.yaml",
+                "app.yaml",
+                "contract_schema.lock.json",
+            ],
+        )
+    )
+    assert pr.blocking_reason is not BlockingReason.NON_DEP_FILES
+
+
+def test_generated_artifacts_are_root_only() -> None:
+    pr = classify(
+        make_pr(branch="renovate/atlan-platform", files=["examples/atlan.yaml"])
+    )
+    assert pr.blocking_reason is BlockingReason.NON_DEP_FILES
+
+
 def test_non_dep_file_triggers_block() -> None:
     pr = classify(make_pr(branch="renovate/github-actions", files=["src/app.py"]))
     assert pr.blocking_reason is BlockingReason.NON_DEP_FILES

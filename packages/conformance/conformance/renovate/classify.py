@@ -71,7 +71,13 @@ _DEP_FILE_RE = re.compile(
     r"|(.*/)?uv\.lock"
     r"|(.*/)?package-lock\.json"
     r"|(.*/)?requirements\.txt"
-    r"|(.*/)?pyproject\.toml)$"
+    r"|(.*/)?pyproject\.toml"
+    r"|(.*/)?contract/PklProject"
+    r"|(.*/)?contract/PklProject\.deps\.json"
+    r"|app/generated/.*"
+    r"|atlan\.yaml"
+    r"|app\.yaml"
+    r"|contract_schema\.lock\.json)$"
 )
 
 
