@@ -17,6 +17,12 @@ if TYPE_CHECKING:
 _FRAMEWORK_MODULES: frozenset[str] = frozenset(
     {
         "application_sdk",
+        # The SDK's error taxonomy and handler surface live in the lockstep api
+        # package. Without this the sandbox re-imports it, so FailureCategory /
+        # Audience inside a workflow are different classes from the ones the
+        # envelope validates against, and every workflow failure turns into a
+        # FailureDetails ValidationError.
+        "application_sdk_api",
         "application_sdk.app",
         "application_sdk.app.base",
         "application_sdk.app.task",

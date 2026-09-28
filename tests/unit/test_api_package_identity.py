@@ -73,10 +73,15 @@ _WORKER_NAMES = frozenset(
 
 
 def _public_names(module: object) -> list[str]:
-    names = getattr(module, "__all__", None)
-    if names is None:
-        names = [n for n in dir(module) if not n.startswith("_")]
-    return sorted(names)
+    """The api module's surface, by the same rule the shim generator uses."""
+    from pathlib import Path
+
+    scripts = str(Path(__file__).resolve().parents[2] / ".github" / "scripts")
+    if scripts not in sys.path:
+        sys.path.insert(0, scripts)
+    import gen_api_shims
+
+    return gen_api_shims.public_names(module.__name__)  # type: ignore[attr-defined]
 
 
 @pytest.mark.parametrize(
@@ -118,7 +123,8 @@ def test_only_the_handler_surface_warns(old: str, new: str, deprecated: bool) ->
         n for n in _public_names(importlib.import_module(new)) if n not in _WORKER_NAMES
     )
     module = importlib.import_module(old)
-    module.__dict__.pop(name, None)  # drop a cached resolution so __getattr__ runs
+    if name in getattr(module, "_DEPRECATED_CONSTANTS", {}):
+        module.__dict__.pop(name, None)  # drop a cached resolution so __getattr__ runs
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         getattr(module, name)
@@ -134,7 +140,6 @@ def test_only_the_handler_surface_warns(old: str, new: str, deprecated: bool) ->
 def test_worker_surface_names_do_not_warn(name: str) -> None:
     import application_sdk.handler as handler_pkg
 
-    handler_pkg.__dict__.pop(name, None)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         getattr(handler_pkg, name)
@@ -180,3 +185,24 @@ def test_the_sdk_and_the_api_package_are_released_in_lockstep() -> None:
     assert api["version"] == sdk["version"]
     assert application_sdk_api.__version__ == sdk["version"]
     assert re.fullmatch(r"\d+\.\d+\.\d+", sdk["version"])
+
+
+def test_the_shims_are_generated_from_the_api_package() -> None:
+    """Adding a public name to packages/api without regenerating the shims fails here.
+
+    The shims carry static literals (explicit imports, ``__all__``,
+    ``_DEPRECATED_CONSTANTS``) so the Symbol Removal Check can read the surface;
+    this keeps them in step with the api package by construction.
+    """
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    result = subprocess.run(
+        [sys.executable, ".github/scripts/gen_api_shims.py", "--check"],
+        cwd=root,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr

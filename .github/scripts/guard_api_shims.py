@@ -49,7 +49,9 @@ SHIM_MODULES: tuple[str, ...] = (
     "application_sdk/handler/service_errors.py",
 )
 
-_ALLOWED_ASSIGN_TARGETS = frozenset({"__all__", "_EXTRA", "_NOT_DEPRECATED"})
+_ALLOWED_ASSIGN_TARGETS = frozenset(
+    {"__all__", "_EXTRA", "_NOT_DEPRECATED", "_DEPRECATED_CONSTANTS"}
+)
 _ALLOWED_FUNCTIONS = frozenset({"__getattr__", "__dir__"})
 
 

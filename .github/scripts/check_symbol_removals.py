@@ -112,6 +112,16 @@ from conventional_breaking import (  # noqa: E402 — sibling script, path set a
 #: The distribution package whose surface this gate guards.
 DEFAULT_PACKAGE = "application_sdk"
 
+#: Distributions released in lockstep with the SDK (same job, same version, an
+#: exact pin) whose modules the SDK re-exports: dotted package -> its package root
+#: relative to the repo root. A name the SDK re-exports from one of these is
+#: surface, and its members/signature are read from the companion's definition,
+#: so moving a class there (behind a re-export shim) is not a removal while any
+#: change to what it offers still is.
+COMPANION_PACKAGES: dict[str, Path] = {
+    "application_sdk_api": Path("packages/api/application_sdk_api"),
+}
+
 #: Module-level dict literal that maps a PEP 562 alias name to its replacement.
 #: Prescribed by ``docs/standards/symbols.md`` so this gate can read the alias
 #: set statically; ``application_sdk/execution/_temporal/preflight_gate.py`` is
@@ -407,7 +417,10 @@ def _reexported_names(
     if isinstance(node, ast.ImportFrom):
         intra_package = bool(node.level) or (
             node.module is not None
-            and (node.module == package or node.module.startswith(package + "."))
+            and any(
+                node.module == root or node.module.startswith(root + ".")
+                for root in (package, *COMPANION_PACKAGES)
+            )
         )
     else:
         intra_package = any(
@@ -536,7 +549,147 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         module = module_path(file, package_root, package)
         for symbol in extract_module(tree, module, package):
             snapshot.symbols[symbol.key] = symbol
+        _expand_companion_reexports(root, tree, module, snapshot)
     return snapshot
+
+
+def _companion_targets(tree: ast.Module) -> dict[str, tuple[str, str, bool]]:
+    """``bound name -> (companion module, attribute, deprecated)`` for *tree*.
+
+    Two shapes: an explicit ``from <companion>... import X`` (a re-export), and a
+    ``_DEPRECATED_CONSTANTS`` entry whose value is ``"<companion>.<mod>.<X>"``
+    (a deprecated alias served by ``__getattr__``).
+    """
+    targets: dict[str, tuple[str, str, bool]] = {}
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom) and not node.level and node.module:
+            if any(
+                node.module == c or node.module.startswith(c + ".")
+                for c in COMPANION_PACKAGES
+            ):
+                for alias in node.names:
+                    if alias.name != "*":
+                        targets[alias.asname or alias.name] = (
+                            node.module,
+                            alias.name,
+                            False,
+                        )
+    for name, value in _alias_values(tree).items():
+        mod, _, attr = value.rpartition(".")
+        if any(mod == c or mod.startswith(c + ".") for c in COMPANION_PACKAGES):
+            targets.setdefault(name, (mod, attr, True))
+    return targets
+
+
+def _alias_values(tree: ast.Module) -> dict[str, str]:
+    """The ``_DEPRECATED_CONSTANTS`` literal's string entries (key -> value)."""
+    out: dict[str, str] = {}
+    for node in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == ALIAS_MAPPING_NAME for t in targets
+        ):
+            continue
+        if isinstance(value, ast.Dict):
+            for k, v in zip(value.keys, value.values):
+                if (
+                    isinstance(k, ast.Constant)
+                    and isinstance(k.value, str)
+                    and isinstance(v, ast.Constant)
+                    and isinstance(v.value, str)
+                ):
+                    out[k.value] = v.value
+    return out
+
+
+def _companion_file(root: Path, module: str) -> Path | None:
+    for package, rel in COMPANION_PACKAGES.items():
+        if module == package or module.startswith(package + "."):
+            base = root / rel
+            parts = module.split(".")[1:]
+            candidate = base.joinpath(*parts)
+            for path in (candidate.with_suffix(".py"), candidate / "__init__.py"):
+                if path.is_file():
+                    return path
+    return None
+
+
+def _resolve_companion(
+    root: Path, module: str, attr: str, depth: int = 0
+) -> list[Symbol]:
+    """The symbols (the name and its members) *attr* has at its companion definition."""
+    path = _companion_file(root, module)
+    if path is None or depth > 8:
+        return []
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    package = module.split(".")[0]
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == attr
+        ):
+            return [
+                sym
+                for sym in extract_module(tree, module, package)
+                if sym.qualname == attr or sym.qualname.startswith(attr + ".")
+            ]
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            names = (
+                [t.id for t in node.targets if isinstance(t, ast.Name)]
+                if isinstance(node, ast.Assign)
+                else [node.target.id]
+                if isinstance(node.target, ast.Name)
+                else []
+            )
+            if attr in names:
+                return [
+                    Symbol(
+                        module=module, qualname=attr, kind="constant", deprecated=False
+                    )
+                ]
+    for node in tree.body:
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if (alias.asname or alias.name) != attr:
+                    continue
+                if node.level:
+                    base = module.split(".")
+                    if not path.name == "__init__.py":
+                        base = base[:-1]
+                    base = base[: len(base) - (node.level - 1)]
+                    source = ".".join(base + ([node.module] if node.module else []))
+                else:
+                    source = node.module or ""
+                return _resolve_companion(root, source, alias.name, depth + 1)
+    return []
+
+
+def _expand_companion_reexports(
+    root: Path, tree: ast.Module, module: str, snapshot: Snapshot
+) -> None:
+    """Record what each name this module re-exports from a companion package offers."""
+    for bound, (source, attr, deprecated) in _companion_targets(tree).items():
+        for sym in _resolve_companion(root, source, attr):
+            qualname = bound + sym.qualname[len(attr) :]
+            key = f"{module}:{qualname}"
+            existing = snapshot.symbols.get(key)
+            snapshot.symbols[key] = Symbol(
+                module=module,
+                qualname=qualname,
+                kind=sym.kind,
+                deprecated=deprecated
+                or sym.deprecated
+                or bool(existing and existing.deprecated),
+                params=sym.params,
+                required_params=sym.required_params,
+                param_kinds=sym.param_kinds,
+            )
 
 
 # ---------------------------------------------------------------------------

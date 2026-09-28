@@ -93,15 +93,40 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+# Names this module imported (and so offered) before its handler routes moved to
+# the api package; kept importable from here, same objects.
+from application_sdk_api.credentials.ingress import lift_agent_json  # noqa: E402,F401
+from application_sdk_api.errors import FailureCategory  # noqa: E402,F401
+from application_sdk_api.errors.base import (  # noqa: E402,F401
+    AppError,
+    safe_traceback,
+    sanitize_cause_repr,
+)
+from application_sdk_api.errors.leaves import InternalError  # noqa: E402,F401
+from application_sdk_api.handler.base import HandlerError  # noqa: E402,F401
+from application_sdk_api.handler.context import bind_handler_context  # noqa: E402,F401
+
 # The handler HTTP surface lives in the api package and is shared with the
 # consolidated API host. These private names are the same objects, kept for the
 # worker-only routes below (and tests) that use them.
+from application_sdk_api.handler.contracts import (  # noqa: E402,F401
+    AuthInput,
+    HandlerCredential,
+    MetadataInput,
+    PreflightCheck,
+    PreflightInput,
+    PreflightOutput,
+)
 from application_sdk_api.handler.contracts import (  # noqa: E402,F401 — re-exported
     flatten_credentials_to_pairs as _flatten_to_pairs,
 )
 from application_sdk_api.handler.contracts import (  # noqa: E402
     normalize_credentials as _normalize_credentials,
 )
+from application_sdk_api.handler.contracts import (  # noqa: E402,F401
+    unverifiable_preflight_result,
+)
+from application_sdk_api.handler.request_contract import ModelT  # noqa: E402,F401
 from application_sdk_api.handler.request_contract import (  # noqa: E402,F401 — re-exported
     RequestContractError as _RequestContractError,
 )
