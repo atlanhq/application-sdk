@@ -797,11 +797,31 @@ def test_o001_prose_leaves_an_externally_byte_consumed_dumps_on_stdlib() -> None
     for needle in (
         "leave the site on stdlib `json`",
         "# conformance: ignore[O001] <reason>",
-        "asset attribute",
+        "one attribute or field value",
         "outside the app",
-        "names that consumer",
-        "every mode",
+        "names the attribute key or field and that location (repo and file:line)",
+        "serializes a whole entity or document never qualifies",
         "hashed as text",
         "parses the whole document",
+        "byte-identical to `orjson.dumps(...).decode()` and makes the swap",
+    ):
+        assert needle in bullet, f"O001's prescription does not say {needle!r}"
+
+
+def test_o001_prose_writes_the_exact_bytes_directive_only_in_strict_mode() -> None:
+    """``remediate-finding`` offers ``outcome = "suppress"`` only for a WARNING in
+    strict mode, and default mode never targets O001 (a WARN rule). The
+    carve-out must say the lane writes the directive as a strict-mode
+    ``site-exception`` and that no mode strips one already in place, not that
+    the lane suppresses "in every mode".
+    """
+    text = " ".join(_read("areas/optimizations.prose.md").split())
+    assert "not only strict" not in text
+    assert "not bound to strict mode" not in text
+    bullet = " ".join(_rule_bullet("optimizations", "O001").split())
+    for needle in (
+        "only a strict-mode run hands the lane this finding",
+        '`suppression_reason = "site-exception"`',
+        "A directive already in place is the terminal state in any mode",
     ):
         assert needle in bullet, f"O001's prescription does not say {needle!r}"

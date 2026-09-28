@@ -180,12 +180,30 @@ def test_o001_terminal_state_licenses_stdlib_only_for_a_named_external_consumer(
     terminal_state = " ".join(get_rule("O001").terminal_state.split())
     for needle in (
         "# conformance: ignore[O001] <reason>",
-        "asset attribute",
-        "hashed as text",
-        "byte-compared",
+        "one attribute or field value",
+        "hashes or byte-compares that value as text",
         "outside the app",
-        "reason names that consumer",
-        "parses the whole document",
+        "names the attribute key or field and the location (repo and file:line)",
+        "serializes a whole entity or document does not qualify",
+        "parses the document before it diffs it",
+    ):
+        assert (
+            needle in terminal_state
+        ), f"O001's terminal_state does not state {needle!r}"
+
+
+def test_o001_terminal_state_sends_a_byte_identical_call_to_the_swap() -> None:
+    """A ``dumps`` already passing ``separators=(",", ":")`` and
+    ``ensure_ascii=False`` is byte-identical under orjson, so an external
+    text hash is unchanged and the site has a compliant swap. The terminal
+    state must not license stdlib for it just because its consumer is external.
+    """
+    terminal_state = " ".join(get_rule("O001").terminal_state.split())
+    for needle in (
+        '`separators=(",", ":")`',
+        "`ensure_ascii=False`",
+        "integer above 64 bits",
+        "byte-identical to `orjson.dumps(...).decode()` and makes the swap",
     ):
         assert (
             needle in terminal_state
@@ -198,8 +216,8 @@ def test_o001_exact_bytes_site_is_still_reported_and_suppressed_only_with_direct
     (tmp_path / "m.py").write_text(
         "import json\n\n\n"
         "def published(fields):\n"
-        "    return json.dumps(fields)  # conformance: ignore[O001] published "
-        "attribute value, hashed by the publish app\n\n\n"
+        "    return json.dumps(fields)  # conformance: ignore[O001] rawDataTypeDefinition, "
+        "hashed as text at example-consumer/diff.py:22\n\n\n"
         "def plain(fields):\n"
         "    return json.dumps(fields)\n"
     )
