@@ -208,6 +208,63 @@ def _form_schema(*names: str, extra: tuple[str, ...] = ()) -> dict[str, Any]:
     }
 
 
+def _composite_schema() -> dict[str, Any]:
+    """The Snowflake-crawler shape: a ``conditional`` property drawn by a widget.
+
+    ``asset-selection`` is the only name the ``metadata`` step lists. The
+    ``AssetSelection`` widget draws that property's ``conditions[].properties``
+    itself, one condition per extraction method, and a sub-field can be a
+    ``conditional`` in its own right (``include-filter`` swaps widgets on the
+    extract strategy). The same names are defined at the top level so the
+    values the widget writes have a schema.
+    """
+    sub_fields: dict[str, Any] = {
+        "temp-table-regex": {"type": "string", "ui": {"placeholder": ".*_TMP"}},
+        "include-database-regex": {"type": "string", "ui": {"hidden": True}},
+        "include-filter": {
+            "type": "conditional",
+            "conditions": [
+                {
+                    "property": "extract-strategy",
+                    "value": "information-schema",
+                    "ui": {"widget": "sqltree"},
+                },
+                {
+                    "property": "extract-strategy",
+                    "value": "account-usage",
+                    "ui": {"widget": "input"},
+                },
+            ],
+        },
+    }
+    return {
+        "properties": {
+            "connection": {"type": "string"},
+            "asset-selection": {
+                "type": "conditional",
+                "ui": {"widget": "AssetSelection"},
+                "conditions": [
+                    {
+                        "property": "extraction-method",
+                        "value": "direct",
+                        "properties": sub_fields,
+                    },
+                    {
+                        "property": "extraction-method",
+                        "value": "agent",
+                        "properties": sub_fields,
+                    },
+                ],
+            },
+            **sub_fields,
+        },
+        "steps": [
+            {"id": "connection", "properties": ["connection"]},
+            {"id": "metadata", "properties": ["asset-selection"]},
+        ],
+    }
+
+
 # ---------------------------------------------------------------------------
 # route_mismatch — the load-bearing check
 # ---------------------------------------------------------------------------
@@ -679,6 +736,28 @@ class TestBlankFormDetection:
         # The panels that DO exist, so the reader can see where it should have been.
         assert "credential" in reason
 
+    def test_fields_a_composite_widget_draws_are_rendered(self) -> None:
+        """Declared sub-fields of a step-listed composite reach the user.
+
+        The connector's contract declares every top-level property, including
+        the ones its ``AssetSelection`` widget draws; a check that only reads
+        step lists reported all of them as undrawn on a form that renders.
+        """
+        served = served_form(_configmap_response(_composite_schema()))
+
+        reason = form_shortfall(
+            _declaring(
+                "connection",
+                "asset-selection",
+                "temp-table-regex",
+                "include-database-regex",
+                "include-filter",
+            ),
+            served,
+        )
+
+        assert reason is None
+
     def test_a_fully_rendered_form_passes(self) -> None:
         """Every declared field defined AND drawn is the only passing shape."""
         served = _served(
@@ -1032,6 +1111,39 @@ class TestServedForm:
         form = served_form(response)
 
         assert form.properties == frozenset({"connection", "orphan"})
+        assert form.rendered == frozenset({"connection"})
+
+    def test_a_conditional_property_draws_its_own_sub_fields(self) -> None:
+        """A composite widget lays out fields no step lists.
+
+        The marketplace ``AssetSelection`` widget is a ``conditional`` property:
+        the step names it once, and the widget draws its ``conditions[]
+        .properties`` itself (``formBlock.vue`` renders a conditional through
+        the condition matching the form's values). Those sub-fields are also
+        defined at the top level so the submitted values have a schema, and
+        they were reported as "named by no step" — a user sees every one.
+        """
+        response = _configmap_response(_composite_schema())
+
+        form = served_form(response)
+
+        assert form.rendered == frozenset(
+            {
+                "connection",
+                "asset-selection",
+                "temp-table-regex",
+                "include-database-regex",
+                "include-filter",
+            }
+        )
+
+    def test_a_conditional_property_no_step_names_draws_nothing(self) -> None:
+        """Sub-fields ride on their composite: an undrawn composite draws none."""
+        schema = _composite_schema()
+        schema["steps"] = [{"id": "connection", "properties": ["connection"]}]
+
+        form = served_form(_configmap_response(schema))
+
         assert form.rendered == frozenset({"connection"})
 
     def test_a_form_with_no_steps_renders_nothing(self) -> None:
