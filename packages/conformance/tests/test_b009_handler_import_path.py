@@ -148,6 +148,44 @@ def test_scan_all_reports_b009_on_an_app(tmp_path: Path) -> None:
     assert [f.rule_id for f in findings if f.rule_id == "B009"] == ["B009"]
 
 
+def _app_with_lock(root: Path, lock: str | None) -> Path:
+    (root / "pyproject.toml").write_text('[project]\nname = "atlan-demo-app"\n')
+    if lock is not None:
+        (root / "uv.lock").write_text(lock)
+    app = root / "app"
+    app.mkdir()
+    (app / "handler.py").write_text("from application_sdk.handler import Handler\n")
+    return app / "handler.py"
+
+
+_SDK_ONLY_LOCK = (
+    'version = 1\n\n[[package]]\nname = "atlan-application-sdk"\nversion = "3.39.1"\n'
+)
+
+
+def test_not_evaluated_when_the_lock_predates_the_api_package(tmp_path: Path) -> None:
+    """On an SDK without atlan-application-sdk-api the old path is the real module."""
+    handler = _app_with_lock(tmp_path, _SDK_ONLY_LOCK)
+    assert [f for f in scan_all([handler], tmp_path) if f.rule_id == "B009"] == []
+
+
+def test_evaluated_when_the_lock_resolves_the_api_package(tmp_path: Path) -> None:
+    lock = _SDK_ONLY_LOCK + (
+        '\n[[package]]\nname = "atlan-application-sdk-api"\nversion = "3.40.0"\n'
+    )
+    handler = _app_with_lock(tmp_path, lock)
+    assert [
+        f.rule_id for f in scan_all([handler], tmp_path) if f.rule_id == "B009"
+    ] == ["B009"]
+
+
+def test_evaluated_when_the_lock_is_unreadable(tmp_path: Path) -> None:
+    handler = _app_with_lock(tmp_path, "this is not toml = = =\n")
+    assert [
+        f.rule_id for f in scan_all([handler], tmp_path) if f.rule_id == "B009"
+    ] == ["B009"]
+
+
 def test_rule_metadata() -> None:
     rule = get_rule("B009")
     assert rule.scope is RuleScope.APP

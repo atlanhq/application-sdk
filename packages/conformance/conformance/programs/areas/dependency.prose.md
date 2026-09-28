@@ -135,6 +135,9 @@ fix.  The re-detection gate is authoritative for this area — see
   `[project].dependencies`.  Delete that one entry (only it; leave the rest of
   the array intact) and re-lock with a plain `uv lock` — no `--upgrade`, so the
   resolved version is unchanged and now reached through the SDK's exact pin.
+  Re-lock only once D012 is clean — on a machine with a machine-wide default
+  index an unpinned repo's `uv lock` rewrites every lock URL onto the package
+  firewall (D013); if D012 also fired, fix it first in the same edit.
   Commit `pyproject.toml` and `uv.lock` together.  **Never touch the `api/`
   member's `pyproject.toml`**: the hosted member is installed without the SDK,
   so its direct declaration of the api package is correct and is not a finding.

@@ -106,7 +106,11 @@ gates them, and the edit is fully determined by the finding):
 
 - **B009 DeprecatedHandlerImportPath** (app source, the import statement the
   finding anchors on) — the app imports the handler surface through a
-  deprecated `application_sdk.handler*` shim.  The edit is a **module-root
+  deprecated `application_sdk.handler*` shim.  **Precondition:** the rule
+  only fires when `uv.lock` resolves `atlan-application-sdk-api`; if the lock
+  you are editing against does not (e.g. a stale branch), the rewrite would not
+  import — route to residue as "needs the SDK bump first" instead.  The edit is
+  a **module-root
   rewrite, names unchanged**: replace the leading `application_sdk.handler`
   with `application_sdk_api.handler` in that one statement —
   `from application_sdk.handler.contracts import PreflightInput` →

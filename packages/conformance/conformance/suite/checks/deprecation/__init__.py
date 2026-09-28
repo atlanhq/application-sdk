@@ -52,7 +52,7 @@ from ._authoring import scan_authoring
 from ._consumer import scan_consumer
 from ._contract_compat import scan_contract_compat
 from ._daft_runtime import scan_daft_runtime
-from ._handler_path import scan_handler_import_path
+from ._handler_path import api_package_resolvable, scan_handler_import_path
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 from ._private_imports import own_import_roots, scan_private_imports
@@ -103,6 +103,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # from everybody else's (not fine), and that is a property of the repo, not
     # of any one file.
     own_roots = own_import_roots(root) if run_consumer else frozenset()
+    # B009 is not evaluated when the locked SDK predates atlan-application-sdk-api:
+    # there the old path is the real module and the rewrite would not import.
+    run_b009 = run_consumer and api_package_resolvable(root)
 
     findings: list[Finding] = []
     for path in paths:
@@ -124,7 +127,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
             findings.extend(scan_private_imports(tree, rel, directives, own_roots))
-            findings.extend(scan_handler_import_path(tree, rel, directives))
+            if run_b009:
+                findings.extend(scan_handler_import_path(tree, rel, directives))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

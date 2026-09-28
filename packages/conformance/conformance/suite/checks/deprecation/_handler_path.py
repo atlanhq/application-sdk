@@ -23,11 +23,20 @@ A bound module is flagged unless every ``<binding>.Name`` the file reads is a
 worker-surface name of that module — a file that only reads
 ``hc.PreflightGateMode`` is compliant.  A binding the file never dereferences is
 flagged: nothing shows which names it is for.
+
+**Gated on the lock.**  On an SDK that predates the move, ``application_sdk.handler``
+is the real module and ``application_sdk_api`` is not installed, so the rewrite
+would not import.  When the repo's ``uv.lock`` is readable and does not resolve
+``atlan-application-sdk-api``, the rule is not evaluated (see
+:func:`api_package_resolvable`); the fix there is an SDK bump, not an edit.
 """
 
 from __future__ import annotations
 
 import ast
+import re
+import tomllib
+from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -63,6 +72,35 @@ DEPRECATED_HANDLER_MODULES: dict[str, frozenset[str]] = {
 #: Submodules of the handler package that are worker modules, not shims:
 #: ``from application_sdk.handler import service`` is not a deprecated import.
 _WORKER_SUBMODULES: frozenset[str] = frozenset({"service", "invocation"})
+
+
+API_DISTRIBUTION = "atlan-application-sdk-api"
+
+
+def _normalise(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def api_package_resolvable(root: Path) -> bool:
+    """Whether the app can import ``application_sdk_api`` — i.e. B009 applies.
+
+    ``False`` only when ``root/uv.lock`` is readable and resolves no
+    ``atlan-application-sdk-api``: the locked SDK predates the move, so
+    ``application_sdk.handler`` is still the real module there.  An absent or
+    unparseable lock says nothing either way and keeps the rule evaluated.
+    """
+    lock = root / "uv.lock"
+    if not lock.is_file():
+        return True
+    try:
+        doc = tomllib.loads(lock.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return True
+    target = _normalise(API_DISTRIBUTION)
+    return any(
+        isinstance(pkg, dict) and _normalise(str(pkg.get("name", ""))) == target
+        for pkg in doc.get("package", [])
+    )
 
 
 def new_module_path(module: str) -> str:
