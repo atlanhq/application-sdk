@@ -48,6 +48,9 @@ name: Conformance Resync
 #   vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED — "true" lets the lane arm
 #     auto-merge (still subject to each repo's renovate.json); unset/false =
 #     PRs only, never armed.
+#   vars.CONFORMANCE_RESYNC_REPOS — optional JSON array of "owner/repo" that
+#     scopes scheduled runs (pilot rollout); unset = the whole fleet. A
+#     dispatch's `repos` input overrides it.
 
 on:
   workflow_dispatch:
@@ -105,7 +108,7 @@ jobs:
       - name: Resync the fleet
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REPOS: ${{ github.event.inputs.repos }}
+          REPOS: ${{ github.event.inputs.repos || vars.CONFORMANCE_RESYNC_REPOS }}
           DRY_RUN: >-
             ${{ (vars.CONFORMANCE_RESYNC_LIVE == 'true' && github.event.inputs.dry_run != 'true') && 'false' || 'true' }}
           AUTOMERGE_ENABLED: ${{ vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED || 'false' }}

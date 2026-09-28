@@ -861,7 +861,11 @@ def main() -> int:
 
     runner = subprocess.run
     automerge_enabled = os.environ.get("AUTOMERGE_ENABLED", "false").lower() == "true"
-    identity = bot_identity(gate.RESYNC_AUTHOR, runner)
+    identity = (
+        (gate.RESYNC_AUTHOR, f"{gate.RESYNC_AUTHOR}@users.noreply.github.com")
+        if args.dry_run
+        else bot_identity(gate.RESYNC_AUTHOR, runner)
+    )
     run_url = (
         f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/"
         f"{os.environ.get('GITHUB_REPOSITORY', 'atlanhq/application-sdk')}/actions/runs/"
