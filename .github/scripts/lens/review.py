@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -717,6 +718,11 @@ def dismiss(
         mode_label=label,
         state=state,
         run_url=run_url,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
     )
     trace.line(
         f"dismiss by @{actor}: closed {closed or 'none'}; refused {refused or 'none'}"
@@ -1101,9 +1107,8 @@ def _where(f: Finding, blob_base: str) -> str:
     line = f.line or f.head_line
     label = f"{f.path}:{line}" if line else f.path
     if blob_base:
-        where = (
-            f"[`{label}`]({blob_base}/{f.path}" + (f"#L{line}" if line else "") + ")"
-        )
+        url = f"{blob_base}/{urllib.parse.quote(f.path, safe='/')}"
+        where = f"[`{label}`]({url}" + (f"#L{line}" if line else "") + ")"
     else:
         where = f"`{label}`"
     if f.scope == "unchanged":
@@ -1133,8 +1138,13 @@ def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
     if f.scenario.strip():
         out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
     if f.suggestion.strip() and chars != 0:
+        # Longer than any backtick run inside, so a suggestion that itself holds a
+        # fenced example (a Markdown doc) cannot close the block early.
+        runs = [len(m) for m in re.findall(r"`+", f.suggestion)]
+        fence = "`" * max(3, max(runs, default=0) + 1)
         out.append(
-            f"\n**Suggested change:**\n\n```{_FENCE.get(ext, '')}\n{f.suggestion.rstrip()}\n```"
+            f"\n**Suggested change:**\n\n{fence}{_FENCE.get(ext, '')}\n"
+            f"{f.suggestion.rstrip()}\n{fence}"
         )
     out.append("\n</details>")
     return "\n".join(out)
@@ -1280,6 +1290,16 @@ def _without_resolved(lines: list[str]) -> list[str]:
 
 
 def verdict_brief(res: RunResult, summary_url: str) -> str:
+    """The verdict, kept within GitHub's comment limit: this round's new findings are
+    shown in full, then shortened, then listed by title (the summary has them all)."""
+    for chars in (None, 600, 200, 0):
+        body = _verdict_brief(res, summary_url, chars)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+    return body[: COMMENT_LIMIT - 200] + "\n\n… (truncated: see the full summary)"
+
+
+def _verdict_brief(res: RunResult, summary_url: str, detail_chars: int | None) -> str:
     """This run's verdict, posted at the BOTTOM of the conversation.
 
     The sticky summary is edited in place, so it stays wherever the PR's first
@@ -1303,7 +1323,18 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
     ]
     if res.new_findings:
         lines.append(f"**New this round:** {len(res.new_findings)}\n")
-        lines.extend(_details(f, res.blob_base) for f in res.new_findings)
+        if detail_chars == 0:
+            lines.extend(
+                f"- {_SEV_ICON[f.severity]} {f.id} — {f.title} ({_where(f, res.blob_base)})"
+                for f in res.new_findings
+            )
+            lines.append(
+                "\nToo many to show here in full: the summary has every finding's details."
+            )
+        else:
+            lines.extend(
+                _details(f, res.blob_base, detail_chars) for f in res.new_findings
+            )
     if state == "failure" and not st.open_findings(BLOCKING):
         lines.append(_CLOSE_HINT)
     fixed = len(res.resolved_free) + len(res.resolved_verified)

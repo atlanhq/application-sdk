@@ -4070,3 +4070,86 @@ def test_concerns_alone_still_get_rechecked(repo: Path):
     st = PRState(approach=json.loads(json.dumps(_CONCERNS)))
     fixed = review_mod._verify(client, ws, [], "--- a.py", review_mod.open_concerns(st))
     assert fixed == ["A1"] and len(script.requests) == 1
+
+
+# ---- lens's review of the no-threads change -----------------------------------------------------------------------
+
+
+def test_the_verdict_comment_stays_within_githubs_limit():
+    """The verdict now carries this round's findings in full, so a round with many
+    verbose findings must shorten them, then list them, rather than be refused."""
+    fs = [
+        Finding(
+            f"a{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            f"t{i}",
+            "b" * 900,
+            f"e{i}",
+            suggestion="s" * 900,
+        )
+        for i in range(150)
+    ]
+    st = PRState(round=2, findings=fs, ledger={"spent_usd": 0.1, "cap_usd": 1.0})
+    res = RunResult(
+        "reviewed",
+        mode="incremental",
+        mode_label="re-review",
+        state=st,
+        new_findings=fs,
+        blob_base="https://github.com/o/r/blob/h",
+    )
+    body = review_mod.verdict_brief(res, "https://example.test/summary")
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert all(f.id in body for f in fs)  # every new finding is still named
+    few = RunResult(
+        "reviewed",
+        mode="incremental",
+        mode_label="re-review",
+        state=PRState(round=2, findings=fs[:1]),
+        new_findings=fs[:1],
+    )
+    assert "b" * 900 in review_mod.verdict_brief(
+        few, ""
+    )  # a normal round shows it in full
+
+
+def test_a_path_is_url_encoded_in_its_link():
+    f = Finding("src/a#b c.py", 3, "low", "bug", "t", "b", "e")
+    where = review_mod._where(f, "https://github.com/o/r/blob/h")
+    assert "(https://github.com/o/r/blob/h/src/a%23b%20c.py#L3)" in where
+
+
+def test_a_suggestion_holding_a_code_fence_cannot_close_its_block():
+    sug = "Use this:\n\n```python\nx = 1\n```\n"
+    f = Finding("docs/x.md", 3, "low", "documentation", "t", "b", "e", suggestion=sug)
+    out = review_mod._details(f, "")
+    assert "````markdown\n" + sug.rstrip() + "\n````" in out
+
+
+def test_a_dismissal_keeps_the_location_links(repo: Path):
+    gh = FakeGitHub()
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT, OFF_DIFF]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    low = next(f for f in first.state.findings if f.severity == "low")
+    review_mod.dismiss(
+        gh, 1, [low.id], "tracked separately", actor="reviewer", pr_author="author"
+    )
+    body = gh.comments[0]["body"]
+    assert "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4" in body
