@@ -99,8 +99,10 @@ two auto-fixable rules:
     non-ASCII as `\uXXXX` while orjson always writes UTF-8.  So only a call
     already passing `separators=(",", ":")` **and** `ensure_ascii=False`
     round-trips byte-identically.  For every other `dumps`, find what consumes
-    the string.  If anything hashes it, commits it, diffs it, signs it or
-    compares it byte-for-byte, prove the change on real input (for a
+    the string.  If that consumer is outside the app and compares the string
+    as text, the next bullet applies instead: do not swap.  If a consumer
+    inside the app hashes it, commits it, diffs it, signs it or compares it
+    byte-for-byte, prove the change on real input (for a
     committed file, dump its current content both ways and compare) and say
     in residue what will change.  Do not rewrite a committed file to match;
     the edit touches the call site only.
@@ -325,4 +327,8 @@ When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.
 interop with a library that requires a `str` and the bytes-decode round-trip
 is wasteful, or a `json.JSONEncoder` subclass), the model may propose an
 inline `# conformance: ignore[O001] <justification>` instead of a fix.  Route
-every suppression to residue for human audit.
+every suppression to residue for human audit.  One O001 directive is not
+bound to strict mode: a `dumps` whose string a consumer outside the app
+hashes or compares as text stays on stdlib `json` behind a directive that
+names that consumer, in every mode (see the byte-changing-defaults bullets
+above).
