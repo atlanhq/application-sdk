@@ -383,6 +383,13 @@ def test_a_file_added_back_at_a_renamed_path_keeps_its_head_text(tmp_path):
 
     assert head[".github/workflows/old-name.yml"] == "name: replacement\n"
 
+    # F-1d0386: the add-back sits past the head-text cap. It is not read, and
+    # it must not be marked removed either.
+    capped = review_mod.head_side_text(
+        gh, parse_unified_diff(RENAME_DIFF + added), "h1", 1
+    )
+    assert ".github/workflows/old-name.yml" not in capped
+
 
 def test_select_skips_lockfiles_binaries_and_deletions():
     d = DIFF + (

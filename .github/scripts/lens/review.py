@@ -205,8 +205,9 @@ def head_side_text(
     deletion. Without it the old file stays visible, and a finding that says
     "this file is still here" can never be verified fixed. Old paths cost no
     request, so every rename in the diff is covered, not only the first
-    `max_files` changed files. A file the PR adds back at an old path keeps its
-    head text.
+    `max_files` changed files. An old path the PR puts a file back at is never
+    marked removed, wherever that file sits in the diff: inside the cap it has
+    its head text, and past it it reads as any uncapped file does.
     """
     head_text: dict[str, str] = {}
     for fd in files[:max_files]:
@@ -214,9 +215,15 @@ def head_side_text(
             head_text[fd.path] = ""
         elif not fd.is_binary:
             head_text[fd.path] = gh.file_at(fd.path, head) or ""
+    at_head = {fd.path for fd in files if fd.status != "deleted"}
     for fd in files:
-        if fd.status == "renamed" and fd.old_path and fd.old_path != fd.path:
-            head_text.setdefault(fd.old_path, "")
+        if (
+            fd.status == "renamed"
+            and fd.old_path
+            and fd.old_path != fd.path
+            and fd.old_path not in at_head
+        ):
+            head_text[fd.old_path] = ""
     return head_text
 
 
