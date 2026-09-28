@@ -15,19 +15,23 @@ trusted as evidence. The approval rests on re-rendering the PR independently
 here and requiring a byte-identical result:
 
   a. author is ``atlan-conformance-sync[bot]``, head branch is exactly
-     ``bot/conformance-resync`` in this same repo, PR open and not a draft,
+     ``bot/conformance-resync`` in this same repo, base is ``main``, PR open
+     and not a draft,
      current HEAD is the SHA under evaluation
   b. the body carries the lane's marker, naming the suite version it rendered
   c. exactly one commit on the PR, authored by the lane, with one parent
   d. that parent is in the base branch's history (the render base is real main)
   e. re-render: check out the parent, read the conformance version its
      ``uv.lock`` resolves (must equal the marker), run ``bootstrap --resync
-     --json`` at exactly that version, stage exactly what the lane stages, and
+     --json`` at exactly that version with the marker's ``resolved-at``
+     resolution fence (:func:`resync_command`), stage exactly what the lane stages, and
      require the resulting git tree to EQUAL the PR head's tree — any extra,
      missing or altered byte anywhere withholds the approval
   f. the re-render dropped no per-repo setting (``.bak`` set-compare)
   g. every ruleset-required check is green
-  h. atlan-ci has not already approved this head with the resync signature
+  h. atlan-ci has not already approved this head with the resync signature;
+     the head is re-read just before posting, and the review is pinned to it
+     with ``commit_id``
 
 The lane (``.github/scripts/conformance_resync.py``) imports
 :func:`stage_like_the_lane`, :data:`ACCEPTED_DROPS` and the marker from here, so
@@ -47,8 +51,10 @@ import re
 import subprocess
 import tempfile
 import tomllib
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from typing import Any
 
 # Constants the resync lane (conformance_resync.py) shares with this gate.
@@ -57,15 +63,54 @@ RESYNC_BRANCH = "bot/conformance-resync"
 RESYNC_SIGNATURE = "**Conformance resync auto-approval:**"
 APPROVER_LOGIN = "atlan-ci"
 CONFORMANCE_PACKAGE = "atlan-application-sdk-conformance"
-_MARKER_RE = re.compile(r"<!--\s*conformance-resync-lane\s+suite=(\d+\.\d+\.\d+)\s*-->")
+_MARKER_RE = re.compile(
+    r"<!--\s*conformance-resync-lane\s+suite=(\d+\.\d+\.\d+)"
+    r"\s+resolved-at=(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\s*-->"
+)
+BASE_BRANCH = "main"
+RELEASE_AGE = timedelta(days=7)
+FIRST_PARTY = (
+    "atlan-application-sdk",
+    "atlan-application-sdk-conformance",
+    "pyatlan",
+)
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 BOOTSTRAP_TIMEOUT = 600
 
 
-def pr_marker(suite_version: str) -> str:
+def pr_marker(suite_version: str, resolved_at: str) -> str:
     """The hidden marker every lane PR body leads with. Shared with the lane
-    (``conformance_resync.py``) so the two never render it differently."""
-    return f"<!-- conformance-resync-lane suite={suite_version} -->"
+    (``conformance_resync.py``) so the two never render it differently.
+    ``resolved_at`` fixes the dependency resolution both sides use."""
+    return (
+        f"<!-- conformance-resync-lane suite={suite_version} "
+        f"resolved-at={resolved_at} -->"
+    )
+
+
+def resync_command(suite: str, resolved_at: str) -> list[str]:
+    """The one ``bootstrap --resync`` invocation the lane and this gate run.
+    Third-party packages resolve as of ``resolved_at`` minus the org release-age
+    window; first-party packages as of ``resolved_at`` itself."""
+    at = datetime.strptime(resolved_at, "%Y-%m-%dT%H:%M:%SZ")
+    cutoff = (at - RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+    first_party = [
+        arg for pkg in FIRST_PARTY for arg in ("--exclude-newer-package", f"{pkg}={resolved_at}")
+    ]
+    return [
+        "uvx",
+        "--isolated",
+        "--no-config",
+        "--exclude-newer",
+        cutoff,
+        *first_party,
+        "--from",
+        f"{CONFORMANCE_PACKAGE}=={suite}",
+        CONFORMANCE_PACKAGE,
+        "bootstrap",
+        "--resync",
+        "--json",
+    ]
 
 
 RESYNC_APPROVAL_BODY = (
@@ -102,6 +147,11 @@ def marker_suite_version(body: str | None) -> str | None:
     return m.group(1) if m else None
 
 
+def marker_resolved_at(body: str | None) -> str | None:
+    m = _MARKER_RE.search(body or "")
+    return m.group(2) if m else None
+
+
 def check_meta(
     pr: str, meta: dict[str, Any], repo: str, eval_sha: str
 ) -> tuple[bool, str]:
@@ -113,6 +163,8 @@ def check_meta(
         return False, f"PR #{pr}: head branch is not {RESYNC_BRANCH} — skipping."
     if ((head.get("repo") or {}).get("full_name")) != repo:
         return False, f"PR #{pr}: head is not in {repo} (fork?) — skipping."
+    if ((meta.get("base") or {}).get("ref")) != BASE_BRANCH:
+        return False, f"PR #{pr}: base is not {BASE_BRANCH} — skipping."
     if meta.get("state") != "open" or meta.get("draft"):
         return False, f"PR #{pr}: not open, or a draft — skipping."
     if not eval_sha or head.get("sha") != eval_sha:
@@ -208,8 +260,9 @@ def still_lost(path: str, lost: list[str]) -> list[str]:
 
 def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
-    (reorder-immune). The lane imports this function."""
-    new = {_normalise(x) for x in new_text.splitlines()}
+    (reorder-immune, counted per line so a duplicate elsewhere in the file
+    cannot stand in for a removed one). The lane imports this function."""
+    remaining = Counter(_normalise(x) for x in new_text.splitlines())
     lost: list[str] = []
     for line in backup_text.splitlines():
         norm = _normalise(line)
@@ -217,7 +270,9 @@ def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
             continue
         if norm in {"{", "}", "[", "]", "},", "],"}:
             continue
-        if norm not in new and line.strip() not in lost:
+        if remaining[norm] > 0:
+            remaining[norm] -= 1
+        elif line.strip() not in lost:
             lost.append(line.strip())
     return lost
 
@@ -327,7 +382,12 @@ def stage_like_the_lane(
 
 
 def render_and_compare(
-    repo: str, parent_sha: str, head_sha: str, suite: str, runner: Runner
+    repo: str,
+    parent_sha: str,
+    head_sha: str,
+    suite: str,
+    resolved_at: str,
+    runner: Runner,
 ) -> RenderResult:
     """Condition (e)/(f): render the parent at ``suite`` and compare trees."""
     with tempfile.TemporaryDirectory(prefix="resync-verify-") as tmp:
@@ -358,17 +418,7 @@ def render_and_compare(
             k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}
         }
         proc = runner(
-            [
-                "uvx",
-                "--isolated",
-                "--no-config",
-                "--from",
-                f"{CONFORMANCE_PACKAGE}=={suite}",
-                CONFORMANCE_PACKAGE,
-                "bootstrap",
-                "--resync",
-                "--json",
-            ],
+            resync_command(suite, resolved_at),
             cwd=work,
             capture_output=True,
             text=True,
@@ -435,7 +485,8 @@ def process_resync_pr(
         return False
     head_sha = str((meta.get("head") or {}).get("sha"))
     suite = marker_suite_version(meta.get("body"))
-    if not suite:
+    resolved_at = marker_resolved_at(meta.get("body"))
+    if not suite or not resolved_at:
         print(f"PR #{pr}: no conformance-resync marker in the body — skipping.")
         return False
 
@@ -468,7 +519,7 @@ def process_resync_pr(
         f"PR #{pr}: re-rendering bootstrap --resync at conformance {suite} "
         f"on {parent_sha[:12]}..."
     )
-    result = renderer(repo, parent_sha, head_sha, suite, runner)
+    result = renderer(repo, parent_sha, head_sha, suite, resolved_at, runner)
     if result.lost:
         print(
             f"PR #{pr}: the render drops per-repo settings in "
@@ -506,18 +557,30 @@ def process_resync_pr(
         )
         return False
 
+    live = _gh_json(
+        ["api", f"repos/{repo}/pulls/{pr}"],
+        runner,
+        what=f"re-reading PR #{pr}'s head",
+    )
+    if not isinstance(live, dict) or (live.get("head") or {}).get("sha") != head_sha:
+        print(f"PR #{pr}: HEAD moved during verification — skipping.")
+        return False
     runner(
         [
             "gh",
-            "pr",
-            "review",
-            pr,
-            "--repo",
-            repo,
-            "--approve",
-            "--body",
-            RESYNC_APPROVAL_BODY,
+            "api",
+            f"repos/{repo}/pulls/{pr}/reviews",
+            "-X",
+            "POST",
+            "-f",
+            f"commit_id={head_sha}",
+            "-f",
+            "event=APPROVE",
+            "-f",
+            f"body={RESYNC_APPROVAL_BODY}",
         ],
+        capture_output=True,
+        text=True,
         check=True,
     )
     print(f"✅ Approved PR #{pr} as atlan-ci (conformance resync auto-approval).")

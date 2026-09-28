@@ -318,13 +318,14 @@ def pr_title(suite_version: str) -> str:
 def render_pr_body(
     *,
     suite_version: str,
+    resolved_at: str,
     touched: list[str],
     lost: dict[str, list[str]],
     automerge: bool,
     automerge_reason: str,
 ) -> str:
     lines = [
-        gate.pr_marker(suite_version),
+        gate.pr_marker(suite_version, resolved_at),
         "",
         "Re-renders this repo's bootstrap-managed scaffolds from the canonical "
         f"templates in `{gate.CONFORMANCE_PACKAGE}=={suite_version}` — the exact "
@@ -398,6 +399,59 @@ def should_dispatch_approval(
     return gate.count_resync_approvals(reviews, head_sha) == 0
 
 
+def choose_resolved_at(keep: dict | None, pinned: str, now: str) -> str:
+    """Reuse the open PR's resolution timestamp while it renders the same
+    suite, so an unchanged PR re-renders identically and its body stays put."""
+    body = (keep or {}).get("body")
+    if gate.marker_suite_version(body) == pinned and gate.marker_resolved_at(body):
+        return str(gate.marker_resolved_at(body))
+    return now
+
+
+def pr_matches_render(
+    repo: str, pr_number: int, staged: list[str], work: str, runner: Runner
+) -> bool:
+    """The PR changes exactly the rendered paths, with the rendered content.
+    Compared per path, not per tree, so unrelated commits on main never force
+    a re-push."""
+    files = _flatten(
+        gh_json(
+            ["api", f"repos/{repo}/pulls/{pr_number}/files", "--paginate", "--slurp"],
+            runner,
+            what="listing lane PR files",
+        )
+    )
+    changed = sorted(str(f.get("filename")) for f in files if isinstance(f, dict))
+    if changed != sorted(staged):
+        return False
+    for path in staged:
+        ours = git(["rev-parse", f"HEAD:{path}"], work, runner, check=False).strip()
+        theirs = git(["rev-parse", f"FETCH_HEAD:{path}"], work, runner, check=False).strip()
+        if not ours or ours != theirs:
+            return False
+    return True
+
+
+def withdraw_lane_pr(
+    repo: str, keep: dict | None, reason: str, dry_run: bool, runner: Runner, result: dict
+) -> None:
+    """A held or ineligible repo must not keep an approvable lane PR open."""
+    if not keep:
+        return
+    if not dry_run:
+        close_pr(
+            repo,
+            keep,
+            f"Closing: {reason}. The lane opens a fresh PR once the repo is eligible again.",
+            runner,
+            delete_branch=True,
+        )
+    result["trace"].append(
+        f"{'would close' if dry_run else 'closed'} lane PR #{keep['number']} ({reason})."
+    )
+    result["closed"] = keep.get("number")
+
+
 def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) -> bool:
     commits = _flatten(
         gh_json(
@@ -417,8 +471,9 @@ def checks_all_green(repo: str, pr_number: int, runner: Runner) -> bool:
     return result.returncode == 0
 
 
-def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> None:
-    _run(
+def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> str:
+    """Empty string on success, else the failure reason."""
+    result = _run(
         [
             "gh",
             "workflow",
@@ -430,27 +485,19 @@ def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> None:
             f"pr_number={pr_number}",
         ],
         runner,
-        check=True,
     )
+    if result.returncode == 0:
+        return ""
+    return (result.stderr or "").strip()[-300:] or f"gh exited {result.returncode}"
 
 
 # ── One repo ─────────────────────────────────────────────────────────────
 
 
-def run_bootstrap(workdir: str, version: str) -> tuple[int, str, str]:
+def run_bootstrap(workdir: str, version: str, resolved_at: str) -> tuple[int, str, str]:
     env = {k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}
     proc = subprocess.run(
-        [
-            "uvx",
-            "--isolated",
-            "--no-config",
-            "--from",
-            f"{gate.CONFORMANCE_PACKAGE}=={version}",
-            gate.CONFORMANCE_PACKAGE,
-            "bootstrap",
-            "--resync",
-            "--json",
-        ],
+        gate.resync_command(version, resolved_at),
         cwd=workdir,
         capture_output=True,
         text=True,
@@ -465,6 +512,7 @@ def process_repo(
     repo: str,
     *,
     identity: tuple[str, str],
+    resolved_now: str,
     dry_run: bool,
     automerge_enabled: bool,
     diffs_dir: pathlib.Path | None,
@@ -510,9 +558,12 @@ def process_repo(
     pushed_this_run = False
     if not ok:
         step(why)
-        result.update(action="skipped", reason=why, pr=(keep or {}).get("html_url"))
-        _maybe_dispatch(repo, keep, dry_run, runner, result)
+        result.update(action="skipped", reason=why)
+        withdraw_lane_pr(repo, keep, why, dry_run, runner, result)
         return result
+
+    resolved_at = choose_resolved_at(keep, pinned, resolved_now)
+    result["resolvedAt"] = resolved_at
 
     automerge, automerge_reason = automerge_allowed(renovate_json)
     if automerge and not automerge_enabled:
@@ -532,7 +583,7 @@ def process_repo(
         base_sha = git(["rev-parse", "HEAD"], work, runner).strip()
         step(f"Cloned latest `{BASE_BRANCH}` at {base_sha[:12]}.")
 
-        rc, out, err = run_bootstrap(work, pinned)
+        rc, out, err = run_bootstrap(work, pinned, resolved_at)
         manifest = gate.parse_manifest(out)
         if rc != 0 or manifest is None:
             result.update(
@@ -542,6 +593,9 @@ def process_repo(
         if manifest.get("skipped"):
             result.update(
                 action="skipped", reason="bootstrap reported the repo as out of scope"
+            )
+            withdraw_lane_pr(
+                repo, keep, "bootstrap reports the repo out of scope", dry_run, runner, result
             )
             return result
 
@@ -560,9 +614,10 @@ def process_repo(
                 action="held",
                 reason="resync would drop per-repo settings: "
                 + "; ".join(f"{p}: {', '.join(m)}" for p, m in sorted(lost.items())),
-                pr=(keep or {}).get("html_url"),
             )
-            _maybe_dispatch(repo, keep, dry_run, runner, result)
+            withdraw_lane_pr(
+                repo, keep, "the resync would drop per-repo settings", dry_run, runner, result
+            )
             return result
 
         if diffs_dir is not None and staged:
@@ -605,7 +660,6 @@ def process_repo(
             work,
             runner,
         )
-        new_tree = git(["rev-parse", "HEAD^{tree}"], work, runner).strip()
 
         remote_line = git(
             ["ls-remote", "origin", f"refs/heads/{gate.RESYNC_BRANCH}"], work, runner
@@ -625,10 +679,7 @@ def process_repo(
                 work,
                 runner,
             )
-            same_content = (
-                git(["rev-parse", "FETCH_HEAD^{tree}"], work, runner).strip()
-                == new_tree
-            )
+            same_content = pr_matches_render(repo, keep["number"], staged, work, runner)
             if same_content and not lane_commits_ok(
                 repo, keep["number"], remote_sha, runner
             ):
@@ -678,6 +729,7 @@ def process_repo(
     title = pr_title(pinned)
     body = render_pr_body(
         suite_version=pinned,
+        resolved_at=resolved_at,
         touched=staged,
         lost={},
         automerge=automerge,
@@ -783,7 +835,13 @@ def _maybe_dispatch(
     )
     if should_dispatch_approval(pr, checks_ok, reviews):
         if not dry_run:
-            dispatch_approval(repo, number, runner)
+            failure = dispatch_approval(repo, number, runner)
+            if failure:
+                result["trace"].append(
+                    f"could not dispatch {APPROVE_WORKFLOW} for PR #{number}: {failure}"
+                )
+                result["approvalDispatchError"] = failure
+                return
         result["trace"].append(
             f"{'would dispatch' if dry_run else 'dispatched'} {APPROVE_WORKFLOW} for PR #{number} "
             "(checks green, not yet approved, head unchanged this run)."
@@ -886,12 +944,14 @@ def main() -> int:
         return 1
 
     diffs_dir = pathlib.Path(args.diffs_dir) if args.dry_run else None
+    resolved_now = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
     results: list[dict] = []
     for repo in roster:
         try:
             r = process_repo(
                 repo,
                 identity=identity,
+                resolved_now=resolved_now,
                 dry_run=args.dry_run,
                 automerge_enabled=automerge_enabled,
                 diffs_dir=diffs_dir,

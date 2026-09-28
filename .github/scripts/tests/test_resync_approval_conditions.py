@@ -24,7 +24,8 @@ import resync_approval_conditions as resync  # noqa: E402
 REPO = "atlanhq/atlan-example-app"
 HEAD = "h" * 40
 PARENT = "p" * 40
-MARKER = "<!-- conformance-resync-lane suite=0.39.0 -->\nbody"
+RESOLVED_AT = "2026-09-28T12:00:00Z"
+MARKER = f"<!-- conformance-resync-lane suite=0.39.0 resolved-at={RESOLVED_AT} -->\nbody"
 
 
 def meta(**over):
@@ -53,8 +54,11 @@ class FakeRunner:
     """Answers gh calls from a table; records every call. Any approval is
     captured in ``approved`` so tests can assert it never happened."""
 
-    def __init__(self, *, commits=None, compare="ahead", checks_rc=0, reviews=None):
+    def __init__(
+        self, *, commits=None, compare="ahead", checks_rc=0, reviews=None, live_head=HEAD
+    ):
         self.commits = [commit()] if commits is None else commits
+        self.live_head = live_head
         self.compare = compare
         self.checks_rc = checks_rc
         self.reviews = reviews or []
@@ -64,9 +68,13 @@ class FakeRunner:
     def __call__(self, cmd, **kwargs):
         self.calls.append(list(cmd))
         joined = " ".join(cmd)
-        if cmd[:3] == ["gh", "pr", "review"]:
+        if "/reviews" in joined and "POST" in cmd:
             self.approved = True
             return subprocess.CompletedProcess(cmd, 0, "", "")
+        if cmd[:3] == ["gh", "api", f"repos/{REPO}/pulls/7"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, json.dumps({"head": {"sha": self.live_head}}), ""
+            )
         if cmd[:3] == ["gh", "pr", "checks"]:
             return subprocess.CompletedProcess(cmd, self.checks_rc, "", "")
         if "/commits" in joined and "pulls" in joined:
@@ -83,8 +91,8 @@ class FakeRunner:
 def renderer(matches=True, lost=None):
     calls = []
 
-    def _render(repo, parent_sha, head_sha, suite, runner):
-        calls.append((repo, parent_sha, head_sha, suite))
+    def _render(repo, parent_sha, head_sha, suite, resolved_at, runner):
+        calls.append((repo, parent_sha, head_sha, suite, resolved_at))
         return resync.RenderResult(
             matches, suite, lost or {}, "" if matches else "differs"
         )
@@ -108,9 +116,38 @@ def run(m=None, runner=None, render=None):
 def test_approves_only_when_every_condition_holds():
     approved, runner, render = run()
     assert approved and runner.approved
-    assert render.calls == [(REPO, PARENT, HEAD, "0.39.0")]
-    body = runner.calls[-1][runner.calls[-1].index("--body") + 1]
+    assert render.calls == [(REPO, PARENT, HEAD, "0.39.0", RESOLVED_AT)]
+    post = runner.calls[-1]
+    assert f"commit_id={HEAD}" in post and "event=APPROVE" in post
+    body = next(a for a in post if a.startswith("body="))[len("body="):]
     assert body.startswith(resync.RESYNC_SIGNATURE)
+
+
+def test_head_moved_during_verification_never_approves():
+    approved, runner, _ = run(runner=FakeRunner(live_head="n" * 40))
+    assert not approved and not runner.approved
+
+
+def test_base_other_than_main_never_approves():
+    approved, runner, render = run(
+        meta(base={"ref": "attacker-branch", "repo": {"full_name": REPO}})
+    )
+    assert not approved and not runner.approved and render.calls == []
+
+
+def test_marker_without_resolved_at_never_approves():
+    approved, runner, render = run(
+        meta(body="<!-- conformance-resync-lane suite=0.39.0 -->\nbody")
+    )
+    assert not approved and render.calls == []
+
+
+def test_resync_command_fences_third_party_and_exempts_first_party():
+    cmd = resync.resync_command("0.39.0", RESOLVED_AT)
+    assert cmd[cmd.index("--exclude-newer") + 1] == "2026-09-21T12:00:00Z"
+    for pkg in resync.FIRST_PARTY:
+        assert f"{pkg}={RESOLVED_AT}" in cmd
+    assert cmd[-4:] == [resync.CONFORMANCE_PACKAGE, "bootstrap", "--resync", "--json"]
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +305,12 @@ def test_parse_manifest_takes_last_manifest_line():
     out = 'installed: x\n{"touched": ["a"]}\n{"skipped": false, "touched": ["b"]}\n'
     assert resync.parse_manifest(out)["touched"] == ["b"]
     assert resync.parse_manifest("nothing") is None
+
+
+def test_lost_setting_lines_counts_duplicates():
+    backup = "a:\n  secrets: inherit\nb:\n  secrets: inherit\n"
+    new = "a:\n  secrets: inherit\nb:\n"
+    assert resync.lost_setting_lines(backup, new) == ["secrets: inherit"]
 
 
 def test_lost_setting_lines_is_reorder_immune():

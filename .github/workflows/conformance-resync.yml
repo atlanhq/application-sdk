@@ -37,6 +37,8 @@ name: Conformance Resync
 # from "override says don't".
 #
 # Required configuration:
+#   Environment `conformance-resync`, deployable from main only. It holds the
+#     App key, so a branch run cannot mint a fleet-wide workflows-write token.
 #   vars.CONFORMANCE_SYNC_APP_ID / secrets.CONFORMANCE_SYNC_APP_PRIVATE_KEY —
 #     the atlan-conformance-sync GitHub App (resync_approval_conditions
 #     RESYNC_AUTHOR). Needs, on every atlan-*-app repo: contents (write —
@@ -79,6 +81,7 @@ concurrency:
 jobs:
   resync:
     runs-on: ubuntu-latest
+    environment: conformance-resync
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,17 +121,54 @@ jobs:
             --out resync-results.json \
             --diffs-dir resync-diffs
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Upload conformance-resync-results
+        id: upload-results
         if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-resync-results
           path: resync-results.json
+          overwrite: true
           retention-days: 14
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      - name: Wait before the conformance-resync-results retry
+        if: always() && steps.upload-results.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload conformance-resync-results (retry)
+        if: always() && steps.upload-results.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-results-retry
+          path: resync-results.json
+          overwrite: true
+          retention-days: 14
+
+      - name: Upload conformance-resync-diffs
+        id: upload-diffs
         if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: conformance-resync-diffs
           path: resync-diffs/
           if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+      - name: Wait before the conformance-resync-diffs retry
+        if: always() && steps.upload-diffs.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload conformance-resync-diffs (retry)
+        if: always() && steps.upload-diffs.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-diffs-retry
+          path: resync-diffs/
+          if-no-files-found: ignore
+          overwrite: true
           retention-days: 14

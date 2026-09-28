@@ -22,6 +22,7 @@ import conformance_resync as lane  # noqa: E402
 import resync_approval_conditions as gate  # noqa: E402
 
 REPO = "atlanhq/atlan-example-app"
+AT = "2026-09-28T12:00:00Z"
 BOT = gate.RESYNC_AUTHOR
 
 
@@ -144,12 +145,14 @@ def test_fork_pr_on_fixed_branch_is_foreign_not_keep():
 def test_marker_round_trip_and_body_leads_with_marker():
     body = lane.render_pr_body(
         suite_version="0.39.0",
+        resolved_at=AT,
         touched=["renovate.json"],
         lost={},
         automerge=True,
         automerge_reason="",
     )
-    assert body.startswith(gate.pr_marker("0.39.0"))
+    assert body.startswith(gate.pr_marker("0.39.0", AT))
+    assert gate.marker_resolved_at(body) == AT
     assert gate.marker_suite_version(body) == "0.39.0"
     assert "armed" in body
 
@@ -157,6 +160,7 @@ def test_marker_round_trip_and_body_leads_with_marker():
 def test_body_flags_lost_settings_and_holds_automerge():
     body = lane.render_pr_body(
         suite_version="0.39.0",
+        resolved_at=AT,
         touched=[".github/workflows/tests.yaml"],
         lost={".github/workflows/tests.yaml": ["unit: 95"]},
         automerge=False,
@@ -169,6 +173,7 @@ def test_body_flags_lost_settings_and_holds_automerge():
 def test_body_is_stable_across_runs():
     kwargs = dict(
         suite_version="0.39.0",
+        resolved_at=AT,
         touched=["renovate.json"],
         lost={},
         automerge=True,
@@ -313,3 +318,60 @@ def test_lane_and_gate_agree_on_identity_constants():
     assert lane.gate.RESYNC_AUTHOR == gate.RESYNC_AUTHOR
     assert lane.gate.RESYNC_BRANCH == gate.RESYNC_BRANCH
     assert lane.gate.CONFORMANCE_PACKAGE == gate.CONFORMANCE_PACKAGE
+
+
+def test_resolved_at_reused_for_same_suite_and_renewed_on_bump():
+    keep = {"body": gate.pr_marker("0.39.0", AT)}
+    assert lane.choose_resolved_at(keep, "0.39.0", "2026-10-01T00:00:00Z") == AT
+    assert (
+        lane.choose_resolved_at(keep, "0.40.0", "2026-10-01T00:00:00Z")
+        == "2026-10-01T00:00:00Z"
+    )
+    assert lane.choose_resolved_at(None, "0.39.0", AT) == AT
+
+
+def _files_runner(paths: list[str], blobs: dict[str, tuple[str, str]]) -> FakeRunner:
+    answers = {
+        (
+            "gh",
+            "api",
+            f"repos/{REPO}/pulls/7/files",
+            "--paginate",
+            "--slurp",
+        ): subprocess.CompletedProcess(
+            [], 0, stdout=json.dumps([[{"filename": p} for p in paths]])
+        ),
+    }
+    for path, (ours, theirs) in blobs.items():
+        answers[("git", "rev-parse", f"HEAD:{path}")] = subprocess.CompletedProcess(
+            [], 0, stdout=ours + "\n"
+        )
+        answers[("git", "rev-parse", f"FETCH_HEAD:{path}")] = (
+            subprocess.CompletedProcess([], 0, stdout=theirs + "\n")
+        )
+    return FakeRunner(answers)
+
+
+def test_pr_matches_render_per_path_ignores_unrelated_main_changes():
+    runner = _files_runner(["renovate.json"], {"renovate.json": ("b1", "b1")})
+    assert lane.pr_matches_render(REPO, 7, ["renovate.json"], "/w", runner) is True
+
+
+def test_pr_matches_render_detects_changed_content_or_paths():
+    runner = _files_runner(["renovate.json"], {"renovate.json": ("b1", "b2")})
+    assert lane.pr_matches_render(REPO, 7, ["renovate.json"], "/w", runner) is False
+    runner = _files_runner(["renovate.json", "x.py"], {"renovate.json": ("b1", "b1")})
+    assert lane.pr_matches_render(REPO, 7, ["renovate.json"], "/w", runner) is False
+
+
+def test_withdraw_closes_the_lane_pr_and_never_dispatches():
+    runner = FakeRunner()
+    result: dict = {"trace": []}
+    lane.withdraw_lane_pr(REPO, _pr(7, gate.RESYNC_BRANCH), "held", False, runner, result)
+    assert result["closed"] == 7
+    assert not any("workflow" in c for c in runner.calls)
+
+
+def test_dispatch_failure_is_reported_not_raised():
+    assert lane.dispatch_approval(REPO, 7, FakeRunner(default_rc=1)) == "gh exited 1"
+    assert lane.dispatch_approval(REPO, 7, FakeRunner()) == ""
