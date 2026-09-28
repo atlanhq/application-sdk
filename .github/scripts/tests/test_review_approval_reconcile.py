@@ -793,6 +793,8 @@ class FakeLensAPI:
         # Runs once the APPROVE has landed: a round finishing while it was in
         # flight.
         self.on_post = None
+        self.on_sleep = None
+        self.slept: list[float] = []
         self.dismissed: list[tuple[str, int]] = []
 
     def transport(self, token: str):
@@ -838,7 +840,15 @@ class FakeLensAPI:
         return reconcile.LensSource(
             LensGitHub(REPO, token=APP_TOKEN, transport=self.transport(APP_TOKEN)),
             LensGitHub(REPO, token=PAT, transport=self.transport(PAT)),
+            sleeper=self.sleep,
         )
+
+    def sleep(self, seconds: float) -> None:
+        """Records the confirm delay instead of spending it; `on_sleep` is
+        what lands on GitHub during it."""
+        self.slept.append(seconds)
+        if self.on_sleep is not None:
+            self.on_sleep()
 
     def approvals(self) -> list[tuple[str, str, str]]:
         return [c for c in self.calls if c[1] == "POST"]
@@ -1643,3 +1653,57 @@ def test_lens_own_last_step_does_not_re_read_after_posting():
 
     assert out.startswith("approved ")
     assert [c for c in api.calls if "/statuses" in c[2]] == []
+
+
+# --- lens review round 4 (PR #4035) ----------------------------------------
+
+
+def test_the_post_check_waits_out_github_read_after_write_lag():
+    """F-2c4c08, the part a bare re-read misses: a round's not-ready status
+    published just before an immediate re-read can be invisible to it, and
+    that round's withdraw can miss the new approval the same way. The second
+    read is taken LENS_CONFIRM_DELAY_SECONDS after the POST."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    # Visible only once the delay has run: an immediate re-read would miss it.
+    api.on_sleep = lambda: api.statuses.insert(0, lens_status(state="failure"))
+
+    action, detail = verdict.post()
+
+    assert api.slept == [reconcile.LENS_CONFIRM_DELAY_SECONDS]
+    assert action == reconcile.SKIPPED
+    assert "withdrew the approval just posted" in detail
+    assert api.dismissed == [(APP_TOKEN, 99)]
+
+
+def test_the_delay_comes_between_the_post_and_the_second_read():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.calls.clear()
+    order: list[str] = []
+    api.on_post = lambda: order.append("post")
+    api.on_sleep = lambda: order.append(f"sleep ({len(api.calls)} calls so far)")
+
+    assert verdict.post()[0] == reconcile.RECONCILED
+
+    kinds = [
+        "status" if "/statuses" in path else method
+        for _token, method, path in api.calls
+    ]
+    calls_before_sleep = int(order[1].split("(")[1].split()[0])
+    assert order[0] == "post"
+    assert kinds[calls_before_sleep - 1] == "POST", "slept right after the POST"
+    assert kinds[calls_before_sleep] == "status", "and read right after the sleep"
+
+
+def test_the_confirm_delay_outlasts_read_after_write_lag():
+    """Seconds of lag are what GitHub has shown; the delay must leave room
+    for that on both sides of the race."""
+    assert reconcile.LENS_CONFIRM_DELAY_SECONDS >= 10
+
+
+def test_no_delay_when_nothing_was_posted():
+    api = FakeLensAPI(reviews=[lens_review()])
+    run_lens_sweep(lens_gh(), api)
+
+    assert api.slept == []

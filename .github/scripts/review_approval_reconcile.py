@@ -178,6 +178,12 @@ DEFAULT_STALE_AFTER_MINUTES = 90
 # and queueing every later tick behind it.
 GH_TIMEOUT_SECONDS = 60
 
+# How long after a replayed lens APPROVE the verdict is read again. Long
+# enough that GitHub's read-after-write lag on reviews and statuses cannot
+# hide a racing lens round from both that read and the round's own withdraw
+# (see `lens.approve.approve_ready_head`). Spent only per approval posted.
+LENS_CONFIRM_DELAY_SECONDS = 15.0
+
 RECONCILED = "reconciled"
 FAILED = "failed"
 DEFERRED = "deferred"
@@ -644,8 +650,9 @@ class LensSource:
     not a draft, head unchanged, not self-approval, no approval and no
     withdrawal on the head), reads guard 1 again last, and posts. A `/lens`
     round that ends not ready on this head before the approval exists leaves
-    nothing to withdraw, only its status, so guard 1 is read once more after
-    the POST and the approval is dismissed if the verdict changed meanwhile.
+    nothing to withdraw, only its status, so guard 1 is read once more
+    LENS_CONFIRM_DELAY_SECONDS after the POST, and the approval is dismissed
+    if the verdict changed meanwhile.
 
     A status or summary that cannot be read is a blocked approval, aged from
     the prefilter's timestamp: deferred while young, red once it outlives a
@@ -657,11 +664,18 @@ class LensSource:
     last step would have left, no more.
     """
 
-    def __init__(self, gh: LensGitHub, approver: LensGitHub) -> None:
+    def __init__(
+        self,
+        gh: LensGitHub,
+        approver: LensGitHub,
+        *,
+        sleeper: Callable[[float], None] = time.sleep,
+    ) -> None:
         """`gh` (fleet App token) does every read; `approver` (the `atlan-ci`
         PAT) is used for the APPROVE call only, as in lens's own last step."""
         self.gh = gh
         self.approver = approver
+        self.sleeper = sleeper
 
     @classmethod
     def from_env(cls, repo: str) -> LensSource:
@@ -798,6 +812,8 @@ class LensSource:
                     decision,
                     refuse_after_withdrawal=True,
                     still_ready=still_ready,
+                    confirm_delay=LENS_CONFIRM_DELAY_SECONDS,
+                    sleeper=self.sleeper,
                 )
             except lens_approve.VerdictUnreadable as exc:
                 # Only the pre-POST read raises: nothing was posted.

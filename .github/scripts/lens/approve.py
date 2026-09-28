@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -129,6 +130,8 @@ def approve_ready_head(
     *,
     refuse_after_withdrawal: bool = False,
     still_ready: Callable[[], str] | None = None,
+    confirm_delay: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> Approval:
     """Post the APPROVE for an `approve` decision, after re-checking the PR.
 
@@ -144,11 +147,19 @@ def approve_ready_head(
 
     - last before the POST, after every other read, so nothing already
       decided against the verdict is approved over;
-    - again after the POST, because no read before it can see a round that
-      completes while the POST is in flight. If the verdict no longer stands,
-      the approval just posted is dismissed. A round that publishes after this
-      second read runs its own withdraw after the approval exists, and dismisses
-      it itself. Between the two, every ordering ends without a stale approval.
+    - again `confirm_delay` seconds after the POST, because no read before it
+      can see a round that completes while the POST is in flight. If the
+      verdict no longer stands, the approval just posted is dismissed.
+
+    The delay is what makes the second read sufficient. GitHub's review and
+    status listings are read-after-write eventually consistent, so a round's
+    not-ready status published just before an immediate re-read can be
+    invisible to it, and that round's withdraw, seconds after the POST, can
+    miss the new approval the same way. After the delay, a round either
+    published early enough for the second read to see it, or it runs its
+    withdraw long enough after the POST to see the approval and dismiss it
+    itself. So every ordering ends without a stale approval, as long as
+    replication lag stays well under the delay.
 
     If the second read is unreadable the approval stays, and the detail says
     it could not be re-confirmed. Dismissing it would leave a withdrawn lens
@@ -174,6 +185,8 @@ def approve_ready_head(
             False, "not approving: a lens approval on this head was withdrawn"
         )
     if still_ready is not None:
+        # First of two reads; the second, after the POST, closes the race a
+        # read here cannot (see the docstring).
         why_not = still_ready()
         if why_not:
             return Approval(False, f"not approving: {why_not}")
@@ -186,6 +199,7 @@ def approve_ready_head(
     approved = f"approved {head[:9]} as {login}"
     if still_ready is None:
         return Approval(True, approved)
+    sleeper(confirm_delay)
     try:
         why_not = still_ready()
     except VerdictUnreadable as exc:
