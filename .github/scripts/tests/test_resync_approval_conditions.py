@@ -1,5 +1,5 @@
 """Tests for .github/scripts/resync_approval_conditions.py — the code-owner
-approval path for connector-pulse's conformance-resync lane PRs (FND-2848).
+approval path for the conformance-resync lane's PRs (FND-2848, FND-2868).
 
 The bar, as for the Renovate gate: no non-affirmative signal reaches the
 approval. Identity (author + branch) only routes a PR here; the tests below pin
@@ -317,10 +317,9 @@ def test_stage_like_the_lane_removes_backups_and_stages_manifest_only(tmp_path):
     assert staged == ["tests.yaml"]
 
 
-def test_other_connectivity_ai_prs_are_never_approved(monkeypatch):
-    """The connectivity-ai App also opens the AI remediation lane's PRs
-    (``conformance/<rule>`` branches). They must never reach the resync path,
-    and the Renovate path refuses the author outright — so no approval."""
+def test_other_lane_author_prs_are_never_approved(monkeypatch):
+    """A PR by the lane's App on any other branch must never reach the resync
+    path, and the Renovate path refuses the author outright — so no approval."""
     routed = []
     monkeypatch.setattr(
         gate.resync, "process_resync_pr", lambda *a, **k: routed.append(a[1]) or True
@@ -358,7 +357,6 @@ def test_accepted_drops_do_not_block_but_other_losses_do(tmp_path):
 
 
 def test_accepted_drops_mirror_the_lane():
-    # connector-pulse conformance_resync_service.ACCEPTED_DROPS must match.
     assert resync.ACCEPTED_DROPS == {
         ".github/workflows/tests.yaml": frozenset(
             {"container-health-timeout-seconds", "e2e-clouds"}

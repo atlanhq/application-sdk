@@ -1,21 +1,20 @@
 #!/usr/bin/env python3
 """Approval gate for conformance-resync PRs — the atlan-ci code-owner review.
 
-connector-pulse's conformance resync lane (``conformance-resync.yml``) keeps one
-PR per app repo on ``bot/conformance-resync``, authored by the connectivity-ai
-App, carrying ``atlan-application-sdk-conformance bootstrap --resync`` output:
+The conformance resync lane (``.github/workflows/conformance-resync.yml``, FND-2868)
+keeps one PR per app repo on ``bot/conformance-resync``, authored by the
+atlan-conformance-sync App, carrying ``atlan-application-sdk-conformance bootstrap --resync`` output:
 the re-rendered tests.yaml / renovate.json / managed workflow shims / review
 kit. Those PRs rewrite ``.github/workflows/*`` files, so the Renovate gate in
 ``renovate_approval_conditions.py`` correctly refuses them (pin-only workflow
 diffs, FND-1996). This module is the separate, narrower path for them.
 
 **Identity selects; content proves.** Author and branch only decide which PRs
-reach this gate — the connectivity-ai App also runs the AI remediation lane, and
-a branch name is something anyone with push access can create, so neither is
+reach this gate — a branch name is something anyone with push access can create, so neither is
 trusted as evidence. The approval rests on re-rendering the PR independently
 here and requiring a byte-identical result:
 
-  a. author is ``connectivity-ai[bot]``, head branch is exactly
+  a. author is ``atlan-conformance-sync[bot]``, head branch is exactly
      ``bot/conformance-resync`` in this same repo, PR open and not a draft,
      current HEAD is the SHA under evaluation
   b. the body carries the lane's marker, naming the suite version it rendered
@@ -30,8 +29,9 @@ here and requiring a byte-identical result:
   g. every ruleset-required check is green
   h. atlan-ci has not already approved this head with the resync signature
 
-The staging rules in :func:`stage_like_the_lane` must stay in lockstep with
-connector-pulse ``scripts/conformance_resync.py``; a drift makes the trees
+The lane (``.github/scripts/conformance_resync.py``) imports
+:func:`stage_like_the_lane`, :data:`ACCEPTED_DROPS` and the marker from here, so
+the two cannot drift; if they ever did, the trees would differ, which makes the trees
 differ, which fails CLOSED (no approval), never open.
 
 Fail closed throughout: anything other than an affirmative signal skips.
@@ -51,9 +51,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-# Constants other automation keys off (connector-pulse's lane + dashboard).
-# Changing any of these is a cross-repo change.
-RESYNC_AUTHOR = "connectivity-ai[bot]"
+# Constants the resync lane (conformance_resync.py) shares with this gate.
+RESYNC_AUTHOR = "atlan-conformance-sync[bot]"
 RESYNC_BRANCH = "bot/conformance-resync"
 RESYNC_SIGNATURE = "**Conformance resync auto-approval:**"
 APPROVER_LOGIN = "atlan-ci"
@@ -180,9 +179,8 @@ def _normalise(line: str) -> str:
 
 # Settings the canonical templates deliberately stopped carrying: a render
 # that drops one of these is the intended change, not a lost per-repo value.
-# Keyed by repo-relative path; matched on the YAML/JSON key. Must stay
-# identical to connector-pulse `conformance_resync_service.ACCEPTED_DROPS` —
-# a drift fails CLOSED (the lane opens a PR this gate will not approve).
+# Keyed by repo-relative path; matched on the YAML/JSON key. The lane imports
+# this mapping, so there is one copy.
 ACCEPTED_DROPS: dict[str, frozenset[str]] = {
     ".github/workflows/tests.yaml": frozenset(
         {"container-health-timeout-seconds", "e2e-clouds"}
@@ -203,7 +201,7 @@ def still_lost(path: str, lost: list[str]) -> list[str]:
 
 def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
-    (reorder-immune). Mirrors connector-pulse's lane."""
+    (reorder-immune). The lane imports this function."""
     new = {_normalise(x) for x in new_text.splitlines()}
     lost: list[str] = []
     for line in backup_text.splitlines():
@@ -295,8 +293,7 @@ def stage_like_the_lane(
     work: str, manifest: dict, runner: Runner
 ) -> dict[str, list[str]]:
     """Apply the lane's ``.bak`` discipline and staging to the render in
-    ``work``; return lost settings. Must match connector-pulse
-    ``scripts/conformance_resync.py``."""
+    ``work``; return lost settings. The lane imports this function."""
     root = pathlib.Path(work)
     lost: dict[str, list[str]] = {}
     backups = sorted(

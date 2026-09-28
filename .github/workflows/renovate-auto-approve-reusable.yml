@@ -59,9 +59,9 @@
 #   7. atlan-ci has not already posted an APPROVED review with this signature
 #
 # Conformance-resync PRs (FND-2848) — a separate, narrower path:
-#   A PR by connectivity-ai[bot] on bot/conformance-resync (connector-pulse's
-#   resync lane) skips conditions 1–7 and is judged by
-#   .github/scripts/resync_approval_conditions.py instead. Author and branch
+#   A PR by atlan-conformance-sync[bot] on bot/conformance-resync (the resync
+#   lane, .github/workflows/conformance-resync.yml) skips conditions 1–7 and is
+#   judged by .github/scripts/resync_approval_conditions.py instead. Author and branch
 #   only route it there; the approval rests on re-rendering `bootstrap --resync`
 #   from the PR's parent at the conformance version its uv.lock pins and
 #   requiring the PR tree to be byte-identical, plus a single lane commit on

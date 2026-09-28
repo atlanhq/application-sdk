@@ -24,10 +24,10 @@ order is load-bearing for cost as well as for the log):
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
   g. atlan-ci has not already posted an APPROVED review with our signature
 
-A PR by ``connectivity-ai[bot]`` on ``bot/conformance-resync`` never reaches
+A PR by ``atlan-conformance-sync[bot]`` on ``bot/conformance-resync`` never reaches
 (a)–(g): :func:`process_pr` hands it to ``resync_approval_conditions``, whose
 approval rests on an independent byte-identical ``bootstrap --resync`` render
-(FND-2848). Every other PR is judged exactly as before.
+(FND-2848, FND-2868). Every other PR is judged exactly as before.
 
 **Fail closed.** Every condition withholds approval on anything other than an
 affirmative signal. A missing value is never a falsy default that reads as
@@ -696,7 +696,7 @@ def process_pr(
     ahead of it have passed, so a non-Renovate PR costs one API call, not six.
     """
     meta = fetch_pr_meta(repo, pr, runner)
-    # connector-pulse's conformance-resync lane PRs take their own, narrower
+    # conformance-resync lane PRs take their own, narrower
     # path: approval there rests on an independent byte-identical re-render,
     # never on the author or branch (see resync_approval_conditions). Every
     # other PR falls through to the Renovate conditions below, unchanged.
