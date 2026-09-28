@@ -35,6 +35,9 @@ Auto-merge policy mirrors renovate-config/default.json:
                          cannot pass simply never merges; dedicated uv.lock-only
                          PR via update-lockfile, auto-merged even under the
                          soft-mode template's '*' automerge=false rule)
+  - atlan-platform:      automerge=true  (FND-2868 — SDK + conformance + toolkit
+                         grouped into one PR; soft mode splits conformance
+                         back out under its own groupName)
   - python-dep:          automerge=false (edits pyproject.toml constraint → human)
 
 Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
@@ -307,6 +310,8 @@ def categorize(pr: RenovatePR) -> Category:
         return Category.LOCK_MAINTENANCE
     if "github-actions" in branch:
         return Category.GITHUB_ACTIONS
+    if "atlan-platform" in branch or "atlan platform" in title:
+        return Category.ATLAN_PLATFORM
     if "app-contract-toolkit" in branch or "app-contract-toolkit" in title:
         return Category.CONTRACT_TOOLKIT
     # groupName "conformance package" → branch slug renovate/conformance-package;
@@ -502,6 +507,8 @@ def auto_merge_expected(
     if category == Category.CONFORMANCE_PACKAGE:
         return True
     if category == Category.SDK_PACKAGE:
+        return True
+    if category == Category.ATLAN_PLATFORM:
         return True
     # python-dep, unknown
     return False

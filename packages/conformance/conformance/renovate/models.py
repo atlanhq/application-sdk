@@ -16,6 +16,7 @@ class Category(str, Enum):
     CONTRACT_TOOLKIT = "contract-toolkit"
     CONFORMANCE_PACKAGE = "conformance-package"
     SDK_PACKAGE = "sdk-package"
+    ATLAN_PLATFORM = "atlan-platform"
     PYTHON_DEP = "python-dep"
     UNKNOWN = "unknown"
 
