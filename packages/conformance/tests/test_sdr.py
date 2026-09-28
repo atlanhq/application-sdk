@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.sdr import discover, scan_all, scan_path
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -814,6 +815,42 @@ def test_p037_ignores_docstring_only_mention(tmp_path: Path) -> None:
         {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": _CREDS_ONLY_IN_DOCSTRING},
     )
     assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+#: Migrated onto the SDK seam P053 prescribes: route_credentials plus a named
+#: CredentialRef and a resolve_credential_raw read elsewhere — both of which
+#: P037 counts as custom resolution on their own.
+_CREDS_ROUTE_CREDENTIALS = (
+    "from application_sdk.credentials import CredentialRef, route_credentials\n"
+    "\n"
+    "def _route(input_obj):\n"
+    "    return route_credentials(input_obj)\n"
+    "\n"
+    "async def _named(context):\n"
+    '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n'
+)
+
+
+@pytest.mark.parametrize(
+    "call",
+    ["route_credentials(input_obj)", "credentials.route_credentials(input_obj)"],
+)
+def test_p037_silent_when_route_credentials_used(tmp_path: Path, call: str) -> None:
+    # route_credentials routes through CredentialRef.resolve, so an app that has
+    # migrated onto it is agent-aware — P037 must not send it back to a
+    # hand-rolled CredentialRef.resolve, which P053 then flags.
+    src = _CREDS_ROUTE_CREDENTIALS.replace("route_credentials(input_obj)", call)
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_still_fires_without_route_credentials(tmp_path: Path) -> None:
+    # Red leg for the exemption above: the same module minus the seam call.
+    src = _CREDS_ROUTE_CREDENTIALS.replace(
+        "    return route_credentials(input_obj)\n", "    return None\n"
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
 def test_p037_agent_aware_in_any_file_exempts(tmp_path: Path) -> None:

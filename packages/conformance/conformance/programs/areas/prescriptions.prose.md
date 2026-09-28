@@ -94,6 +94,17 @@ deliberate is the developer's call.  Both draft a proposal for human review and
 never auto-apply.  (These rules are backed by a separate
 `suite.checks.persistence_seam` check — see its module docs.)
 
+The credential-seam rule (P053, FND-2949) is also P-series and suggest-only:
+the fix replaces an app's own credential router with
+`application_sdk.credentials.route_credentials`, which can change which
+credential a given input resolves to (the local copy may have skipped agent
+routing, resolved leniently, or flattened inline pairs differently), so whether
+the app's tests still describe the intended behaviour is the developer's call.
+It drafts a proposal for human review and never auto-applies.  (This rule is
+backed by a separate `suite.checks.credential_seam` check, which is silent
+unless the app's `uv.lock` resolves `atlan-application-sdk` >= 3.40.0 — see its
+module docs.)
+
 The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
 P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
 has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
@@ -1055,3 +1066,64 @@ path component, and this rule governs that package's sources too).
   today.**  So a P049 finding is new code, not inherited drift: treat a
   suppression proposal as the exception it is, and never propose one without
   reading the enclosing function.
+
+- **P053 LocalCredentialRouting** (WARN) — app code turns a workflow input's
+  credential channels (a pre-built `CredentialRef` field, `credential_guid`,
+  `agent_json`, inline `credentials`) into a credential itself, or declares its
+  own copy of the credential types.  The finding names which shape fired:
+  `CredentialRef.resolve(...)` / `CredentialRef.resolve_or_none(...)`,
+  `CredentialRef(credential_guid=...)`, `inline [{key, value}] flattening`
+  (grouped per function, anchored at the first site), or a module-level
+  `CredentialValue` / `CredentialMap` / `InlineCredentials` / `Bounded*Credential*`
+  alias.  It only fires when the app's `uv.lock` resolves
+  `atlan-application-sdk` >= 3.40.0, so the seam is importable.
+
+  Draft, by shape:
+
+  1. **A local router** (`build_credential_ref(input)` and relatives) —
+     replace the body with the seam and delete the local copy::
+
+         from application_sdk.credentials import route_credentials
+
+         ref, inline = route_credentials(input)
+
+     Pass `ref_field="<app>_credential"` only when the input carries more than
+     one populated `CredentialRef` field; `route_credentials` otherwise finds the
+     toolkit-generated one itself.  On the task side, replace the
+     `resolve_credential_raw(ref)`-or-inline branch with
+     `self.context.resolve_credential_raw_or_inline(ref, inline)`.  A `SqlApp`
+     subclass that only needs the ref already has
+     `self.resolve_credential_ref(input)`.  Return `outcome = "fix"`.
+
+  2. **Inline flattening over a dict payload** (`workflow_args.get("credentials",
+     [])` iterated into a dict) — `route_credentials` reads attributes, not
+     dict keys, so propose `normalize_inline_credentials(raw)` from
+     `application_sdk.credentials` for that half, and say in the residue that
+     the dict-shaped router should move onto the typed input so the whole
+     function can become `route_credentials(input)`.  Return
+     `outcome = "fix"`.
+
+  3. **A local type alias** — replace the alias with an import of
+     `CredentialValue` / `CredentialMap` / `InlineCredentials` from
+     `application_sdk.credentials`.  The SDK's `CredentialValue` also admits
+     `float`, so a field retyped onto it accepts slightly more than a local
+     `str | int | bool | None` did; name that in the proposal.  Return
+     `outcome = "fix"`.
+
+  **Say what the migration changes.**  The local copies disagreed on
+  behaviour, not just shape: one that built `CredentialRef(credential_guid=...)`
+  directly never routed `agent_json`, so after the fix an agent-mode run
+  resolves through the agent for the first time; one that used
+  `resolve_or_none` swallowed a misrouted input that `route_credentials` now
+  raises on (`CredentialRoutingError`, naming the cause).  A proposal that does
+  not name which of these applies is not reviewable.  Never claim the edit is
+  mechanical.
+
+  **Fallback** — a second, per-source credential GUID carried in some other
+  field (`CredentialRef(credential_guid=input.cloud_source)`) never fires: the
+  rule only matches the input's own `credential_guid` channel.  What can still
+  fire outside the seam's model is `CredentialRef.resolve` over an object that
+  is not the entry-point input; for that, propose an inline
+  `# conformance: ignore[P053] <reason>` naming what is resolved, and return
+  `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
+  the tier is already WARN for that.
