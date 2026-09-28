@@ -46,6 +46,11 @@ dependencies = [
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
+    # The handler surface and error taxonomy live in this repo's thin api package
+    # (packages/api) so the consolidated API host can serve an app's handler without
+    # installing this distribution. Exact pin, released by the same job at the same
+    # version: an SDK can never be installed next to a stale api (FND-2964).
+    "atlan-application-sdk-api==3.39.1",
 ]
 
 [project.scripts]
@@ -441,6 +446,9 @@ constraint-dependencies = [
 # the local path means a packages/conformance change is picked up here
 # immediately, with no separate release-then-bump-the-pin cycle.
 atlan-application-sdk-conformance = { path = "packages/conformance" }
+# The api package is part of this repo and released with it at the same version;
+# the path source keeps local development and CI on the in-tree code.
+atlan-application-sdk-api = { path = "packages/api", editable = true }
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]

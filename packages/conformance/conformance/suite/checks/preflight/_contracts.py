@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from functools import lru_cache
 
-from conformance.suite.checks._ast_common import make_finding
+from conformance.suite.checks._ast_common import canonical_sdk_module, make_finding
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     is_entrypoint_decorator,
 )
@@ -94,7 +94,9 @@ def _qualified(src: Source, node: ast.AST | None) -> str:
             package = src.rel.split("/")[:-1]
             prefix = package[: len(package) - level + 1]
             name = ".".join([*prefix, name.lstrip(".")])
-        return name
+        # ``application_sdk_api.X`` is the same object as ``application_sdk.X``;
+        # fold it so every SDK-prefix test below matches either spelling.
+        return canonical_sdk_module(name)
     return ""
 
 

@@ -26,6 +26,7 @@ import conformance.suite.checks.logging as logging_checks
 import conformance.suite.checks.sdr as sdr_checks
 from conformance.suite.checks import (
     actions_pinning,
+    api_member,
     app_name_alignment,
     artifact_schema_declared,
     artifact_schema_writer,
@@ -161,6 +162,12 @@ _CHECKS: list[CheckRegistration] = [
         series=gitignore_entries.SERIES,
         discover=gitignore_entries.discover,
         scan_path=gitignore_entries.scan_path,
+    ),
+    CheckRegistration(
+        series=api_member.SERIES,
+        discover=api_member.discover,
+        scan_path=api_member.scan_path,
+        scan_all=api_member.scan_all,
     ),
     CheckRegistration(
         series=orchestration.SERIES,

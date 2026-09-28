@@ -42,7 +42,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
     # Imported lazily inside _start_metrics_push (cold path) — type-only here.
-    from application_sdk.handler.base import Handler
+    from application_sdk_api.handler.base import Handler
+
     from application_sdk.observability.pushgateway import PushGatewayClient
 
 logger = get_logger(__name__)
@@ -607,6 +608,8 @@ def create_worker(
     app_workflows = get_all_app_workflows()
     task_activities = get_all_task_activities()
 
+    from application_sdk_api.handler.base import DefaultHandler  # noqa: PLC0415
+
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
         gate_attempts,
@@ -615,7 +618,6 @@ def create_worker(
         preflight_gate_activity_name,
         resolve_gate_mode,
     )
-    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.

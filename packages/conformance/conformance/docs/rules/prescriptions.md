@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**47 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -70,6 +70,7 @@ reassigned.
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
+| [P054](#p054) | `HostedApiMemberNotThin` | `block` | `app` | `api-member-isolation` | — | 0.40.0 |
 
 ---
 
@@ -2677,5 +2678,62 @@ Land as `WARN`: every hit is a working copy awaiting migration.  A site the seam
 genuinely does not cover — `CredentialRef.resolve` over an object that is not the
 entry-point input — records that with a justified `# conformance: ignore[P053]
 <reason>`.
+
+---
+
+## P054 — `HostedApiMemberNotThin` {#p054}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `api-member-isolation` · **Autofixable:** — · **Since:** 0.40.0
+
+> A hosted api/ member imports application_sdk or the worker package, reads the environment at import, or is named unlike the app
+
+**Rationale:** The consolidated API server imports every hosted app's api member into one process that
+has atlan-application-sdk-api installed and NOT atlan-application-sdk. A member that
+imports application_sdk (or the app's worker package 'app', which does) fails with
+ImportError when the server loads it — or, where the name happens to resolve, drags the
+worker's dependency tree into a pod sized for none of it. A module-level os.environ /
+os.getenv read runs once, at import, in a process whose environment belongs to the host,
+not the app, so the value is either absent or another app's. And the entry-point name is
+the key the server routes the app under: a name that differs from the app's atlan.yaml
+name serves the handler at a path nothing calls. Customer impact: a hosted app whose
+member fails to import, or reads another app's configuration, stops serving its
+credential test, preflight and metadata-browsing routes on the consolidated server, so
+the customer cannot set up or run the connector. Every one of these breaks the app only
+once it is hosted, which no worker test exercises, so the rule is BLOCK from day one — a
+deliberate exception to landing new rules as WARN. It is opt-in by construction: it
+evaluates nothing unless the repo declares an atlan.app_api entry point, so it cannot
+red a repo that has not adopted hosting (FND-2964).
+
+### What correct looks like
+
+- **Compliant example:** application_sdk packages/api/pyproject.toml — the api distribution the consolidated
+  server installs declares no temporalio, dapr, daft, duckdb, pandas, pyarrow, boto3 or
+  pyatlan, and packages/api/application_sdk_api/ never imports application_sdk. A hosted
+  member mirrors that: it imports application_sdk_api and its own package, and reads
+  configuration inside handler methods, not at import. No reference app is hosted yet,
+  so none has an api/ member to cite.
+
+**Evaluated only when** some `pyproject.toml` in the repo declares
+`[project.entry-points."atlan.app_api"]` (FND-2964).  Otherwise the rule is not
+evaluated and reports nothing.
+
+Inside each package an entry point names (`<name> = "<pkg>:handler"`, resolved relative
+to the declaring `pyproject.toml`), flags:
+
+* any import of `application_sdk` or `application_sdk.*` — the   member must import
+`application_sdk_api` only (the handler   surface and error taxonomy both live there); *
+any import of the worker package `app` / `app.*`; * a module-level `os.environ` /
+`os.getenv` read — at module or   class-body level, in a decorator or a default
+argument; a read   inside a function body runs per call and is not flagged.
+
+It also flags an entry-point name that differs from the top-level `name:` in
+`atlan.yaml` (or the generated `manifest.json` fallback); that sub-check is skipped when
+no contract name is readable.
+
+**Fix.**  Import the handler surface from `application_sdk_api`; move anything shared
+with the worker into the member (or into a package both depend on that does not import
+`application_sdk`); read configuration inside the handler methods; rename the entry
+point to the app's name.  Suppress a reviewed exception with `# conformance:
+ignore[P054] <reason>` on the line (in `pyproject.toml` for the name sub-check).
 
 ---

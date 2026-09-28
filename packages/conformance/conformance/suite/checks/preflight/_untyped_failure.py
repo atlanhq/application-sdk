@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import make_finding
+from conformance.suite.checks._ast_common import canonical_sdk_module, make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._common import (
@@ -78,7 +78,8 @@ def scan(reg: Registry) -> list[Finding]:
         for imported in ast.walk(src.tree):
             if (
                 isinstance(imported, ast.ImportFrom)
-                and imported.module == "application_sdk.handler"
+                and canonical_sdk_module(imported.module or "")
+                == "application_sdk.handler"
             ):
                 local_names.update(
                     alias.asname or alias.name
@@ -87,13 +88,11 @@ def scan(reg: Registry) -> list[Finding]:
                 )
             if isinstance(imported, ast.Import):
                 for alias in imported.names:
-                    if alias.name == "application_sdk.handler":
+                    if canonical_sdk_module(alias.name) == "application_sdk.handler":
                         if alias.asname:
                             module_aliases.add(alias.asname)
                         else:
-                            qualified_calls.add(
-                                "application_sdk.handler.PreflightCheck"
-                            )
+                            qualified_calls.add(f"{alias.name}.PreflightCheck")
         if not local_names and not module_aliases and not qualified_calls:
             continue
         for node in ast.walk(src.tree):

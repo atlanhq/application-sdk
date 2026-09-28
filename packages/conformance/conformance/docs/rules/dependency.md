@@ -5,7 +5,7 @@
 
 # Dependency Rules (D-series)
 
-**15 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
+**16 rules** · Checker: `suite.checks.dependency_conformance` (TOML-based, static)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -30,6 +30,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [D013](#d013) | `NonPyPILockfileIndex` | `warn` | `both` | `supply-chain` | yes | 0.30.0 |
 | [D014](#d014) | `AbsoluteResolverFence` | `warn` | `both` | `supply-chain` | yes | 0.31.0 |
 | [D015](#d015) | `PyrightExcludeClobbersDefaults` | `warn` | `both` | `tooling-baseline` | yes | 0.32.0 |
+| [D016](#d016) | `DirectApiDependency` | `warn` | `app` | `dependency-pinning` | yes | 0.40.0 |
 
 ---
 
@@ -741,5 +742,48 @@ type-checked*, which is not a safe automatic rewrite.
 
 Scope is `both`: application-sdk's own `pyproject.toml` carries this exact shape.  Cite:
 FND-2229.
+
+---
+
+## D016 — `DirectApiDependency` {#d016}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `packaging` · **Category:** `dependency-pinning` · **Autofixable:** yes · **Since:** 0.40.0
+
+> The app's root pyproject.toml declares atlan-application-sdk-api; it must come transitively from atlan-application-sdk
+
+**Rationale:** atlan-application-sdk pins atlan-application-sdk-api exactly — the two ship from one
+repo on one release train, and the worker's handler imports resolve to the api package's
+objects. That exact pin makes the SDK version the ONE knob an app turns: a Renovate SDK
+bump moves both together. An app that also declares atlan-application-sdk-api in its
+root [project].dependencies adds a second knob. Its specifier either restates the SDK's
+pin (so every SDK bump must also edit it, and a bump that forgets fails to resolve) or
+ranges around it (so it says nothing). Declaring the api package in the hosted api/
+workspace member's own pyproject.toml is correct and is not flagged: that member is
+installed on the consolidated API server WITHOUT the SDK, so there the api package is a
+genuine direct dependency (FND-2964). D002 would report the same root line once an SDK
+carrying the pin is installed; it defers to this rule for that one package so the line
+is reported once, with the reason that is specific to it.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app pyproject.toml — [project].dependencies names atlan-application-sdk
+  (with its extras) and the source driver, and nothing else of the SDK's:
+  atlan-application-sdk-api is not declared, so it arrives through the SDK's own exact
+  pin and moves with the SDK bump.
+
+Flags `atlan-application-sdk-api` in the repo **root** `pyproject.toml`
+`[project].dependencies` (FND-2964). `atlan-application-sdk` pins it exactly, so it is
+always installed at the version the SDK was released with; a root declaration only adds
+a second version knob that every SDK bump has to keep in step.
+
+Not flagged: the `api/` workspace member's own `pyproject.toml` (the member is hosted on
+the consolidated API server without the SDK, so it must declare the api package
+directly), optional dependencies, and dependency groups.  The SDK repo itself is exempt
+(scope `app`).
+
+**Fix.**  Delete the entry from the root `[project].dependencies` and re-lock (`uv
+lock`); the lock keeps the same resolved version, now reached through the SDK.  Suppress
+a deliberate exception with a `# conformance: ignore[D016] <reason>` comment on the
+entry's line.
 
 ---

@@ -18,7 +18,7 @@ findings in the working tree, as reported by `suite.runner --series D`.
 
 The fingerprint-set of all unsuppressed FAILING D-series results.  Extends to
 include WARNING results in strict mode —
-D002/D003/D004/D006/D007/D008/D012/D013/D014/D015 are WARN-tier, so they are
+D002/D003/D004/D006/D007/D008/D012/D013/D014/D015/D016 are WARN-tier, so they are
 processed in strict mode; D001, D005, D009, D010 and D011 are BLOCK-tier and
 processed in both modes.
 
@@ -129,6 +129,21 @@ fix.  The re-detection gate is authoritative for this area — see
   line (the SDK installs it transitively).  Remove only that one entry; leave
   the rest of the array intact.  If the deletion empties the array, leave the
   empty array rather than removing the table.
+
+- **D016 DirectApiDependency** (`classification = "mechanical"`) — the repo
+  ROOT `pyproject.toml` declares `atlan-application-sdk-api` in
+  `[project].dependencies`.  Delete that one entry (only it; leave the rest of
+  the array intact) and re-lock with a plain `uv lock` — no `--upgrade`, so the
+  resolved version is unchanged and now reached through the SDK's exact pin.
+  Re-lock only once D012 is clean — on a machine with a machine-wide default
+  index an unpinned repo's `uv lock` rewrites every lock URL onto the package
+  firewall (D013); if D012 also fired, fix it first in the same edit.
+  Commit `pyproject.toml` and `uv.lock` together.  **Never touch the `api/`
+  member's `pyproject.toml`**: the hosted member is installed without the SDK,
+  so its direct declaration of the api package is correct and is not a finding.
+  If the root declaration carried extras the SDK's pin does not (e.g.
+  `atlan-application-sdk-api[sql]`), route to residue instead — dropping it
+  would drop those extras.
 
 - **D004 RedeclaredSdkManagedDependencyInGroups** — same as D002 but the
   redeclaration is in a `[dependency-groups.*]` table.  Delete the entire

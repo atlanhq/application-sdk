@@ -2,7 +2,7 @@
 
 One checker, two halves plus a contract-compat pass, dispatched by scope:
 
-* **consumer half (B001/B007/B008, scope ``app``)** — B001 flags app usage of any
+* **consumer half (B001/B007/B008/B009, scope ``app``)** — B001 flags app usage of any
   SDK symbol the committed manifest marks deprecated; B007 flags daft-only
   DataFrame APIs (``count_rows``/``to_pylist``/``.names``,
   ``DataframeType.daft``) that are dead on the daft-less SDK >= 3.22 runtime —
@@ -10,7 +10,10 @@ One checker, two halves plus a contract-compat pass, dispatched by scope:
   or attribute use that reaches an ``_``-prefixed module or name the app does
   not own — the SDK's, or any other package's — which no manifest can carry
   either, because a private symbol is never deprecated before it changes
-  (FND-2388);
+  (FND-2388); B009 flags an import of the handler surface through the
+  deprecated ``application_sdk.handler*`` shims instead of
+  ``application_sdk_api.handler*`` (FND-2964) — a deprecated *path*, which the
+  symbol manifest cannot carry either;
 * **authoring half (B002/B003/B004, scope ``sdk``)** — flags the SDK declaring
   its own deprecations incorrectly (malformed notice, overdue removal, or an
   unmarked docstring claim);
@@ -25,7 +28,7 @@ never depends on this dispatch alone.
 
 Inline suppression
 ------------------
-Add ``# conformance: ignore[B001] <reason>`` (or B002–B008) on the offending
+Add ``# conformance: ignore[B001] <reason>`` (or B002–B009) on the offending
 line or the comment-only line directly above it.
 """
 
@@ -49,6 +52,7 @@ from ._authoring import scan_authoring
 from ._consumer import scan_consumer
 from ._contract_compat import scan_contract_compat
 from ._daft_runtime import scan_daft_runtime
+from ._handler_path import api_package_resolvable, scan_handler_import_path
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 from ._private_imports import own_import_roots, scan_private_imports
@@ -65,6 +69,7 @@ __all__ = [
     "scan_consumer",
     "scan_contract_compat",
     "scan_daft_runtime",
+    "scan_handler_import_path",
     "scan_path",
     "scan_private_imports",
 ]
@@ -98,6 +103,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # from everybody else's (not fine), and that is a property of the repo, not
     # of any one file.
     own_roots = own_import_roots(root) if run_consumer else frozenset()
+    # B009 is not evaluated when the locked SDK predates atlan-application-sdk-api:
+    # there the old path is the real module and the rewrite would not import.
+    run_b009 = run_consumer and api_package_resolvable(root)
 
     findings: list[Finding] = []
     for path in paths:
@@ -119,6 +127,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if run_consumer:
             findings.extend(scan_daft_runtime(tree, rel, directives))
             findings.extend(scan_private_imports(tree, rel, directives, own_roots))
+            if run_b009:
+                findings.extend(scan_handler_import_path(tree, rel, directives))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
 

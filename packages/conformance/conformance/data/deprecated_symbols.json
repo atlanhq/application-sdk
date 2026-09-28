@@ -147,7 +147,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "UNVERIFIABLE_CHECK_NAME is deprecated; use application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME \u2014 the same constant, at the module that now owns it. Will be removed in v3.40.0.",
+      "message": "UNVERIFIABLE_CHECK_NAME is deprecated; use application_sdk_api.handler.contracts.UNVERIFIABLE_CHECK_NAME \u2014 the same constant, at the module that now owns it. Will be removed in v3.40.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.preflight_gate",
       "removal_version": "3.40.0",
@@ -199,22 +199,832 @@
       "symbol": "_resolve_gate_enforcement"
     },
     {
-      "kind": "class",
-      "marker_via": "warn",
-      "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
-      "migration_target": true,
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.ApiMetadataObject Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "ApiMetadataObject"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.ApiMetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "ApiMetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.AuthInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "AuthInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.AuthOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "AuthOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.AuthStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "AuthStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.BaseConnectionConfig Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "BaseConnectionConfig"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.BaseMetadataConfig Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "BaseMetadataConfig"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.DefaultHandler Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "DefaultHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.Handler Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "Handler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.HandlerContext Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "HandlerContext"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.HandlerCredential Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "HandlerCredential"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.HandlerError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "HandlerError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.MetadataInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "MetadataInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.MetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "MetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.PreflightCheck Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "PreflightCheck"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.PreflightInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "PreflightInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.PreflightOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "PreflightOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.PreflightStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "PreflightStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.SqlMetadataObject Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "SqlMetadataObject"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.SqlMetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "SqlMetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.flatten_credentials_to_pairs Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "flatten_credentials_to_pairs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.normalize_credentials Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "normalize_credentials"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.unverifiable_preflight_result Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler",
+      "removal_version": "4.0",
+      "symbol": "unverifiable_preflight_result"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.AppError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "AppError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.AuthInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "AuthInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.AuthOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "AuthOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.AuthStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "AuthStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.DefaultHandler Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "DefaultHandler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.ErrorCode Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "ErrorCode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.HANDLER_ERROR Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "HANDLER_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.Handler Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "Handler"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.HandlerError Will be removed in v4.0.",
+      "migration_target": false,
       "module": "application_sdk.handler.base",
       "removal_version": "4.0",
       "symbol": "HandlerError"
     },
     {
-      "kind": "enum_member",
-      "marker_via": "enum-member",
-      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
-      "migration_target": true,
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.MetadataInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "MetadataInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.MetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "MetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.PreflightInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "PreflightInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.PreflightOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "PreflightOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.PreflightStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "PreflightStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.SqlMetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "SqlMetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.base.get_handler_context Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.base",
+      "removal_version": "4.0",
+      "symbol": "get_handler_context"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.APP_CONTEXT_ERROR Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "APP_CONTEXT_ERROR"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.AppContextError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "AppContextError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.ErrorCode Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "ErrorCode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.HandlerContext Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "HandlerContext"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.InternalError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "InternalError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.PreconditionError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "PreconditionError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.SecretStore Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "SecretStore"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.SecretStoreNotConfiguredError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "SecretStoreNotConfiguredError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.bind_handler_context Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "bind_handler_context"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.get_handler_context Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "get_handler_context"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.context.get_logger Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.context",
+      "removal_version": "4.0",
+      "symbol": "get_logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AUTH_STATUS_HTTP_CODES Will be removed in v4.0.",
+      "migration_target": false,
       "module": "application_sdk.handler.contracts",
-      "removal_version": "3.40.0",
-      "symbol": "PreflightStatus.PARTIAL"
+      "removal_version": "4.0",
+      "symbol": "AUTH_STATUS_HTTP_CODES"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AgentCredentialSpec Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "AgentCredentialSpec"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.ApiMetadataObject Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "ApiMetadataObject"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.ApiMetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "ApiMetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AppError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "AppError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AuthInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "AuthInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AuthOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "AuthOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.AuthStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "AuthStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.BaseConnectionConfig Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "BaseConnectionConfig"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.BaseMetadataConfig Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "BaseMetadataConfig"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.FailureDetails Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "FailureDetails"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.HandlerCredential Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "HandlerCredential"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.InternalError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "InternalError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.MetadataInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "MetadataInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.MetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "MetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.PreflightCheck Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "PreflightCheck"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.PreflightInput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "PreflightInput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.PreflightOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "PreflightOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.PreflightStatus Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "PreflightStatus"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.SerializableEnum Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "SerializableEnum"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.SqlMetadataObject Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "SqlMetadataObject"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.SqlMetadataOutput Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "SqlMetadataOutput"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.UNVERIFIABLE_CHECK_NAME Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "UNVERIFIABLE_CHECK_NAME"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.flatten_credentials_to_pairs Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "flatten_credentials_to_pairs"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.get_logger Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "get_logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.logger Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "logger"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.normalize_credentials Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "normalize_credentials"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.parse_credentials_extra Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "parse_credentials_extra"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.redact_secrets Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "redact_secrets"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.sanitize_cause_repr Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "sanitize_cause_repr"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.contracts.unverifiable_preflight_result Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.contracts",
+      "removal_version": "4.0",
+      "symbol": "unverifiable_preflight_result"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.manifest.AppManifest Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.manifest",
+      "removal_version": "4.0",
+      "symbol": "AppManifest"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.manifest.DagNode Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.manifest",
+      "removal_version": "4.0",
+      "symbol": "DagNode"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.manifest.DagNodeDependency Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.manifest",
+      "removal_version": "4.0",
+      "symbol": "DagNodeDependency"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.manifest.ExecuteWorkflowInputs Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.manifest",
+      "removal_version": "4.0",
+      "symbol": "ExecuteWorkflowInputs"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "create_app_handler_service is deprecated; use server_sdk.build_asgi_app from atlan-application-sdk-server instead \u2014 it installs without the worker dependency tree and registers the handler routes only, so check the routes your app relies on \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0",
+      "symbol": "create_app_handler_service"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your own uvicorn.run instead \u2014 the consolidated host owns the run loop, so atlan-application-sdk-server ships no blocking entry point \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk.handler.service",
+      "removal_version": "4.0",
+      "symbol": "run_app_handler_service"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.service_errors.InternalError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.service_errors",
+      "removal_version": "4.0",
+      "symbol": "InternalError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.service_errors.InvalidConfigIdError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.service_errors",
+      "removal_version": "4.0",
+      "symbol": "InvalidConfigIdError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.service_errors.InvalidConfigTypeError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.service_errors",
+      "removal_version": "4.0",
+      "symbol": "InvalidConfigTypeError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.service_errors.InvalidInputError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.service_errors",
+      "removal_version": "4.0",
+      "symbol": "InvalidInputError"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "application_sdk_api.handler.service_errors.TempPathEscapeError Will be removed in v4.0.",
+      "migration_target": false,
+      "module": "application_sdk.handler.service_errors",
+      "removal_version": "4.0",
+      "symbol": "TempPathEscapeError"
     },
     {
       "kind": "class",
@@ -431,6 +1241,24 @@
       "module": "application_sdk.transformers.query",
       "removal_version": "4.0",
       "symbol": "QueryBasedTransformer"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk_api.handler.base",
+      "removal_version": "4.0",
+      "symbol": "HandlerError"
+    },
+    {
+      "kind": "enum_member",
+      "marker_via": "enum-member",
+      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
+      "migration_target": true,
+      "module": "application_sdk_api.handler.contracts",
+      "removal_version": "3.40.0",
+      "symbol": "PreflightStatus.PARTIAL"
     }
   ]
 }

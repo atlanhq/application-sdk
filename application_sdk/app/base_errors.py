@@ -77,14 +77,10 @@ class StateStoreNotConfiguredError(PreconditionError):
     expected_state: str | None = "configured"
 
 
-@dataclass(kw_only=True)
-class SecretStoreNotConfiguredError(PreconditionError):
-    """Secret store required by get_secret / resolve_credential but not configured."""
-
-    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
-    message: str = "No secret store configured"
-    resource: str | None = "secret_store"
-    expected_state: str | None = "configured"
+# Defined in the api package (HandlerContext raises it); the same class.
+from application_sdk_api.handler.context import (  # noqa: E402,F401
+    SecretStoreNotConfiguredError,
+)
 
 
 @dataclass(kw_only=True)

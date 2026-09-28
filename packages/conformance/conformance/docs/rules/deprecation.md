@@ -5,7 +5,7 @@
 
 # Backwards-Compatibility / Deprecation Rules (B-series)
 
-**8 rules** · Checker: `suite.checks.deprecation` (AST-based)
+**9 rules** · Checker: `suite.checks.deprecation` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -31,6 +31,7 @@ reassigned.
 | [B006](#b006) | `StaleContractLedger` | `block` | `both` | `contract-backwards-compatibility` | yes | 0.7.0 |
 | [B007](#b007) | `DaftOnlyDataframeApiUsage` | `warn` | `app` | `daft-removal` | — | 0.18.0 |
 | [B008](#b008) | `PrivateModuleImport` | `warn` | `app` | `sdk-private-surface` | — | 0.34.0 |
+| [B009](#b009) | `DeprecatedHandlerImportPath` | `warn` | `app` | `deprecated-import-path` | yes | 0.40.0 |
 
 ---
 
@@ -425,5 +426,68 @@ gap in the package worth raising rather than routing around; say so in the suppr
 Coverage limit (intentional): a reach-through whose base is not a module alias bound in
 the same file — e.g. a private attribute on an object returned by a factory — is not
 matched, biased toward zero false positives.
+
+---
+
+## B009 — `DeprecatedHandlerImportPath` {#b009}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `deprecated-import-path` · **Autofixable:** yes · **Since:** 0.40.0
+
+> Imports the handler surface from the deprecated application_sdk.handler path instead of application_sdk_api.handler
+
+**Rationale:** The handler surface moved into the atlan-application-sdk-api distribution so the
+consolidated API server can host an app's handler without installing the worker's
+dependency tree. The old application_sdk.handler* modules are shims that resolve every
+name to the same object with a DeprecationWarning and are removed in v4.0, so an app
+still importing them breaks at that bump. B001 cannot carry this: it matches deprecated
+*symbols*, and here no symbol is deprecated — only the import path is. The rewrite is
+purely mechanical (same names, same objects, new module root), which is why it is
+auto-fixable. The worker-surface names that happen to live in handler.contracts
+(PreflightGateMode, the event-trigger configs, FileUploadResponse) and the worker-side
+helpers re-exported from the handler package are NOT deprecated on that path and are
+never flagged. The rule is not evaluated when the repo's uv.lock is readable and
+resolves no atlan-application-sdk-api: on an SDK that predates the move the old path is
+the real module, the new one does not exist, and the fix is an SDK bump rather than an
+import edit (FND-2964).
+
+### What correct looks like
+
+- **Compliant example:** application_sdk packages/api/application_sdk_api/handler/__init__.py — the module every
+  handler-surface name is defined in; the application_sdk.handler* modules only
+  re-export it with a DeprecationWarning. The compliant import names the same symbols
+  with the root spelled application_sdk_api. No reference app has migrated yet — each
+  still imports its Handler surface from the deprecated root, so treat their handler
+  modules as the shape to rewrite, not to copy.
+
+Flags an import of a handler-surface name through one of the deprecated shim modules —
+`application_sdk.handler` and its `base`, `contracts`, `context`, `manifest` and
+`service_errors` submodules (FND-2964).  Every name there resolves to the object defined
+in `application_sdk_api.handler`; the shims emit a `DeprecationWarning` and are removed
+in v4.0.
+
+Shapes matched:
+
+* `from application_sdk.handler.contracts import PreflightInput`; * `from
+application_sdk.handler import contracts` /   `from application_sdk import handler`; *
+`import application_sdk.handler.contracts as hc` and the plain   `import
+application_sdk.handler` — flagged unless every   `alias.Name` the file reads is a
+worker-surface name.
+
+**Not flagged** — the worker surface, which stays on the old path: `PreflightGateMode`,
+`EventTriggerConfig`, `EventFilterRule`, `SubscriptionConfig`, `CloudEventEnvelope`,
+`FileUploadResponse`, `bind_invocation_context` (via `handler.context`) and
+`create_app_handler_service` / `run_app_handler_service` (via `handler`; those two are
+`@deprecated` functions B001 already reports).  Neither are
+`application_sdk.handler.service` / `.invocation`, which are worker modules, nor
+`application_sdk.errors*`, which is a first-class path to the same taxonomy.
+
+**Not evaluated** when `uv.lock` is readable and resolves no `atlan-application-sdk-api`
+— the locked SDK predates the move, so the old path is the real module and the new one
+would not import. An absent or unparseable lock keeps the rule evaluated.
+
+**Fix.**  Rewrite the module root — `application_sdk.handler` →
+`application_sdk_api.handler` — keeping the imported names.  In a mixed import, split
+the statement: the worker-surface names stay on the old path, everything else moves.
+Suppress a deliberate exception with `# conformance: ignore[B009] <reason>`.
 
 ---

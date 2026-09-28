@@ -1,0 +1,51 @@
+name: API package suite tests (reusable)
+
+# Reusable workflow: the api PACKAGE's own pytest unit tests (packages/api/tests/),
+# run in its own thin environment, plus a probe of the base install the
+# consolidated API host ships.
+#
+# Nothing else in this repo collects these suites: the root pyproject's
+# `testpaths = ["tests"]` never reaches packages/. The root SDK suite, which
+# exercises the same code through application_sdk's shims, runs separately in
+# sdk-tests (sdk-gate triggers both on packages/api/**).
+#
+# SDK-private: no consumer app references this workflow.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  suite-tests:
+    name: Suite unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.17"
+
+      - name: Run api package unit tests
+        working-directory: packages/api
+        run: |
+          set -euo pipefail
+          # The package pins its own pyproject.toml / uv.lock; sync all extras +
+          # groups so the `test` deps (pytest, pytest-asyncio, httpx2) and the
+          # capability extras ([sql], [aws], [workflow]) the suites exercise are
+          # present, then run its suite (testpaths = ["tests"], asyncio_mode = auto).
+          uv sync --all-extras --all-groups
+          uv run pytest -v
+
+      # The base install is the shape the host ships: no capability extras. The
+      # probe's logic (import walk, forbidden-module check, RSS budget) lives in a
+      # tested script (docs/standards/ci.md).
+      - name: Prove the THIN base install imports, builds and stays small
+        run: |
+          set -euo pipefail
+          uv venv .venv-base
+          uv pip install --python .venv-base packages/api
+          .venv-base/bin/python .github/scripts/probe_api_base_install.py --max-rss-mb 120

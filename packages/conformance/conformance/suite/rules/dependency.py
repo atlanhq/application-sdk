@@ -1051,4 +1051,64 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/dependency.md#d015"
         ),
     ),
+    RuleDefinition(
+        id="D016",
+        canonical_reference=(
+            "atlan-mysql-app pyproject.toml — [project].dependencies names "
+            "atlan-application-sdk (with its extras) and the source driver, and "
+            "nothing else of the SDK's: atlan-application-sdk-api is not declared, so "
+            "it arrives through the SDK's own exact pin and moves with the SDK bump."
+        ),
+        fix_locus=FixLocus.PACKAGING,
+        scope=RuleScope.APP,
+        name="DirectApiDependency",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="dependency-pinning",
+        autofixable=True,
+        since="0.40.0",
+        rationale=(
+            "atlan-application-sdk pins atlan-application-sdk-api exactly — the two "
+            "ship from one repo on one release train, and the worker's handler "
+            "imports resolve to the api package's objects. That exact pin makes the "
+            "SDK version the ONE knob an app turns: a Renovate SDK bump moves both "
+            "together. An app that also declares atlan-application-sdk-api in its "
+            "root [project].dependencies adds a second knob. Its specifier either "
+            "restates the SDK's pin (so every SDK bump must also edit it, and a "
+            "bump that forgets fails to resolve) or ranges around it (so it says "
+            "nothing). Declaring the api package in the hosted api/ workspace "
+            "member's own pyproject.toml is correct and is not flagged: that member "
+            "is installed on the consolidated API server WITHOUT the SDK, so there "
+            "the api package is a genuine direct dependency (FND-2964). D002 would "
+            "report the same root line once an SDK carrying the pin is installed; "
+            "it defers to this rule for that one package so the line is reported "
+            "once, with the reason that is specific to it."
+        ),
+        short_description=(
+            "The app's root pyproject.toml declares atlan-application-sdk-api; it "
+            "must come transitively from atlan-application-sdk"
+        ),
+        full_description=(
+            "Flags ``atlan-application-sdk-api`` in the repo **root**\n"
+            "``pyproject.toml`` ``[project].dependencies`` (FND-2964).\n"
+            "``atlan-application-sdk`` pins it exactly, so it is always installed\n"
+            "at the version the SDK was released with; a root declaration only\n"
+            "adds a second version knob that every SDK bump has to keep in step.\n"
+            "\n"
+            "Not flagged: the ``api/`` workspace member's own ``pyproject.toml``\n"
+            "(the member is hosted on the consolidated API server without the\n"
+            "SDK, so it must declare the api package directly), optional\n"
+            "dependencies, and dependency groups.  The SDK repo itself is exempt\n"
+            "(scope ``app``).\n"
+            "\n"
+            "**Fix.**  Delete the entry from the root ``[project].dependencies``\n"
+            "and re-lock (``uv lock``); the lock keeps the same resolved version,\n"
+            "now reached through the SDK.  Suppress a deliberate exception with a\n"
+            "``# conformance: ignore[D016] <reason>`` comment on the entry's line.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/dependency.md#d016"
+        ),
+    ),
 )

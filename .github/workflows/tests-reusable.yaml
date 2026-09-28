@@ -779,6 +779,81 @@ jobs:
         with:
           test-dir: tests/integration
 
+  # ── Hosted api member (consolidated API server) ────────────────────────────
+  # An app served by common-app-server keeps its one handler in a uv workspace
+  # member that declares an `atlan.app_api` entry point. detect-api-member finds
+  # it (a tested script; the job-level `if` below does the gating, no inlined
+  # conditional shell). Repos without one — worker-only apps, and every app not
+  # yet hosted — skip api-member entirely.
+  detect-api-member:
+    name: Detect hosted api member
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      present: ${{ steps.detect.outputs.present }}
+      name: ${{ steps.detect.outputs.name }}
+      member: ${{ steps.detect.outputs.member }}
+      package: ${{ steps.detect.outputs.package }}
+      object: ${{ steps.detect.outputs.object }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - name: Find an atlan.app_api entry point
+        id: detect
+        run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"
+
+  # Installs the member ALONE (its own declared dependencies, no
+  # atlan-application-sdk) and mounts it with application_sdk_api.build_asgi_app,
+  # exactly as the host does, then runs the host matrix (health, 422 on a
+  # malformed body, no bare 500). The same checks gate the host's pin bump, so a
+  # change that would break the host fails here, in the app's own PR.
+  api-member:
+    name: Hosted api member
+    needs: detect-api-member
+    if: needs.detect-api-member.outputs.present == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          path: application-sdk-scripts
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.17"
+      - name: Install the api member alone and mount it like the host
+        env:
+          MEMBER: ${{ needs.detect-api-member.outputs.member }}
+          APP_NAME: ${{ needs.detect-api-member.outputs.name }}
+          PACKAGE: ${{ needs.detect-api-member.outputs.package }}
+          OBJECT: ${{ needs.detect-api-member.outputs.object }}
+        run: |
+          set -euo pipefail
+          uv venv .venv-api
+          uv pip install --python .venv-api "./$MEMBER" httpx2
+          .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
+            --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
+
   # ── Integration (boots the app + testcontainers / services-script) ───────
   # Runs on merge_group / push / dispatch, and on pull_request only when the base
   # branch has no merge queue to run it in (see detect-merge-queue). Skipped when
@@ -3150,6 +3225,8 @@ jobs:
         lease-tenant,
         prepare-tenant,
         e2e,
+        detect-api-member,
+        api-member,
       ]
     if: always()
     runs-on: ubuntu-latest
@@ -3160,6 +3237,20 @@ jobs:
       pull-requests: write
       contents: read
     steps:
+      # The hosted api member leg is outside verify-test-gate's inputs (that action
+      # is consumed at @main). It is skipped for repos without an atlan.app_api
+      # entry point; a failure or cancellation of either job fails the gate.
+      - name: Fail the gate when the hosted api member leg failed
+        if: >-
+          contains(fromJSON('["failure", "cancelled"]'), needs.detect-api-member.result) ||
+          contains(fromJSON('["failure", "cancelled"]'), needs.api-member.result)
+        env:
+          DETECT_RESULT: ${{ needs.detect-api-member.result }}
+          MEMBER_RESULT: ${{ needs.api-member.result }}
+        run: |
+          echo "::error::Hosted api member leg did not pass (detect: $DETECT_RESULT, member: $MEMBER_RESULT)"
+          exit 1
+
       # Single source of truth: the tested driver computes both the pass/fail
       # decision and the human-readable status strings the summary table below
       # renders, so displayed status can't drift from the enforced result.

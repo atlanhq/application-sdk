@@ -244,6 +244,7 @@ version = "3.39.1"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "atlan-application-sdk-api" },
     { name = "azure-identity" },
     { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
@@ -372,6 +373,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk", extras = ["storage"], marker = "extra == 'incremental'" },
+    { name = "atlan-application-sdk-api", editable = "packages/api" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
@@ -460,8 +462,40 @@ test = [
 ]
 
 [[package]]
+name = "atlan-application-sdk-api"
+version = "3.39.1"
+source = { editable = "packages/api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "orjson" },
+    { name = "pydantic" },
+    { name = "starlette" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "atlan-application-sdk-api", extras = ["sql", "aws", "workflow"], marker = "extra == 'test'" },
+    { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.34.0" },
+    { name = "fastapi", specifier = ">=0.115.0,<1.0.0" },
+    { name = "httpx2", marker = "extra == 'test'", specifier = ">=0.28.0" },
+    { name = "orjson", specifier = ">=3.10.0,<4.0.0" },
+    { name = "psycopg2-binary", marker = "extra == 'test'", specifier = ">=2.9.9" },
+    { name = "pydantic", specifier = ">=2.10.0,<3.0.0" },
+    { name = "pytest", marker = "extra == 'test'", specifier = ">=8.3.3,<10.0.0" },
+    { name = "pytest-asyncio", marker = "extra == 'test'", specifier = ">=1.4.0,<2.0.0" },
+    { name = "sqlalchemy", marker = "extra == 'sql'", specifier = ">=2.0.0,<3.0.0" },
+    { name = "starlette", specifier = ">=0.40.0" },
+    { name = "temporalio", marker = "extra == 'workflow'", specifier = ">=1.25.0,<2.0.0" },
+    { name = "uvicorn", marker = "extra == 'serve'", specifier = ">=0.30.0" },
+]
+provides-extras = ["sql", "aws", "serve", "workflow", "test"]
+
+[package.metadata.requires-dev]
+dev = [{ name = "ruff", specifier = "==0.16.7" }]
+
+[[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.39.0"
+version = "0.39.1"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

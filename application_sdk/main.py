@@ -1557,11 +1557,14 @@ def run_handler_mode(config: AppConfig) -> None:
     Loads the handler class (or DefaultHandler) and runs the FastAPI
     server via uvicorn. This is synchronous — uvicorn manages its own loop.
     """
+    from application_sdk_api.handler.base import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+    )
+
     from application_sdk.execution._temporal.converter import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_data_converter_for_app,
     )
-    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
-        DefaultHandler,
+    from application_sdk.handler.service import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         run_app_handler_service,
     )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed
@@ -1654,6 +1657,9 @@ async def run_combined_mode(config: AppConfig) -> None:
     _worker_event_loop = asyncio.get_running_loop()
 
     import uvicorn  # noqa: PLC0415 — cold path: uvicorn only loaded in worker/handler runtime modes
+    from application_sdk_api.handler.base import (  # noqa: PLC0415 — cold path: only loaded in handler mode
+        DefaultHandler,
+    )
 
     from application_sdk.app.registry import (  # noqa: PLC0415 — circular: app.* imports from main.py via _pascal_to_kebab
         AppRegistry,
@@ -1668,8 +1674,7 @@ async def run_combined_mode(config: AppConfig) -> None:
     from application_sdk.execution._temporal.worker import (  # noqa: PLC0415 — cold path: only loaded in worker mode (execution backend)
         create_worker,
     )
-    from application_sdk.handler import (  # noqa: PLC0415 — cold path: only loaded in handler mode
-        DefaultHandler,
+    from application_sdk.handler.service import (  # noqa: PLC0415 — cold path: only loaded in handler mode
         create_app_handler_service,
     )
     from application_sdk.infrastructure.context import (  # noqa: PLC0415 — cold path: only when infrastructure init is needed

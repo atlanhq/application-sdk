@@ -8900,7 +8900,7 @@ class TestBoundaryLogRedaction:
         self, route: str, chained: bool
     ) -> None:
         client = _make_client(handler=_LeakyHandler(chained=chained))
-        with patch("application_sdk.handler.service.logger") as ml:
+        with patch("application_sdk_api.routes.logger") as ml:
             response = client.post(route, json={"credentials": []})
         assert response.status_code >= 500
         assert _LEAKY_SECRET not in response.text

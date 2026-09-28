@@ -1,0 +1,390 @@
+"""AppError — canonical SDK exception base (kw-only dataclass)."""
+
+from __future__ import annotations
+
+import dataclasses
+import re
+import traceback
+from collections.abc import Mapping
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, ClassVar
+
+from application_sdk_api.errors.categories import Audience, FailureCategory
+
+if TYPE_CHECKING:
+    from application_sdk_api.errors.wire import FailureDetails
+
+# Fields present on every AppError — excluded from the wire `evidence` dict.
+_BASE_FIELDS: frozenset[str] = frozenset(
+    {"message", "retryable", "cause", "app_name", "run_id", "suggested_action"}
+)
+
+# Cap for the cause string carried on the wire envelope. Sized so a full
+# provider error response survives intact. An object-store error's ``str()`` is
+# "[preamble + request URL][provider XML/JSON body][Rust ``Debug source:`` dump]"
+# — measured at ~800 chars for a typical artifact key. The previous 500 spent
+# 374 on the URL preamble alone and cut the provider's ``<Message>`` in half,
+# deleting the only sentence that named what the store rejected. (FND-957)
+_CAUSE_MAX_LEN = 2000
+# Past the cap, keep BOTH ends rather than the head only: a backend error puts
+# the request URL at the head and what the provider said at the tail, so a
+# head-only cut spends the whole budget on boilerplate. The two lengths sum to
+# less than _CAUSE_MAX_LEN so the elision marker only appears when there is
+# genuinely something elided.
+_CAUSE_HEAD_LEN = 1200
+_CAUSE_TAIL_LEN = 700
+_TRACEBACK_MAX_LEN = 8000
+#: Recursion bound for :func:`redact_wire_value`. A pathologically deep
+#: hand-built structure must truncate rather than overflow the stack.
+_REDACT_MAX_DEPTH: int = 32
+# URL userinfo of any shape — ``user:pass@``, a bare token as the whole userinfo
+# (git remotes, registries, webhook URLs), an empty user with a password
+# (``redis://:pw@``) — up to the last ``@`` that comes before any ``/`` or
+# whitespace, so an ``@`` in a path or query string is never userinfo. A
+# password containing ``@`` is taken whole. The one exemption lives in
+# :func:`_redact_url_userinfo`: in the Azure blob schemes ``container@account``
+# is addressing, not a credential, and is left alone while no password is
+# present.
+#
+# Scanned, not matched by a regex. The regex this replaces,
+# ``(?<![A-Za-z0-9+.-])([a-z][a-z0-9+.-]*://)((?:[^@\s/]*@)+)``, is quadratic:
+# ``sub`` retries at every position of a long run of scheme-legal characters
+# (a hash, a base64 blob), and the consolidated API host runs this on the
+# shared request path, where a slow redaction stalls every co-hosted app
+# (measured on the fork this replaces: 80k characters took 23s). The scan finds
+# each ``://`` once, walks back over its scheme run once (runs are bounded by
+# the previous ``://``), and walks forward to the ``/`` or whitespace that ends
+# the authority once, so the whole pass is linear.
+#
+# The scheme starts at the first ASCII letter of the scheme-legal run, so
+# ``10.0.0.1postgres://u:p@h`` is redacted too — the old lookbehind form left it
+# alone. Over-redacting a scheme is the safe direction.
+_SCHEME_SEP = "://"
+_SCHEME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+.-"
+)
+_ASCII_LETTERS = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ")
+_AUTHORITY_END = frozenset("/ \t\n\r\f\v")
+_STRUCTURAL_USERINFO_SCHEMES = frozenset({"abfss", "abfs", "wasbs", "wasb"})
+
+
+def _redact_url_userinfo(text: str) -> str:
+    """Replace ``scheme://userinfo@`` with ``scheme://***@`` everywhere, in linear time."""
+    out: list[str] = []
+    cursor = 0  # everything before this has been emitted
+    search = 0
+    length = len(text)
+    while True:
+        sep = text.find(_SCHEME_SEP, search)
+        if sep == -1:
+            break
+        search = sep + len(_SCHEME_SEP)
+        if sep < cursor:
+            continue
+        run_start = sep
+        while run_start > cursor and text[run_start - 1] in _SCHEME_CHARS:
+            run_start -= 1
+        scheme_start = run_start
+        while scheme_start < sep and text[scheme_start] not in _ASCII_LETTERS:
+            scheme_start += 1
+        if scheme_start == sep:
+            continue  # a run with no letter in it is not a scheme
+        last_at = -1
+        i = search
+        while i < length and text[i] not in _AUTHORITY_END:
+            if text[i] == "@":
+                last_at = i
+            i += 1
+        if last_at <= search:
+            # ``last_at == search`` is an empty userinfo ("x://@h"): no
+            # credential, nothing to redact.
+            # A later "://" before the authority's end cannot find userinfo
+            # either — resume just before the boundary so a "://" that starts
+            # there is still seen.
+            search = max(search, i - 1)
+            continue
+        scheme = text[scheme_start:sep]
+        if (
+            scheme.lower() in _STRUCTURAL_USERINFO_SCHEMES
+            and ":" not in text[search:last_at]
+        ):
+            search = last_at + 1
+            continue
+        out.append(text[cursor:search])
+        out.append("***@")
+        cursor = last_at + 1
+        search = cursor
+    out.append(text[cursor:])
+    return "".join(out)
+
+
+# Matches secret query params: api_key=value → api_key=***
+# ``pwd`` covers ODBC/DSN keyword syntax (``UID=sa;PWD=…``), which no other
+# keyword here matches — ODBC connectors do not use ``password=``.
+# The value alternation tries a braced value first: ODBC quotes values that
+# contain the ``;`` separator as ``PWD={secret;with;semicolons}``, and the
+# bare-value class ``[^\s&,;#]+`` would stop at the first ``;`` inside the
+# braces and leak the password tail. ``\{[^}]*\}`` consumes the braces as a
+# unit so only the closing brace survives; an *escaped* closing brace
+# (``}}`` per the ODBC spec) still ends the match at the first ``}`` — the
+# residue is then a brace fragment, not usable secret material. The bare
+# class still stops at ``;``, so the following key=value pair survives.
+# ``uid`` is deliberately absent. It is a user name, not a credential, and
+# dropping it would remove "which account failed to log in" from every auth
+# failure. It also has no word boundary in this alternation, so it would match
+# the tail of ``run_guid=`` and ``correlation_uuid=`` — redacting the exact
+# correlation IDs an on-call needs.
+# A generic ``token`` is deliberately NOT here, for the same reason ``uid``
+# is not: it would redact ``next_token=`` / ``page_token=`` /
+# ``continuation_token=``, the pagination cursors an on-call needs to see.
+# The list stays an enumeration of things that are only ever credentials.
+# ``signature`` and ``sig`` cover presigned object-store URLs, which object-store
+# errors quote verbatim in their message: AWS SigV4 ``X-Amz-Signature``, GCS
+# ``X-Goog-Signature``, and Azure SAS ``sig``. ``credential`` already matched
+# ``X-Amz-Credential`` (an access-key id plus scope), but the signature is the
+# part that actually authorises the request, so redacting only the credential
+# left the usable half in the string. ``sig`` carries a lookbehind because it is
+# short enough to appear as the tail of a longer word; the other tokens are
+# distinctive enough not to need one.
+_SECRET_PARAM_RE = re.compile(
+    r"(?i)((?:api_key|access_token|auth_token|password|passwd|pwd|secret|credential|private_key|signature|sharedaccesskey|accountkey|(?<![a-z0-9_])sig)=)(?:\{[^}]*+\}|[^\s&,;#]++)",
+)
+
+
+def redact_secrets(text: str) -> str:
+    """Redact URL userinfo and known secret query-params from a string.
+
+    Use this when logging strings that may embed credentials but are not a
+    single cause exception — e.g. a formatted traceback whose frames are worth
+    keeping but whose driver messages embed connection-string passwords.
+
+    ``text`` must be a ``str`` — callers holding an exception or other object
+    should stringify first (the sibling :func:`sanitize_cause_repr` does this
+    for cause exceptions). Non-``str`` input raises ``TypeError`` via ``re``.
+    """
+    text = _redact_url_userinfo(text)
+    text = _SECRET_PARAM_RE.sub(r"\1***", text)
+    return text
+
+
+def redact_wire_value(value: Any, seen: set[int] | None = None, depth: int = 0) -> Any:
+    """Redact every string reachable inside a value bound for the wire.
+
+    Strings are redacted wherever they appear inside dict / list / tuple / set
+    structures; other non-string values are left untouched. The recursive
+    counterpart to :func:`redact_secrets`, which handles one string.
+
+    Args:
+        value: Any value bound for a wire — typically a ``model_dump`` result or
+            an evidence mapping.
+        seen: Container ids on the current recursion path. Callers pass nothing;
+            the walker threads it through itself.
+        depth: Current recursion depth. Callers pass nothing.
+
+    Returns:
+        The same shape with every reachable string redacted. A revisited
+        container yields ``None`` and anything past :data:`_REDACT_MAX_DEPTH`
+        yields ``"…"``, so a hostile structure truncates rather than hangs.
+    """
+    if isinstance(value, str):
+        return redact_secrets(value)
+    # Mapping, not dict: a ChainMap or MappingProxyType inside evidence otherwise
+    # reached the wire unredacted. The branch rebuilds a plain dict, so no
+    # Mapping subclass constructor runs.
+    if isinstance(value, Mapping):
+        if seen is None:
+            seen = set()
+        # Guard the two ways a hand-built container can crash the walk:
+        #   * a self-referential container recurses forever — prune a revisit
+        #     rather than render it;
+        #   * a pathologically deep acyclic structure overflows the stack —
+        #     bound depth and truncate past it.
+        # ``seen`` is a mutable add/remove recursion stack shared along the path,
+        # so diamond-shared (acyclic) subcontainers are redacted, not falsely
+        # pruned, and no frozenset is allocated per level.
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            return {k: redact_wire_value(v, seen, depth + 1) for k, v in value.items()}
+        finally:
+            seen.discard(id(value))
+    if isinstance(value, (list, tuple, set, frozenset)):
+        if seen is None:
+            seen = set()
+        if id(value) in seen:
+            return None
+        if depth >= _REDACT_MAX_DEPTH:
+            return "…"
+        seen.add(id(value))
+        try:
+            redacted = [redact_wire_value(v, seen, depth + 1) for v in value]
+        finally:
+            seen.discard(id(value))
+        if isinstance(value, tuple) and hasattr(type(value), "_fields"):
+            # A NamedTuple takes positional fields, not an iterable —
+            # ``type(value)(redacted)`` crashes a 2+-field one and silently
+            # retypes a 1-field one (its sole field becomes the redacted
+            # *list*). Rebuild with positional expansion so the shape survives.
+            try:
+                return type(value)(*redacted)
+            except Exception:  # noqa: BLE001 — see fallback below
+                return tuple(redacted)
+        try:
+            return type(value)(redacted)
+        except Exception:  # noqa: BLE001 — a connector-authored container
+            # subclass whose constructor raises (any type, not just
+            # TypeError/ValueError) must not crash through the degrade either;
+            # fall back to a plain container of the same shape. Values are
+            # redacted either way, and evidence serialises as JSON arrays
+            # regardless.
+            return tuple(redacted) if isinstance(value, tuple) else redacted
+    return value
+
+
+# ``object_store`` (via obstore) appends a multi-line Rust ``Debug`` dump to
+# every error's ``str()``. It sits *after* the provider's XML/JSON body, so it
+# competes with the diagnostic for the budget — and a keep-the-tail truncation
+# would preserve the dump and drop the body. Measured on a real GCS write
+# failure: [374 chars URL+status][206 chars provider XML][218 chars Debug dump].
+# Strip it before capping; the routing-relevant facts reach consumers as typed
+# evidence instead. (FND-957)
+_DEBUG_SOURCE_TAIL_RE = re.compile(r"\n+Debug source:\n.*\Z", re.DOTALL)
+
+
+def redact_and_cap(text: str) -> str:
+    """Redact secrets in ``text``, then cap it, keeping both ends.
+
+    The one cap block: :func:`sanitize_cause_repr` builds on it for cause
+    exceptions, and the preflight outcome rows call it on the handler's own
+    ``message`` before it becomes a log attribute. Not re-exported from
+    ``application_sdk_api.errors`` — those are its two consumers.
+
+    Truncation keeps both ends because a backend error puts the request URL at
+    the head and what the provider said at the tail; a head-only cut spends the
+    budget on boilerplate. Redaction runs *before* truncation, so retaining a
+    tail can never expose an unredacted secret. (FND-957)
+    """
+    text = redact_secrets(text)
+    if len(text) > _CAUSE_MAX_LEN:
+        elided = len(text) - _CAUSE_HEAD_LEN - _CAUSE_TAIL_LEN
+        text = (
+            text[:_CAUSE_HEAD_LEN]
+            + f"…[{elided} chars elided]…"
+            + text[-_CAUSE_TAIL_LEN:]
+        )
+    return text
+
+
+def sanitize_cause_repr(exc: BaseException) -> str:
+    """Return a length-capped, secret-redacted string for a cause exception.
+
+    Truncation keeps both ends. A backend error puts the request URL at the
+    head and the reason at the tail, so a head-only cut spends the whole
+    budget on boilerplate and deletes the diagnostic. Redaction runs *before*
+    truncation, so retaining a tail can never expose an unredacted secret.
+    (FND-957)
+    """
+    text = _DEBUG_SOURCE_TAIL_RE.sub("", str(exc))
+    return f"{type(exc).__name__}: {redact_and_cap(text)}"
+
+
+def safe_traceback(exc: BaseException | None, max_len: int = _TRACEBACK_MAX_LEN) -> str:
+    """Return a secret-redacted, length-capped full-frame traceback.
+
+    For logging a traceback whose frames are worth keeping but whose driver
+    messages may embed connection-string passwords. Redacts URL userinfo and
+    known secret params, then caps the total length with an ellipsis marker.
+    Returns ``""`` for ``None``; an exception never raised (no ``__traceback__``)
+    yields just its formatted type/message line.
+    """
+    if exc is None:
+        return ""
+    text = redact_secrets("".join(traceback.format_exception(exc)))
+    if len(text) > max_len:
+        text = text[:max_len] + "…"
+    return text
+
+
+# Backward-compat alias: the helper is load-bearing across clients/sql.py and
+# credentials/errors.py, so it is public. Kept for existing internal/test imports.
+_sanitize_cause_repr = sanitize_cause_repr
+
+
+@dataclass(kw_only=True)
+class AppError(Exception):
+    """Canonical SDK exception base.
+
+    Subclass one of the categorical leaves (AuthError, AppNotFoundError, …)
+    to define a typed error. Add dataclass fields to carry structured
+    evidence — they appear automatically in ``to_failure_details()``.
+    """
+
+    message: str
+    retryable: bool | None = None
+    cause: BaseException | None = None
+    app_name: str | None = None
+    run_id: str | None = None
+    suggested_action: str | None = None
+
+    category: ClassVar[FailureCategory] = FailureCategory.INTERNAL
+    default_retryable: ClassVar[bool] = False
+    code: ClassVar[str] = "INTERNAL"
+    audience: ClassVar[Audience] = Audience.APP_OWNER
+
+    def __post_init__(self) -> None:
+        # Redacted once, here: ``str(exc)`` feeds every log line and every HTTP
+        # error detail, and a driver's message embeds its DSN. The envelope
+        # re-redacts idempotently, so nothing downstream changes.
+        if isinstance(self.message, str):
+            self.message = redact_secrets(self.message)
+        Exception.__init__(self, self.message)
+        if self.cause is not None and self.__cause__ is None:
+            self.__cause__ = self.cause
+
+    def __str__(self) -> str:
+        return self.message
+
+    @property
+    def effective_retryable(self) -> bool:
+        """Per-instance retryable, falling back to class default."""
+        return self.default_retryable if self.retryable is None else self.retryable
+
+    @property
+    def qualified_code(self) -> str:
+        """``CATEGORY.CODE`` string for log lines and human-readable surfaces."""
+        return f"{self.category.name}.{self.code}"
+
+    def to_failure_details(self) -> FailureDetails:
+        """Build the Pydantic wire envelope from this error's dataclass fields.
+
+        Non-base fields become ``evidence``. The Error dataclass is the schema
+        source — no separate model to keep in sync.
+
+        Tenant identity is intentionally NOT included here. The producer
+        (the failing app) does not know or carry tenant context; per-tenant
+        attribution is the consumer's responsibility (the Automation Engine
+        or another consumer reading ``ApplicationError.details`` attaches
+        tenant from its own context at ingest time).
+        """
+        from application_sdk_api.errors.wire import FailureDetails  # noqa: PLC0415
+
+        evidence: dict[str, Any] = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name not in _BASE_FIELDS
+        }
+        return FailureDetails(
+            category=self.category,
+            code=self.code,
+            retryable=self.effective_retryable,
+            audience=type(self).audience,
+            message=self.message,
+            suggested_action=self.suggested_action,
+            evidence=evidence,
+            app_name=self.app_name,
+            run_id=self.run_id,
+            cause_repr=sanitize_cause_repr(self.cause) if self.cause else None,
+        )

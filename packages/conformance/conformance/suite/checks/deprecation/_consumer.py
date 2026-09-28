@@ -43,10 +43,15 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    canonical_sdk_module,
+    is_sdk_module,
+    make_finding,
+)
 from conformance.suite.schema.findings import Finding
 
-from ._manifest import SDK_IMPORT_ROOT, DeprecatedSymbol, Manifest
+from ._manifest import DeprecatedSymbol, Manifest
 
 _RULE_ID = "B001"
 
@@ -57,7 +62,8 @@ def _hint(message: str) -> str:
 
 
 def _is_sdk_module(name: str) -> bool:
-    return name == SDK_IMPORT_ROOT or name.startswith(SDK_IMPORT_ROOT + ".")
+    """``application_sdk[.X]`` or its ``application_sdk_api[.X]`` alias."""
+    return is_sdk_module(name)
 
 
 def _module_matches(import_mod: str, entry_module: str) -> bool:
@@ -66,7 +72,14 @@ def _module_matches(import_mod: str, entry_module: str) -> bool:
     Exact module, or *entry_module* is a submodule of *import_mod* (covers
     re-export from a parent package).  Deliberately one-directional: importing
     from a *sibling* module (a different re-export) does not match.
+
+    Both sides are folded onto the ``application_sdk`` spelling first: the
+    ``application_sdk_api`` tree defines the objects ``application_sdk.handler*``
+    / ``.errors*`` re-export, so a record in either tree matches an import
+    through either path.
     """
+    import_mod = canonical_sdk_module(import_mod)
+    entry_module = canonical_sdk_module(entry_module)
     return entry_module == import_mod or entry_module.startswith(import_mod + ".")
 
 

@@ -624,3 +624,145 @@ def test_check_exits_2_when_no_tag_is_reachable(tmp_path: Path):
     _run_git(repo, "add", "-A")
     _run_git(repo, "commit", "-qm", "c")
     assert mod.main(["check", "--repo", str(repo)]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Companion package (application_sdk_api): moving a definition behind a shim
+# ---------------------------------------------------------------------------
+
+
+def _tree(root: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return root
+
+
+_BASE_DEF = """
+class AuthError(Exception):
+    def __init__(self, message, retryable=None):
+        pass
+
+    def to_failure_details(self):
+        pass
+
+
+def redact(text):
+    return text
+"""
+
+
+def test_a_class_moved_to_the_companion_behind_a_reexport_is_not_removed(tmp_path):
+    base = mod.build_snapshot(
+        _tree(tmp_path / "base", {"application_sdk/errors.py": _BASE_DEF}),
+        "application_sdk",
+    )
+    head_root = _tree(
+        tmp_path / "head",
+        {
+            "application_sdk/errors.py": (
+                "from application_sdk_api.errors import AuthError, redact\n"
+            ),
+            "packages/api/application_sdk_api/__init__.py": "",
+            "packages/api/application_sdk_api/errors.py": _BASE_DEF,
+        },
+    )
+    head = mod.build_snapshot(head_root, "application_sdk")
+    assert mod.compare(base, head) == []
+    # Members are resolved from the companion's definition, not just the name.
+    assert (
+        head.symbols["application_sdk.errors:AuthError.to_failure_details"].kind
+        == "method"
+    )
+
+
+def test_narrowing_the_moved_definition_is_still_caught(tmp_path):
+    base = mod.build_snapshot(
+        _tree(tmp_path / "base", {"application_sdk/errors.py": _BASE_DEF}),
+        "application_sdk",
+    )
+    narrowed = _BASE_DEF.replace("def redact(text):", "def redact(value):")
+    head = mod.build_snapshot(
+        _tree(
+            tmp_path / "head",
+            {
+                "application_sdk/errors.py": "from application_sdk_api.errors import AuthError, redact\n",
+                "packages/api/application_sdk_api/__init__.py": "",
+                "packages/api/application_sdk_api/errors.py": narrowed,
+            },
+        ),
+        "application_sdk",
+    )
+    assert "application_sdk.errors:redact" in blocking(mod.compare(base, head))
+
+
+def test_a_member_dropped_from_the_moved_class_is_still_caught(tmp_path):
+    base = mod.build_snapshot(
+        _tree(tmp_path / "base", {"application_sdk/errors.py": _BASE_DEF}),
+        "application_sdk",
+    )
+    trimmed = _BASE_DEF.replace("    def to_failure_details(self):\n        pass\n", "")
+    head = mod.build_snapshot(
+        _tree(
+            tmp_path / "head",
+            {
+                "application_sdk/errors.py": "from application_sdk_api.errors import AuthError, redact\n",
+                "packages/api/application_sdk_api/__init__.py": "",
+                "packages/api/application_sdk_api/errors.py": trimmed,
+            },
+        ),
+        "application_sdk",
+    )
+    assert "application_sdk.errors:AuthError.to_failure_details" in blocking(
+        mod.compare(base, head)
+    )
+
+
+def test_a_deprecated_alias_to_the_companion_keeps_members_as_deprecated(tmp_path):
+    base = mod.build_snapshot(
+        _tree(tmp_path / "base", {"application_sdk/handler.py": _BASE_DEF}),
+        "application_sdk",
+    )
+    shim = (
+        '_DEPRECATED_CONSTANTS = {"AuthError": "application_sdk_api.handler.AuthError", '
+        '"redact": "application_sdk_api.handler.redact"}\n\n'
+        "def __getattr__(name):\n    raise AttributeError(name)\n"
+    )
+    head = mod.build_snapshot(
+        _tree(
+            tmp_path / "head",
+            {
+                "application_sdk/handler.py": shim,
+                "packages/api/application_sdk_api/__init__.py": "",
+                "packages/api/application_sdk_api/handler.py": _BASE_DEF,
+            },
+        ),
+        "application_sdk",
+    )
+    assert mod.compare(base, head) == []
+    assert head.symbols[
+        "application_sdk.handler:AuthError.to_failure_details"
+    ].deprecated
+
+
+def test_a_reexport_chain_inside_the_companion_is_followed(tmp_path):
+    base = mod.build_snapshot(
+        _tree(tmp_path / "base", {"application_sdk/errors.py": _BASE_DEF}),
+        "application_sdk",
+    )
+    head = mod.build_snapshot(
+        _tree(
+            tmp_path / "head",
+            {
+                "application_sdk/errors.py": "from application_sdk_api.errors import AuthError, redact\n",
+                "packages/api/application_sdk_api/__init__.py": "",
+                "packages/api/application_sdk_api/errors/__init__.py": (
+                    "from .base import AuthError, redact\n"
+                ),
+                "packages/api/application_sdk_api/errors/base.py": _BASE_DEF,
+            },
+        ),
+        "application_sdk",
+    )
+    assert mod.compare(base, head) == []

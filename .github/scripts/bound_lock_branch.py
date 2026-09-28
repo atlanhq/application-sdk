@@ -100,6 +100,12 @@ PROJECTS: tuple[Project, ...] = (
         directory="packages/conformance",
         exempt=("atlan-application-sdk", "pyatlan"),
     ),
+    # The api package is what the consolidated API host installs into every
+    # hosted-app pod, so it is the lock least able to afford an unattended
+    # minutes-old transitive. No exemptions: it resolves no first-party name
+    # from PyPI -- atlan-application-sdk-api IS this project (editable), and it
+    # deliberately depends on neither atlan-application-sdk nor pyatlan.
+    Project(directory="packages/api"),
 )
 
 # The one npm project the refresh lane rewrites: dev-only devDependencies for the

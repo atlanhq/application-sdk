@@ -50,6 +50,15 @@ MANIFEST_PATH = _manifest_path()
 # The SDK import root whose deprecations we track.
 SDK_IMPORT_ROOT = "application_sdk"
 
+# The thin ``atlan-application-sdk-api`` distribution, relative to the SDK repo
+# root: ``(<dist dir>, <import root>)``.  The handler surface and the error
+# taxonomy are *defined* there (``application_sdk.handler*`` / ``.errors*`` only
+# re-export them), so a deprecation marked on one of those classes lives in this
+# tree.  Its records keep their true ``application_sdk_api.*`` module; B001
+# folds the two spellings when matching (see ``_ast_common._sdk_alias``).
+API_DIST_RELPATH: tuple[str, ...] = ("packages", "api")
+API_IMPORT_ROOT = "application_sdk_api"
+
 
 @dataclass(frozen=True)
 class DeprecatedSymbol:
@@ -105,19 +114,29 @@ def _module_path(file: Path, sdk_root: Path) -> str:
 
 
 def build_manifest(sdk_root: Path) -> Manifest:
-    """Scan ``<sdk_root>/application_sdk`` and build the manifest of marked symbols.
+    """Scan the SDK's import roots and build the manifest of marked symbols.
+
+    Walks ``<sdk_root>/application_sdk`` and, when present,
+    ``<sdk_root>/packages/api/application_sdk_api`` — the handler surface and
+    error taxonomy are defined in the latter.
 
     Only *marked* symbols (decorator or class-attributable warn) are recorded —
     claim-only sites are an authoring concern (B004), not a consumer signal.
     """
-    package_root = sdk_root / SDK_IMPORT_ROOT
+    api_dist = sdk_root.joinpath(*API_DIST_RELPATH)
+    trees: list[tuple[Path, Path]] = [(sdk_root, sdk_root / SDK_IMPORT_ROOT)]
+    if (api_dist / API_IMPORT_ROOT).is_dir():
+        trees.append((api_dist, api_dist / API_IMPORT_ROOT))
+    files = [
+        (base, file) for base, package_root in trees for file in discover(package_root)
+    ]
     records: list[DeprecatedSymbol] = []
-    for file in discover(package_root):
+    for base, file in files:
         try:
             tree = ast.parse(file.read_text(encoding="utf-8"), filename=str(file))
         except (OSError, SyntaxError, UnicodeDecodeError):
             continue
-        module = _module_path(file, sdk_root)
+        module = _module_path(file, base)
         for site in extract_sites(tree):
             if site.marker_via is None:
                 continue
