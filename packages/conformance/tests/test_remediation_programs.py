@@ -783,3 +783,25 @@ def test_o001_prescription_names_the_byte_changing_defaults() -> None:
     bullet = _rule_bullet("optimizations", "O001")
     assert "ensure_ascii" in bullet
     assert "separators" in bullet
+
+
+def test_o001_prose_leaves_an_externally_byte_consumed_dumps_on_stdlib() -> None:
+    """The byte-changing-defaults bullet said to prove the change and residue it,
+    but no orjson call can reproduce stdlib's default bytes, so for a string
+    published as an asset attribute value (the publish app hashes it) there is
+    nothing to prove: every swap churns every asset once on every tenant. The
+    prose must name the stdlib carve-out next to the UUID one and say how to
+    prove the consumer (FND-2509).
+    """
+    bullet = " ".join(_rule_bullet("optimizations", "O001").split())
+    for needle in (
+        "leave the site on stdlib `json`",
+        "# conformance: ignore[O001] <reason>",
+        "asset attribute",
+        "outside the app",
+        "names that consumer",
+        "every mode",
+        "hashed as text",
+        "parses the whole document",
+    ):
+        assert needle in bullet, f"O001's prescription does not say {needle!r}"
