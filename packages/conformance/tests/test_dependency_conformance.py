@@ -1538,6 +1538,72 @@ def test_d003_url_without_any_sqlalchemy_import_does_not_count(
     )
 
 
+_SDK_SQL_CLIENT_SOURCE = (
+    "from application_sdk.clients.models import DatabaseConfig\n"
+    "from application_sdk.clients.sql import BaseSQLClient\n"
+    "class CrateClient(BaseSQLClient):\n"
+    '    DB_CONFIG = DatabaseConfig(template="crate://{host}:{port}/")\n'
+)
+
+
+def _d003_scan_source(tmp_path: Path, source: str) -> list[str]:
+    pp = tmp_path / "pyproject.toml"
+    pp.write_text(
+        '[project]\nname = "my-connector"\nversion = "0.1.0"\n' + _CRATEDB_DEPS,
+        encoding="utf-8",
+    )
+    src = tmp_path / "app" / "clients.py"
+    src.parent.mkdir(parents=True)
+    src.write_text(source, encoding="utf-8")
+    findings = scan_all(
+        [pp, src],
+        tmp_path,
+        imported_modules={"os"},
+        dist_import_map={"sqlalchemy-cratedb": {"sqlalchemy_cratedb"}},
+        dialect_entry_points={"sqlalchemy-cratedb": {"crate"}},
+    )
+    return [f.message for f in findings if f.rule_id == "D003"]
+
+
+def test_d003_sdk_sql_client_import_loads_sqlalchemy(tmp_path: Path) -> None:
+    """A client built on the SDK's ``BaseSQLClient`` loads its dialect through
+    SQLAlchemy without the repo importing ``sqlalchemy`` itself, so the scheme
+    in its ``DatabaseConfig`` template is evidence."""
+    flagged = _d003_scan_source(tmp_path, _SDK_SQL_CLIENT_SOURCE)
+    assert not any("sqlalchemy-cratedb" in m for m in flagged)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param(
+            'import application_sdk\nURL = "crate://{host}:{port}/"\n',
+            id="bare-sdk-import",
+        ),
+        pytest.param(
+            "from application_sdk.clients import base\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="non-sql-sdk-client",
+        ),
+        pytest.param(
+            "import application_sdk_clients_sql\n" 'URL = "crate://{host}:{port}/"\n',
+            id="lookalike-module-name",
+        ),
+        pytest.param(
+            "from application_sdk.clients.sql import BaseSQLClient\n",
+            id="sdk-sql-import-without-scheme",
+        ),
+    ],
+)
+def test_d003_sdk_import_without_sql_client_or_scheme_is_not_evidence(
+    tmp_path: Path, source: str
+) -> None:
+    """Only the SDK's SQL client module counts as loading SQLAlchemy, and it
+    still needs a scheme that selects the registered dialect."""
+    flagged = _d003_scan_source(tmp_path, source)
+    assert any("sqlalchemy-cratedb" in m for m in flagged)
+
+
 def test_d003_docstring_url_does_not_count_as_dialect_usage(tmp_path: Path) -> None:
     pp = tmp_path / "pyproject.toml"
     pp.write_text(

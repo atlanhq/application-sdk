@@ -111,8 +111,10 @@ an entry point/plugin, or run as a server (e.g. uvicorn) without an explicit imp
   reads via _collect_dialect_drivers, so the dependency is counted as used. The checker
   also matches a URL scheme (`crate://`, `foo+bar://`) against the `sqlalchemy.dialects`
   entry points each dependency registers, so a third-party dialect package loaded only
-  through that entry point is counted as used too. A dynamically-loaded dependency the
-  checker can see is not a finding at all.
+  through that entry point is counted as used too, whether the repo imports SQLAlchemy
+  directly or builds its engine through the SDK's `BaseSQLClient`
+  (`application_sdk.clients.sql`). A dynamically-loaded dependency the checker can see
+  is not a finding at all.
 - **Already correct when:** A justified inline `# conformance: ignore[D003] <reason>` IS the correct end state for a
   dependency that is genuinely loaded without a static import — a driver resolved from a
   dialect/plugin string, an entry-point registration, a CLI invoked as a subprocess. The

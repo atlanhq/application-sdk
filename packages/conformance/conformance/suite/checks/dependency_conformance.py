@@ -1508,6 +1508,10 @@ _SQLALCHEMY_DRIVERNAME_RE = re.compile(
     r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
 )
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
+# Modules that create a SQLAlchemy engine on the repo's behalf. A connector built
+# on the SDK's ``BaseSQLClient`` loads its dialect through SQLAlchemy without
+# ever importing ``sqlalchemy`` itself.
+_SQLALCHEMY_LOADER_MODULES = ("application_sdk.clients.sql",)
 
 
 def _dialect_entry_point_name(dialect: str, driver: str | None) -> str:
@@ -1576,14 +1580,16 @@ def _collect_source_usage(
     matching (WARN-tier): a scheme only ever clears the finding for a
     dependency that registers a ``sqlalchemy.dialects`` entry point under that
     exact name. Two sound exclusions bound it: docstrings are not evidence, and
-    no name is credited unless the repo imports ``sqlalchemy`` somewhere —
-    without SQLAlchemy nothing loads a dialect entry point. The gate is
-    repo-wide because a URL constant often lives in a config module that never
-    imports SQLAlchemy itself.
+    no name is credited unless the repo imports ``sqlalchemy`` or the SDK's SQL
+    client module (``_SQLALCHEMY_LOADER_MODULES``) somewhere — without
+    SQLAlchemy nothing loads a dialect entry point. The gate is repo-wide
+    because a URL constant often lives in a config module that never imports
+    SQLAlchemy itself.
     """
     modules: set[str] = set()
     drivers: set[str] = set()
     dialect_names: set[str] = set()
+    loads_sqlalchemy = False
     for path in py_files:
         try:
             raw = path.read_bytes()
@@ -1601,9 +1607,11 @@ def _collect_source_usage(
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     modules.add(alias.name.split(".", 1)[0])
+                    loads_sqlalchemy |= _is_sqlalchemy_loader(alias.name)
             elif isinstance(node, ast.ImportFrom):
                 if node.level == 0 and node.module:
                     modules.add(node.module.split(".", 1)[0])
+                    loads_sqlalchemy |= _is_sqlalchemy_loader(node.module)
             elif isinstance(node, ast.Call):
                 drivername = _url_create_drivername(node)
                 match = (
@@ -1620,9 +1628,17 @@ def _collect_source_usage(
                     continue
                 for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
                     dialect_names.add(_dialect_entry_point_name(*match.groups()))
-    if "sqlalchemy" not in modules:
+    if "sqlalchemy" not in modules and not loads_sqlalchemy:
         dialect_names = set()
     return modules, drivers, dialect_names
+
+
+def _is_sqlalchemy_loader(module: str) -> bool:
+    """Whether importing *module* means the repo loads SQLAlchemy through it."""
+    return any(
+        module == loader or module.startswith(loader + ".")
+        for loader in _SQLALCHEMY_LOADER_MODULES
+    )
 
 
 def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:
