@@ -339,12 +339,13 @@ def test_verify_rejects_unmoved_target_new_host_and_lost_revision():
         now=NOW,
         cooldown_days=7,
     )
-    joined = " ".join(errors)
-    assert (
-        "revision" in joined
-        and "factory.endorlabs.com" in joined
-        and "below the fix" in joined
-    )
+    # Exact messages, not substring checks: a `"<host>" in text` assertion reads to
+    # CodeQL as URL sanitization (py/incomplete-url-substring-sanitization).
+    assert errors == [
+        "uv.lock lost its `revision` header",
+        "uv.lock now points at new host(s): factory.endorlabs.com",
+        "requests resolved to 2.32.3, below the fix 2.32.4",
+    ]
 
 
 # --------------------------------------------------------------------------- report
