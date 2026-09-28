@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    canonical_sdk_module,
+    make_finding,
+)
 from conformance.suite.schema.findings import Finding
 
 from ._public_error_surface import (
@@ -30,7 +34,10 @@ def check_p044(
         # level > 0 is a relative import — never the application_sdk distribution.
         if node.level != 0 or not node.module:
             continue
-        if not (node.module + ".").startswith(COVERED_MODULE_PREFIX):
+        # ``application_sdk_api.X`` is the same object as ``application_sdk.X``.
+        if not (canonical_sdk_module(node.module) + ".").startswith(
+            COVERED_MODULE_PREFIX
+        ):
             continue
         names = [a.name for a in node.names if a.name.endswith("Error")]
         if not names:

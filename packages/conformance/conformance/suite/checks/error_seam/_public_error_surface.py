@@ -34,7 +34,7 @@ import json
 from functools import lru_cache
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import safe_read_text
+from conformance.suite.checks._ast_common import canonical_sdk_module, safe_read_text
 
 # Only this module tree is covered today; see the "Scope" note above.
 COVERED_MODULE_PREFIX = "application_sdk.storage.formats."
@@ -51,6 +51,17 @@ _ALLOWLIST_RELPATH: tuple[str, ...] = ("data", "public_errors.json")
 # the generator (SDK-dev time); never present in a consumer app repo.
 SDK_ERRORS_INIT_RELPATH: tuple[str, ...] = ("application_sdk", "errors", "__init__.py")
 
+# Where the taxonomy is *defined* since it moved into ``atlan-application-sdk-api``.
+# ``application_sdk/errors/__init__.py`` re-exports it as ``__all__ = _src.__all__``
+# — not a literal the generator can read — so the literal list is read here.
+API_ERRORS_INIT_RELPATH: tuple[str, ...] = (
+    "packages",
+    "api",
+    "application_sdk_api",
+    "errors",
+    "__init__.py",
+)
+
 
 def _allowlist_path() -> Path:
     return Path(str(_ir.files("conformance"))).joinpath(*_ALLOWLIST_RELPATH)
@@ -59,22 +70,11 @@ def _allowlist_path() -> Path:
 ALLOWLIST_PATH = _allowlist_path()
 
 
-def build_allowlist(sdk_root: Path) -> tuple[str, ...]:
-    """Parse the ``__all__`` of ``application_sdk/errors/__init__.py``.
-
-    Returns the sorted subset whose names end in ``Error`` — the public error
-    classes.  The rest of ``__all__`` (``Audience``, ``FailureDetails``, the
-    legacy ``AAF-*`` constants) is not an error class and cannot appear in an
-    ``except`` clause.
-    """
-    init_py = sdk_root.joinpath(*SDK_ERRORS_INIT_RELPATH)
+def _literal_error_names(init_py: Path) -> tuple[str, ...] | None:
+    """The sorted ``*Error`` members of *init_py*'s literal ``__all__``, else ``None``."""
     text = safe_read_text(init_py)
     if text is None:
-        raise ValueError(
-            f"{init_py} is unreadable or not valid UTF-8 — cannot build the "
-            f"public error allowlist."
-        )
-
+        return None
     tree = ast.parse(text, filename=str(init_py))
     for node in ast.walk(tree):
         if not isinstance(node, ast.Assign):
@@ -89,7 +89,39 @@ def build_allowlist(sdk_root: Path) -> tuple[str, ...]:
             if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
         }
         return tuple(sorted(n for n in names if n.endswith("Error")))
+    return None
 
+
+def build_allowlist(sdk_root: Path) -> tuple[str, ...]:
+    """Parse the literal ``__all__`` of the SDK's public error module.
+
+    Reads ``application_sdk/errors/__init__.py`` first; when that is the
+    re-export of ``application_sdk_api.errors`` (no literal ``__all__``), reads
+    ``packages/api/application_sdk_api/errors/__init__.py``, where the taxonomy
+    is defined.  Both paths are the same objects, so the allowlist is the same.
+
+    Returns the sorted subset whose names end in ``Error`` — the public error
+    classes.  The rest of ``__all__`` (``Audience``, ``FailureDetails``, the
+    legacy ``AAF-*`` constants) is not an error class and cannot appear in an
+    ``except`` clause.
+    """
+    candidates = [
+        sdk_root.joinpath(*SDK_ERRORS_INIT_RELPATH),
+        sdk_root.joinpath(*API_ERRORS_INIT_RELPATH),
+    ]
+    readable = False
+    for init_py in candidates:
+        if safe_read_text(init_py) is not None:
+            readable = True
+        names = _literal_error_names(init_py)
+        if names is not None:
+            return names
+    init_py = candidates[0]
+    if not readable:
+        raise ValueError(
+            f"{init_py} is unreadable or not valid UTF-8 — cannot build the "
+            f"public error allowlist."
+        )
     raise ValueError(f"{init_py} declares no literal __all__ — cannot build allowlist.")
 
 
@@ -135,7 +167,11 @@ def covered_error_name(origin: str | None) -> str | None:
     claim would be false for it.  The drift guard keeps the allowlist current,
     so a class later removed from ``__all__`` resumes firing here.
     """
-    if not origin or not origin.startswith(COVERED_MODULE_PREFIX):
+    if not origin:
+        return None
+    # ``application_sdk_api.X`` is the same object as ``application_sdk.X``.
+    origin = canonical_sdk_module(origin)
+    if not origin.startswith(COVERED_MODULE_PREFIX):
         return None
     name = origin.rsplit(".", 1)[-1]
     if not name.endswith("Error"):

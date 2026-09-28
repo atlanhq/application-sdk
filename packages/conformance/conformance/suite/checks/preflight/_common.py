@@ -12,7 +12,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    _parse_directives,
+    canonical_sdk_module,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     _SDK_CONTRACT_MODULE_PREFIXES,
     ImportProvenance,
@@ -348,7 +352,7 @@ def sdk_preflightcheck_locals(tree: ast.Module) -> frozenset[str]:
     locals_: set[str] = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
+            module = canonical_sdk_module(node.module or "")
             if any(
                 module == p or module.startswith(p + ".")
                 for p in _SDK_CONTRACT_MODULE_PREFIXES

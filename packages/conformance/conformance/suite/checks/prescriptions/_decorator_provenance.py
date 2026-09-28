@@ -28,6 +28,8 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass
 
+from conformance.suite.checks._ast_common._sdk_alias import canonical_sdk_module
+
 from ._constants import _SDK_MODULE_PREFIX
 
 _SDK_CONTRACT_MODULE_PREFIXES: tuple[str, ...] = (
@@ -97,7 +99,8 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
-            module = node.module or ""
+            # ``application_sdk_api.X`` is the same object as ``application_sdk.X``.
+            module = canonical_sdk_module(node.module or "")
             is_sdk = module == _SDK_MODULE_PREFIX or module.startswith(
                 _SDK_MODULE_PREFIX + "."
             )
@@ -129,7 +132,7 @@ def collect_import_provenance(tree: ast.AST) -> ImportProvenance:
 
         elif isinstance(node, ast.Import):
             for alias in node.names:
-                name = alias.name
+                name = canonical_sdk_module(alias.name)
                 is_sdk = name == _SDK_MODULE_PREFIX or name.startswith(
                     _SDK_MODULE_PREFIX + "."
                 )

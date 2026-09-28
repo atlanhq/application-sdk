@@ -147,7 +147,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "UNVERIFIABLE_CHECK_NAME is deprecated; use application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME \u2014 the same constant, at the module that now owns it. Will be removed in v3.40.0.",
+      "message": "UNVERIFIABLE_CHECK_NAME is deprecated; use application_sdk_api.handler.contracts.UNVERIFIABLE_CHECK_NAME \u2014 the same constant, at the module that now owns it. Will be removed in v3.40.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.preflight_gate",
       "removal_version": "3.40.0",
@@ -197,24 +197,6 @@
       "module": "application_sdk.execution._temporal.worker",
       "removal_version": "3.40.0",
       "symbol": "_resolve_gate_enforcement"
-    },
-    {
-      "kind": "class",
-      "marker_via": "warn",
-      "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
-      "migration_target": true,
-      "module": "application_sdk.handler.base",
-      "removal_version": "4.0",
-      "symbol": "HandlerError"
-    },
-    {
-      "kind": "enum_member",
-      "marker_via": "enum-member",
-      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
-      "migration_target": true,
-      "module": "application_sdk.handler.contracts",
-      "removal_version": "3.40.0",
-      "symbol": "PreflightStatus.PARTIAL"
     },
     {
       "kind": "function",
@@ -449,6 +431,24 @@
       "module": "application_sdk.transformers.query",
       "removal_version": "4.0",
       "symbol": "QueryBasedTransformer"
+    },
+    {
+      "kind": "class",
+      "marker_via": "warn",
+      "message": "HandlerError is deprecated; use a typed application_sdk.errors.AppError subclass \u2014 will be removed in v4.0",
+      "migration_target": true,
+      "module": "application_sdk_api.handler.base",
+      "removal_version": "4.0",
+      "symbol": "HandlerError"
+    },
+    {
+      "kind": "enum_member",
+      "marker_via": "enum-member",
+      "message": "PreflightStatus.PARTIAL is deprecated; use PreflightStatus.READY when extraction can proceed or PreflightStatus.NOT_READY when it cannot instead \u2014 will be removed in v3.40.0, the first minor release after the reference apps stop returning it.",
+      "migration_target": true,
+      "module": "application_sdk_api.handler.contracts",
+      "removal_version": "3.40.0",
+      "symbol": "PreflightStatus.PARTIAL"
     }
   ]
 }
