@@ -66,6 +66,35 @@ RULES: tuple[RuleDefinition, ...] = (
             "either.  The parsed value is identical, so tests that compare parsed\n"
             "JSON pass; a consumer that hashes, commits or byte-compares the output\n"
             "sees the difference.\n"
+            "\n"
+            "No orjson call reproduces stdlib's default bytes: there is no separators\n"
+            "option, no ``ensure_ascii`` option, ``orjson.dumps`` cannot serialize an\n"
+            "integer above 64 bits, and\n"
+            'rewriting orjson\'s text corrupts string values that contain ``", "``.\n'
+            "So a ``json.dumps`` whose output orjson cannot reproduce, and whose\n"
+            "string is stored as one attribute or field value and hashed or\n"
+            "byte-compared as text outside the app, stays on stdlib ``json`` behind\n"
+            "a directive naming that attribute and where it is compared; see\n"
+            "*Already correct when*.  A ``dumps`` that serializes a whole entity or\n"
+            "document does not qualify.\n"
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[O001] <reason>` IS the correct "
+            "end state for a `json.dumps` only when all three hold. (1) orjson cannot "
+            "reproduce the call's output: the call does not already pass both "
+            '`separators=(",", ":")` and `ensure_ascii=False`, or its input can hold an '
+            "integer above 64 bits. A call that passes both on 64-bit-safe input is "
+            "byte-identical to `orjson.dumps(...).decode()` and makes the swap. (2) The "
+            "encoded string is stored as one attribute or field value, and a consumer "
+            "outside the app hashes or byte-compares that value as text. (3) The reason "
+            "names the attribute key or field and the location (repo and file:line) "
+            "where that consumer hashes or compares it as text. A `dumps` that "
+            "serializes a whole entity or document does not qualify, even when the "
+            "document is later hashed: the publish app parses the document before it "
+            "diffs it, and there is no single attribute key to cite, so that site makes "
+            "the swap. A directive whose reason names no attribute key or no comparison "
+            "location, or names a consumer that only parses the JSON or sits inside the "
+            "app, is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
     ),
