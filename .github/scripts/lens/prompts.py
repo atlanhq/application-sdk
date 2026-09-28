@@ -124,7 +124,9 @@ You check whether earlier review findings are fixed by new commits. For each fin
 original claim, the code it quoted when raised, and that site as it is NOW; <changes_this_round> shows
 everything the new commits changed. A fix can land away from the quoted line (in a helper the code
 calls, or in another file that feeds it): judge whether the defect can still occur, not whether the
-quoted line was edited. Answer by calling verdicts once.
+quoted line was edited. A <concern id="A…"> is an earlier concern about the PR's approach: it is
+fixed when the PR no longer has that problem (the code changed, or the claim it contradicted was
+corrected). Answer by calling verdicts once, with one verdict per finding and concern id.
 fixed: the defect can no longer occur. open: it still can. Do not raise new issues.
 """
 

@@ -4141,7 +4141,8 @@ def test_the_round_diff_is_bounded_and_puts_finding_files_first():
     assert (
         "--- b_owner.py\n" in out and "--- a_first.py\n" in out
     )  # the small ones do, in full
-    assert review_mod.round_diff(files, []) == ""  # nothing open: nothing to show
+    # with no finding to prioritise (only approach concerns to re-check), files go in path order
+    assert review_mod.round_diff(files, []).startswith("--- a_first.py")
 
 
 def test_force_after_new_commits_reviews_only_those_commits(repo: Path):
@@ -4195,3 +4196,90 @@ def test_force_on_an_unchanged_head_re_reviews_the_whole_pr(repo: Path):
     )
     assert res.mode == "full"
     assert res.mode_label == "re-review · full, because requested with force"
+
+
+# ---- approach concerns are re-checked, not frozen --------------------------------------------------------------
+
+_CONCERNS = {
+    "problem": "p",
+    "approach": "a",
+    "verdict": "concerns",
+    "concerns": [
+        {
+            "title": "Re-check stops at 20",
+            "why": "open_[:20]",
+            "alternative": "batch it",
+        },
+        {"title": "Force contract", "why": "comment and code disagree"},
+    ],
+}
+
+
+def test_open_concerns_are_rechecked_in_the_verify_call_and_marked_addressed(
+    repo: Path,
+):
+    """The approach check runs once per PR; a concern the author then fixed stayed on
+    the PR forever. It now rides the verify call and is marked addressed."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    first.state.approach = json.loads(json.dumps(_CONCERNS))
+    gh.comments[0]["body"] = review_mod.SUMMARY_MARKER + "\n" + first.state.encode()
+    _round_two_elsewhere(gh)
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": "A1", "status": "fixed"}]})])
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    sent = json.dumps(
+        next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    )
+    assert 'concern id=\\"A1\\"' in sent and 'concern id=\\"A2\\"' in sent
+    c1, c2 = res.state.approach["concerns"]
+    assert (c1["status"], c1["addressed_round"]) == ("addressed", 2)
+    assert c2.get("status", "open") == "open"
+    assert [cid for cid, _ in review_mod.open_concerns(res.state)] == ["A2"]
+    body = gh.comments[0]["body"]
+    assert "✔️ ~~Re-check stops at 20~~ (A1) — addressed in round 2" in body
+    assert "**Force contract** (A2)" in body and "worth a second look" in body
+
+
+def test_all_concerns_addressed_reads_as_addressed_not_as_concerns():
+    ap = json.loads(json.dumps(_CONCERNS))
+    for c in ap["concerns"]:
+        c["status"], c["addressed_round"] = "addressed", 3
+    st = PRState(round=3, approach=ap)
+    res = RunResult("reviewed", mode="incremental", mode_label="re-review", state=st)
+    summary = render_summary(res)
+    assert (
+        "✅ every concern has been addressed" in summary
+        and "worth a second look" not in summary
+    )
+    brief = review_mod.verdict_brief(res, "")
+    assert "**Approach check — ✅ concerns addressed**" in brief and "⚠️ **" not in brief
+    assert review_mod.open_concerns(st) == []
+
+
+def test_concerns_alone_still_get_rechecked(repo: Path):
+    """No open findings, but an open concern: the verify call still runs."""
+    ws, _ = _ws(repo)
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": "A1", "status": "fixed"}]})])
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    st = PRState(approach=json.loads(json.dumps(_CONCERNS)))
+    fixed = review_mod._verify(client, ws, [], "--- a.py", review_mod.open_concerns(st))
+    assert fixed == ["A1"] and len(script.requests) == 1

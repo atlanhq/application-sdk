@@ -437,7 +437,11 @@ def run(
     will_call = (
         bool(res.triage.reviewed)
         or (cfg.approach and not state.approach)
-        or (cfg.verify and round_no > 1 and state.open_findings())
+        or (
+            cfg.verify
+            and round_no > 1
+            and (state.open_findings() or open_concerns(state))
+        )
     )
     if cfg.preflight and will_call:
         with trace.group("3 · preflight (zero tokens)"):
@@ -467,14 +471,31 @@ def run(
     # model also sees what changed this round, since the fix may not be at the quote.
     if cfg.verify and round_no > 1:
         to_verify = state.open_findings() if touched else []
-        with trace.group(f"4 · verify {len(to_verify)} still-open finding(s)"):
-            res.resolved_verified = _verify(
-                client, ws, to_verify, round_diff(all_files, to_verify)
+        # The approach check runs once per PR, so without this a concern the author
+        # has since addressed would stay on the PR forever. It rides the same call.
+        concerns = open_concerns(state) if touched else []
+        with trace.group(
+            f"4 · verify {len(to_verify)} still-open finding(s), {len(concerns)} approach concern(s)"
+        ):
+            fixed = (
+                _verify(
+                    client, ws, to_verify, round_diff(all_files, to_verify), concerns
+                )
+                if to_verify or concerns
+                else []
             )
+            res.resolved_verified = [i for i in fixed if not _CONCERN_ID.match(i)]
             for f in to_verify:
                 if f.id in res.resolved_verified:
                     f.fixed_round, f.fixed_by = round_no, "verified"
-            trace.line(f"verified fixed: {', '.join(res.resolved_verified) or 'none'}")
+            addressed = {i for i in fixed if _CONCERN_ID.match(i)}
+            for cid, c in concerns:
+                if cid in addressed:
+                    c["status"], c["addressed_round"] = "addressed", round_no
+            trace.line(
+                f"verified fixed: {', '.join(res.resolved_verified) or 'none'}; "
+                f"concerns addressed: {', '.join(sorted(addressed)) or 'none'}"
+            )
 
     res.timings_ms["index"] = int((time.monotonic() - t_phase) * 1000)
     t_phase = time.monotonic()
@@ -781,8 +802,6 @@ ROUND_DIFF_CHARS = 12_000  # this round's changes shown to the verify call
 def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
     """What changed this round, for the verify call: files holding an open finding
     first, then the rest, within a fixed budget (a cached, bounded prompt)."""
-    if not open_:
-        return ""
     owners = {f.path for f in open_}
     out, used = [], 0
     for fd in sorted(files, key=lambda d: (d.path not in owners, d.path)):
@@ -807,23 +826,55 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
 VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
 
 
+_CONCERN_ID = re.compile(r"^A\d+$")
+
+
+def open_concerns(state: PRState) -> list[tuple[str, dict[str, Any]]]:
+    """The approach check's concerns not yet addressed, with stable ids A1, A2, …
+    (the concern list is fixed once per PR, so its order is the id)."""
+    ap = state.approach or {}
+    if ap.get("verdict") != "concerns":
+        return []
+    return [
+        (f"A{i}", c)
+        for i, c in enumerate(ap.get("concerns") or [], 1)
+        if c.get("status", "open") == "open"
+    ]
+
+
 def _verify(
-    client: Client, ws: Workspace, open_: list[Finding], changes: str = ""
+    client: Client,
+    ws: Workspace,
+    open_: list[Finding],
+    changes: str = "",
+    concerns: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> list[str]:
-    """Every open finding, VERIFY_BATCH at a time. The round's changes lead each
-    call, so the batches share one cached prefix."""
+    """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
+    (with the first batch). The round's changes lead each call, so the batches
+    share one cached prefix. Returns the ids judged fixed: F-… and A…."""
+    batches = [
+        open_[i : i + VERIFY_BATCH] for i in range(0, len(open_), VERIFY_BATCH)
+    ] or [[]]
     fixed: list[str] = []
-    for i in range(0, len(open_), VERIFY_BATCH):
-        fixed += _verify_batch(client, ws, open_[i : i + VERIFY_BATCH], changes)
+    for n, batch in enumerate(batches):
+        fixed += _verify_batch(client, ws, batch, changes, concerns if n == 0 else None)
     return fixed
 
 
 def _verify_batch(
-    client: Client, ws: Workspace, open_: list[Finding], changes: str
+    client: Client,
+    ws: Workspace,
+    open_: list[Finding],
+    changes: str,
+    concerns: list[tuple[str, dict[str, Any]]] | None = None,
 ) -> list[str]:
     items = (
         [f"<changes_this_round>\n{changes}\n</changes_this_round>"] if changes else []
     )
+    for cid, c in concerns or []:
+        items.append(
+            f'<concern id="{cid}">\n{c.get("title", "")}. {c.get("why", "")}\n</concern>'
+        )
     for f in open_:
         text = ws.text(f.path) or ""
         lines = text.splitlines()
@@ -863,15 +914,19 @@ def _verify_batch(
         return []
     fixed: list[str] = []
     by_id = {f.id: f for f in open_}
+    concern_ids = {cid for cid, _ in concerns or []}
     for tc in comp.tool_calls:
         for it in (
             parse_args((tc.get("function") or {}).get("arguments") or "").get("items")
             or []
         ):
-            f = by_id.get(str(it.get("id")))
-            if f and it.get("status") == "fixed":
+            iid, ok = str(it.get("id")), it.get("status") == "fixed"
+            f = by_id.get(iid)
+            if f and ok:
                 f.status = "fixed"
                 fixed.append(f.id)
+            elif iid in concern_ids and ok:
+                fixed.append(iid)
     return fixed
 
 
@@ -1011,6 +1066,30 @@ def _spiral_lines(res: RunResult) -> list[str]:
     ]
 
 
+def _concern_lines(ap: dict[str, Any], *, brief: bool) -> list[str]:
+    """Open concerns in full; addressed ones as one line, so the PR shows what is
+    still worth a look and not a concern the author has since dealt with."""
+    cs = ap.get("concerns") or []
+    still = [(i, c) for i, c in enumerate(cs, 1) if c.get("status", "open") == "open"]
+    done = [(i, c) for i, c in enumerate(cs, 1) if c.get("status") == "addressed"]
+    out = []
+    if not brief:
+        out.append(
+            "**Approach check** — worth a second look (advisory, does not block):"
+            if still
+            else "**Approach check** — ✅ every concern has been addressed."
+        )
+    for i, c in still:
+        alt = f" *Instead:* {c['alternative']}" if c.get("alternative") else ""
+        mark = "⚠️ " if brief else ""
+        out.append(f"- {mark}**{c.get('title', '')}** (A{i}) — {c.get('why', '')}{alt}")
+    for i, c in done:
+        out.append(
+            f"- ✔️ ~~{c.get('title', '')}~~ (A{i}) — addressed in round {c.get('addressed_round', '?')}"
+        )
+    return out
+
+
 def resolve_closed_threads(gh: GitHub, number: int, state: PRState) -> int:
     """Resolve lens's own review threads for findings that are fixed or dismissed,
     so a person doesn't have to (the ruleset requires resolved threads to merge).
@@ -1092,12 +1171,7 @@ def render_summary(res: RunResult) -> str:
             f"**lens reads this PR as** — {ap['problem']} *How:* {ap.get('approach', '')}\n"
         )
     if ap.get("verdict") == "concerns":
-        lines.append(
-            "**Approach check** — worth a second look (advisory, does not block):"
-        )
-        for c in ap.get("concerns", []):
-            alt = f" *Instead:* {c['alternative']}" if c.get("alternative") else ""
-            lines.append(f"- **{c.get('title', '')}** — {c.get('why', '')}{alt}")
+        lines.extend(_concern_lines(ap, brief=False))
         lines.append("")
     elif ap.get("verdict") == "sound":
         lines.append("**Approach check** — sound.\n")
@@ -1252,16 +1326,24 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
         # The holistic review, in full: how lens reads the change, and whether the
         # approach is the right one — not just a one-word verdict.
         lines.append("")
-        lines.append(
-            f"**Approach check — {'⚠️ concerns (advisory)' if ap['verdict'] == 'concerns' else '✅ sound'}**"
+        concerns = ap.get("verdict") == "concerns"
+        still = [
+            c for c in ap.get("concerns") or [] if c.get("status", "open") == "open"
+        ]
+        label = (
+            "⚠️ concerns (advisory)"
+            if concerns and still
+            else "✅ concerns addressed"
+            if concerns
+            else "✅ sound"
         )
+        lines.append(f"**Approach check — {label}**")
         if ap.get("problem"):
             lines.append(f"- *Problem:* {ap['problem']}")
         if ap.get("approach"):
             lines.append(f"- *How the PR solves it:* {ap['approach']}")
-        for c in ap.get("concerns") or []:
-            alt = f" *Instead:* {c['alternative']}" if c.get("alternative") else ""
-            lines.append(f"- ⚠️ **{c.get('title', '')}** — {c.get('why', '')}{alt}")
+        if concerns:
+            lines.extend(_concern_lines(ap, brief=True))
         lines.append("")
     led = st.ledger or {}
     lines.append(
