@@ -112,28 +112,42 @@ def test_suppressed_inline() -> None:
 
 
 def test_worker_surface_sets_mirror_the_sdk_shims() -> None:
-    """The exempt sets are copied from each shim's ``_NOT_DEPRECATED``; pin them."""
+    """The exempt sets are what each generated shim serves WITHOUT a warning.
+
+    ``application_sdk/handler/*.py`` are generated (``gen_api_shims.py``): every
+    name in ``__all__`` that is not a ``_DEPRECATED_CONSTANTS`` key is a plain,
+    non-deprecated import. Pin B009's exempt sets to exactly that.
+    """
     root = Path(__file__).resolve().parents[3] / "application_sdk" / "handler"
     if not root.is_dir():
         pytest.skip("SDK source not alongside the conformance package")
     for module, exempt in DEPRECATED_HANDLER_MODULES.items():
         rel = module.split(".")[2:] or ["__init__"]
         tree = ast.parse((root / f"{rel[0]}.py").read_text(encoding="utf-8"))
-        declared: set[str] | None = None
+        exported: set[str] = set()
+        deprecated: set[str] = set()
         for node in tree.body:
-            target = node.target if isinstance(node, ast.AnnAssign) else None
-            if (
-                isinstance(target, ast.Name)
-                and target.id == "_NOT_DEPRECATED"
-                and node.value is not None
-            ):
-                declared = {
-                    c.value
-                    for c in ast.walk(node.value)
-                    if isinstance(c, ast.Constant) and isinstance(c.value, str)
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+                if isinstance(node, ast.AnnAssign)
+                else []
+            )
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            value = getattr(node, "value", None)
+            if "__all__" in names and isinstance(value, (ast.List, ast.Tuple)):
+                exported = {e.value for e in value.elts if isinstance(e, ast.Constant)}
+            if "_DEPRECATED_CONSTANTS" in names and isinstance(value, ast.Dict):
+                deprecated = {
+                    k.value for k in value.keys if isinstance(k, ast.Constant)
                 }
-        assert declared is not None, f"{module}: no _NOT_DEPRECATED set"
-        assert declared == set(exempt), module
+        assert exported, f"{module}: no literal __all__"
+        # Names the shim serves without warning but that are not handler
+        # contracts (the handler-service entry points carry their own
+        # @deprecated; bind_invocation_context is worker-side) are exempt too.
+        not_deprecated = exported - deprecated
+        assert set(exempt) <= not_deprecated, (module, set(exempt) - not_deprecated)
 
 
 # ── runner integration + metadata ────────────────────────────────────────────
