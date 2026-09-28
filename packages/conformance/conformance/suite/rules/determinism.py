@@ -416,6 +416,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "reviewed exception with\n"
             "``# conformance: ignore[P031] <reason>``.\n"
         ),
+        rule_interactions=(
+            "Applied together with F011 on preflight paths. run_in_thread moves "
+            "the work to the SDK's pool but carries no deadline, so F011 treats "
+            "the swapped call exactly as it treated asyncio.to_thread: an "
+            "executor wait that must sit under an enclosing deadline. When the "
+            "flagged offload is on a preflight path, add the deadline in the "
+            "same edit — asyncio.wait_for(self.run_in_thread(fn, arg), "
+            "timeout=...) or async with asyncio.timeout(...) sized from the "
+            "remaining preflight budget. A swap that keeps an existing deadline "
+            "must keep it around the new call."
+        ),
         help_uri=f"{_HELP_BASE}#p031",
     ),
     RuleDefinition(
