@@ -20,6 +20,7 @@ The round rules that make the loop converge are here, in code:
 from __future__ import annotations
 
 import json
+import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -30,7 +31,14 @@ from . import holistic, prompts, trace
 from .agent import BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
-from .diff import FileDiff, Hunk, Line, parse_unified_diff, snippet_in_text
+from .diff import (
+    FileDiff,
+    Hunk,
+    Line,
+    locate_in_text,
+    parse_unified_diff,
+    snippet_in_text,
+)
 from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
 from .github import GitHub, GitHubError, bot_login
 from .index import build_index
@@ -66,6 +74,8 @@ class RunResult:
     # What kind of run this is, in words, with the reason: "first review",
     # "re-review · only commits since abc1234", "re-review · full, because …", "retry · …".
     mode_label: str = ""
+    # Files drawing new blocking findings round after round (see spiral_paths).
+    spiral: list[tuple[str, list[int]]] = field(default_factory=list)
     run_url: str = (
         ""  # the Actions run doing this review (linked from the verdict and history)
     )
@@ -95,7 +105,6 @@ def describe_mode(
     pending: int,
     force: bool,
     model_changed: bool,
-    config_changed: bool,
     ancestry: str,
 ) -> str:
     """The kind of run, in plain words, with the reason for a full re-review."""
@@ -109,8 +118,6 @@ def describe_mode(
         why = "requested with force"
     elif model_changed:
         why = "the model changed since the last review"
-    elif config_changed:
-        why = "the lens config changed since the last review"
     elif ancestry and ancestry != "ahead":
         why = "the branch was force-pushed or rebased"
     else:
@@ -227,7 +234,11 @@ def run(
         )
 
     # ---- admission (0 model calls) --------------------------------------
-    same_reviewer = state.model == cfg.model and state.config_hash == cfg.raw_hash
+    # Only a different MODEL is a different reviewer. A lens config change (cards,
+    # prompts, limits) does not re-open code an earlier round already passed: that
+    # moved the goalposts on reviewed code. It applies from the next new commits;
+    # `/lens force` re-reviews the whole PR under the new config.
+    same_reviewer = state.model == cfg.model
     # A head already reviewed is skipped — unless part of it was left unreviewed by a
     # failure, in which case only those files are retried (never the whole PR again).
     retry_only = (
@@ -288,7 +299,6 @@ def run(
         pending=len(state.pending_files),
         force=force,
         model_changed=bool(state.model) and state.model != cfg.model,
-        config_changed=bool(state.config_hash) and state.config_hash != cfg.raw_hash,
         ancestry=ancestry,
     )
     if retry_only:
@@ -449,11 +459,16 @@ def run(
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
-    # ---- verify still-open findings in touched files (1 call) -------------
+    # ---- verify still-open findings (1 call) -------------------------------
+    # Every open finding, not only those whose own file changed: a fix often lands
+    # in another file (a data file's finding fixed in the code that reads it). The
+    # model also sees what changed this round, since the fix may not be at the quote.
     if cfg.verify and round_no > 1:
-        to_verify = [f for f in state.open_findings() if f.path in touched]
+        to_verify = state.open_findings() if touched else []
         with trace.group(f"4 · verify {len(to_verify)} still-open finding(s)"):
-            res.resolved_verified = _verify(client, ws, to_verify)
+            res.resolved_verified = _verify(
+                client, ws, to_verify, round_diff(all_files, to_verify)
+            )
             for f in to_verify:
                 if f.id in res.resolved_verified:
                     f.fixed_round, f.fixed_by = round_no, "verified"
@@ -541,6 +556,9 @@ def run(
         ]
     res.new_findings = merge_new(state, fresh, round_no=round_no)
     res.unplaced = [f for f in res.new_findings if not f.line]
+    res.spiral = spiral_paths(state, res.new_findings, round_no)
+    for path, rounds in res.spiral:
+        trace.line(f"spiral: {path} drew new findings in rounds {rounds}")
     with trace.group("7 · verdict"):
         for b in res.bundles:
             trace.line(
@@ -710,6 +728,7 @@ def dismiss(
         gh.comment(number, "\n".join([brief, "", *lines]) if lines else brief)
         if state.reviewed_head:
             gh.set_status(state.reviewed_head, *verdict_status(res), url)
+        resolve_closed_threads(gh, number, state)
     else:
         gh.comment(number, "lens: nothing was dismissed.\n\n" + "\n".join(lines))
     return res
@@ -754,25 +773,64 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # n
     return bundles[: cfg.max_bundles]
 
 
-def _verify(client: Client, ws: Workspace, open_: list[Finding]) -> list[str]:
+ROUND_DIFF_CHARS = 12_000  # this round's changes shown to the verify call
+
+
+def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
+    """What changed this round, for the verify call: files holding an open finding
+    first, then the rest, within a fixed budget (a cached, bounded prompt)."""
+    if not open_:
+        return ""
+    owners = {f.path for f in open_}
+    out, used = [], 0
+    for fd in sorted(files, key=lambda d: (d.path not in owners, d.path)):
+        if fd.is_binary or not fd.hunks:
+            continue
+        block = f"--- {fd.path}\n{fd.render(max_lines=200)}"
+        if used + len(block) > ROUND_DIFF_CHARS:
+            out.append(f"--- {fd.path} (diff omitted: budget)")
+            continue
+        out.append(block)
+        used += len(block)
+    return "\n".join(out)
+
+
+def _current_line(ws: Workspace, f: Finding, text: str) -> int:
+    """Where the finding's quoted code is NOW. Stored line numbers are from an
+    earlier head and drift as commits land; the quote is what identifies the site."""
+    return locate_in_text(text, f.evidence) or f.head_line or f.line
+
+
+def _verify(
+    client: Client, ws: Workspace, open_: list[Finding], changes: str = ""
+) -> list[str]:
     if not open_:
         return []
     items = []
     for f in open_[:20]:
         text = ws.text(f.path) or ""
         lines = text.splitlines()
-        sym = ws.index.enclosing(f.path, f.line) if f.line else None
+        at = _current_line(ws, f, text)
+        sym = ws.index.enclosing(f.path, at) if at else None
         lo, hi = (
             (sym.start, sym.end)
             if sym and sym.end - sym.start < 120
-            else (max(f.line - 15, 1), f.line + 15)
+            else (max(at - 15, 1), at + 15)
         )
-        code = "\n".join(
-            f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1)
+        code = (
+            "\n".join(
+                f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1)
+            )
+            if at
+            else "(the quoted code is not in this file any more)"
         )
         items.append(
-            f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n<code_now>\n{code}\n</code_now>\n</finding>'
+            f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n'
+            f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
+            f"<code_now>\n{code}\n</code_now>\n</finding>"
         )
+    if changes:
+        items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     messages = [
         {"role": "system", "content": prompts.VERIFY_SYSTEM},
         {"role": "user", "content": "\n".join(items)},
@@ -886,11 +944,72 @@ def _history_section(st: PRState) -> list[str]:
             run_kind += " · ⚠️ incomplete"
         log = f"[run]({h['run']})" if h.get("run") else "—"
         out.append(
-            f"| {h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
+            f"| {'after ' if h.get('mode') == 'dismiss' else ''}{h['round']} | {run_kind} | {span} | {h.get('new', 0)} | {h.get('resolved', 0)} "
             f"| {h.get('blocking', '—')} | ${float(h.get('usd', 0)):.3f} | {log} |"
         )
     out.append("\n</details>")
     return out
+
+
+def _run_title(res: RunResult, round_no: int) -> str:
+    """ "round 2 · re-review · …", or for a dismissal (which is not a review round)
+    "dismissal after round 2 · F-… by @…"."""
+    label = res.mode_label or res.mode
+    if res.mode == "dismiss":
+        return f"dismissal after round {round_no} · {label.removeprefix('dismiss · ')}"
+    return f"round {round_no} · {label}"
+
+
+SPIRAL_ROUNDS = (
+    3  # a file drawing new findings in this many rounds is worth stepping back from
+)
+
+
+def spiral_paths(
+    state: PRState, new: list[Finding], round_no: int
+) -> list[tuple[str, list[int]]]:
+    """Files where this round's new BLOCKING findings continue a run: the same file
+    has drawn new findings in SPIRAL_ROUNDS or more rounds. Each fix uncovering the
+    next corner case is a sign the approach, not the latest patch, needs another look."""
+    if round_no < SPIRAL_ROUNDS:
+        return []
+    out = []
+    for path in sorted({f.path for f in new if f.severity in BLOCKING}):
+        rounds = sorted({f.round for f in state.findings if f.path == path})
+        if len(rounds) >= SPIRAL_ROUNDS:
+            out.append((path, rounds))
+    return out
+
+
+def _spiral_lines(res: RunResult) -> list[str]:
+    return [
+        f"\n🔁 **Worth stepping back:** `{path}` has drawn new blocking findings in rounds "
+        f"{', '.join(map(str, rounds))}. Each fix is uncovering another case; consider simplifying "
+        "the approach instead of patching case by case."
+        for path, rounds in res.spiral
+    ]
+
+
+def resolve_closed_threads(gh: GitHub, number: int, state: PRState) -> int:
+    """Resolve lens's own review threads for findings that are fixed or dismissed,
+    so a person doesn't have to (the ruleset requires resolved threads to merge).
+    Only threads lens opened are touched, matched by the finding id in the comment."""
+    closed = {f.id for f in state.findings if f.status in ("fixed", "wontfix")}
+    if not closed:
+        return 0
+    login = bot_login().removesuffix("[bot]")
+    done = 0
+    try:
+        for t in gh.review_threads(number):
+            if t["resolved"] or t["author"].removesuffix("[bot]") != login:
+                continue
+            m = re.search(r"<sub>lens (F-[0-9a-f]{6})</sub>", t["body"])
+            if m and m.group(1) in closed:
+                gh.resolve_thread(t["id"])
+                done += 1
+    except GitHubError as e:
+        trace.line(f"could not resolve review threads: {trace.short(str(e), 140)}")
+    return done
 
 
 def render_summary(res: RunResult) -> str:
@@ -917,8 +1036,9 @@ def render_summary(res: RunResult) -> str:
         verdict = "✅ **Ready to merge** — every finding is resolved"
     lines = [
         SUMMARY_MARKER,
-        f"### lens · round {st.round} · {res.mode_label or res.mode}",
+        f"### lens summary · updated after round {st.round} ({res.mode_label or res.mode})",
         verdict,
+        *_spiral_lines(res),
         "",
         f"**Open findings:** {counts}",
         "",
@@ -1067,7 +1187,8 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
     if state == "failure" and not st.open_findings(BLOCKING):
         icon = "🟡"
     lines = [
-        f"{icon} **lens · round {st.round} · {res.mode_label or res.mode}** — {description}",
+        f"{icon} **lens · {_run_title(res, st.round)}** — {description}",
+        *_spiral_lines(res),
         "",
         f"**Open findings:** {counts}",
     ]
@@ -1167,6 +1288,9 @@ def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
         )
     )
     trace.line(f"status 'lens' on {head[:9]}: {state} — {description}")
+    if res.state is not None:
+        n = resolve_closed_threads(gh, number, res.state)
+        trace.line(f"review threads resolved: {n}")
 
 
 def verdict_status(res: RunResult) -> tuple[str, str]:

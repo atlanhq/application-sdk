@@ -32,7 +32,8 @@ Evidence
   function in full, and <referenced_code> shows repo code the change or the PR says it follows; call
   find_symbol / read_file only for what they do not answer.
 - A changed symbol marked PUBLIC API: check the change against its call sites; a behaviour change callers
-  can observe is at least high.
+  can observe is at least high — unless <description> declares it as intended. A declared change is the
+  author's decision: do not ask them to declare or document what the description already states.
 - existing_code must be copied VERBATIM from the diff or <changed_functions> (1-6 lines, without the
   line-number column or the + marker).
 
@@ -40,6 +41,8 @@ Severity
 - critical: security vulnerability, credential/data exposure, data loss or corruption, crash on a common path.
 - high: incorrect behaviour a user will hit, broken public contract, resource leak, race.
 - medium: edge case, performance problem, missing test for new behaviour, maintainability hazard.
+- An input form the code does not handle (a syntax variant, a corner case) is at most medium unless you
+  can show where that form occurs in this repo's real code (cite it from search_code).
 - low (nit): a small, concrete improvement — clearer name, simpler expression, a missing edge-case test. At most 5 per review, only ones clearly worth a human's time.
 
 Output
@@ -118,7 +121,10 @@ REFLECT_TOOLS = [
 
 VERIFY_SYSTEM = """\
 You check whether earlier review findings are fixed by new commits. For each finding id you get the
-original claim and the relevant code as it is NOW. Answer by calling verdicts once.
+original claim, the code it quoted when raised, and that site as it is NOW; <changes_this_round> shows
+everything the new commits changed. A fix can land away from the quoted line (in a helper the code
+calls, or in another file that feeds it): judge whether the defect can still occur, not whether the
+quoted line was edited. Answer by calling verdicts once.
 fixed: the defect can no longer occur. open: it still can. Do not raise new issues.
 """
 

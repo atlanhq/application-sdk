@@ -218,6 +218,7 @@ class FakeGitHub:
         self.comments: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
         self.statuses: list[dict[str, Any]] = []
+        self.resolved: list[str] = []  # review threads lens resolved
         self.posted: list[str] = []  # plain PR comments (the per-run verdict)
         self.status = "ahead"
 
@@ -263,6 +264,24 @@ class FakeGitHub:
     def comment(self, n, body):
         self.posted.append(body)
         return len(self.posted)
+
+    def review_threads(self, n):
+        out = []
+        for i, r in enumerate(self.reviews):
+            for j, c in enumerate(r["comments"]):
+                tid = f"T{i}-{j}"
+                out.append(
+                    {
+                        "id": tid,
+                        "resolved": tid in self.resolved,
+                        "author": "atlan-app-fleet",
+                        "body": c["body"],
+                    }
+                )
+        return out
+
+    def resolve_thread(self, thread_id):
+        self.resolved.append(thread_id)
 
     def set_status(self, sha, state, description, target_url=""):
         self.statuses.append(
@@ -2815,10 +2834,6 @@ def test_a_re_review_after_merging_main_reviews_only_the_authors_change(repo: Pa
             "re-review · full, because the model changed since the last review",
         ),
         (
-            {"mode": "full", "reviewed_head": "abc", "config_changed": True},
-            "re-review · full, because the lens config changed since the last review",
-        ),
-        (
             {"mode": "full", "reviewed_head": "abc", "ancestry": "diverged"},
             "re-review · full, because the branch was force-pushed or rebased",
         ),
@@ -2829,7 +2844,6 @@ def test_each_kind_of_run_says_what_it_is_and_why(kw, label):
         "pending": 0,
         "force": False,
         "model_changed": False,
-        "config_changed": False,
         "ancestry": "ahead",
     }
     assert review_mod.describe_mode(**{**base, **kw}) == label
@@ -2861,7 +2875,7 @@ def test_the_label_is_shown_on_the_verdict_summary_and_log(repo: Path, capsys):
     )
     assert res.mode_label == "re-review · only commits since h1"
     assert (
-        "### lens · round 2 · re-review · only commits since h1"
+        "### lens summary · updated after round 2 (re-review · only commits since h1)"
         in gh.comments[0]["body"]
     )
     assert any(
@@ -3689,3 +3703,260 @@ def test_a_failed_review_still_leaves_a_withdraw_decision(monkeypatch, tmp_path)
     )
     assert code == 1
     assert json.loads(out.read_text())["action"] == "withdraw"
+
+
+# ---- the review loop: re-check, threads, spirals, config changes, the description --------------------------------
+
+HELPER = 'def get_or_none(client, key):\n    return client.get(key) or b""\n'
+HELPER_DIFF = (
+    "diff --git a/application_sdk/storage/helper.py b/application_sdk/storage/helper.py\n"
+    "new file mode 100644\n--- /dev/null\n+++ b/application_sdk/storage/helper.py\n"
+    '@@ -0,0 +1,2 @@\n+def get_or_none(client, key):\n+    return client.get(key) or b""\n'
+)
+
+
+def _round_two_elsewhere(gh):
+    """A second commit that changes ANOTHER file and leaves the finding's file alone."""
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = HELPER_DIFF
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")] + HELPER_DIFF
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = SRC_V2
+    gh.files[("application_sdk/storage/helper.py", "h2")] = HELPER
+
+
+def test_a_fix_in_another_file_is_still_rechecked(repo: Path):
+    """A finding was re-checked only when its own file changed, so a fix landing in the
+    code that feeds it (a data file's finding fixed in the reader) was never seen."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_elsewhere(gh)
+    script = Script(
+        response([tool_call("verdicts", {"items": [{"id": fid, "status": "fixed"}]})])
+    )
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    assert res.resolved_verified == [fid]
+    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    sent = json.dumps(verify)
+    assert (
+        f'finding id=\\"{fid}\\"' in sent
+        and "application_sdk/storage/helper.py" in sent
+    )
+    assert "quoted_when_raised" in sent
+
+
+def test_the_recheck_finds_the_quoted_code_where_it_is_now():
+    """Stored line numbers drift as commits land; the quote identifies the site."""
+    f = Finding(
+        "a.py", 2, "high", "bug", "t", "b", "    return data.decode()", head_line=2
+    )
+    now = "import x\n\n\n\ndef fetch(client, key):\n    data = client.get(key)\n    return data.decode()\n"
+    assert review_mod._current_line(None, f, now) == 7
+    f.evidence = "gone()"
+    assert review_mod._current_line(None, f, now) == 2  # falls back to the stored line
+
+
+def test_lens_resolves_its_own_thread_when_the_finding_is_fixed(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    assert gh.resolved == []  # open finding: its thread stays open
+    fixed = SRC_V2.replace(
+        "    return data.decode()",
+        "    return data.decode() if data is not None else None",
+    )
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = (
+        "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
+        "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
+        "@@ -4 +4 @@\n-    return data.decode()\n+    return data.decode() if data is not None else None\n"
+    )
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = fixed
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
+    assert gh.resolved == ["T0-0"]
+
+
+def test_only_lens_threads_for_closed_findings_are_resolved():
+    class G:
+        resolved: list = []
+
+        def review_threads(self, n):
+            return [
+                {
+                    "id": "a",
+                    "resolved": False,
+                    "author": "atlan-app-fleet",
+                    "body": "x <sub>lens F-aaaaaa</sub>",
+                },
+                {
+                    "id": "b",
+                    "resolved": False,
+                    "author": "atlan-app-fleet",
+                    "body": "x <sub>lens F-bbbbbb</sub>",
+                },
+                {
+                    "id": "c",
+                    "resolved": False,
+                    "author": "a-person",
+                    "body": "x <sub>lens F-aaaaaa</sub>",
+                },
+                {
+                    "id": "d",
+                    "resolved": True,
+                    "author": "atlan-app-fleet",
+                    "body": "x <sub>lens F-aaaaaa</sub>",
+                },
+            ]
+
+        def resolve_thread(self, tid):
+            self.resolved.append(tid)
+
+    st = PRState(
+        findings=[
+            Finding(
+                "a.py", 1, "high", "bug", "t", "b", "e", id="F-aaaaaa", status="fixed"
+            ),
+            Finding(
+                "a.py", 2, "high", "bug", "t", "b", "e", id="F-bbbbbb"
+            ),  # still open
+        ]
+    )
+    g = G()
+    assert review_mod.resolve_closed_threads(g, 1, st) == 1 and g.resolved == ["a"]
+
+
+def test_a_dismissal_resolves_its_thread(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    review_mod.dismiss(
+        gh, 1, [fid], "tracked separately", actor="reviewer", pr_author="author"
+    )
+    assert gh.resolved == ["T0-0"]
+    assert gh.posted[-1].startswith(
+        "✅ **lens · dismissal after round 1 · " + fid + " by @reviewer**"
+    )
+
+
+def test_a_file_drawing_new_blocking_findings_round_after_round_gets_a_step_back_note():
+    old = [
+        Finding(
+            "d.py", 1, "high", "bug", f"t{r}", "b", f"e{r}", round=r, status="fixed"
+        )
+        for r in (1, 2)
+    ]
+    new = [Finding("d.py", 9, "high", "bug", "t3", "b", "e3", round=3)]
+    st = PRState(round=3, findings=old + new)
+    assert review_mod.spiral_paths(st, new, 3) == [("d.py", [1, 2, 3])]
+    assert review_mod.spiral_paths(st, new, 2) == []  # too early to call it a spiral
+    medium = [Finding("d.py", 9, "medium", "bug", "t3", "b", "e3", round=3)]
+    assert (
+        review_mod.spiral_paths(st, medium, 3) == []
+    )  # only blocking findings drive it
+    res = RunResult(
+        "reviewed",
+        mode="incremental",
+        mode_label="re-review",
+        state=st,
+        spiral=review_mod.spiral_paths(st, new, 3),
+    )
+    assert (
+        "🔁 **Worth stepping back:** `d.py` has drawn new blocking findings in rounds 1, 2, 3"
+        in render_summary(res)
+    )
+
+
+def test_a_config_change_does_not_reopen_reviewed_code(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    changed = cfg_for(repo)
+    changed.raw_hash = "new-cards"
+    same_head = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=changed,
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
+    assert same_head.action == "skipped"  # the reviewed head is not re-reviewed
+    _round_two_elsewhere(gh)
+    nxt = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=changed,
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
+    assert nxt.mode == "incremental"  # new commits only, under the new config
+    gh.status = "identical"  # what GitHub's compare says for the same commit
+    forced = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=changed,
+        rules=rules,
+        client_factory=_factory(Script()),
+        force=True,
+    )
+    assert forced.action == "reviewed"
+
+
+def test_the_whole_description_reaches_the_reviewer(repo: Path):
+    """A declaration past the first 1,200 characters was cut, and lens asked for it."""
+    ws, bundle = _ws(repo)
+    body = "x" * 3000 + " DECLARED: kwargs are context fields now."
+    ctx = agent_mod.build_context(
+        ws, bundle, RuleSet([], {}), {"title": "t", "body": body}, []
+    )
+    assert "DECLARED: kwargs are context fields now." in ctx
+    from lens import prompts  # noqa: PLC0415
+
+    assert "unless <description> declares it as intended" in prompts.REVIEW_SYSTEM
