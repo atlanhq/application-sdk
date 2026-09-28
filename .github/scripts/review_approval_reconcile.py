@@ -92,9 +92,11 @@ Everything runs on the fleet App token, which carries its own quota — a
 reconciler that polled every PR on the `atlan-ci` PAT would become a new source
 of the exhaustion it exists to recover from. Per tick that is one paginated PR
 listing and one paginated GraphQL query, plus two reads per labelled PR
-(comments, then reviews) and three per PR with a green `lens` status (statuses,
-comments, reviews). The `atlan-ci` PAT is spent on one request per approval
-posted.
+(comments, then reviews) and about three per PR with a green `lens` status
+(statuses, more than one page only on a busy head; comments; reviews), plus a
+status re-read before each lens approval. Every `gh` call the script makes
+itself is bounded by GH_TIMEOUT_SECONDS. The `atlan-ci` PAT is spent on one
+request per approval posted.
 
 Quota pre-flight
 ----------------
@@ -171,6 +173,11 @@ DEFAULT_MIN_AGE_MINUTES = 12
 # self-healing one, and the run goes red.
 DEFAULT_STALE_AFTER_MINUTES = 90
 
+# Ceiling on each `gh` call this script makes itself. A stalled CLI would
+# otherwise hold the run until the job's own timeout, skipping the report
+# and queueing every later tick behind it.
+GH_TIMEOUT_SECONDS = 60
+
 RECONCILED = "reconciled"
 FAILED = "failed"
 DEFERRED = "deferred"
@@ -215,6 +222,21 @@ class Quota:
         return max(0, self.reset - int(now.timestamp()))
 
 
+def run_gh(runner: Runner, argv: list[str], **kwargs) -> subprocess.CompletedProcess:
+    """`runner(argv)` under GH_TIMEOUT_SECONDS. A timeout comes back as a
+    failed result (exit 124, like coreutils `timeout`), so each caller's own
+    failure handling covers a stalled CLI too."""
+    try:
+        return runner(argv, timeout=GH_TIMEOUT_SECONDS, **kwargs)
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            args=argv,
+            returncode=124,
+            stdout="",
+            stderr=f"gh timed out after {GH_TIMEOUT_SECONDS}s",
+        )
+
+
 def list_open_prs(repo: str, runner: Runner) -> list[dict]:
     """Every open PR, with `head` and `labels` already populated.
 
@@ -225,7 +247,8 @@ def list_open_prs(repo: str, runner: Runner) -> list[dict]:
     `--paginate` follows Link: rel="next", so a repo with more than 100 open
     PRs does not silently lose coverage of the rest.
     """
-    result = runner(
+    result = run_gh(
+        runner,
         [
             "gh",
             "api",
@@ -260,7 +283,8 @@ def approver_quota(runner: Runner, token: str) -> Quota | None:
     """
     if not token:
         return None
-    result = runner(
+    result = run_gh(
+        runner,
         ["gh", "api", "rate_limit", "--jq", ".resources.core | .remaining, .reset"],
         capture_output=True,
         text=True,
@@ -513,7 +537,7 @@ query($owner: String!, $name: String!, $endCursor: String) {
         number
         headRefOid
         commits(last: 1) {
-          nodes { commit { oid status { context(name: "lens") { state } } } }
+          nodes { commit { oid status { context(name: "lens") { state createdAt } } } }
         }
       }
     }
@@ -522,8 +546,13 @@ query($owner: String!, $name: String!, $endCursor: String) {
 """
 
 
-def lens_ready_heads(repo: str, runner: Runner) -> set[tuple[int, str]]:
-    """(PR number, head SHA) for every open PR whose head's `lens` status is green.
+def lens_ready_heads(repo: str, runner: Runner) -> dict[tuple[int, str], str]:
+    """When lens's status went green, keyed by (PR number, head SHA), for every
+    open PR whose head's `lens` status is green.
+
+    The timestamp gives the PR an age even when a later REST read fails, so an
+    unreadable status or summary defers and can escalate like any other
+    blocked approval, instead of skipping quietly on every tick.
 
     Only a prefilter. Who set the status, and everything else, is re-read over
     REST for the few PRs it lets through. A failure reds the run, as a failed PR
@@ -531,7 +560,8 @@ def lens_ready_heads(repo: str, runner: Runner) -> set[tuple[int, str]]:
     saw nothing would be the silence this workflow exists to break.
     """
     owner, name = repo.split("/", 1)
-    result = runner(
+    result = run_gh(
+        runner,
         [
             "gh",
             "api",
@@ -554,7 +584,7 @@ def lens_ready_heads(repo: str, runner: Runner) -> set[tuple[int, str]]:
         raise SystemExit(
             f"::error::failed to list lens verdicts for {repo}: {result.stderr}"
         )
-    ready: set[tuple[int, str]] = set()
+    ready: dict[tuple[int, str], str] = {}
     for line in result.stdout.splitlines():
         if not line.strip():
             continue
@@ -564,7 +594,7 @@ def lens_ready_heads(repo: str, runner: Runner) -> set[tuple[int, str]]:
             commit = commit_node.get("commit") or {}
             context = (commit.get("status") or {}).get("context") or {}
             if head and commit.get("oid") == head and context.get("state") == "SUCCESS":
-                ready.add((int(node["number"]), head))
+                ready[(int(node["number"]), head)] = context.get("createdAt") or ""
     return ready
 
 
@@ -610,9 +640,15 @@ class LensSource:
        already catch; the ruleset's dismiss-on-push only affects approvals on
        older heads.
 
-    `lens.approve.approve_ready_head` then re-checks against fresh reads (open,
-    not a draft, head unchanged, not self-approval, no approval and no
-    withdrawal on the head) and posts the APPROVE.
+    Right before the APPROVE, guard 1 is read again: a `/lens` round that
+    started after the first read and ended not ready on this head leaves no
+    approval to withdraw, only its status. `lens.approve.approve_ready_head`
+    then re-checks against fresh reads (open, not a draft, head unchanged, not
+    self-approval, no approval and no withdrawal on the head) and posts.
+
+    A status or summary that cannot be read is a blocked approval, aged from
+    the prefilter's timestamp: deferred while young, red once it outlives a
+    quota window. It is never a quiet skip.
 
     Human activity on its own does not stop a lens approval, here or in lens:
     a posted lens approval survives a human comment, because `dismiss-on-human`
@@ -633,10 +669,23 @@ class LensSource:
             LensGitHub(repo, token=os.environ.get("APPROVER_TOKEN", "")),
         )
 
+    def green_status(self, head: str) -> dict | str:
+        """lens's newest `lens` status on `head` when it is lens's own green,
+        else why not. Raises GitHubError when the statuses are unreadable."""
+        status = self.gh.newest_status(head, "lens")
+        if status is None:
+            return "no lens status on the head"
+        creator = (status.get("creator") or {}).get("login")
+        if creator != lens_bot_login():
+            return f"the newest lens status was set by {creator}, not lens"
+        if status.get("state") != "success":
+            return f"the lens status is {status.get('state')}"
+        return status
+
     def verdict(
         self,
         pr: dict,
-        ready: set[tuple[int, str]],
+        ready: dict[tuple[int, str], str],
         *,
         min_age: timedelta,
         stale_after: timedelta,
@@ -651,25 +700,32 @@ class LensSource:
         def skip(reason: str) -> Outcome:
             return Outcome(number, SKIPPED, reason, LENS)
 
-        try:
-            status = next(
-                (s for s in self.gh.statuses(head) if s.get("context") == "lens"),
-                None,
+        def unreadable(what: str) -> Outcome:
+            # The prefilter's timestamp stands in for the status's own: a read
+            # that keeps failing must reach the stale path, not skip forever.
+            age = comment_age({"created_at": ready[(number, head)]}, now)
+            if age is None or age < min_age:
+                return skip("verdict too recent to be lost")
+            return _blocked_outcome(
+                number,
+                f"{what} is unreadable, so it is unknowable whether an "
+                f"approval is owed",
+                age,
+                stale_after,
+                LENS,
             )
-        except GitHubError as exc:
-            return skip(f"the lens status is unreadable: {exc}")
-        if status is None:
-            return skip("no lens status on the head")
-        creator = (status.get("creator") or {}).get("login")
-        if creator != lens_bot_login():
-            return skip(f"the newest lens status was set by {creator}, not lens")
-        if status.get("state") != "success":
-            return skip(f"the lens status is {status.get('state')}")
+
+        try:
+            status = self.green_status(head)
+        except GitHubError:
+            return unreadable("the lens status")
+        if isinstance(status, str):
+            return skip(status)
 
         try:
             state, _ = lens_find_state(self.gh, number)
-        except GitHubError as exc:
-            return skip(f"the lens summary is unreadable: {exc}")
+        except GitHubError:
+            return unreadable("the lens summary")
         if state is None:
             return skip("no lens summary with a readable state")
         if state.reviewed_head != head:
@@ -718,6 +774,16 @@ class LensSource:
         }
 
         def post() -> tuple[str, str]:
+            # Re-read lens's verdict right before the APPROVE. A `/lens` round
+            # that started after the read above and finished not ready on this
+            # head has no approval to withdraw, so the review listing cannot
+            # show it; its status can. A round still running shows `pending`.
+            try:
+                current = self.green_status(head)
+            except GitHubError:
+                return DEFERRED, "the lens status is unreadable at approval time"
+            if isinstance(current, str):
+                return SKIPPED, f"the lens verdict changed before approval: {current}"
             try:
                 approval = lens_approve.approve_ready_head(
                     self.gh, self.approver, decision, refuse_after_withdrawal=True

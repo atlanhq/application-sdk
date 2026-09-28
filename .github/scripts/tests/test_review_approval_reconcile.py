@@ -796,7 +796,9 @@ class FakeLensAPI:
                     return response
             base = f"/repos/{REPO}"
             if method == "GET" and path.startswith(f"{base}/commits/{HEAD}/statuses"):
-                return 200, json.dumps(self.statuses)
+                # Paginated like GitHub: 100 per page, newest first.
+                page = int(path.rsplit("page=", 1)[1]) if "&page=" in path else 1
+                return 200, json.dumps(self.statuses[(page - 1) * 100 : page * 100])
             if method == "GET" and path.startswith(f"{base}/issues/{PR}/comments"):
                 return 200, json.dumps(self.comments)
             if method == "GET" and path.startswith(f"{base}/pulls/{PR}/reviews"):
@@ -835,7 +837,12 @@ def lens_node(number: int = PR, head: str = HEAD, state: str = "SUCCESS") -> dic
         "headRefOid": head,
         "commits": {
             "nodes": [
-                {"commit": {"oid": head, "status": {"context": {"state": state}}}}
+                {
+                    "commit": {
+                        "oid": head,
+                        "status": {"context": {"state": state, "createdAt": OLD}},
+                    }
+                }
             ]
         },
     }
@@ -942,7 +949,7 @@ def test_a_withdrawal_landing_after_the_sweep_read_is_still_caught():
     source = api.source()
     verdict = source.verdict(
         pull(labels=[]),
-        {(PR, HEAD)},
+        {(PR, HEAD): OLD},
         min_age=timedelta(minutes=12),
         stale_after=timedelta(minutes=90),
         now=NOW,
@@ -1208,7 +1215,7 @@ def test_lens_prefilter_keeps_only_green_heads():
             )
         ),
     )
-    assert reconcile.lens_ready_heads(REPO, gh) == {(1, HEAD)}
+    assert reconcile.lens_ready_heads(REPO, gh) == {(1, HEAD): OLD}
     [argv] = gh.called(is_graphql)
     assert "--paginate" in argv and 'context(name: "lens")' in " ".join(argv)
 
@@ -1297,3 +1304,176 @@ def test_pr_input_parsing(value, expected):
 def test_a_malformed_pr_input_is_refused(value):
     with pytest.raises(SystemExit, match="must be a PR number"):
         reconcile.parse_pr(value)
+
+
+# --- lens review round 1 (PR #4035) ----------------------------------------
+
+
+def _owed_lens_verdict(api):
+    verdict = api.source().verdict(
+        pull(labels=[]),
+        {(PR, HEAD): OLD},
+        min_age=timedelta(minutes=12),
+        stale_after=timedelta(minutes=90),
+        now=NOW,
+    )
+    assert isinstance(verdict, reconcile.Owed)
+    return verdict
+
+
+def test_a_lens_round_finishing_before_the_post_stops_the_replay():
+    """F-012fb2: a `/lens` round that started after the sweep's read and ended
+    not ready on the same head has no approval to withdraw. Its status is the
+    only trace, so it is re-read right before the APPROVE."""
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.statuses.insert(0, lens_status(state="failure"))
+
+    action, detail = verdict.post()
+
+    assert action == reconcile.SKIPPED
+    assert "changed before approval" in detail and "failure" in detail
+    assert api.approvals() == []
+
+
+def test_a_lens_round_still_running_at_post_time_is_not_raced():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.statuses.insert(0, lens_status(state="pending"))
+
+    assert verdict.post()[0] == reconcile.SKIPPED
+    assert api.approvals() == []
+
+
+def test_an_unreadable_lens_status_at_post_time_defers():
+    api = FakeLensAPI()
+    verdict = _owed_lens_verdict(api)
+    api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+
+    assert verdict.post()[0] == reconcile.DEFERRED
+    assert api.approvals() == []
+
+
+@pytest.mark.parametrize(
+    "path",
+    [f"/repos/{REPO}/commits/{HEAD}/statuses", f"/repos/{REPO}/issues/{PR}/comments"],
+)
+def test_an_unreadable_lens_status_or_summary_defers_instead_of_skipping(path):
+    """F-bdac06: a read failure is a blocked approval, loud and able to
+    escalate, never a quiet skip on every tick."""
+    api = FakeLensAPI()
+    api.fail[path] = (502, "bad gateway")
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [(o.action, o.source) for o in outcomes] == [
+        (reconcile.DEFERRED, reconcile.LENS)
+    ]
+    assert "unreadable" in outcomes[0].reason
+    assert api.approvals() == []
+
+
+def _lens_node_at(created_at: str) -> dict:
+    node = lens_node()
+    node["commits"]["nodes"][0]["commit"]["status"]["context"]["createdAt"] = created_at
+    return node
+
+
+def test_an_unreadable_lens_status_outlasting_a_window_reds_the_run():
+    gh = lens_gh(nodes=[_lens_node_at("2026-08-17T09:00:00Z")])
+    api = FakeLensAPI()
+    api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [o.action for o in outcomes] == [reconcile.FAILED]
+
+
+def test_an_unreadable_lens_status_on_a_fresh_verdict_is_just_too_recent():
+    gh = lens_gh(nodes=[_lens_node_at(RECENT)])
+    api = FakeLensAPI()
+    api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "too recent" in outcomes[0].reason
+
+
+def test_a_lens_status_past_the_first_page_is_still_found():
+    """F-961972: a head busy with other statuses pushes lens's past page 1."""
+    others = [
+        {"context": f"ci/{i}", "state": "success", "creator": {"login": "x"}}
+        for i in range(150)
+    ]
+    api = FakeLensAPI(statuses=[*others, lens_status()])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    pages = [c[2] for c in api.calls if "/statuses" in c[2]]
+    assert any(p.endswith("&page=2") for p in pages)
+
+
+def test_a_lens_status_search_stops_at_the_end_of_the_listing():
+    api = FakeLensAPI(statuses=[{"context": "ci/other", "state": "success"}])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.reason for o in outcomes] == ["no lens status on the head"]
+    assert len([c for c in api.calls if "/statuses" in c[2]]) == 1
+
+
+class _KwargsRecorder:
+    """Wraps a FakeGH to record the keyword arguments of every call."""
+
+    def __init__(self, gh: FakeGH) -> None:
+        self.gh = gh
+        self.seen: list[tuple[list[str], dict]] = []
+
+    def __call__(self, argv, **kwargs):
+        self.seen.append((list(argv), kwargs))
+        return self.gh(argv, **kwargs)
+
+
+def test_every_gh_call_this_script_makes_is_bounded():
+    """F-449b02: a stalled CLI must not hold the run to the job timeout."""
+    recorder = _KwargsRecorder(lens_gh(prs=[pull()]))
+    reconcile.sweep(
+        REPO,
+        runner=recorder,
+        now=NOW,
+        sleeper=lambda _s: None,
+        lens=FakeLensAPI().source(),
+    )
+    own = [
+        kwargs
+        for argv, kwargs in recorder.seen
+        if is_pr_list(argv) or is_graphql(argv) or is_rate_limit(argv)
+    ]
+    assert len(own) == 3
+    assert all(kw.get("timeout") == reconcile.GH_TIMEOUT_SECONDS for kw in own)
+
+
+def _stall():
+    raise subprocess.TimeoutExpired(cmd="gh", timeout=reconcile.GH_TIMEOUT_SECONDS)
+
+
+def test_a_stalled_pr_listing_is_loud():
+    gh = base_gh()
+    gh.on(is_pr_list, _stall)
+
+    with pytest.raises(SystemExit, match="timed out"):
+        run_sweep(gh)
+
+
+def test_a_stalled_lens_prefilter_is_loud():
+    gh = lens_gh()
+    gh.on(is_graphql, _stall)
+
+    with pytest.raises(SystemExit, match="timed out"):
+        run_lens_sweep(gh, FakeLensAPI())
+
+
+def test_a_stalled_quota_read_is_treated_as_unreadable_not_empty():
+    """Same as any unreadable meter: go ahead and try the approval."""
+    gh = base_gh()
+    gh.on(is_rate_limit, _stall)
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
