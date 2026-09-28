@@ -124,6 +124,31 @@ class GitHub:
                 return out
             page += 1
 
+    def newest_status(
+        self, sha: str, context: str, max_pages: int = 10
+    ) -> dict[str, Any] | None:
+        """The newest commit status on `sha` for `context`, whoever set it.
+
+        The listing is newest first but mixes every context, so a head busy
+        with other statuses can push `context` past the first page. Pages are
+        read until it appears or the listing ends, up to `max_pages` pages of
+        100. None when it is not found within them."""
+        for page in range(1, max_pages + 1):
+            batch = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/commits/{sha}/statuses"
+                    f"?per_page=100&page={page}",
+                )
+                or []
+            )
+            for status in batch:
+                if status.get("context") == context:
+                    return status
+            if len(batch) < 100:
+                return None
+        return None
+
     def workflow_runs(self, workflow_file: str) -> list[dict[str, Any]]:
         """Recent runs of one workflow, newest first (one page is enough: a
         run this call must see is at most minutes old)."""
@@ -203,12 +228,14 @@ class GitHub:
                 return out
             page += 1
 
-    def approve(self, number: int, head: str, body: str) -> None:
-        self._call(
+    def approve(self, number: int, head: str, body: str) -> int:
+        """Posts an APPROVE review; returns its id (0 if GitHub did not say)."""
+        out = self._call(
             "POST",
             f"/repos/{self.repo}/pulls/{number}/reviews",
             {"commit_id": head, "event": "APPROVE", "body": body},
         )
+        return int((out or {}).get("id") or 0)
 
     def dismiss_review(self, number: int, review_id: int, message: str) -> None:
         self._call(
