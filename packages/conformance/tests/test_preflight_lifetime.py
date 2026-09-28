@@ -212,6 +212,17 @@ def test_bounded_run_in_thread_is_valid(tmp_path, offload, template):
     )
 
 
+def test_module_attribute_run_in_thread_requires_outer_deadline(tmp_path):
+    assert "F011" in {
+        f.rule_id
+        for f in findings(
+            tmp_path,
+            "await heartbeat.run_in_thread(probe)",
+            "import asyncio\nfrom application_sdk.execution import heartbeat\n",
+        )
+    }
+
+
 def test_aliased_sdk_run_in_thread_requires_outer_deadline(tmp_path):
     assert "F011" in {
         f.rule_id

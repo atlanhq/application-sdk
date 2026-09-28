@@ -400,9 +400,11 @@ _CONTRACT_RULES = (
         rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
         rule_interactions=(
             "Applied together with P031. P031 moves asyncio.to_thread / "
-            "run_in_executor(None, ...) onto the SDK's run_in_thread "
-            "(App.run_in_thread, task_context.run_in_thread, or "
-            "application_sdk.execution.heartbeat.run_in_thread), and run_in_thread "
+            "run_in_executor(None, ...) onto the SDK's run_in_thread; on a preflight "
+            "path that is the module-level "
+            "application_sdk.execution.heartbeat.run_in_thread, because Handler has "
+            "no run_in_thread and App.run_in_thread raises outside a @task. "
+            "run_in_thread "
             "carries no deadline of its own, so the swapped call is still an "
             "executor wait in F011's view. On a preflight path, add the deadline "
             "when moving: wrap the run_in_thread await in asyncio.wait_for(..., "

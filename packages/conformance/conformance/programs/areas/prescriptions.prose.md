@@ -683,7 +683,9 @@ the blind gate cannot tell a correct hop from a plausible one.
   thread, exactly as P023 prescribes.  A `run_in_executor` whose first
   argument is a *real* executor the app owns is a deliberate choice, not this
   defect — say so and route to residue rather than rewriting it.  On a
-  preflight path, F011 sees the swapped call too: `run_in_thread` carries no
+  preflight path, F011 sees the swapped call too: use the module-level
+  `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
+  `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
   deadline, so the draft must keep or add an enclosing
   `asyncio.wait_for(..., timeout=...)` or `async with asyncio.timeout(...)`
   sized from the remaining preflight budget; a swap without one moves F011 to
