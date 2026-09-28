@@ -559,4 +559,80 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#b008",
     ),
+    RuleDefinition(
+        id="B009",
+        canonical_reference=(
+            "application_sdk packages/api/application_sdk_api/handler/__init__.py — "
+            "the module every handler-surface name is defined in; the "
+            "application_sdk.handler* modules only re-export it with a "
+            "DeprecationWarning. The compliant import names the same symbols with "
+            "the root spelled application_sdk_api. No reference app has migrated "
+            "yet — each still imports its Handler surface from the deprecated "
+            "root, so treat their handler modules as the shape to rewrite, not to "
+            "copy."
+        ),
+        scope=RuleScope.APP,
+        name="DeprecatedHandlerImportPath",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="deprecated-import-path",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.40.0",
+        rationale=(
+            "The handler surface moved into the atlan-application-sdk-api "
+            "distribution so the consolidated API server can host an app's handler "
+            "without installing the worker's dependency tree. The old "
+            "application_sdk.handler* modules are shims that resolve every name to "
+            "the same object with a DeprecationWarning and are removed in v4.0, so "
+            "an app still importing them breaks at that bump. B001 cannot carry "
+            "this: it matches deprecated *symbols*, and here no symbol is "
+            "deprecated — only the import path is. The rewrite is purely "
+            "mechanical (same names, same objects, new module root), which is why "
+            "it is auto-fixable. The worker-surface names that happen to live in "
+            "handler.contracts (PreflightGateMode, the event-trigger configs, "
+            "FileUploadResponse) and the worker-side helpers re-exported from the "
+            "handler package are NOT deprecated on that path and are never flagged "
+            "(FND-2964)."
+        ),
+        short_description=(
+            "Imports the handler surface from the deprecated application_sdk.handler "
+            "path instead of application_sdk_api.handler"
+        ),
+        full_description=(
+            "Flags an import of a handler-surface name through one of the\n"
+            "deprecated shim modules — ``application_sdk.handler`` and its\n"
+            "``base``, ``contracts``, ``context``, ``manifest`` and\n"
+            "``service_errors`` submodules (FND-2964).  Every name there resolves\n"
+            "to the object defined in ``application_sdk_api.handler``; the shims\n"
+            "emit a ``DeprecationWarning`` and are removed in v4.0.\n"
+            "\n"
+            "Shapes matched:\n"
+            "\n"
+            "* ``from application_sdk.handler.contracts import PreflightInput``;\n"
+            "* ``from application_sdk.handler import contracts`` /\n"
+            "  ``from application_sdk import handler``;\n"
+            "* ``import application_sdk.handler.contracts as hc`` and the plain\n"
+            "  ``import application_sdk.handler`` — flagged unless every\n"
+            "  ``alias.Name`` the file reads is a worker-surface name.\n"
+            "\n"
+            "**Not flagged** — the worker surface, which stays on the old path:\n"
+            "``PreflightGateMode``, ``EventTriggerConfig``, ``EventFilterRule``,\n"
+            "``SubscriptionConfig``, ``CloudEventEnvelope``,\n"
+            "``FileUploadResponse``, ``bind_invocation_context`` (via\n"
+            "``handler.context``) and ``create_app_handler_service`` /\n"
+            "``run_app_handler_service`` (via ``handler``; those two are\n"
+            "``@deprecated`` functions B001 already reports).  Neither are\n"
+            "``application_sdk.handler.service`` / ``.invocation``, which are\n"
+            "worker modules, nor ``application_sdk.errors*``, which is a\n"
+            "first-class path to the same taxonomy.\n"
+            "\n"
+            "**Fix.**  Rewrite the module root — ``application_sdk.handler`` →\n"
+            "``application_sdk_api.handler`` — keeping the imported names.  In a\n"
+            "mixed import, split the statement: the worker-surface names stay on\n"
+            "the old path, everything else moves.  Suppress a deliberate\n"
+            "exception with ``# conformance: ignore[B009] <reason>``.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#b009",
+    ),
 )

@@ -3,8 +3,11 @@ kind: responsibility
 name: deprecation-area
 description: >
   Maintains the current B-series violation-set and drives remediation of
-  deprecation findings.  B001 (app: stop consuming a deprecated SDK symbol),
-  B007 (app: daft-only DataFrame APIs dead on the daft-less runtime), and
+  deprecation findings.  B009 (app: move a handler-surface import from the
+  deprecated application_sdk.handler* path to application_sdk_api.handler*) and
+  B006 (stale contract ledger) are mechanical; B001 (app: stop consuming a
+  deprecated SDK symbol), B007 (app: daft-only DataFrame APIs dead on the
+  daft-less runtime), and
   B002 (sdk: fix a malformed deprecation notice) are guided fixes; B003 (overdue
   removal) and B004 (unmarked claim) are detect-only and route to residue.
 ---
@@ -26,7 +29,7 @@ includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008/B009 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -100,6 +103,31 @@ gates them, and the edit is fully determined by the finding):
   blank one; that is a B005 question and never part of a B006 fix.
   Measured on a connector at suite 0.34.0: two B006 findings, ledger 121 → 123
   fields, re-detect clean with no B005 introduced.
+
+- **B009 DeprecatedHandlerImportPath** (app source, the import statement the
+  finding anchors on) — the app imports the handler surface through a
+  deprecated `application_sdk.handler*` shim.  The edit is a **module-root
+  rewrite, names unchanged**: replace the leading `application_sdk.handler`
+  with `application_sdk_api.handler` in that one statement —
+  `from application_sdk.handler.contracts import PreflightInput` →
+  `from application_sdk_api.handler.contracts import PreflightInput`;
+  `import application_sdk.handler.contracts as hc` →
+  `import application_sdk_api.handler.contracts as hc`;
+  `from application_sdk import handler` →
+  `from application_sdk_api import handler`.  For the plain unaliased
+  `import application_sdk.handler[...]`, also rewrite every
+  `application_sdk.handler[...].Name` reference in the file to the new root.
+  **Split a mixed statement** when the message says `Keep …`: those names are
+  the worker surface (`PreflightGateMode`, `EventTriggerConfig`,
+  `EventFilterRule`, `SubscriptionConfig`, `CloudEventEnvelope`,
+  `FileUploadResponse`, `bind_invocation_context`,
+  `create_app_handler_service`, `run_app_handler_service`), which do not
+  exist on the new path for the last three and are not deprecated on the old
+  one — leave them in a statement on the original module and move the rest.
+  Never touch `application_sdk.errors*` (first-class, not deprecated) or
+  `application_sdk.handler.service` / `.invocation` (worker modules).  The
+  objects are identical through either path, so no call site changes; the
+  test gate confirms.  `classification = "mechanical"`.
 
 **Guided fixes** (`classification = "judgment"`; the loop applies and gates them
 with `recheck-narrowest` + the test orthogonal gate, then routes to residue for

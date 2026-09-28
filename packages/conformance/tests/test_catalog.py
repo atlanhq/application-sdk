@@ -470,6 +470,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
     assert app_scoped == {
+        "B009",
         "B001",
         "B007",
         "B008",
@@ -880,10 +881,23 @@ def test_catalog_b_series_present() -> None:
     cannot carry (fleet SDR sweep).  ``DataframeType.daft`` is the SDK's own
     symbol, so it rides the generated manifest and B001 reports it — the
     ownership split the B007 rule definition and remediation prose describe.
+    B009 is DeprecatedHandlerImportPath — a deprecated import *path* (the
+    handler surface moved to ``application_sdk_api``), which no symbol
+    manifest can carry either.
     """
     rules = load_catalog()
     b_ids = {r.id for r in rules if r.id.startswith("B")}
-    expected = {"B001", "B002", "B003", "B004", "B005", "B006", "B007", "B008"}
+    expected = {
+        "B001",
+        "B002",
+        "B003",
+        "B004",
+        "B005",
+        "B006",
+        "B007",
+        "B008",
+        "B009",
+    }
     missing = expected - b_ids
     assert not missing, f"Missing B-series rules: {missing}"
     extra = b_ids - expected
@@ -1540,6 +1554,11 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
     "E008": (
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
+    ),
+    "B009": (
+        "the api package is new with FND-2964 and no reference app has moved its "
+        "handler imports to application_sdk_api yet, so none can show the "
+        "compliant import; the positive shape is the SDK's own api package"
     ),
     "T025": (
         "no reference app is in bundle mode (each emits a single generated "
