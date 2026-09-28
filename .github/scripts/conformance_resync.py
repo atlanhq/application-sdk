@@ -425,11 +425,16 @@ def pr_matches_render(
     if changed != sorted(staged):
         return False
     for path in staged:
-        ours = git(["rev-parse", f"HEAD:{path}"], work, runner, check=False).strip()
-        theirs = git(
-            ["rev-parse", f"FETCH_HEAD:{path}"], work, runner, check=False
+        ours = git(
+            ["rev-parse", "--verify", "-q", f"HEAD:{path}"], work, runner, check=False
         ).strip()
-        if not ours or ours != theirs:
+        theirs = git(
+            ["rev-parse", "--verify", "-q", f"FETCH_HEAD:{path}"],
+            work,
+            runner,
+            check=False,
+        ).strip()
+        if ours != theirs:
             return False
     return True
 

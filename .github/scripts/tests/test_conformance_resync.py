@@ -343,10 +343,10 @@ def _files_runner(paths: list[str], blobs: dict[str, tuple[str, str]]) -> FakeRu
         ),
     }
     for path, (ours, theirs) in blobs.items():
-        answers[("git", "rev-parse", f"HEAD:{path}")] = subprocess.CompletedProcess(
-            [], 0, stdout=ours + "\n"
+        answers[("git", "rev-parse", "--verify", "-q", f"HEAD:{path}")] = (
+            subprocess.CompletedProcess([], 0, stdout=ours + "\n")
         )
-        answers[("git", "rev-parse", f"FETCH_HEAD:{path}")] = (
+        answers[("git", "rev-parse", "--verify", "-q", f"FETCH_HEAD:{path}")] = (
             subprocess.CompletedProcess([], 0, stdout=theirs + "\n")
         )
     return FakeRunner(answers)
@@ -377,3 +377,13 @@ def test_withdraw_closes_the_lane_pr_and_never_dispatches():
 def test_dispatch_failure_is_reported_not_raised():
     assert lane.dispatch_approval(REPO, 7, FakeRunner(default_rc=1)) == "gh exited 1"
     assert lane.dispatch_approval(REPO, 7, FakeRunner()) == ""
+
+
+def test_pr_matches_render_when_both_sides_delete_the_path():
+    runner = _files_runner(["retired.sh"], {"retired.sh": ("", "")})
+    assert lane.pr_matches_render(REPO, 7, ["retired.sh"], "/w", runner) is True
+
+
+def test_pr_matches_render_detects_a_delete_on_one_side_only():
+    runner = _files_runner(["retired.sh"], {"retired.sh": ("", "b1")})
+    assert lane.pr_matches_render(REPO, 7, ["retired.sh"], "/w", runner) is False
