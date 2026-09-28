@@ -71,9 +71,11 @@ def flatten_dotted_keys(nested: Mapping[str, object]) -> dict[str, object]:
     to travel as).
 
     Raises:
-        ValueError: A key is not a string, or two paths land on the same dotted
-            key (``{"extra.a": 1, "extra": {"a": 2}}``). Either value silently
-            winning would be a credential nobody asked for. ``ValueError`` so a
+        ValueError: A key is not a string, two paths land on the same dotted
+            key (``{"extra.a": 1, "extra": {"a": 2}}``), or one key is a dotted
+            parent of another (``{"host": "h", "host.name": "n"}``) — expanding
+            that back would drop one of them. Either value silently winning
+            would be a credential nobody asked for. ``ValueError`` so a
             pydantic validator using this reports a validation error.
     """
     flat: dict[str, object] = {}
@@ -93,6 +95,14 @@ def flatten_dotted_keys(nested: Mapping[str, object]) -> dict[str, object]:
                 flat[dotted] = value
 
     _walk("", nested)
+    for dotted in flat:
+        parts = dotted.split(".")
+        for depth in range(1, len(parts)):
+            parent = ".".join(parts[:depth])
+            if parent in flat:
+                raise ValueError(
+                    f"Credential key {parent!r} is both a value and the parent of {dotted!r}"
+                )
     return flat
 
 
@@ -163,8 +173,9 @@ def normalize_inline_credentials(
 
     Raises:
         CredentialParseError: ``extra`` is a string that does not decode to a
-            JSON object, a value is not a :data:`CredentialValue` scalar, or
-            two inputs name the same dotted key.
+            JSON object, a value is not a :data:`CredentialValue` scalar, two
+            pairs or paths name the same key, or a key is the dotted parent of
+            another.
     """
     from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
         CredentialParseError,
@@ -185,6 +196,11 @@ def normalize_inline_credentials(
             if not isinstance(key, str) or not key:
                 logger.debug("Skipping an inline credential pair with no string key")
                 continue
+            if key in merged:
+                raise CredentialParseError(
+                    message=f"Credential key {key!r} is given twice",
+                    credential_name=key,
+                )
             merged[key] = item.get("value", "")
 
     if isinstance(merged.get("extra"), str):
@@ -210,23 +226,59 @@ def normalize_inline_credentials(
     return flat  # type: ignore[return-value]
 
 
-def find_prebuilt_credential_ref(
-    source: object, *, ref_field: str | None = None
-) -> CredentialRef | None:
+RUN_CREDENTIAL_FIELD_ATTR = "run_credential_field"
+"""Input-class attribute naming the field that holds the run's pre-built ref.
+
+Declare it as a ``ClassVar[str]`` on the entry-point input when the model has
+more than one ``CredentialRef`` field (or to pin discovery to one field)::
+
+    class MyInput(AppInputContract):
+        run_credential_field: ClassVar[str] = "my_credential"
+
+It is a class declaration, not a call argument, so every reader of the input —
+:func:`route_credentials` in the entry point and the preflight gate — makes the
+same choice. The same convention as ``preflight_credential_refs``.
+"""
+
+
+def _declared_run_credential_field(source: object) -> str | None:
+    """The ``run_credential_field`` the input's class declares, if any."""
+    from application_sdk.credentials.errors import (  # noqa: PLC0415 — circular: credentials/__init__ loads sibling modules
+        CredentialRoutingError,
+    )
+
+    source_type = type(source)
+    if RUN_CREDENTIAL_FIELD_ATTR in getattr(source_type, "model_fields", {}):
+        # A pydantic field, not a ClassVar: it would travel with every payload,
+        # and a caller could then choose which credential the run uses.
+        raise CredentialRoutingError(
+            message=(
+                f"{source_type.__name__}.{RUN_CREDENTIAL_FIELD_ATTR} is a model "
+                "field; declare it as ClassVar[str]"
+            ),
+            field=RUN_CREDENTIAL_FIELD_ATTR,
+        )
+    declared = getattr(source_type, RUN_CREDENTIAL_FIELD_ATTR, None)
+    return declared if isinstance(declared, str) and declared else None
+
+
+def find_prebuilt_credential_ref(source: object) -> CredentialRef | None:
     """Return the :class:`CredentialRef` an input already carries, if any.
 
-    ``ref_field`` names the field to read. Without it, the generic
-    ``credential_ref`` field wins, then the one other populated
-    ``CredentialRef`` field on the model — normally the ``<app>_credential``
-    field the contract toolkit generates.
+    When the input's class declares :data:`RUN_CREDENTIAL_FIELD_ATTR`, only that
+    field is read. Otherwise the generic ``credential_ref`` field wins, then the
+    one other populated ``CredentialRef`` field on the model — normally the
+    ``<app>_credential`` field the contract toolkit generates.
 
     Raises:
-        CredentialRoutingError: No ``ref_field`` was given and more than one
-            other ``CredentialRef`` field is populated, so which credential the
-            run means is ambiguous. Pass ``ref_field``.
+        CredentialRoutingError: No field is declared and more than one other
+            ``CredentialRef`` field is populated, so which credential the run
+            means is ambiguous; or ``run_credential_field`` is declared as a
+            model field instead of a ``ClassVar``.
     """
-    if ref_field is not None:
-        value = getattr(source, ref_field, None)
+    declared = _declared_run_credential_field(source)
+    if declared is not None:
+        value = getattr(source, declared, None)
         return value if isinstance(value, CredentialRef) else None
 
     generic = getattr(source, "credential_ref", None)
@@ -248,16 +300,25 @@ def find_prebuilt_credential_ref(
         raise CredentialRoutingError(
             message=(
                 f"Input carries several credential refs ({', '.join(sorted(populated))}); "
-                "pass ref_field= to say which one the run uses"
+                f"declare {RUN_CREDENTIAL_FIELD_ATTR}: ClassVar[str] on the input "
+                "class to say which one the run uses"
             ),
-            field="ref_field",
+            field=RUN_CREDENTIAL_FIELD_ATTR,
         )
     return getattr(source, populated[0]) if populated else None
 
 
 def _has_routing_fields(source: object) -> bool:
-    """Whether the input names a credential by GUID or by a populated agent spec."""
+    """Whether the input names a credential: a GUID, agent mode, or an agent spec.
+
+    Agent mode counts on its own: an ``extraction_method="agent"`` run with an
+    empty spec is a misroute, and must reach the strict resolver to be refused
+    rather than fall through to inline credentials.
+    """
     if getattr(source, "credential_guid", ""):
+        return True
+    method = getattr(source, "extraction_method", "")
+    if isinstance(method, str) and method.strip().lower() == "agent":
         return True
     agent = getattr(source, "agent_json", None)
     return isinstance(agent, AgentCredentialSpec) and agent.is_populated()
@@ -266,7 +327,6 @@ def _has_routing_fields(source: object) -> bool:
 def route_credentials(
     source: object,
     *,
-    ref_field: str | None = None,
     inline_field: str = "credentials",
 ) -> ResolvedCredentials:
     """Route an input's credential channels into one :class:`ResolvedCredentials`.
@@ -274,8 +334,8 @@ def route_credentials(
     In order:
 
     1. A pre-built ref (:func:`find_prebuilt_credential_ref`) wins outright.
-    2. An input that names a credential — a ``credential_guid``, or a populated
-       ``agent_json`` — routes through the strict :meth:`CredentialRef.resolve`,
+    2. An input that names a credential — a ``credential_guid``, agent mode, or
+       a populated ``agent_json`` — routes through the strict :meth:`CredentialRef.resolve`,
        the same routing the preflight gate uses, so the gate and the tasks
        agree on the credential. A misrouted input (``extraction_method="agent"``
        with an empty spec) raises here and names the cause, rather than falling
@@ -288,17 +348,17 @@ def route_credentials(
        test channel; see the module docstring.
 
     Args:
-        source: The entry-point input.
-        ref_field: Field holding the app's pre-built ref, when discovery is
-            ambiguous or undesired.
+        source: The entry-point input. Its class may declare
+            :data:`RUN_CREDENTIAL_FIELD_ATTR` to name its pre-built ref field.
         inline_field: Field holding the inline credentials.
 
     Raises:
         CredentialRoutingError: The input names a credential that cannot be
-            routed, or carries several pre-built refs and no ``ref_field``.
+            routed, or carries several pre-built refs and declares no
+            ``run_credential_field``.
         CredentialParseError: The inline credentials are malformed.
     """
-    prebuilt = find_prebuilt_credential_ref(source, ref_field=ref_field)
+    prebuilt = find_prebuilt_credential_ref(source)
     if prebuilt is not None:
         return ResolvedCredentials(prebuilt, {})
 

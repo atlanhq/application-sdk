@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 import pytest
 from pydantic import BaseModel, Field, ValidationError
 
@@ -89,6 +91,19 @@ class TestFlattenDottedKeys:
     def test_two_paths_to_one_key_raise(self) -> None:
         with pytest.raises(ValueError, match="'extra.a' is given twice"):
             flatten_dotted_keys({"extra.a": 1, "extra": {"a": 2}})
+
+    def test_a_key_that_is_another_keys_parent_raises(self) -> None:
+        # expand_dotted_keys would keep ``host`` and silently drop ``host.name``.
+        with pytest.raises(ValueError, match="'host' is both a value and the parent"):
+            flatten_dotted_keys({"host": "h", "host.name": "n"})
+        with pytest.raises(ValueError, match="'host' is both a value and the parent"):
+            flatten_dotted_keys({"host.name": "n", "host": "h"})
+
+    def test_sibling_prefixes_are_not_parents(self) -> None:
+        assert flatten_dotted_keys({"host": "h", "hostname": "n"}) == {
+            "host": "h",
+            "hostname": "n",
+        }
 
     def test_non_string_key_raises(self) -> None:
         with pytest.raises(ValueError, match="must be strings"):
@@ -189,6 +204,19 @@ class TestNormalizeInlineCredentials:
         with pytest.raises(CredentialParseError, match="given twice"):
             normalize_inline_credentials({"extra.a": "1", "extra": {"a": "2"}})
 
+    def test_duplicate_pair_keys_raise(self) -> None:
+        # The later pair must not silently replace the earlier one.
+        with pytest.raises(CredentialParseError, match="'host' is given twice"):
+            normalize_inline_credentials(
+                [{"key": "host", "value": "old"}, {"key": "host", "value": "new"}]
+            )
+
+    def test_parent_and_child_pairs_raise(self) -> None:
+        with pytest.raises(CredentialParseError, match="both a value and the parent"):
+            normalize_inline_credentials(
+                [{"key": "host", "value": "h"}, {"key": "host.name", "value": "n"}]
+            )
+
 
 # ---------------------------------------------------------------------------
 # find_prebuilt_credential_ref
@@ -217,9 +245,27 @@ class TestFindPrebuiltCredentialRef:
         two = _Two(demo_credential=_ref("a"), other_credential=_ref("b"))
         with pytest.raises(CredentialRoutingError, match="several credential refs"):
             find_prebuilt_credential_ref(two)
-        assert find_prebuilt_credential_ref(two, ref_field="other_credential") == _ref(
-            "b"
+
+    def test_declared_run_credential_field_picks_one(self) -> None:
+        class _Declared(_AppInput):
+            run_credential_field: ClassVar[str] = "other_credential"
+            other_credential: CredentialRef | None = None
+
+        declared = _Declared(demo_credential=_ref("a"), other_credential=_ref("b"))
+        assert find_prebuilt_credential_ref(declared) == _ref("b")
+        # Only the declared field is read: an unset one means "no pre-built ref".
+        assert (
+            find_prebuilt_credential_ref(_Declared(demo_credential=_ref("a"))) is None
         )
+
+    def test_run_credential_field_as_a_model_field_raises(self) -> None:
+        # A model field would travel with the payload and let a caller pick the
+        # credential; only a ClassVar declaration is honoured.
+        class _Misdeclared(_AppInput):
+            run_credential_field: str = "demo_credential"
+
+        with pytest.raises(CredentialRoutingError, match="declare it as ClassVar"):
+            find_prebuilt_credential_ref(_Misdeclared(demo_credential=_ref("a")))
 
     def test_nothing_set_returns_none(self) -> None:
         assert find_prebuilt_credential_ref(_AppInput()) is None
@@ -253,6 +299,18 @@ class TestRouteCredentials:
         )
         assert ref is not None and ref.credential_guid == "g"
 
+    @pytest.mark.parametrize("method", ["direct", "query_history", "s3", " S3 "])
+    def test_guid_routed_methods(self, method: str) -> None:
+        ref, _ = route_credentials(
+            _AppInput(extraction_method=method, credential_guid="g")
+        )
+        assert ref is not None and ref.credential_guid == "g"
+
+    def test_unclassified_extraction_method_raises(self) -> None:
+        # Not guessed to be direct: a misspelled or unsupported mode is refused.
+        with pytest.raises(CredentialRoutingError):
+            route_credentials(_AppInput(extraction_method="drect", credential_guid="g"))
+
     def test_misrouted_agent_run_raises_instead_of_falling_back(self) -> None:
         # extraction_method=agent with an empty spec: the GUID must not be used,
         # and neither may the inline credentials.
@@ -263,6 +321,15 @@ class TestRouteCredentials:
         )
         with pytest.raises(CredentialRoutingError):
             route_credentials(misrouted)
+
+    def test_agent_mode_with_empty_spec_and_no_guid_raises(self) -> None:
+        # Agent mode alone names a credential route; an empty spec must be
+        # refused, not answered with the inline credentials (or nothing).
+        for credentials in ([{"key": "host", "value": "h"}], []):
+            with pytest.raises(CredentialRoutingError):
+                route_credentials(
+                    _AppInput(extraction_method="agent", credentials=credentials)
+                )
 
     def test_inline_used_only_without_routing_fields(self) -> None:
         routed = route_credentials(
@@ -316,7 +383,6 @@ class TestRouteCredentials:
 
 
 class TestResolveCredentialRawOrInline:
-    @pytest.mark.asyncio
     async def test_ref_path_resolves_through_the_store(self) -> None:
         store = MockCredentialStore()
         ref = store.add_basic("svc", username="u", password="p")
@@ -326,7 +392,6 @@ class TestResolveCredentialRawOrInline:
         raw = await ctx.resolve_credential_raw_or_inline(ref, {"host": "ignored"})
         assert raw.get("username") == "u"
 
-    @pytest.mark.asyncio
     async def test_inline_path_returns_the_nested_shape(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         raw = await ctx.resolve_credential_raw_or_inline(
@@ -334,7 +399,6 @@ class TestResolveCredentialRawOrInline:
         )
         assert raw == {"host": "h", "extra": {"client_id": "c"}}
 
-    @pytest.mark.asyncio
     async def test_neither_raises(self) -> None:
         ctx = AppContext(app_name="a", app_version="1")
         with pytest.raises(CredentialRoutingError, match="neither"):
@@ -353,6 +417,17 @@ class TestGatePrebuiltRef:
             _AppInput(demo_credential=ref), "extract"
         )
         assert gate.credential_ref == ref
+
+    def test_gate_honours_a_declared_run_credential_field(self) -> None:
+        class _Declared(_AppInput):
+            run_credential_field: ClassVar[str] = "other_credential"
+            other_credential: CredentialRef | None = None
+
+        gate = PreflightGateInput.from_extraction_input(
+            _Declared(demo_credential=_ref("a"), other_credential=_ref("b")), "extract"
+        )
+        # The same ref route_credentials hands the tasks.
+        assert gate.credential_ref == _ref("b")
 
     def test_ambiguous_refs_fall_back_to_credential_ref_only(self) -> None:
         class _Two(_AppInput):
