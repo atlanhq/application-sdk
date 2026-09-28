@@ -49,6 +49,15 @@ before migrating.
   `orjson.dumps` / `orjson.loads`, and the stdlib json module is imported nowhere under
   app/. orjson is a core SDK dependency, so there is no install cost to paying for the
   speed.
+- **Already correct when:** A justified inline `# conformance: ignore[O001] <reason>` IS the correct end state for a
+  `json.dumps` whose encoded string is published as an asset attribute value, hashed as
+  text, or byte-compared by a consumer outside the app, where the reason names that
+  consumer (for example the publish app hashing a Column attribute's string value). A
+  consumer that parses the whole document before comparing it (the same publish app
+  diffing an entity file) does not qualify: that site makes the swap. No orjson option
+  reproduces stdlib's default separators or `ensure_ascii` escaping, so any swap changes
+  every stored value once. A directive whose reason names no external consumer, or names
+  one that only parses the JSON, is unremediated: make the swap.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
@@ -70,6 +79,13 @@ pass `separators=(",", ":")` and `ensure_ascii=False`: orjson is always compact 
 always writes non-ASCII as UTF-8, with no option for either.  The parsed value is
 identical, so tests that compare parsed JSON pass; a consumer that hashes, commits or
 byte-compares the output sees the difference.
+
+No orjson call reproduces stdlib's default bytes: there is no separators option, no
+`ensure_ascii` option, `orjson.dumps` cannot serialize an integer above 64 bits, and
+rewriting orjson's text corrupts string values that contain `", "`. So a `json.dumps`
+whose string leaves the app and is compared as bytes (published as an asset attribute
+value, hashed as text, or byte-compared by another service) stays on stdlib `json`
+behind a justified directive; see *Already correct when*.
 
 ---
 

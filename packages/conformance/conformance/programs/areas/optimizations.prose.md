@@ -104,6 +104,25 @@ two auto-fixable rules:
     committed file, dump its current content both ways and compare) and say
     in residue what will change.  Do not rewrite a committed file to match;
     the edit touches the call site only.
+  - **When the bytes leave the app, leave the site on stdlib `json`.**  No
+    orjson call reproduces stdlib's default output (no separators option, no
+    `ensure_ascii` option, and `orjson.dumps` cannot serialize integers above
+    64 bits), and rewriting orjson's
+    text corrupts values that contain `", "`.  So if the encoded string is
+    published as an asset attribute value, hashed as text, or byte-compared by a
+    consumer outside the app, do not swap: any swap changes every stored value
+    once on every tenant, and moves any length limit measured on the string.
+    Prove the consumer before you stop: trace the string from the call to
+    where it leaves the app (the asset attribute it is written to, the hash,
+    the comparison) and name that consumer.  Then add
+    `# conformance: ignore[O001] <reason>` where the reason names that
+    consumer.  This is the rule's terminal state in every mode, not only
+    strict: residue it once, and do not strip the directive on a later run.
+    A consumer that only parses the JSON, or one inside the app, is not a
+    reason: make the swap.  The same service can be both: the publish app
+    parses the whole document of an entity file before it diffs it, so the
+    dumps that writes the file makes the swap, while a JSON string stored as
+    one attribute value inside that entity is hashed as text and stays.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
     and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`

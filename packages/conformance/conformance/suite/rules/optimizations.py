@@ -66,6 +66,28 @@ RULES: tuple[RuleDefinition, ...] = (
             "either.  The parsed value is identical, so tests that compare parsed\n"
             "JSON pass; a consumer that hashes, commits or byte-compares the output\n"
             "sees the difference.\n"
+            "\n"
+            "No orjson call reproduces stdlib's default bytes: there is no separators\n"
+            "option, no ``ensure_ascii`` option, ``orjson.dumps`` cannot serialize an\n"
+            "integer above 64 bits, and\n"
+            'rewriting orjson\'s text corrupts string values that contain ``", "``.\n'
+            "So a ``json.dumps`` whose string leaves the app and is compared as\n"
+            "bytes (published as an asset attribute value, hashed as text, or byte-compared\n"
+            "by another service) stays on stdlib ``json`` behind a justified\n"
+            "directive; see *Already correct when*.\n"
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[O001] <reason>` IS the correct "
+            "end state for a `json.dumps` whose encoded string is published as an asset "
+            "attribute value, hashed as text, or byte-compared by a consumer outside the "
+            "app, where the reason names that consumer (for example the publish app "
+            "hashing a Column attribute's string value). A consumer that parses the whole "
+            "document before comparing it (the same publish app diffing an entity file) "
+            "does not qualify: that site makes the swap. No orjson option reproduces "
+            "stdlib's default "
+            "separators or `ensure_ascii` escaping, so any swap changes every stored "
+            "value once. A directive whose reason names no external consumer, or names "
+            "one that only parses the JSON, is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
     ),
