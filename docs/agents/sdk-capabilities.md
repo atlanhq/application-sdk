@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.39.1
-source-sha:    0cf5d2cbf5509e746033abe96a3973f93b111a6a
-source-date:   2026-09-27T23:16:34Z
+source-sha:    5af6afb0e7c17e32c2f330c54fc34b823998a246
+source-date:   2026-09-28T15:47:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -1374,7 +1374,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `find_prebuilt_credential_ref`
 
 - **Import:** `from application_sdk.credentials import find_prebuilt_credential_ref`
-- **Signature:** `find_prebuilt_credential_ref(source: object, *, ref_field: str | None = None)`
+- **Signature:** `find_prebuilt_credential_ref(source: object)`
 - **Summary:** Return the :class:`CredentialRef` an input already carries, if any.
 - **Defined in:** `application_sdk/credentials/routing.py`
 
@@ -1465,7 +1465,7 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 #### `route_credentials`
 
 - **Import:** `from application_sdk.credentials import route_credentials`
-- **Signature:** `route_credentials(source: object, *, ref_field: str | None = None, inline_field: str = 'credentials')`
+- **Signature:** `route_credentials(source: object, *, inline_field: str = 'credentials')`
 - **Summary:** Route an input's credential channels into one :class:`ResolvedCredentials`.
 - **Defined in:** `application_sdk/credentials/routing.py`
 
