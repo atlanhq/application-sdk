@@ -1,11 +1,47 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Auto-maintained by the vuln-triage rover; CODEOWNERS: SDK/security team + @atlan-ci (auto-merge of allowlist-only PRs).",
   "_base_image": "app-runtime-base:3",
-  "_updated": "2026-09-10",
+  "_updated": "2026-09-28",
   "_renewal_note": "Expiry dates are the remediation SLA per severity, measured from first detection. CRITICAL: 7 days. HIGH: 30 days. MEDIUM/LOW are NOT allowlisted (tracked on Linear tickets only). The gate (check_allowlist.py) passes while an entry is unexpired and fails once it expires. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-SELFTEST-1": {
+    "package": "boto3",
+    "severity": "HIGH",
+    "reason": "Case 1: our dependency, fixed in 1.43.103; clears once a dependency bump is merged and released (see ticket).",
+    "expires": "2026-10-28",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 1,
+    "ticket": "SELFTEST"
+  },
+  "CVE-SELFTEST-2": {
+    "package": "agent-detector",
+    "severity": "HIGH",
+    "reason": "Case 2: no upstream fix for agent-detector yet; upstream is maintained.",
+    "expires": "2026-10-28",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 2,
+    "ticket": "SELFTEST"
+  },
+  "CVE-SELFTEST-3": {
+    "package": "pyo3",
+    "severity": "HIGH",
+    "reason": "Case 2: pyo3 is vendored inside temporalio; clears when temporalio ships pyo3 >= 0.24.1.",
+    "expires": "2026-10-28",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 2,
+    "ticket": "SELFTEST"
+  },
+  "CVE-SELFTEST-4": {
+    "package": "dapr",
+    "severity": "CRITICAL",
+    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
+    "expires": "2026-10-05",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 4,
+    "ticket": "SELFTEST"
+  }
 }
