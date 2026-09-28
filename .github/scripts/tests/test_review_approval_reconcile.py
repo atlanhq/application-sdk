@@ -1211,3 +1211,89 @@ def test_lens_prefilter_keeps_only_green_heads():
     assert reconcile.lens_ready_heads(REPO, gh) == {(1, HEAD)}
     [argv] = gh.called(is_graphql)
     assert "--paginate" in argv and 'context(name: "lens")' in " ".join(argv)
+
+
+# --- manual dispatch ------------------------------------------------------
+#
+# A person who dispatches the workflow has seen the approval missing and the
+# run finished. The grace exists for the unattended cron; it must never answer
+# them "too recent" and skip the PR they asked about.
+
+
+def _a_minute_ago() -> str:
+    """`main()` reads the real clock, so "recent" has to be relative to it."""
+    return (datetime.now(timezone.utc) - timedelta(minutes=1)).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    )
+
+
+def test_a_manual_dispatch_reconciles_a_verdict_the_cron_would_call_too_recent():
+    gh = base_gh(comments=[comment(created_at=_a_minute_ago())])
+    assert reconcile.main(["--repo", REPO], runner=gh) == 0
+    assert gh.called(is_approve) == [], "the cron keeps its grace"
+
+    gh = base_gh(comments=[comment(created_at=_a_minute_ago())])
+    assert (
+        reconcile.main(["--repo", REPO, "--event-name", "workflow_dispatch"], runner=gh)
+        == 0
+    )
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_a_manual_dispatch_reconciles_a_fresh_lens_verdict():
+    api = FakeLensAPI(statuses=[lens_status(created_at=RECENT)])
+    outcomes = run_lens_sweep(
+        lens_gh(), api, min_age=reconcile.min_age_for("workflow_dispatch", 12)
+    )
+
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+
+
+def test_a_manual_dispatch_still_never_approves_a_withdrawn_or_open_verdict():
+    """Only the timer is dropped. Every other guard still holds."""
+    min_age = reconcile.min_age_for("workflow_dispatch", 12)
+    api = FakeLensAPI(
+        statuses=[lens_status(created_at=RECENT)],
+        reviews=[lens_review(state="DISMISSED")],
+    )
+    assert [o.action for o in run_lens_sweep(lens_gh(), api, min_age=min_age)] == [
+        reconcile.SKIPPED
+    ]
+    assert api.approvals() == []
+
+    api = FakeLensAPI(statuses=[lens_status(state="pending", created_at=RECENT)])
+    assert [o.action for o in run_lens_sweep(lens_gh(), api, min_age=min_age)] == [
+        reconcile.SKIPPED
+    ]
+    assert api.approvals() == []
+
+
+def test_the_cron_keeps_the_default_grace():
+    assert reconcile.min_age_for("schedule", 12) == timedelta(minutes=12)
+    assert reconcile.min_age_for("workflow_dispatch", 12) == timedelta(0)
+
+
+def test_pr_input_limits_the_sweep_to_that_pr():
+    gh = base_gh(prs=[pull(number=3), pull(number=PR)])
+    assert (
+        reconcile.main(
+            ["--repo", REPO, "--event-name", "workflow_dispatch", "--pr", str(PR)],
+            runner=gh,
+        )
+        == 0
+    )
+    assert len(gh.called(is_approve)) == 1
+    assert gh.called(lambda a: a[1] == "api" and "/issues/3/" in a[2]) == []
+
+
+@pytest.mark.parametrize(
+    "value, expected", [("", None), ("  ", None), ("7", 7), ("#7", 7)]
+)
+def test_pr_input_parsing(value, expected):
+    assert reconcile.parse_pr(value) == expected
+
+
+@pytest.mark.parametrize("value", ["abc", "0", "-3", "7; rm -rf /"])
+def test_a_malformed_pr_input_is_refused(value):
+    with pytest.raises(SystemExit, match="must be a PR number"):
+        reconcile.parse_pr(value)

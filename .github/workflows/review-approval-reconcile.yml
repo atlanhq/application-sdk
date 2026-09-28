@@ -52,6 +52,10 @@
 # problem does not clear on its own. A verdict still unapproved past
 # --stale-after-minutes (90) has outlived a full reset without recovering, and
 # that does red the run.
+#
+# Manual dispatch (optionally with `pr`) skips the min-age grace: the grace is
+# for the unattended cron, and a person dispatching has already seen the
+# approval run finish. Every other guard still applies.
 
 name: Review approvals — reconcile lost atlan-ci approvals
 
@@ -64,6 +68,10 @@ on:
         description: "Report which PRs would be reconciled without approving any"
         type: boolean
         default: false
+      pr:
+        description: "Only this PR number (empty = every open PR). A manual run skips the min-age grace."
+        type: string
+        default: ""
 
 # github.token only needs contents:read for the checkout; every API call the
 # sweep makes runs under the fleet App token minted below, and the one APPROVE
@@ -111,7 +119,11 @@ jobs:
           # The one identity whose lens summary and `lens` status are trusted
           # as lens's own; the same value lens.yml runs with.
           LENS_BOT_LOGIN: atlan-app-fleet[bot]
+          # Through env, not interpolated into the script: it is free text.
+          PR_INPUT: ${{ inputs.pr }}
         run: |
           python3 .github/scripts/review_approval_reconcile.py \
             --repo "${{ github.repository }}" \
+            --event-name "${{ github.event_name }}" \
+            --pr "$PR_INPUT" \
             ${{ inputs.dry_run && '--dry-run' || '' }}

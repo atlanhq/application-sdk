@@ -59,7 +59,9 @@ Guards (all four must hold before a PR is touched)
    cannot race a fast-path run that is still in flight for the same comment (its
    job ceiling is 10 minutes, including rate-limit backoff). The cost is latency:
    recovery lands one grace period plus up to one cron interval after the loss,
-   not within a single interval.
+   not within a single interval. A manual dispatch skips this guard
+   (`min_age_for`): a person asking for the approval has already checked
+   that the run finished.
 
 The stamper re-checks 1, 2 and 3 itself against fresh reads, so a dismissal
 landing between this sweep and the stamp is still caught. The checks here are a
@@ -739,6 +741,7 @@ def sweep(
     dry_run: bool = False,
     sleeper: Callable[[float], None] = time.sleep,
     lens: LensSource | None = None,
+    only_pr: int | None = None,
 ) -> list[Outcome]:
     """Reconcile every open PR whose standing verdict lost its approval.
 
@@ -760,7 +763,7 @@ def sweep(
 
     for pr in prs:
         number = pr.get("number")
-        if number is None:
+        if number is None or (only_pr is not None and number != only_pr):
             continue
 
         verdicts: list[Verdict] = [
@@ -895,6 +898,37 @@ def report(outcomes: list[Outcome], repo: str) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
+def min_age_for(event_name: str, min_age_minutes: int) -> timedelta:
+    """The grace a verdict must outlive before its missing approval counts as lost.
+
+    The grace exists only so the cron does not race the source's own approval
+    run while that run may still be retrying. Racing it is not unsafe (every
+    approval path re-reads the verdict, head and label or status right before
+    posting), it just risks a duplicate approval. A manual dispatch is a person
+    who has looked at the PR, seen the approval missing and the run finished,
+    and asked for it now. Making them wait out a timer built for the unattended
+    case, and reporting "too recent" instead, is the failure this removes.
+    """
+    if event_name == "workflow_dispatch":
+        return timedelta(0)
+    return timedelta(minutes=min_age_minutes)
+
+
+def parse_pr(value: str) -> int | None:
+    """`--pr` as a PR number, or None for "every PR". Empty is what the
+    workflow passes on a cron tick, where there is no `pr` input."""
+    value = value.strip()
+    if not value:
+        return None
+    try:
+        number = int(value.lstrip("#"))
+    except ValueError:
+        raise SystemExit(f"::error::--pr must be a PR number, got {value!r}")
+    if number < 1:
+        raise SystemExit(f"::error::--pr must be a PR number, got {value!r}")
+    return number
+
+
 def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -925,14 +959,28 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
         action="store_true",
         help="Report which PRs would be reconciled without approving any of them.",
     )
+    parser.add_argument(
+        "--event-name",
+        default="schedule",
+        help=(
+            "The GitHub event that started this run. `workflow_dispatch` means a "
+            "person asked for it, and the min-age grace does not apply."
+        ),
+    )
+    parser.add_argument(
+        "--pr",
+        default="",
+        help="Reconcile only this PR number. Empty (the default) sweeps every PR.",
+    )
     args = parser.parse_args(argv)
 
     outcomes = sweep(
         args.repo,
         runner=runner,
-        min_age=timedelta(minutes=args.min_age_minutes),
+        min_age=min_age_for(args.event_name, args.min_age_minutes),
         stale_after=timedelta(minutes=args.stale_after_minutes),
         dry_run=args.dry_run,
+        only_pr=parse_pr(args.pr),
     )
     report(outcomes, args.repo)
     return 1 if any(outcome.action == FAILED for outcome in outcomes) else 0
