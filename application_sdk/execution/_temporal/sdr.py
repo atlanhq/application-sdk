@@ -26,6 +26,18 @@ from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk_api.handler.contracts import (
+        AuthInput,
+        AuthOutput,
+        HandlerCredential,
+        MetadataInput,
+        MetadataOutput,
+        PreflightCheck,
+        PreflightInput,
+        PreflightOutput,
+        PreflightStatus,
+    )
+
     from application_sdk.credentials.agent import (
         SecretStoreCheckResult,
         check_secret_store_access,
@@ -46,24 +58,13 @@ with workflow.unsafe.imports_passed_through():
         emit_preflight_check_outcome,
         emit_preflight_crash_outcome,
     )
-    from application_sdk.handler.context import bind_invocation_context
-    from application_sdk.handler.contracts import (
-        AuthInput,
-        AuthOutput,
-        HandlerCredential,
-        MetadataInput,
-        MetadataOutput,
-        PreflightCheck,
-        PreflightInput,
-        PreflightOutput,
-        PreflightStatus,
-    )
+    from application_sdk.handler.invocation import bind_invocation_context
     from application_sdk.infrastructure.context import get_infrastructure
     from application_sdk.observability.logger_adaptor import get_logger
     from application_sdk.storage.preflight import check_object_store_access
 
 if TYPE_CHECKING:
-    from application_sdk.handler.base import Handler
+    from application_sdk_api.handler.base import Handler
 
 logger = get_logger(__name__)
 

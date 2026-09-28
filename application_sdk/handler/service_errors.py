@@ -1,37 +1,50 @@
-"""Typed error leaves for the handler service module."""
+"""Deprecated alias of :mod:`application_sdk_api.handler.service_errors` (removal in v4.0).
+
+The handler surface lives in the ``atlan-application-sdk-api`` package so the
+consolidated API host can serve an app's handler without this distribution.
+Import from ``application_sdk_api.handler.service_errors`` instead. Every name here resolves to the object in
+``application_sdk_api.handler.service_errors`` (with a ``DeprecationWarning``), so behaviour is unchanged.
+
+Do not define anything in this module. ``guard_api_shims.py`` fails CI if it holds
+more than this re-export; make changes in ``packages/api``.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import ClassVar
+import importlib as _importlib
+import warnings as _warnings
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
 
-from application_sdk.errors.leaves import InternalError, InvalidInputError
+import application_sdk_api.handler.service_errors as _src
 
+if _TYPE_CHECKING:
+    from application_sdk_api.handler.service_errors import *  # noqa: F401,F403
 
-@dataclass(kw_only=True)
-class TempPathEscapeError(InternalError):
-    """A path escaped the system temp directory — invariant violation."""
-
-    code: ClassVar[str] = "INTERNAL_HANDLER_TEMP_PATH_ESCAPE"
-    message: str = "Temp file path escapes system temp directory"
-    component: str | None = "handler"
-
-
-@dataclass(kw_only=True)
-class InvalidConfigIdError(InvalidInputError):
-    """config_id did not match the allowed character pattern."""
-
-    code: ClassVar[str] = "INVALID_INPUT_CONFIG_ID"
-    message: str = "Invalid config_id: must match allowed character pattern"
-    field: str | None = "config_id"
-    config_id: str | None = None
+_EXTRA: dict[str, str] = {}
+#: Worker-surface names (App configuration, event triggers) that are not part
+#: of the handler surface and are not deprecated on this path.
+_NOT_DEPRECATED: frozenset[str] = frozenset()
+__all__ = list(
+    getattr(_src, "__all__", [n for n in dir(_src) if not n.startswith("_")])
+) + list(_EXTRA)  # noqa: PLE0605
 
 
-@dataclass(kw_only=True)
-class InvalidConfigTypeError(InvalidInputError):
-    """config_type did not match the allowed character pattern."""
+def __getattr__(name: str) -> _Any:
+    if name in _EXTRA:
+        value = getattr(_importlib.import_module(_EXTRA[name]), name)
+    else:
+        value = getattr(_src, name)
+    if not name.startswith("_") and name not in _NOT_DEPRECATED:
+        _warnings.warn(
+            f"application_sdk.handler.service_errors.{name} is deprecated and will be removed in v4.0; "
+            f"import it from application_sdk_api.handler.service_errors",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    globals()[name] = value
+    return value
 
-    code: ClassVar[str] = "INVALID_INPUT_CONFIG_TYPE"
-    message: str = "Invalid config_type: must match allowed character pattern"
-    field: str | None = "config_type"
-    config_type: str | None = None
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | set(dir(_src)))

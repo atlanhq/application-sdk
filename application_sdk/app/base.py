@@ -81,12 +81,7 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import FileReference, StorageTier, StoreTarget
-from application_sdk.errors import (
-    APP_CONTEXT_ERROR,
-    APP_ERROR,
-    APP_NON_RETRYABLE,
-    ErrorCode,
-)
+from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE, ErrorCode
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
@@ -106,8 +101,9 @@ from application_sdk.observability.observability import AtlanObservability
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
+    from application_sdk_api.handler.contracts import PreflightGateMode
+
     from application_sdk.execution.progress import ProgressWatchdogMode
-    from application_sdk.handler.contracts import PreflightGateMode
 
 _task_logger = get_logger(__name__)
 
@@ -507,31 +503,8 @@ class AppError(_NewAppError):
         return " | ".join(parts)
 
 
-class AppContextError(_InternalError):
-    """Raised when App or task context is accessed outside of valid execution scope.
-
-    This is a programming error — it indicates that context-dependent methods
-    (e.g. ``self.context``, ``self.heartbeat()``) were called outside of a
-    workflow run or @task execution.
-    """
-
-    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = APP_CONTEXT_ERROR
-    code: ClassVar[str] = "INTERNAL_APP_CONTEXT"
-
-    def __init__(self, message: str, *, error_code: ErrorCode | None = None) -> None:
-        _InternalError.__init__(self, message=message)
-        self._legacy_error_code = error_code
-
-    @property
-    def error_code(self) -> ErrorCode:
-        return (
-            self._legacy_error_code
-            if self._legacy_error_code is not None
-            else self.DEFAULT_ERROR_CODE
-        )
-
-    def __str__(self) -> str:
-        return f"[{self.error_code.code}] {self.message}"
+# Defined in the api package (Handler.context raises it); the same class.
+from application_sdk_api.handler.context import AppContextError  # noqa: E402
 
 
 class NonRetryableError(AppError):
@@ -2576,6 +2549,10 @@ async def _run_preflight_gate(
     returned.
     """
     with workflow.unsafe.imports_passed_through():
+        from application_sdk_api.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            PreflightCheck,
+        )
+
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CredentialResolvable,
         )
@@ -2603,9 +2580,6 @@ async def _run_preflight_gate(
             is_preflight_block,
             preflight_gate_activity_name,
             underlying_error_type,
-        )
-        from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
-            PreflightCheck,
         )
 
     entry = entrypoint or "<implicit>"

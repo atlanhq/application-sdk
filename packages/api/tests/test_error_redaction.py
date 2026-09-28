@@ -27,7 +27,7 @@ from application_sdk_api.errors.wire import FailureDetails
 from application_sdk_api.handler.contracts import PreflightCheck
 from application_sdk_api.server import _summarize_check
 
-DSN = "postgresql://atlanadmin:sup3rs3cr3t@warehouse.internal:5439/db"
+DSN = "warehouse://atlanadmin:sup3rs3cr3t@warehouse.internal:5439/db"
 SECRETS = ("sup3rs3cr3t", "hunter2", "AKIA-LIVE-KEY")
 
 
@@ -42,11 +42,11 @@ def _wire_blob(obj) -> str:
 @pytest.mark.parametrize(
     ("raw", "expected"),
     [
-        (DSN, "postgresql://***@warehouse.internal:5439/db"),
+        (DSN, "warehouse://***@warehouse.internal:5439/db"),
         # A raw @ inside the password must not leave the tail exposed.
-        ("postgresql://u:p@ss@host:5432/db", "postgresql://***@host:5432/db"),
+        ("warehouse://u:p@ss@host:5432/db", "warehouse://***@host:5432/db"),
         # ODBC quotes values containing the ';' separator.
-        ("UID=sa;PWD={s3cr;et};Server=x", "UID=sa;PWD=***;Server=x"),
+        ("UID=sa;PWD={s3cr;et};Host=x", "UID=sa;PWD=***;Host=x"),
         # Presigned object-store URL: the signature authorises the request.
         (
             "https://x.blob.core.windows.net/c?sig=AB%2Fd&se=2026",
@@ -83,24 +83,16 @@ def test_generic_key_names_are_not_swept_up() -> None:
     )
 
 
-def test_masking_never_raises() -> None:
-    """application_sdk_api masks where application_sdk rejects.
-
-    ``handler/sql.py`` builds failure details inside a "report NOT_READY, never
-    500" boundary, so a raising validator would turn a redaction problem into
-    exactly the 500 that boundary exists to prevent.
-    """
-    fd = FailureDetails(
-        category=AuthError.category,
-        code="AUTH",
-        retryable=False,
-        message="denied",
-        evidence={"password": "hunter2"},
-    )
-    assert fd.evidence["password"] == "***"
-
-
-# ── hostile structures degrade, never hang ──────────────────────────────────
+def test_a_top_level_secret_named_key_is_rejected() -> None:
+    """The producer bug stays loud at the top level (``sql_app`` degrades it)."""
+    with pytest.raises(ValueError, match="secret-named"):
+        FailureDetails(
+            category=AuthError.category,
+            code="AUTH",
+            retryable=False,
+            message="x",
+            evidence={"password": "hunter2"},
+        )
 
 
 def test_self_referential_evidence_is_pruned_not_recursed() -> None:
@@ -209,7 +201,7 @@ def _sql_app_that_fails_with(driver_error: str):
 
     class _Client(BaseSQLClient):
         DB_CONFIG = DatabaseConfig(
-            template="postgresql://{username}:{password}@{host}/{database}"
+            template="warehouse://{username}:{password}@{host}/{database}"
         )
 
         async def load(self, credentials):
@@ -283,7 +275,7 @@ def test_redaction_is_linear_not_quadratic() -> None:
     import time
 
     def elapsed(n: int) -> float:
-        text = "postgresql://" + "a" * n
+        text = "warehouse://" + "a" * n
         start = time.perf_counter()
         redact_secrets(text)
         return time.perf_counter() - start
@@ -353,7 +345,7 @@ def test_the_traceback_survives_redaction() -> None:
     )
     assert "Traceback" in logs
     assert "password authentication failed" in logs or "boom" in logs
-    assert "postgresql://***@warehouse.internal:5439/db" in logs
+    assert "warehouse://***@warehouse.internal:5439/db" in logs
 
 
 def test_the_traceback_survives_a_handler_that_reads_only_the_message() -> None:
@@ -390,7 +382,7 @@ def test_the_traceback_survives_a_handler_that_reads_only_the_message() -> None:
 
     out = "\n".join(sink.seen)
     assert "Traceback" in out
-    assert "postgresql://***@warehouse.internal:5439/db" in out
+    assert "warehouse://***@warehouse.internal:5439/db" in out
     assert not any(secret in out for secret in SECRETS)
 
 
@@ -453,19 +445,19 @@ def test_exc_info_is_cleared_so_a_structured_handler_cannot_re_derive_it() -> No
     [
         # A scheme need not start the run. An earlier lookbehind-anchored
         # pattern dropped every one of these while claiming parity.
-        ("2postgresql://u:p@h", "2postgresql://***@h"),
-        ("-postgresql://u:p@h", "-postgresql://***@h"),
-        (".postgresql://u:p@h", ".postgresql://***@h"),
-        ("+postgresql://u:p@h", "+postgresql://***@h"),
-        ("x=1&y=2postgresql://u:p@h", "x=1&y=2postgresql://***@h"),
-        ("10.0.0.1postgres://u:p@h", "10.0.0.1postgres://***@h"),
+        ("2warehouse://u:p@h", "2warehouse://***@h"),
+        ("-warehouse://u:p@h", "-warehouse://***@h"),
+        (".warehouse://u:p@h", ".warehouse://***@h"),
+        ("+warehouse://u:p@h", "+warehouse://***@h"),
+        ("x=1&y=2warehouse://u:p@h", "x=1&y=2warehouse://***@h"),
+        ("10.0.0.1warehouse://u:p@h", "10.0.0.1warehouse://***@h"),
         # Ordinary shapes.
-        ("see postgresql://u:p@h", "see postgresql://***@h"),
-        ("postgresql://u:p@ss@h:5432/db", "postgresql://***@h:5432/db"),
+        ("see warehouse://u:p@h", "see warehouse://***@h"),
+        ("warehouse://u:p@ss@h:5432/db", "warehouse://***@h:5432/db"),
         ("a https://x:y@h and b http://p:q@i", "a https://***@h and b http://***@i"),
-        ("ftp://u:p@h  postgres://a:b@c", "ftp://***@h  postgres://***@c"),
+        ("ftp://u:p@h  warehouse://a:b@c", "ftp://***@h  warehouse://***@c"),
         # Not credentials: no userinfo at all, or no scheme.
-        ("postgresql://h/db", "postgresql://h/db"),
+        ("warehouse://h/db", "warehouse://h/db"),
         ("x://@h", "x://@h"),
         ("://nope", "://nope"),
         ("no url here", "no url here"),
@@ -486,7 +478,7 @@ def test_redaction_stays_linear_on_a_long_scheme_run() -> None:
     import time
 
     def elapsed(n: int) -> float:
-        text = "postgresql://" + "a" * n
+        text = "warehouse://" + "a" * n
         start = time.perf_counter()
         redact_secrets(text)
         return time.perf_counter() - start
@@ -595,7 +587,6 @@ def test_redaction_is_linear_on_a_body_full_of_schemes() -> None:
 @pytest.mark.parametrize(
     ("evidence", "expected"),
     [
-        ({"password": "h", "host": "x"}, {"password": "***", "host": "x"}),
         ({"config": {"password": "h"}}, {"config": {"password": "***"}}),
         (
             {"creds": [{"password": "h"}, {"host": "x"}]},
@@ -668,7 +659,7 @@ def test_a_non_dict_mapping_has_its_strings_redacted() -> None:
     import collections
 
     wire = redact_wire_value({"cfg": collections.ChainMap({"dsn": DSN})})
-    assert "postgresql://***@warehouse.internal:5439/db" in repr(wire)
+    assert "warehouse://***@warehouse.internal:5439/db" in repr(wire)
     assert not any(secret in repr(wire) for secret in SECRETS)
 
 

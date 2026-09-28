@@ -26,12 +26,12 @@ import asyncio
 from typing import TYPE_CHECKING, Any
 
 import httpx
+from application_sdk_api.handler.contracts import PreflightCheck, PreflightOutput
 from pydantic import BaseModel, ValidationError
 
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import redact_wire_value
-from application_sdk.handler.contracts import PreflightCheck, PreflightOutput
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:

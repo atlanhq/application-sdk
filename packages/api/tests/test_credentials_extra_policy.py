@@ -48,7 +48,7 @@ def test_absent_is_not_malformed(creds: dict) -> None:
 def test_strict_rejects_an_unusable_extra(extra) -> None:
     with pytest.raises(InvalidInputError) as caught:
         parse_credentials_extra({"extra": extra})
-    assert caught.value.context["field"] == "extra"
+    assert caught.value.credential_name == "extra"
 
 
 def test_lenient_drops_it_but_says_so(caplog: pytest.LogCaptureFixture) -> None:

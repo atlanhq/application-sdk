@@ -34,9 +34,9 @@ from application_sdk_api.config.store import (
     ConfigStore,
     config_objectstore_key,
 )
-from application_sdk_api.errors.base import AppError, HandlerError
+from application_sdk_api.errors.base import AppError
 from application_sdk_api.errors.categories import FailureCategory
-from application_sdk_api.handler.base import Handler
+from application_sdk_api.handler.base import Handler, HandlerError
 from application_sdk_api.handler.contracts import (
     AuthInput,
     MetadataInput,

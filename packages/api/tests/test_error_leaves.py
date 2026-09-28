@@ -20,10 +20,16 @@ from application_sdk_api.server import _CATEGORY_TO_HTTP, _app_error_to_http_sta
 
 
 def _leaves() -> list[type[AppError]]:
+    """The categorical leaves: direct AppError subclasses, one per category.
+
+    ``leaves`` also defines specialised errors (``TaskStalledError``,
+    ``ObjectStoreReadError``, ...) that subclass a categorical leaf; they inherit
+    its category and are not part of the one-per-category invariant.
+    """
     return [
         obj
         for _, obj in inspect.getmembers(leaves_mod, inspect.isclass)
-        if issubclass(obj, AppError) and obj is not AppError
+        if obj.__module__ == leaves_mod.__name__ and AppError in obj.__bases__
     ]
 
 
@@ -52,13 +58,16 @@ def test_leaf_declares_its_own_code_and_resolves_to_a_status(leaf) -> None:
         f"{leaf.__name__}: code {leaf.code!r} should be its category "
         f"{leaf.category.value!r}"
     )
-    status = _app_error_to_http_status(leaf("boom"))
+    status = _app_error_to_http_status(leaf(message="boom"))
     assert 400 <= status <= 599
 
 
 def test_source_unavailable_is_503_not_500() -> None:
     """The customer's source being down is not this service failing."""
-    assert _app_error_to_http_status(leaves_mod.SourceUnavailableError("down")) == 503
+    assert (
+        _app_error_to_http_status(leaves_mod.SourceUnavailableError(message="down"))
+        == 503
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +114,10 @@ def test_each_category_pins_its_http_status(
 
 @pytest.mark.parametrize("leaf", _leaves(), ids=lambda c: c.__name__)
 def test_leaf_resolves_to_its_categorys_pinned_status(leaf) -> None:
-    assert _app_error_to_http_status(leaf("boom")) == _EXPECTED_STATUS[leaf.category]
+    assert (
+        _app_error_to_http_status(leaf(message="boom"))
+        == _EXPECTED_STATUS[leaf.category]
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from application_sdk_api.errors.base import redact_secrets
+from application_sdk_api.errors.base import redact_secrets, redact_wire_value
 from application_sdk_api.errors.categories import Audience, FailureCategory
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -29,30 +29,63 @@ _EVIDENCE_KEY_SUFFIX_DENYLIST: tuple[str, ...] = ("_secret", "_password", "_toke
 
 
 def secret_named_evidence_keys(evidence: Mapping[str, Any]) -> frozenset[str]:
-    """Return the ``evidence`` keys :class:`FailureDetails` rejects as secret-named.
+    """The ``evidence`` keys whose *name* marks them as secret-bearing.
 
-    The envelope's validator refuses secret-named keys outright, so a producer
-    holding a rejected verdict has no way to ask *which* key was the problem
-    without re-deriving the denylist. Exposing the predicate keeps that single
-    source of truth here, at the wire layer where the rule lives.
-
-    Args:
-        evidence: Candidate evidence mapping, keyed by the producing
-            dataclass's field names.
-
-    Returns:
-        The offending keys, empty when the mapping is acceptable.
+    :class:`FailureDetails` rejects these at the top level and masks them
+    (``***``) below it. Exposed so a producer holding a rejected verdict can strip
+    exactly the keys the envelope refuses, without re-deriving the denylist.
 
     Example:
         >>> sorted(secret_named_evidence_keys({"host": "db", "api_key": "x"}))
         ['api_key']
     """
+    # isinstance guard: pydantic validates only the top-level key type, so a
+    # nested mapping reaches here with any hashable key. A non-str key cannot be
+    # a secret-NAMED key; its value is still redacted by redact_wire_value.
     return frozenset(
         k
         for k in evidence
-        if k.lower() in _EVIDENCE_KEY_DENYLIST
-        or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+        if isinstance(k, str)
+        and (
+            k.lower() in _EVIDENCE_KEY_DENYLIST
+            or any(k.lower().endswith(s) for s in _EVIDENCE_KEY_SUFFIX_DENYLIST)
+        )
     )
+
+
+_MASK = "***"
+_MASK_MAX_DEPTH = 32
+
+
+def mask_secret_named_keys(
+    evidence: Mapping[str, Any], _depth: int = 0
+) -> dict[str, Any]:
+    """Replace secret-named values with ``***`` at every depth, keeping the key."""
+    if _depth >= _MASK_MAX_DEPTH:
+        return {}
+    bad = secret_named_evidence_keys(evidence)
+    return {
+        key: (_MASK if key in bad else _mask_nested(value, _depth + 1))
+        for key, value in evidence.items()
+    }
+
+
+def _mask_nested(value: Any, depth: int) -> Any:
+    if depth >= _MASK_MAX_DEPTH:
+        return "…"
+    if isinstance(value, Mapping):
+        return mask_secret_named_keys(value, depth)
+    if isinstance(value, (list, tuple)):
+        masked = [_mask_nested(v, depth + 1) for v in value]
+        if isinstance(value, tuple):
+            if hasattr(type(value), "_fields"):
+                try:
+                    return type(value)(*masked)
+                except Exception:  # noqa: BLE001 — connector-authored NamedTuple
+                    return tuple(masked)
+            return tuple(masked)
+        return masked
+    return value
 
 
 class FailureDetails(BaseModel):
@@ -107,17 +140,31 @@ class FailureDetails(BaseModel):
         the Automation Engine and every log row, so redacting where it is built
         covers every consumer at once — including the ones not written yet.
         Idempotent, so an envelope replayed off the wire is unchanged.
-        ``evidence`` is handled below by key name instead: it is structured,
-        and a secret-named key is a producer bug worth rejecting, not masking.
+        ``evidence`` is handled below: secret-named keys masked, values redacted.
         """
         return v if v is None else redact_secrets(v)
 
     @field_validator("evidence")
     @classmethod
-    def _no_secret_keys(cls, v: dict[str, Any]) -> dict[str, Any]:
+    def _scrub_evidence(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Reject secret-named top-level keys; mask nested ones; redact every value.
+
+        A secret-named *top-level* key is a producer bug and is rejected, as it
+        always was — ``sql_app``'s degrade ladder strips it and keeps the typed
+        routing. Two gaps are closed here, because this envelope is what reaches
+        Temporal history, the Automation Engine, every log row and the HTTP body:
+
+        * a secret-named key one level down (``{"config": {"password": ...}}``)
+          passed the top-level check untouched — it is masked (``***``);
+        * evidence *values* were never redacted, so a leaf field such as
+          ``endpoint`` carrying a DSN shipped its password — every string is now
+          scrubbed like the free-text fields.
+
+        Idempotent, so an envelope replayed off the wire is unchanged.
+        """
         bad = secret_named_evidence_keys(v)
         if bad:
             raise ValueError(  # stdlib-interop: pydantic field_validator requires ValueError
                 "evidence keys may not use secret-named fields: %s" % sorted(bad)
             )
-        return v
+        return redact_wire_value({k: _mask_nested(val, 1) for k, val in v.items()})

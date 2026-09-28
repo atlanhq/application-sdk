@@ -1,10 +1,12 @@
-"""Server handler surface — Handler base + typed contracts.
+"""The handler surface: the ``Handler`` base, its typed contracts and request context.
 
-Re-exports the handler base class and the typed contracts the SQL-connector
-server path uses, so app code imports them from one place.
+This is the single definition shared by the worker (``application_sdk``) and the
+consolidated API host. App handler code imports from here; everything else an
+app needs comes from ``application_sdk``.
 """
 
-from application_sdk_api.handler.base import DefaultHandler, Handler
+from application_sdk_api.handler.base import DefaultHandler, Handler, HandlerError
+from application_sdk_api.handler.context import HandlerContext
 from application_sdk_api.handler.contracts import (
     ApiMetadataObject,
     ApiMetadataOutput,
@@ -13,21 +15,27 @@ from application_sdk_api.handler.contracts import (
     AuthStatus,
     BaseConnectionConfig,
     BaseMetadataConfig,
+    CloudEventEnvelope,
+    EventFilterRule,
+    EventTriggerConfig,
+    FileUploadResponse,
     HandlerCredential,
     MetadataInput,
     MetadataOutput,
     PreflightCheck,
+    PreflightGateMode,
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    SubscriptionConfig,
     flatten_credentials_to_pairs,
+    normalize_credentials,
+    unverifiable_preflight_result,
 )
 
 __all__ = [
-    "Handler",
-    "DefaultHandler",
     "ApiMetadataObject",
     "ApiMetadataOutput",
     "AuthInput",
@@ -35,14 +43,26 @@ __all__ = [
     "AuthStatus",
     "BaseConnectionConfig",
     "BaseMetadataConfig",
+    "CloudEventEnvelope",
+    "DefaultHandler",
+    "EventFilterRule",
+    "EventTriggerConfig",
+    "FileUploadResponse",
+    "Handler",
+    "HandlerContext",
     "HandlerCredential",
+    "HandlerError",
     "MetadataInput",
     "MetadataOutput",
     "PreflightCheck",
+    "PreflightGateMode",
     "PreflightInput",
     "PreflightOutput",
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "SubscriptionConfig",
     "flatten_credentials_to_pairs",
+    "normalize_credentials",
+    "unverifiable_preflight_result",
 ]

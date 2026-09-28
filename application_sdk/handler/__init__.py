@@ -1,58 +1,64 @@
-"""Handler framework for per-app HTTP services.
+"""Deprecated alias of :mod:`application_sdk_api.handler` (removal in v4.0).
 
-Provides the Handler ABC and DefaultHandler for implementing auth,
-preflight, and metadata endpoints, plus the service factory for
-creating FastAPI applications.
+The handler surface lives in the ``atlan-application-sdk-api`` package so the
+consolidated API host can serve an app's handler without this distribution.
+Import from ``application_sdk_api.handler`` instead. Every name here resolves to the object in
+``application_sdk_api.handler`` (with a ``DeprecationWarning``), so behaviour is unchanged.
+
+Do not define anything in this module. ``guard_api_shims.py`` fails CI if it holds
+more than this re-export; make changes in ``packages/api``.
 """
 
-from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
-from application_sdk.handler.context import HandlerContext
-from application_sdk.handler.contracts import (
-    ApiMetadataObject,
-    ApiMetadataOutput,
-    AuthInput,
-    AuthOutput,
-    AuthStatus,
-    BaseConnectionConfig,
-    BaseMetadataConfig,
-    HandlerCredential,
-    MetadataInput,
-    MetadataOutput,
-    PreflightCheck,
-    PreflightGateMode,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    SqlMetadataObject,
-    SqlMetadataOutput,
-)
-from application_sdk.handler.service import (
-    create_app_handler_service,
-    run_app_handler_service,
-)
+from __future__ import annotations
 
-__all__ = [
-    "ApiMetadataObject",
-    "ApiMetadataOutput",
-    "AuthInput",
-    "AuthOutput",
-    "AuthStatus",
-    "BaseConnectionConfig",
-    "BaseMetadataConfig",
-    "DefaultHandler",
-    "Handler",
-    "HandlerContext",
-    "HandlerCredential",
-    "HandlerError",
-    "MetadataInput",
-    "MetadataOutput",
-    "PreflightCheck",
-    "PreflightGateMode",
-    "PreflightInput",
-    "PreflightOutput",
-    "PreflightStatus",
-    "SqlMetadataObject",
-    "SqlMetadataOutput",
-    "create_app_handler_service",
-    "run_app_handler_service",
-]
+import importlib as _importlib
+import warnings as _warnings
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
+
+import application_sdk_api.handler as _src
+
+if _TYPE_CHECKING:
+    from application_sdk_api.handler import *  # noqa: F401,F403
+
+_EXTRA: dict[str, str] = {
+    "create_app_handler_service": "application_sdk.handler.service",
+    "run_app_handler_service": "application_sdk.handler.service",
+}
+#: Worker-surface names (App configuration, event triggers) that are not part
+#: of the handler surface and are not deprecated on this path.
+_NOT_DEPRECATED: frozenset[str] = frozenset(
+    {
+        "PreflightGateMode",
+        "EventTriggerConfig",
+        "EventFilterRule",
+        "SubscriptionConfig",
+        "CloudEventEnvelope",
+        "FileUploadResponse",
+        "create_app_handler_service",
+        "run_app_handler_service",
+    }
+)
+__all__ = list(
+    getattr(_src, "__all__", [n for n in dir(_src) if not n.startswith("_")])
+) + list(_EXTRA)  # noqa: PLE0605
+
+
+def __getattr__(name: str) -> _Any:
+    if name in _EXTRA:
+        value = getattr(_importlib.import_module(_EXTRA[name]), name)
+    else:
+        value = getattr(_src, name)
+    if not name.startswith("_") and name not in _NOT_DEPRECATED:
+        _warnings.warn(
+            f"application_sdk.handler.{name} is deprecated and will be removed in v4.0; "
+            f"import it from application_sdk_api.handler",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | set(dir(_src)))

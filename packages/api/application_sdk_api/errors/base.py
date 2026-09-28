@@ -95,10 +95,12 @@ def _redact_url_userinfo(text: str) -> str:
             if text[i] == "@":
                 last_at = i
             i += 1
-        if last_at == -1:
-            # No userinfo up to the authority's end, and no later "://" before
-            # that point can find one either — resume just before the boundary
-            # so a "://" that starts there is still seen.
+        if last_at <= search:
+            # ``last_at == search`` is an empty userinfo ("x://@h"): no
+            # credential, nothing to redact.
+            # A later "://" before the authority's end cannot find userinfo
+            # either — resume just before the boundary so a "://" that starts
+            # there is still seen.
             search = max(search, i - 1)
             continue
         scheme = text[scheme_start:sep]
@@ -333,6 +335,11 @@ class AppError(Exception):
     audience: ClassVar[Audience] = Audience.APP_OWNER
 
     def __post_init__(self) -> None:
+        # Redacted once, here: ``str(exc)`` feeds every log line and every HTTP
+        # error detail, and a driver's message embeds its DSN. The envelope
+        # re-redacts idempotently, so nothing downstream changes.
+        if isinstance(self.message, str):
+            self.message = redact_secrets(self.message)
         Exception.__init__(self, self.message)
         if self.cause is not None and self.__cause__ is None:
             self.__cause__ = self.cause

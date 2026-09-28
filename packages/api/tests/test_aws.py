@@ -206,7 +206,7 @@ def test_the_incomplete_credentials_error_names_keys_not_values() -> None:
                 "SecretAccessKey": "s3cr3t",
             },
         )
-    rendered = f"{caught.value} {caught.value.context}"
+    rendered = f"{caught.value} {caught.value.to_failure_details().evidence}"
     assert "SessionToken" in rendered, "the caller must be told which key is missing"
     assert "AKIAEXAMPLE" not in rendered
     assert "s3cr3t" not in rendered

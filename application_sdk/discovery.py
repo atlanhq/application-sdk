@@ -21,6 +21,8 @@ import inspect
 import warnings
 from typing import Any, ClassVar
 
+from application_sdk_api.handler.base import Handler
+
 from application_sdk._discovery_errors import (
     DiscoveryAppRegistrationError,
     DiscoveryClassNotFoundError,
@@ -33,7 +35,6 @@ from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry
 from application_sdk.errors import DISCOVERY_ERROR, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError
-from application_sdk.handler.base import Handler
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)

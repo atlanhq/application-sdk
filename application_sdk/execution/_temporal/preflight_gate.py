@@ -51,6 +51,18 @@ from temporalio.exceptions import TimeoutType
 from typing_extensions import deprecated
 
 with workflow.unsafe.imports_passed_through():
+    from application_sdk_api.handler.contracts import (
+        BaseConnectionConfig,
+        BaseMetadataConfig,
+        HandlerCredential,
+        PreflightCheck,
+        PreflightGateMode,
+        PreflightInput,
+        PreflightOutput,
+        PreflightStatus,
+        unverifiable_preflight_result,
+    )
+
     from application_sdk.constants import (
         APP_ID,
         APPLICATION_VERSION,
@@ -79,18 +91,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.execution._temporal.preflight_persist import (
         persist_check_result,
     )
-    from application_sdk.handler.context import bind_invocation_context
-    from application_sdk.handler.contracts import (
-        BaseConnectionConfig,
-        BaseMetadataConfig,
-        HandlerCredential,
-        PreflightCheck,
-        PreflightGateMode,
-        PreflightInput,
-        PreflightOutput,
-        PreflightStatus,
-        unverifiable_preflight_result,
-    )
+    from application_sdk.handler.invocation import bind_invocation_context
     from application_sdk.infrastructure.context import get_infrastructure
 
     # Stable log bodies for the gate's two events — the contract connector-pulse
@@ -476,8 +477,9 @@ def input_type_supports_gate(input_type: type) -> bool:
 
 
 if TYPE_CHECKING:
+    from application_sdk_api.handler.base import Handler
+
     from application_sdk.execution.errors import ApplicationError
-    from application_sdk.handler.base import Handler
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.storage.preflight import ObjectStoreCheckResult
 
@@ -2790,7 +2792,7 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
         "the policy built from an app's declared attempts",
     ),
     "UNVERIFIABLE_CHECK_NAME": (
-        "application_sdk.handler.contracts.UNVERIFIABLE_CHECK_NAME",
+        "application_sdk_api.handler.contracts.UNVERIFIABLE_CHECK_NAME",
         "the same constant, at the module that now owns it",
     ),
 }
@@ -2811,7 +2813,7 @@ def _deprecated_constant_value(name: str) -> object:
     # Imported here rather than at module scope: a module-level re-export would
     # resolve before ``__getattr__`` ever ran, handing the name back silently and
     # leaving the one consumer of it with no migration signal at all.
-    from application_sdk.handler.contracts import (  # noqa: PLC0415
+    from application_sdk_api.handler.contracts import (  # noqa: PLC0415
         UNVERIFIABLE_CHECK_NAME,
     )
 

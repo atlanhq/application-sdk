@@ -1,190 +1,52 @@
-"""Request context for Handler execution.
+"""Deprecated alias of :mod:`application_sdk_api.handler.context` (removal in v4.0).
 
-Provides HandlerContext, the execution context passed to handlers during
-HTTP request processing. Unlike AppContext (which handles Temporal workflow
-concerns), HandlerContext is focused on HTTP request handling.
+The handler surface lives in the ``atlan-application-sdk-api`` package so the
+consolidated API host can serve an app's handler without this distribution.
+Import from ``application_sdk_api.handler.context`` instead. Every name here resolves to the object in
+``application_sdk_api.handler.context`` (with a ``DeprecationWarning``), so behaviour is unchanged.
+
+Do not define anything in this module. ``guard_api_shims.py`` fails CI if it holds
+more than this re-export; make changes in ``packages/api``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-from contextlib import contextmanager
-from contextvars import ContextVar
-from dataclasses import dataclass, field
-from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
-from uuid import UUID, uuid4
+import importlib as _importlib
+import warnings as _warnings
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
 
-from application_sdk.app.base_errors import SecretStoreNotConfiguredError
-from application_sdk.observability.logger_adaptor import get_logger
+import application_sdk_api.handler.context as _src
 
-if TYPE_CHECKING:
-    from application_sdk.handler.contracts import HandlerCredential
-    from application_sdk.infrastructure.secrets import SecretStore
+if _TYPE_CHECKING:
+    from application_sdk_api.handler.context import *  # noqa: F401,F403
 
-
-def _utc_now() -> datetime:
-    return datetime.now(UTC)
-
-
-@dataclass
-class HandlerContext:
-    """Execution context passed to Handlers during request processing.
-
-    Provides request identification, credential access, and structured
-    logging for HTTP handler invocations.
-
-    Usage:
-        async def test_auth(self, input: AuthInput) -> AuthOutput:
-            api_key = self.context.get_credential("api_key")
-            self.context.log_info("Testing authentication")
-    """
-
-    app_name: str
-    """The App name this handler serves."""
-
-    request_id: UUID = field(default_factory=uuid4)
-    """Unique identifier for this request."""
-
-    started_at: datetime = field(default_factory=_utc_now)
-    """When the request started."""
-
-    _credentials: list[HandlerCredential] = field(default_factory=list, repr=False)
-    """Credentials extracted from request (omitted from repr for security)."""
-
-    _secret_store: SecretStore | None = field(default=None, repr=False)
-    """Secret store injected from InfrastructureContext."""
-
-    _logger: Any = field(default=None, repr=False)
-    """Cached bound logger instance."""
-
-    @property
-    def request_id_str(self) -> str:
-        """Request ID as string."""
-        return str(self.request_id)
-
-    @property
-    def credentials(self) -> list[HandlerCredential]:
-        """Credentials extracted from the HTTP request."""
-        return self._credentials
-
-    def get_credential(self, key: str) -> str | None:
-        """Get a specific credential value by key, or None if not found."""
-        for cred in self._credentials:
-            if cred.key == key:
-                return cred.value
-        return None
-
-    def has_credential(self, key: str) -> bool:
-        """Check if a credential exists in the context."""
-        return any(cred.key == key for cred in self._credentials)
-
-    @property
-    def log(self) -> Any:
-        """Logger with app context (app_name and request_id are auto-injected by the adapter)."""
-        if self._logger is None:
-            self._logger = get_logger(__name__)
-        return self._logger
-
-    async def get_secret(self, name: str) -> str:
-        """Get a secret by name from the secret store.
-
-        Args:
-            name: Secret name.
-
-        Returns:
-            The secret value.
-
-        Raises:
-            SecretStoreNotConfiguredError: If no secret store is configured.
-        """
-        if self._secret_store is None:
-            raise SecretStoreNotConfiguredError()
-        return await self._secret_store.get(name)
-
-    async def get_secret_optional(self, name: str) -> str | None:
-        """Get a secret by name, returning None if not found or not configured.
-
-        Args:
-            name: Secret name.
-
-        Returns:
-            The secret value, or None if not found or not configured.
-        """
-        if self._secret_store is None:
-            return None
-        return await self._secret_store.get_optional(name)
-
-    def log_debug(self, message: str, **kwargs: Any) -> None:
-        self.log.debug(message, **kwargs)
-
-    def log_info(self, message: str, **kwargs: Any) -> None:
-        self.log.info(message, **kwargs)
-
-    def log_warning(self, message: str, **kwargs: Any) -> None:
-        self.log.warning(message, **kwargs)
-
-    def log_error(self, message: str, **kwargs: Any) -> None:
-        self.log.error(message, **kwargs)
-
-    def elapsed_ms(self) -> float:
-        """Elapsed time since request started in milliseconds."""
-        delta = datetime.now(UTC) - self.started_at
-        return delta.total_seconds() * 1000
+_EXTRA: dict[str, str] = {
+    "bind_invocation_context": "application_sdk.handler.invocation",
+}
+#: Worker-surface names (App configuration, event triggers) that are not part
+#: of the handler surface and are not deprecated on this path.
+_NOT_DEPRECATED: frozenset[str] = frozenset({"bind_invocation_context"})
+__all__ = list(
+    getattr(_src, "__all__", [n for n in dir(_src) if not n.startswith("_")])
+) + list(_EXTRA)  # noqa: PLE0605
 
 
-# ---------------------------------------------------------------------------
-# ContextVar-backed context binding
-# ---------------------------------------------------------------------------
-
-_current_handler_context: ContextVar[HandlerContext | None] = ContextVar(
-    "handler_context", default=None
-)
-
-
-def get_handler_context() -> HandlerContext | None:
-    """Return the HandlerContext for the current asyncio task, or None."""
-    return _current_handler_context.get()
-
-
-@contextmanager
-def bind_handler_context(ctx: HandlerContext) -> Iterator[HandlerContext]:
-    """Bind *ctx* as the active handler context for the duration of the block.
-
-    Uses a ContextVar so concurrent coroutines on a shared Handler instance
-    (FastAPI requests, Temporal SDR activities) cannot overwrite each other's
-    context.  Each asyncio Task gets its own copy of the ContextVar namespace,
-    so token-based reset is both safe and strictly scoped to the current task.
-    """
-    token = _current_handler_context.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _current_handler_context.reset(token)
+def __getattr__(name: str) -> _Any:
+    if name in _EXTRA:
+        value = getattr(_importlib.import_module(_EXTRA[name]), name)
+    else:
+        value = getattr(_src, name)
+    if not name.startswith("_") and name not in _NOT_DEPRECATED:
+        _warnings.warn(
+            f"application_sdk.handler.context.{name} is deprecated and will be removed in v4.0; "
+            f"import it from application_sdk_api.handler.context",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    globals()[name] = value
+    return value
 
 
-@contextmanager
-def bind_invocation_context(
-    app_name: str, credentials: list[Any]
-) -> Iterator[HandlerContext]:
-    """Build and bind a per-invocation :class:`HandlerContext` for the block.
-
-    Shared by the SDR activities and the injected preflight gate so each handler
-    invocation runs with the same ContextVar-backed context the HTTP path builds
-    (app name, credentials, and the worker's secret store when present).
-    """
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: avoid import cycle at module load
-        get_infrastructure,
-    )
-
-    infra = get_infrastructure()
-    secret_store = infra.secret_store if infra is not None else None
-    context = HandlerContext(
-        app_name=app_name,
-        request_id=uuid4(),
-        started_at=datetime.now(UTC),
-        _credentials=list(credentials),
-        _secret_store=secret_store,
-    )
-    with bind_handler_context(context):
-        yield context
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | set(dir(_src)))

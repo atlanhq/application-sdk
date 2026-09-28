@@ -115,7 +115,7 @@ class TestParseCredentialsExtra:
         looked complete, the connectivity check just failed. The lenient caller
         has no exception to surface, so this log line is the only signal.
         """
-        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+        with patch("application_sdk_api.credentials.utils.logger") as mock_logger:
             assert parse_credentials_extra({"extra": extra}, strict=False) == {}
 
         mock_logger.warning.assert_called_once()
@@ -125,7 +125,7 @@ class TestParseCredentialsExtra:
     def test_lenient_drop_log_excludes_credential_material(self):
         """The reason is loggable; the value never is."""
         secret = "s3cr3t-token-value"
-        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+        with patch("application_sdk_api.credentials.utils.logger") as mock_logger:
             parse_credentials_extra(
                 {"extra": f'{{"token": "{secret}", BROKEN'}, strict=False
             )
@@ -135,7 +135,7 @@ class TestParseCredentialsExtra:
 
     def test_usable_extra_logs_nothing(self):
         """No warning on the happy path — this runs on every credential load."""
-        with patch("application_sdk.credentials.utils.logger") as mock_logger:
+        with patch("application_sdk_api.credentials.utils.logger") as mock_logger:
             parse_credentials_extra({"extra": '{"host": "h"}'}, strict=False)
             parse_credentials_extra({"extra": {"host": "h"}}, strict=False)
             parse_credentials_extra({}, strict=False)

@@ -1,81 +1,50 @@
-"""Typed manifest contracts for Automation Engine DAG execution.
+"""Deprecated alias of :mod:`application_sdk_api.handler.manifest` (removal in v4.0).
 
-HTTP API zone: these types are Pydantic models. They cross an external HTTP
-boundary (GET /workflows/v1/manifest consumed by Heracles / Automation Engine)
-so they need schema validation on ingress and clean JSON serialization on
-egress. Do NOT use plain dataclasses here — use BaseModel so that
-``model_validate`` / ``model_validate_json`` replace hand-rolled parsing and
-``model_dump_json()`` eliminates the intermediate dict step.
+The handler surface lives in the ``atlan-application-sdk-api`` package so the
+consolidated API host can serve an app's handler without this distribution.
+Import from ``application_sdk_api.handler.manifest`` instead. Every name here resolves to the object in
+``application_sdk_api.handler.manifest`` (with a ``DeprecationWarning``), so behaviour is unchanged.
+
+Do not define anything in this module. ``guard_api_shims.py`` fails CI if it holds
+more than this re-export; make changes in ``packages/api``.
 """
 
 from __future__ import annotations
 
-from typing import Any
+import importlib as _importlib
+import warnings as _warnings
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+from typing import Any as _Any
 
-from pydantic import BaseModel, ConfigDict
+import application_sdk_api.handler.manifest as _src
 
+if _TYPE_CHECKING:
+    from application_sdk_api.handler.manifest import *  # noqa: F401,F403
 
-class DagNodeDependency(BaseModel):
-    """Declares that a node may only run after the given node completes."""
-
-    model_config = ConfigDict(frozen=True)
-
-    node_id: str
-
-
-class ExecuteWorkflowInputs(BaseModel):
-    """Inputs for the execute_workflow activity.
-
-    ``args`` values can be:
-
-    - Template placeholders: ``{{workflow-id}}``, ``{{connection}}`` —
-      substituted by Heracles from workflow config / frontend form values.
-    - JSONPath references: ``$.extract.outputs.foo`` — resolved by AE at
-      runtime against upstream node's run() return.
-    - Literals: booleans, strings, numbers.
-
-    ``args`` intentionally typed ``dict[str, Any]``: it is a passthrough
-    contract with an external orchestrator, so the value space is open by
-    design — this is not a missing type annotation.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    workflow_type: str
-    task_queue: str
-    args: dict[str, Any] = {}
+_EXTRA: dict[str, str] = {}
+#: Worker-surface names (App configuration, event triggers) that are not part
+#: of the handler surface and are not deprecated on this path.
+_NOT_DEPRECATED: frozenset[str] = frozenset()
+__all__ = list(
+    getattr(_src, "__all__", [n for n in dir(_src) if not n.startswith("_")])
+) + list(_EXTRA)  # noqa: PLE0605
 
 
-class DagNode(BaseModel):
-    """A single node in the Automation Engine execution DAG."""
+def __getattr__(name: str) -> _Any:
+    if name in _EXTRA:
+        value = getattr(_importlib.import_module(_EXTRA[name]), name)
+    else:
+        value = getattr(_src, name)
+    if not name.startswith("_") and name not in _NOT_DEPRECATED:
+        _warnings.warn(
+            f"application_sdk.handler.manifest.{name} is deprecated and will be removed in v4.0; "
+            f"import it from application_sdk_api.handler.manifest",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+    globals()[name] = value
+    return value
 
-    model_config = ConfigDict(frozen=True)
 
-    activity_name: str
-    activity_display_name: str
-    app_name: str
-    inputs: ExecuteWorkflowInputs
-    depends_on: DagNodeDependency | None = None
-
-
-class AppManifest(BaseModel):
-    """Manifest describing an app's execution DAG for Automation Engine.
-
-    Returned by GET /workflows/v1/manifest. Tells Heracles how to
-    orchestrate the app's workflows as a DAG via Automation Engine.
-
-    Parse from a dict or raw JSON string::
-
-        manifest = AppManifest.model_validate(data)
-        manifest = AppManifest.model_validate_json(raw_bytes)
-
-    Serialize to JSON bytes for the HTTP response::
-
-        return Response(content=manifest.model_dump_json(), media_type="application/json")
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    execution_mode: str
-    dag: dict[str, DagNode]
-    init_endpoint: str | None = None
+def __dir__() -> list[str]:
+    return sorted(set(__all__) | set(dir(_src)))
