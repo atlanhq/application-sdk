@@ -19,7 +19,7 @@
 # parent link render (that observability gap is exactly why the previous cron
 # was turned off). Re-enable the `schedule:` block below once verified.
 #
-# Required configuration (shared with vuln-triage-cron.yml):
+# Required configuration:
 #   secrets.HARNESS_TOKEN           Bearer token for /api/sandbox/execute.
 #   secrets.GLOBALPROTECT_USERNAME  VPN auth.
 #   secrets.GLOBALPROTECT_PASSWORD  VPN auth.

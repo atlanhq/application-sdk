@@ -1,0 +1,52 @@
+"""python -m vuln_triage --repo owner/name --root <checkout> --ticket FND-123 [...]"""
+
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+from .run import Context, Deps, run
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="vuln_triage")
+    p.add_argument("--repo", required=True)
+    p.add_argument("--root", required=True, type=Path)
+    p.add_argument("--ticket", required=True)
+    p.add_argument("--severity", default="")
+    p.add_argument("--scan-run-id", default="")
+    p.add_argument(
+        "--scan-dir", type=Path, help="pre-downloaded Trivy JSON (skips download)"
+    )
+    p.add_argument("--run-url", default="")
+    p.add_argument("--run-id", default="")
+    # `--dry-run` alone, or `--dry-run true|false` so the workflow can pass its
+    # boolean input straight through without branching shell.
+    p.add_argument(
+        "--dry-run",
+        nargs="?",
+        const=True,
+        default=False,
+        type=lambda s: s.strip().lower() == "true",
+        help="classify, read Linear, print the comment; push and comment nothing",
+    )
+    a = p.parse_args(argv)
+    ctx = Context(
+        repo=a.repo,
+        root=a.root.resolve(),
+        ticket=a.ticket.strip(),
+        severity=a.severity.strip(),
+        scan_run_id=a.scan_run_id.strip(),
+        scan_dir=a.scan_dir.resolve() if a.scan_dir else None,
+        run_url=a.run_url,
+        run_id=a.run_id,
+        dry_run=a.dry_run,
+    )
+    run(ctx, Deps(runner=subprocess.run))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

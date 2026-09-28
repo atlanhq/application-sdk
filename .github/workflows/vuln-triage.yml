@@ -1,0 +1,120 @@
+name: Vuln Triage
+run-name: "vuln triage ${{ inputs.ticket }}"
+
+# Deterministic CVE triage for one security-scan Linear ticket
+# (.github/scripts/vuln_triage, config in .github/vuln-triage/config.toml).
+#
+# It replaces the mothership rover (vuln-triage-cron.yml + .mothership/vuln-triage):
+# the same classification and the same two PR shapes, in tested Python. No model, no
+# VPN, no sandbox. A run costs one short runner job and $0 in model spend; the rover cost
+# ~$3.40 in model spend per ticket and needed Twingate/GlobalProtect to reach mothership.
+#
+# Triggered by daily-security-scan.yml (dispatch_vuln_triage.py) once per newly filed
+# ticket, passing that scan's run id so the triage reads exactly the artifacts that
+# produced the ticket. Manual dispatch re-runs one ticket (scan_run_id empty = the newest
+# successful scan).
+#
+# Security shape:
+#   * Only trusted code runs: the checkout is the default branch; there is no PR code here.
+#   * PRs are authored as atlan-app-fleet[bot] (a token minted per run, scoped to
+#     contents/pull-requests/issues write). vuln_auto_merge_gate.py trusts that identity,
+#     and atlan-ci stays free to approve (GitHub forbids approving your own PR). App-token
+#     pushes also trigger CI, which GITHUB_TOKEN pushes would not.
+#   * The gate, not this job, is the safety boundary: it auto-merges only an allowlist-only
+#     or a pyproject.toml/uv.lock-only PR, and only once required CI is green.
+#   * The job's own GITHUB_TOKEN only reads: the checkout and the scan artifact.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ticket:
+        description: Linear ticket identifier to triage (e.g. FND-1234)
+        required: true
+        type: string
+      severity:
+        description: Severity bucket of the ticket (CRITICAL/HIGH/MEDIUM/LOW)
+        required: false
+        type: string
+        default: ""
+      scan_run_id:
+        description: Security-scan run whose artifacts to read (empty = newest successful)
+        required: false
+        type: string
+        default: ""
+      dry_run:
+        description: Classify and print the ticket comment to the job summary; push, open and comment nothing
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read # download the scan's security-scan-raw-results artifact
+
+# Two runs on one ticket would race to open the same branches.
+concurrency:
+  group: vuln-triage-${{ inputs.ticket }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    name: Triage ${{ inputs.ticket }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Mint atlan-app-fleet App token (PR author identity)
+        id: app
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write # push the chore/allowlist-* and fix/bump-* branches
+          permission-pull-requests: write # open the PRs
+          permission-issues: write # the vuln-auto-merge label
+
+      # Checked out with the App token so the pushed branches trigger CI. main only.
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+
+      # Same uv as setup-deps and the security scan, so a Case-1 `uv lock` writes the
+      # lock format CI expects.
+      - name: Install uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.19"
+
+      - name: Configure git identity
+        run: |
+          git config user.name "atlan-app-fleet[bot]"
+          git config user.email "atlan-app-fleet[bot]@users.noreply.github.com"
+
+      - name: Triage
+        working-directory: .github/scripts
+        env:
+          GH_TOKEN: ${{ github.token }} # artifact download and read-only gh calls
+          PR_AUTHOR_TOKEN: ${{ steps.app.outputs.token }} # `gh pr create` only
+          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          REPO: ${{ github.repository }}
+          ROOT: ${{ github.workspace }}
+          TICKET: ${{ inputs.ticket }}
+          SEVERITY: ${{ inputs.severity }}
+          SCAN_RUN_ID: ${{ inputs.scan_run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+          # Empty on the scan's dispatch (it does not pass the input), which reads as false.
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: >-
+          python3 -m vuln_triage
+          --repo "$REPO"
+          --root "$ROOT"
+          --ticket "$TICKET"
+          --severity "$SEVERITY"
+          --scan-run-id "$SCAN_RUN_ID"
+          --run-url "$RUN_URL"
+          --run-id "$RUN_ID"
+          --dry-run "$DRY_RUN"
