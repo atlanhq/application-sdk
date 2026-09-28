@@ -137,10 +137,16 @@ def test_worker_surface_sets_mirror_the_sdk_shims() -> None:
             names = {t.id for t in targets if isinstance(t, ast.Name)}
             value = getattr(node, "value", None)
             if "__all__" in names and isinstance(value, (ast.List, ast.Tuple)):
-                exported = {e.value for e in value.elts if isinstance(e, ast.Constant)}
+                exported = {
+                    e.value
+                    for e in value.elts
+                    if isinstance(e, ast.Constant) and isinstance(e.value, str)
+                }
             if "_DEPRECATED_CONSTANTS" in names and isinstance(value, ast.Dict):
                 deprecated = {
-                    k.value for k in value.keys if isinstance(k, ast.Constant)
+                    k.value
+                    for k in value.keys
+                    if isinstance(k, ast.Constant) and isinstance(k.value, str)
                 }
         assert exported, f"{module}: no literal __all__"
         # Names the shim serves without warning but that are not handler
