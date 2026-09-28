@@ -208,10 +208,9 @@ def git_repo(tmp_path: Path) -> Path:
     git("add", ".")
     git("commit", "-m", "fix(contract-toolkit): repair schema")
 
-    # Server-package commit with an SDK-SHAPED subject — filtered by the
-    # pathspec, which is the layer _SUBPKG_RE cannot cover.
-    (tmp_path / "packages" / "server").mkdir(parents=True)
-    (tmp_path / "packages" / "server" / "s.py").write_text("server\n")
+    # api-package commit — released in lockstep with the SDK, so it COUNTS.
+    (tmp_path / "packages" / "api").mkdir(parents=True)
+    (tmp_path / "packages" / "api" / "s.py").write_text("api\n")
     git("add", ".")
     git("commit", "-m", "fix: tighten the task queue derivation")
 
@@ -235,21 +234,14 @@ class TestGetCommitsSinceLastTag:
         assert not any("conformance" in c for c in commits)
         assert not any("contract-toolkit" in c for c in commits)
 
-    def test_server_only_commits_are_removed_by_path_not_subject(
+    def test_api_package_commits_count_toward_the_sdk_bump(
         self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """The filter is two layers and both are load-bearing.
-
-        _SUBPKG_RE drops scoped subjects; the `:(exclude)` pathspec drops
-        commits that only touch a sub-package whatever their subject says.
-        Adding `server` to _SUBPKG_RE alone left this open, so a commit under
-        packages/server with an ordinary `fix:` subject still bumped the SDK's
-        version and landed in the SDK's changelog.
-        """
+        """packages/api is released in lockstep with the SDK (same job, same
+        version), so a commit that only touches it must bump the SDK."""
         monkeypatch.chdir(git_repo)
         commits = release.get_commits_since_last_tag()
-        assert "fix: correct connection handling" in commits
-        assert "fix: tighten the task queue derivation" not in commits
+        assert "fix: tighten the task queue derivation" in commits
 
     def test_empty_lines_are_removed(
         self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
@@ -578,3 +570,39 @@ class TestMainStackedPrGuard:
 
         assert seen["landed_sha"] == ""
         assert outputs["skip"] == "false"
+
+
+class TestUpdateApiLockstep:
+    def _tree(self, tmp_path: Path) -> Path:
+        (tmp_path / "packages" / "api" / "application_sdk_api").mkdir(parents=True)
+        (tmp_path / "pyproject.toml").write_text(
+            'version = "3.39.0"\ndependencies = [\n    "atlan-application-sdk-api==3.39.0",\n]\n'
+        )
+        (tmp_path / "packages" / "api" / "pyproject.toml").write_text(
+            '[project]\nname = "atlan-application-sdk-api"\nversion = "3.39.0"\n'
+        )
+        (
+            tmp_path / "packages" / "api" / "application_sdk_api" / "__init__.py"
+        ).write_text('__version__ = "3.39.0"\n')
+        return tmp_path
+
+    def test_moves_all_three_to_the_new_version(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        release.update_api_lockstep("3.40.0", root=root)
+        assert (
+            '"atlan-application-sdk-api==3.40.0"'
+            in (root / "pyproject.toml").read_text()
+        )
+        assert (
+            'version = "3.40.0"' in (root / "packages/api/pyproject.toml").read_text()
+        )
+        assert (
+            '__version__ = "3.40.0"'
+            in (root / "packages/api/application_sdk_api/__init__.py").read_text()
+        )
+
+    def test_a_missing_pin_fails_instead_of_half_bumping(self, tmp_path: Path) -> None:
+        root = self._tree(tmp_path)
+        (root / "pyproject.toml").write_text('version = "3.39.0"\n')
+        with pytest.raises(RuntimeError, match="expected exactly one"):
+            release.update_api_lockstep("3.40.0", root=root)

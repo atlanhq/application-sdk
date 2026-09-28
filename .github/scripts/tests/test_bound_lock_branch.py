@@ -51,9 +51,9 @@ def repo(tmp_path: Path) -> Path:
     sub = tmp_path / "packages" / "conformance"
     sub.mkdir(parents=True)
     (sub / "uv.lock").write_text("sub lock\n")
-    server = tmp_path / "packages" / "server"
-    server.mkdir(parents=True)
-    (server / "uv.lock").write_text("server lock\n")
+    api = tmp_path / "packages" / "api"
+    api.mkdir(parents=True)
+    (api / "uv.lock").write_text("api lock\n")
     npm_project = tmp_path / orchestrator.NPM_PROJECT
     npm_project.mkdir(parents=True, exist_ok=True)
     (npm_project / "package.json").write_text('{"name": "remediation"}\n')
@@ -165,7 +165,7 @@ class TestProjects:
         assert [p.directory for p in orchestrator.PROJECTS] == [
             ".",
             "packages/conformance",
-            "packages/server",
+            "packages/api",
         ]
 
     def test_the_conformance_project_exempts_the_sdk_and_pyatlan(self):
@@ -182,9 +182,9 @@ class TestProjects:
         # atlan-application-sdk IS this project, and the conformance package is
         # path-sourced via [tool.uv.sources].
         assert by_dir["."] == {"pyatlan"}
-        # The server package resolves no first-party name from PyPI at all, so
+        # The api package resolves no first-party name from PyPI at all, so
         # an exemption here would widen the bound for nothing.
-        assert by_dir["packages/server"] == set()
+        assert by_dir["packages/api"] == set()
 
 
 class TestBoundProject:
@@ -271,7 +271,7 @@ class TestMain:
         assert head_files(in_repo) == {
             "uv.lock",
             "packages/conformance/uv.lock",
-            "packages/server/uv.lock",
+            "packages/api/uv.lock",
             f"{orchestrator.NPM_PROJECT}/package-lock.json",
         }
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE

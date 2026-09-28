@@ -39,7 +39,7 @@ on:
     paths:
       - "uv.lock"
       - "packages/conformance/uv.lock"
-      - "packages/server/uv.lock"
+      - "packages/api/uv.lock"
       # The npm lock moves on its own: measured on #3355, whose entire net diff
       # after the uv bound was this one file. Without it here that push runs no
       # job at all and the file merges unbounded.

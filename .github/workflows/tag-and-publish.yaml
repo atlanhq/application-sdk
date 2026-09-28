@@ -97,6 +97,17 @@ jobs:
       #     uv build
       #     uv publish --index testpypi
 
+      # Lockstep release: atlan-application-sdk pins atlan-application-sdk-api at
+      # its own version, so the api package (packages/api) is published first,
+      # from this same commit. If it fails, the SDK is not published.
+      # Available at: https://pypi.org/project/atlan-application-sdk-api/
+      - name: Build and publish the api package to PyPI
+        env:
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_API_TOKEN_SDK_API }}
+        run: |
+          uv build packages/api --out-dir dist-api
+          uv publish dist-api/*
+
       # Available at: https://pypi.org/project/atlan-application-sdk/
       - name: Build and publish to PyPI
         env:

@@ -91,24 +91,17 @@ class TestClassifyFiles:
         # Lock files classify as a dependency update; both zones require chore/ci.
         assert ptc.classify_files([path]) == "deps"
 
-    def test_server_core(self):
-        assert ptc.classify_files(["packages/server/server_sdk/server.py"]) == (
-            "sv-core"
+    def test_api_package_source_is_sdk(self):
+        # packages/api is released in lockstep with the SDK, so it is SDK source.
+        assert (
+            ptc.classify_files(["packages/api/application_sdk_api/server.py"]) == "sdk"
         )
 
-    def test_server_tests_are_exempt(self):
-        assert ptc.classify_files(["packages/server/tests/test_foo.py"]) == "other"
+    def test_api_package_tests_are_exempt(self):
+        assert ptc.classify_files(["packages/api/tests/test_foo.py"]) == "other"
 
-    @pytest.mark.parametrize(
-        "path",
-        [
-            "packages/server/uv.lock",
-            "packages/server/ui/package-lock.json",
-            "packages/server/ui/yarn.lock",
-        ],
-    )
-    def test_server_lock_files_are_deps(self, path):
-        assert ptc.classify_files([path]) == "deps"
+    def test_api_package_lock_file_is_deps(self):
+        assert ptc.classify_files(["packages/api/uv.lock"]) == "deps"
 
     @pytest.mark.parametrize(
         "files",
@@ -129,8 +122,8 @@ class TestClassifyFiles:
             ["packages/conformance/pyproject.toml", "packages/conformance/foo.py"]
         ) == ("cf-core")
         assert ptc.classify_files(
-            ["packages/server/pyproject.toml", "packages/server/server_sdk/x.py"]
-        ) == ("sv-core")
+            ["packages/api/pyproject.toml", "packages/api/application_sdk_api/x.py"]
+        ) == ("sdk")
         assert ptc.classify_files(["pyproject.toml", "entrypoint.sh"]) == "docker-img"
 
     def test_docs_only_is_other(self):

@@ -157,3 +157,26 @@ def test_importing_errors_pulls_no_serving_or_worker_stack() -> None:
         [sys.executable, "-c", code], capture_output=True, text=True, check=True
     ).stdout.strip()
     assert out == "[]", out
+
+
+def test_the_sdk_and_the_api_package_are_released_in_lockstep() -> None:
+    """One version knob: the SDK pins the api package at its own version.
+
+    The release job publishes both from the same commit (api first), and
+    release.py moves all three together, so an SDK can never be installed next to
+    a stale api. A hand-edit that desyncs them fails here, before any release.
+    """
+    import re
+    import tomllib
+    from pathlib import Path
+
+    import application_sdk_api
+
+    root = Path(__file__).resolve().parents[2]
+    sdk = tomllib.loads((root / "pyproject.toml").read_text())["project"]
+    api = tomllib.loads((root / "packages/api/pyproject.toml").read_text())["project"]
+    pins = [d for d in sdk["dependencies"] if d.startswith("atlan-application-sdk-api")]
+    assert pins == [f"atlan-application-sdk-api=={sdk['version']}"], pins
+    assert api["version"] == sdk["version"]
+    assert application_sdk_api.__version__ == sdk["version"]
+    assert re.fullmatch(r"\d+\.\d+\.\d+", sdk["version"])

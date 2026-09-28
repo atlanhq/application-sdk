@@ -37,7 +37,6 @@ BUMP_RE = re.compile(r"^Bump version to ")
 DOCKER_RE = re.compile(r"^(feat|fix)(\([^)]*\))?!?:")
 CT_RE = re.compile(r"^(feat|fix)\(contract-toolkit\)!?:")
 CF_RE = re.compile(r"^(feat|fix)\(conformance\)!?:")
-SV_RE = re.compile(r"^(feat|fix)\(server\)!?:")
 CHORE_RE = re.compile(r"^(chore|ci)(\([^)]*\))?!?:")
 
 DOCKER_IMAGE_FILES = ("Dockerfile", "entrypoint.sh")
@@ -73,11 +72,11 @@ CF_EXEMPT_GLOBS = (
     "packages/conformance/*/yarn.lock",
 )
 
-SV_EXEMPT_GLOBS = (
-    "packages/server/tests/*",
-    "packages/server/uv.lock",
-    "packages/server/*/package-lock.json",
-    "packages/server/*/yarn.lock",
+# packages/api is released in lockstep with the SDK, so its source is the "sdk"
+# zone; its tests and lock file are exempt like the other packages'.
+API_EXEMPT_GLOBS = (
+    "packages/api/tests/*",
+    "packages/api/uv.lock",
 )
 
 _VALIDATORS = {
@@ -85,7 +84,6 @@ _VALIDATORS = {
     "docker-img": (DOCKER_RE, "docker-img"),
     "ct-core": (CT_RE, "ct-core"),
     "cf-core": (CF_RE, "cf-core"),
-    "sv-core": (SV_RE, "sv-core"),
     "other": (CHORE_RE, "chore-ci"),
 }
 
@@ -113,13 +111,6 @@ _LOG_MESSAGES = {
         "Violation: conformance core change must use feat(conformance): or "
         "fix(conformance):."
     ),
-    (
-        "sv-core",
-        False,
-    ): "packages/server core change with a valid scoped title. ✅",
-    ("sv-core", True): (
-        "Violation: server core change must use feat(server): or fix(server):."
-    ),
     ("other", False): "Non-source change with a chore/ci title. ✅",
     ("other", True): "Violation: non-source change must use chore: or ci:.",
 }
@@ -141,13 +132,10 @@ _ERROR_MESSAGES = {
         "conformance core changes must use 'feat(conformance):' or "
         "'fix(conformance):'."
     ),
-    "sv-core": (
-        "server package core changes must use 'feat(server):' or " "'fix(server):'."
-    ),
     "chore-ci": (
         "Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved "
-        "for application_sdk/, Dockerfile/entrypoint.sh, contract-toolkit core, "
-        "packages/conformance core, and packages/server core)."
+        "for application_sdk/ and packages/api, Dockerfile/entrypoint.sh, contract-toolkit "
+        "core, and packages/conformance core)."
     ),
 }
 
@@ -205,20 +193,6 @@ such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
 
 Editing the PR title re-runs this check and clears this comment automatically.
 """,
-    "sv-core": """\
-### server package changes need a scoped `feat`/`fix` title
-
-This PR changes `packages/server/` source, so its title must use the
-`server` scope:
-
-- `feat(server): ...`
-- `fix(server): ...`
-
-(Changes confined to `packages/server/tests/` or lock files
-such as `uv.lock`/`package-lock.json` should instead be `chore:`/`ci:`.)
-
-Editing the PR title re-runs this check and clears this comment automatically.
-""",
     "chore-ci": """\
 ### \U0001f3f7️ Non-source PR shouldn't use a `feat`/`fix` title
 
@@ -256,15 +230,18 @@ def is_dependency_manifest(path: str) -> bool:
 def classify_files(files: list) -> str:
     """Return the highest-precedence zone touched by ``files``.
 
-    One of "deps", "sdk", "docker-img", "ct-core", "cf-core", "sv-core", or
-    "other".
+    One of "deps", "sdk", "docker-img", "ct-core", "cf-core", or "other".
     """
     if files and all(is_dependency_manifest(f) for f in files):
         return "deps"
 
-    sdk = docker_img = ct_core = cf_core = sv_core = False
+    sdk = docker_img = ct_core = cf_core = False
     for f in files:
         if f.startswith("application_sdk/"):
+            sdk = True
+        elif any(fnmatch.fnmatch(f, glob) for glob in API_EXEMPT_GLOBS):
+            continue
+        elif f.startswith("packages/api/"):
             sdk = True
         elif f in DOCKER_IMAGE_FILES:
             docker_img = True
@@ -276,10 +253,6 @@ def classify_files(files: list) -> str:
             continue
         elif f.startswith("packages/conformance/"):
             cf_core = True
-        elif any(fnmatch.fnmatch(f, glob) for glob in SV_EXEMPT_GLOBS):
-            continue
-        elif f.startswith("packages/server/"):
-            sv_core = True
 
     if sdk:
         return "sdk"
@@ -289,8 +262,6 @@ def classify_files(files: list) -> str:
         return "ct-core"
     if cf_core:
         return "cf-core"
-    if sv_core:
-        return "sv-core"
     return "other"
 
 
