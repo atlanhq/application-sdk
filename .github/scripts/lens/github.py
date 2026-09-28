@@ -217,6 +217,47 @@ class GitHub:
             {"message": message, "event": "DISMISS"},
         )
 
+    def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
+        out = self._call("POST", "/graphql", {"query": query, "variables": variables})
+        if (out or {}).get("errors"):
+            raise GitHubError(f"graphql: {str(out['errors'])[:300]}")
+        return (out or {}).get("data") or {}
+
+    def review_threads(self, number: int) -> list[dict[str, Any]]:
+        """Each review thread: id, resolved, and its first comment's author and body."""
+        owner, name = self.repo.split("/", 1)
+        q = (
+            "query($o:String!,$n:String!,$pr:Int!,$after:String){repository(owner:$o,name:$n)"
+            "{pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}"
+            "nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"
+        )
+        out: list[dict[str, Any]] = []
+        after = None
+        while True:
+            data = self._graphql(
+                q, {"o": owner, "n": name, "pr": number, "after": after}
+            )
+            page = data["repository"]["pullRequest"]["reviewThreads"]
+            for t in page["nodes"]:
+                first = (t["comments"]["nodes"] or [{}])[0]
+                out.append(
+                    {
+                        "id": t["id"],
+                        "resolved": bool(t["isResolved"]),
+                        "author": str((first.get("author") or {}).get("login") or ""),
+                        "body": str(first.get("body") or ""),
+                    }
+                )
+            if not page["pageInfo"]["hasNextPage"]:
+                return out
+            after = page["pageInfo"]["endCursor"]
+
+    def resolve_thread(self, thread_id: str) -> None:
+        self._graphql(
+            "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}",
+            {"id": thread_id},
+        )
+
     def review(
         self, number: int, head: str, body: str, comments: list[dict[str, Any]]
     ) -> None:
