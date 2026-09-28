@@ -18,7 +18,7 @@ def _first_party_rules() -> list[dict]:
         and (
             r.get("matchPackageNames")
             in (["atlan-application-sdk"], ["atlan-application-sdk-conformance"])
-            or r.get("matchManagers") == ["custom.regex"]
+            or r.get("matchDepNames") == ["app-contract-toolkit"]
         )
     ]
 
@@ -28,6 +28,13 @@ def test_first_party_lanes_share_one_group() -> None:
     assert len(rules) == 3
     assert {r.get("groupName") for r in rules} == {_GROUP}
     assert {r.get("prPriority") for r in rules} == {10}
+
+
+def test_group_rules_name_their_dependency() -> None:
+    rules = json.loads(_PRESET.read_text())["packageRules"]
+    for rule in rules:
+        if rule.get("groupName") == _GROUP:
+            assert rule.get("matchPackageNames") or rule.get("matchDepNames"), rule
 
 
 def test_first_party_post_upgrade_tasks_run_per_update() -> None:

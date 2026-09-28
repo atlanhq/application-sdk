@@ -80,9 +80,12 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "app-contract-toolkit (Pkl): minor+patch, grouped into the atlan platform PR (see the SDK lane rule); auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
+      "description": "app-contract-toolkit (Pkl): minor+patch, grouped into the atlan platform PR (see the SDK lane rule); auto-merge on green. Matched by the regex customManager below, and scoped to its depName so no other regex-managed dependency (a repo-local customManager, or application-sdk's own pkl pin) joins the group. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
       "matchManagers": [
         "custom.regex"
+      ],
+      "matchDepNames": [
+        "app-contract-toolkit"
       ],
       "matchUpdateTypes": [
         "minor",
