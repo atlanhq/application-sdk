@@ -16,6 +16,8 @@ run-name: "vuln triage ${{ inputs.selftest && 'SELFTEST' || inputs.ticket }}${{ 
 #
 # Security shape:
 #   * Only trusted code runs: the checkout is the default branch; there is no PR code here.
+#     The one exception is a self-test, which runs the dispatched ref's code. Dispatching
+#     already needs write access to the repo, and a self-test's PRs never reach the gate.
 #   * PRs are authored as atlan-app-fleet[bot] (a token minted per run, scoped to
 #     contents/pull-requests/issues write). vuln_auto_merge_gate.py trusts that identity,
 #     and atlan-ci stays free to approve (GitHub forbids approving your own PR). App-token
@@ -88,11 +90,15 @@ jobs:
           permission-pull-requests: write # open the PRs
           permission-issues: write # the vuln-auto-merge label
 
-      # Checked out with the App token so the pushed branches trigger CI. main only.
-      - name: Check out main
+      # Checked out with the App token so the pushed branches trigger CI.
+      # Live and dry runs always check out main: a triage PR is based on the checked-out
+      # commit, so anything else would carry that ref's changes into it. A self-test checks
+      # out the dispatched ref, so a branch's triage code can be tested before merge; its
+      # PRs are drafts, unlabelled, on selftest/ branches, and closed by the same run.
+      - name: Check out main (or the dispatched ref for a self-test)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ inputs.selftest && github.ref || 'main' }}
           token: ${{ steps.app.outputs.token }}
 
       # Same uv as setup-deps and the security scan, so a Case-1 `uv lock` writes the
