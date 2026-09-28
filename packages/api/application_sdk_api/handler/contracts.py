@@ -459,7 +459,9 @@ def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
         # unusable for auth (the contract wants a list), but the flat keys beside
         # it are real credential material and must not survive into the body.
         return {**_rest(), "credentials": creds}
-    return _rest()
+    # No credential material anywhere (creds is None and no flat keys): nothing
+    # to strip, so the body passes through as sent.
+    return dict(body)
 
 
 class AuthStatus(SerializableEnum):

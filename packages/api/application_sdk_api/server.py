@@ -34,27 +34,9 @@ from application_sdk_api.config.store import (
     ConfigStore,
     config_objectstore_key,
 )
-from application_sdk_api.errors.base import AppError
-from application_sdk_api.errors.categories import FailureCategory
-from application_sdk_api.handler.base import Handler, HandlerError
-from application_sdk_api.handler.contracts import (
-    AuthInput,
-    MetadataInput,
-    PreflightCheck,
-    PreflightInput,
-    PreflightOutput,
-    normalize_credentials,
-)
-from application_sdk_api.handler.request_contract import (
-    RequestContractError,
-    read_json_object,
-    validate_request,
-)
-from application_sdk_api.manifest import (
-    ENTRYPOINT_NAME_RE,
-    ComputeManifest,
-    register_manifest_routes,
-)
+from application_sdk_api.handler.base import Handler
+from application_sdk_api.handler.request_contract import read_json_object
+from application_sdk_api.manifest import ComputeManifest, register_manifest_routes
 from application_sdk_api.observability.logger_adaptor import get_logger
 from application_sdk_api.revision import (
     SERVER_SDK_DIST,
@@ -62,6 +44,13 @@ from application_sdk_api.revision import (
     header_safe,
     resolve_app_version,
     server_revision,
+)
+from application_sdk_api.routes import (  # noqa: F401 — the shared helpers, re-exported
+    _CATEGORY_TO_HTTP,
+    _app_error_to_http_status,
+    _summarize_check,
+    _wrap_response,
+    register_handler_routes,
 )
 from application_sdk_api.workflow import (
     WORKFLOW_EXTRA_AVAILABLE,
@@ -96,115 +85,15 @@ except ModuleNotFoundError:  # pragma: no cover - orjson is a declared core dep
 # Error category → HTTP status
 # ---------------------------------------------------------------------------
 
-_CATEGORY_TO_HTTP: dict[FailureCategory, int] = {
-    FailureCategory.AUTH: 401,
-    FailureCategory.PERMISSION: 403,
-    FailureCategory.NOT_FOUND: 404,
-    FailureCategory.ALREADY_EXISTS: 409,
-    FailureCategory.INVALID_INPUT: 400,
-    FailureCategory.PRECONDITION: 412,
-    FailureCategory.RATE_LIMITED: 429,
-    FailureCategory.TIMEOUT: 504,
-    FailureCategory.DEPENDENCY_UNAVAILABLE: 503,
-    # The customer's source being down is a 503, not a 500: it was absent from
-    # this map and fell through to the 500 default, so every connector that
-    # reports SOURCE_UNAVAILABLE was answering as if it had itself broken.
-    FailureCategory.SOURCE_UNAVAILABLE: 503,
-    FailureCategory.RESOURCE_EXHAUSTED: 503,
-    FailureCategory.DATA_INTEGRITY: 500,
-    FailureCategory.INTERNAL: 500,
-    FailureCategory.UNIMPLEMENTED: 501,
-    FailureCategory.CANCELLED: 499,
-}
-
-
-def _app_error_to_http_status(exc: AppError) -> int:
-    return _CATEGORY_TO_HTTP.get(exc.category, 500)
-
 
 # ---------------------------------------------------------------------------
 # Response envelope + preflight request shaping
 # ---------------------------------------------------------------------------
 
 
-def _normalize_preflight_request(body: dict[str, Any]) -> dict[str, Any]:
-    """Mirror ``metadata`` and ``connection_config`` when exactly one is present.
-
-    The camelCase spelling is folded onto the field name first. ``PreflightInput``
-    accepts either via ``AliasChoices``, but the mirror below decides which of
-    the two blocks to copy by inspecting the *raw body*, so without the fold a
-    caller sending only ``connectionConfig`` + no ``metadata`` would get an
-    empty ``metadata`` — and, before the alias existed, an empty
-    ``connection_config`` as well.
-    """
-    normalized = normalize_credentials(body)
-    if "connectionConfig" in normalized and "connection_config" not in normalized:
-        normalized = {
-            k: v for k, v in normalized.items() if k != "connectionConfig"
-        } | {"connection_config": normalized["connectionConfig"]}
-    has_metadata = "metadata" in normalized and normalized["metadata"] is not None
-    has_connection_config = (
-        "connection_config" in normalized
-        and normalized["connection_config"] is not None
-    )
-    if has_metadata and not has_connection_config:
-        return {**normalized, "connection_config": normalized["metadata"]}
-    if has_connection_config and not has_metadata:
-        return {**normalized, "metadata": normalized["connection_config"]}
-    return normalized
-
-
-def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
-    # cause_repr is the raw exception text behind a typed error. It stays in the
-    # server log and the Temporal payload; the HTTP caller gets typed fields.
-    dumped = check.model_dump(
-        mode="json", exclude_none=True, exclude={"error": {"cause_repr"}}
-    )
-    dumped["message"] = check.resolved_message
-    if check.resolved_suggested_action:
-        dumped["suggested_action"] = check.resolved_suggested_action
-    return dumped
-
-
-def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
-    return {
-        "status": result.status.value,
-        "message": result.message,
-        "total_duration_ms": result.total_duration_ms,
-        "checks": [_summarize_check(check) for check in result.checks],
-    }
-
-
-def _wrap_response(
-    data: dict[str, Any] | list[Any],
-    *,
-    message: str = "",
-    success: bool = True,
-) -> dict[str, Any]:
-    """Standard envelope ``{success, data, message?}`` — message omitted when empty."""
-    result: dict[str, Any] = {"success": success, "data": data}
-    if message:
-        result["message"] = message
-    return result
-
-
 # ---------------------------------------------------------------------------
 # Entrypoint validation
 # ---------------------------------------------------------------------------
-
-
-def _validated_entrypoint(body: dict[str, Any]) -> None:
-    """Reject a malformed ``entrypoint`` with 400 before it reaches a handler.
-
-    Without this the surface fails OPEN: an unparseable or traversal-shaped name
-    falls through to whatever default the app's handler returns, so ``/auth``
-    answers 200 "success" and ``/check`` answers 200 "ready, 0 checks" for a name
-    that identifies nothing. application-sdk 400s these, and callers rely on that
-    to distinguish "bad request" from "checks passed".
-    """
-    entrypoint = body.get("entrypoint") or ""
-    if entrypoint and not ENTRYPOINT_NAME_RE.match(str(entrypoint)):
-        raise HTTPException(status_code=400, detail="Invalid entrypoint name")
 
 
 # ---------------------------------------------------------------------------
@@ -617,54 +506,6 @@ def build_asgi_app(
     app.add_middleware(_BodySizeLimitMiddleware, max_bytes=MAX_REQUEST_BODY_BYTES)
     app.add_middleware(_RevisionHeaderMiddleware, headers=revision_headers)
 
-    @app.exception_handler(RequestContractError)
-    async def _handle_request_contract_error(
-        request: Request, exc: Exception
-    ) -> JSONResponse:
-        """Turn a request-body contract failure into a 422 naming the field.
-
-        Registered unconditionally, unlike the ``Exception`` handler below:
-        this only changes responses that are 500s today, so that handler's
-        ``app_package`` opt-in rationale does not apply here.
-
-        Pydantic's ``input`` and ``ctx`` are omitted -- the rejected value can
-        be a credential, and the field path plus the reason is what a caller
-        can act on.
-        """
-        errors = (
-            exc.cause.errors(
-                include_url=False, include_input=False, include_context=False
-            )
-            if isinstance(exc, RequestContractError) and exc.cause is not None
-            else []
-        )
-        detail = [
-            {
-                "field": ".".join(str(part) for part in error["loc"]),
-                "message": error["msg"],
-                "type": error["type"],
-            }
-            for error in errors
-        ]
-        fields = ", ".join(item["field"] for item in detail if item["field"]) or "body"
-        logger.warning(
-            # %r on the path: it is caller-controlled and percent-decoded, so a
-            # %0A in it would forge a log line. No exc_info here, so this record
-            # is single-line and a forged one would be indistinguishable.
-            "Rejected a malformed request to %r for app %s: invalid field(s) %s",
-            request.url.path,
-            app_name,
-            fields,
-        )
-        return JSONResponse(
-            status_code=422,
-            content={
-                "success": False,
-                "message": f"Invalid request: {fields}",
-                "detail": detail,
-            },
-        )
-
     if app_package is not None:
         # Opt-in only. Starlette routes an ``Exception`` handler to
         # ``ServerErrorMiddleware``, the one layer outside every user
@@ -749,157 +590,12 @@ def build_asgi_app(
         return True
 
     # -- auth ----------------------------------------------------------------
-    @app.post("/workflows/v1/auth")
-    async def test_auth(request: Request) -> JSONResponse:
-        body = normalize_credentials(await read_json_object(request))
-        _validated_entrypoint(body)
-        auth_input = validate_request(AuthInput, body)
-        try:
-            logger.info("Auth test started: app=%s", app_name)
-            result = await handler.test_auth(auth_input)
-            logger.info(
-                "Auth test completed: app=%s status=%s", app_name, result.status.value
-            )
-            return JSONResponse(
-                status_code=result.status.http_status,
-                content=_wrap_response(
-                    result.model_dump(),
-                    message=result.message or f"Authentication {result.status.value}",
-                    success=result.status.is_success,
-                ),
-            )
-        except HandlerError as e:
-            logger.error("Auth test failed for app %s: %s", app_name, e, exc_info=True)
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except AppError as e:
-            logger.error("Auth test failed for app %s: %s", app_name, e, exc_info=True)
-            raise HTTPException(
-                status_code=_app_error_to_http_status(e), detail=str(e)
-            ) from None
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                "Auth test failed unexpectedly for app %s: %s",
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
+    # auth / check / metadata, the 422 request contract and the error boundary:
+    # the SDK's one implementation, shared with the worker's handler service.
+    register_handler_routes(
+        app, handler, app_name=app_name, app_package=app_package or "app"
+    )
 
-    # -- check ---------------------------------------------------------------
-    @app.post("/workflows/v1/check")
-    async def preflight_check(request: Request) -> JSONResponse:
-        body = _normalize_preflight_request(await read_json_object(request))
-        _validated_entrypoint(body)
-        preflight_input = validate_request(PreflightInput, body)
-        try:
-            logger.info("Preflight check started: app=%s", app_name)
-            result = await handler.preflight_check(preflight_input)
-            logger.info(
-                "Preflight check completed: app=%s status=%s checks=%d",
-                app_name,
-                result.status.value,
-                len(result.checks),
-            )
-            # v2-compatible response: each check becomes a top-level key in data,
-            # keyed by name with only the first char lowercased. successMessage /
-            # failureMessage populated per pass/fail so the SageV2 widget renders.
-            v2_data: dict[str, Any] = {}
-            for check in result.checks:
-                key = check.name[0].lower() + check.name[1:]
-                msg = check.resolved_message or ""
-                v2_data[key] = {
-                    "success": check.passed,
-                    "message": msg,
-                    "successMessage": msg if check.passed else "",
-                    "failureMessage": "" if check.passed else msg,
-                }
-            # Envelope success = "any check ran", NOT "all passed"; the verdict
-            # lives in data.<check>.success and preflight.status.
-            response = _wrap_response(
-                v2_data,
-                message=result.message or f"Preflight check {result.status.value}",
-                success=len(result.checks) > 0,
-            )
-            response["preflight"] = _preflight_runtime_summary(result)
-            return JSONResponse(content=response)
-        except HandlerError as e:
-            logger.error(
-                "Preflight check failed for app %s: %s", app_name, e, exc_info=True
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except AppError as e:
-            logger.error(
-                "Preflight check failed for app %s: %s", app_name, e, exc_info=True
-            )
-            raise HTTPException(
-                status_code=_app_error_to_http_status(e), detail=str(e)
-            ) from None
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                "Preflight check failed unexpectedly for app %s: %s",
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-
-    # -- metadata ------------------------------------------------------------
-    @app.post("/workflows/v1/metadata")
-    async def fetch_metadata(request: Request) -> JSONResponse:
-        body = normalize_credentials(await read_json_object(request))
-        _validated_entrypoint(body)
-        metadata_input = validate_request(MetadataInput, body)
-        # Mirror the widget routing key onto object_filter when it's empty.
-        if not metadata_input.object_filter and metadata_input.metadata_template_key:
-            metadata_input = metadata_input.model_copy(
-                update={"object_filter": metadata_input.metadata_template_key}
-            )
-        try:
-            logger.info("Metadata fetch started: app=%s", app_name)
-            result = await handler.fetch_metadata(metadata_input)
-            data = [obj.model_dump() for obj in result.objects]
-            logger.info(
-                "Metadata fetch completed: app=%s type=%s objects=%d",
-                app_name,
-                type(result).__name__,
-                len(result.objects),
-            )
-            # message deliberately omitted (empty) so FE filter dropdowns render.
-            return JSONResponse(content=_wrap_response(data))
-        except HandlerError as e:
-            logger.error(
-                "Metadata fetch failed for app %s: %s", app_name, e, exc_info=True
-            )
-            raise HTTPException(status_code=e.http_status, detail=str(e)) from None
-        except AppError as e:
-            logger.error(
-                "Metadata fetch failed for app %s: %s", app_name, e, exc_info=True
-            )
-            raise HTTPException(
-                status_code=_app_error_to_http_status(e), detail=str(e)
-            ) from None
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(
-                "Metadata fetch failed unexpectedly for app %s: %s",
-                app_name,
-                e,
-                exc_info=True,
-            )
-            raise HTTPException(
-                status_code=500, detail="Internal server error"
-            ) from None
-
-    # -- config --------------------------------------------------------------
     @app.get("/workflows/v1/config/{config_id}")
     async def get_workflow_config(
         config_id: Annotated[str, PathParam(pattern=CONFIG_KEY_PATTERN)],
