@@ -1578,6 +1578,16 @@ def _d003_scan_source(tmp_path: Path, source: str) -> list[str]:
             'URL = "crate://{host}:{port}/"\n',
             id="from-clients-import-sql",
         ),
+        pytest.param(
+            "from application_sdk.clients import BaseSQLClient\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="public-reexport-base-sql-client",
+        ),
+        pytest.param(
+            "from application_sdk.clients import AsyncBaseSQLClient\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="public-reexport-async-base-sql-client",
+        ),
     ],
 )
 def test_d003_sdk_sql_client_import_loads_sqlalchemy(
@@ -1601,6 +1611,11 @@ def test_d003_sdk_sql_client_import_loads_sqlalchemy(
             "from application_sdk.clients import base\n"
             'URL = "crate://{host}:{port}/"\n',
             id="non-sql-sdk-client",
+        ),
+        pytest.param(
+            "from application_sdk.clients import DatabaseConfig\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="public-reexport-non-client-name",
         ),
         pytest.param(
             "import application_sdk.clients.sqlite\n"
