@@ -335,6 +335,30 @@ check_artifact_schemas "duplicate field names" 'isDistinct' "$(artifact_schemas_
     }
   }')"
 
+# PklArtifactSchema: the amended module must be one immutable module any reader
+# can resolve — an absolute, version-pinned `package:` URI. An unversioned URI, a
+# relative path, and a `@dependency/...` import (which resolves through the
+# declaring app's PklProject, not the reader's) each mean different things to
+# different readers.
+check_artifact_schemas "unversioned Pkl module URI" 'Value: "package://example.com/toolkits/typedef/models#' "$(artifact_schemas_body '  ["model_module"] = new PklArtifactSchema {
+    amendsModule = "package://example.com/toolkits/typedef/models#/Typedefs.pkl"
+  }')"
+
+check_artifact_schemas "relative Pkl module path" 'Value: "../toolkit' "$(artifact_schemas_body '  ["model_module"] = new PklArtifactSchema {
+    amendsModule = "../toolkit/src/main/pkl/Typedefs.pkl"
+  }')"
+
+check_artifact_schemas "dependency-notation Pkl module" 'Value: "@models/' "$(artifact_schemas_body '  ["model_module"] = new PklArtifactSchema {
+    amendsModule = "@models/Typedefs.pkl"
+  }')"
+
+# A Pkl module is declared by the module it amends, never by a field map: `pkl` is
+# not a field-map format, so `ArtifactSchema` cannot carry it.
+check_artifact_schemas "pkl format on a field-map ArtifactSchema" 'but got `"pkl"`' "$(artifact_schemas_body '  ["model_module"] = new ArtifactSchema {
+    format = "pkl"
+    fields { new ArtifactField { name = "x"; description = "d" } }
+  }')"
+
 # Control: the same contract with a valid declaration must generate cleanly, and
 # must actually emit the artifact. Without this, a check that always errors (for
 # any reason) would pass the three assertions above and prove nothing.

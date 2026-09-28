@@ -179,6 +179,26 @@ def test_declared_boundary_fields_are_silent(tmp_path: Path) -> None:
     assert _run(tmp_path, {"app/main.py": _SINGLE_EP_APP}) == []
 
 
+def test_a_pkl_module_declaration_satisfies_the_rule(tmp_path: Path) -> None:
+    """A ``PklArtifactSchema`` entry declares the field: it has no ``fields`` list.
+
+    Rendered by the toolkit for an input that is itself a Pkl module (FND-2839).
+    The rule asks only whether a key exists, so the entry's shape — a module URI
+    rather than a field map — must not matter to it.
+    """
+    generated = tmp_path / "app" / "generated"
+    _write_manifest(generated / "manifest.json")
+    _write_schemas(generated / "artifact_schemas.json", "transformed_entities")
+    envelope = json.loads((generated / "artifact_schemas.json").read_text())
+    envelope["schemas"]["raw_queries"] = {
+        "format": "pkl",
+        "amends_module": "package://example.com/models@1.2.3#/Typedefs.pkl",
+    }
+    (generated / "artifact_schemas.json").write_text(json.dumps(envelope))
+
+    assert _run(tmp_path, {"app/main.py": _SINGLE_EP_APP}) == []
+
+
 def test_a_partially_declared_boundary_reports_only_the_gap(tmp_path: Path) -> None:
     generated = tmp_path / "app" / "generated"
     _write_manifest(generated / "manifest.json")

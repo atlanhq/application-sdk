@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.38.0
-source-sha:    c7db1d98458c5816fb6b4abfbc7887c5e51e6e26
-source-date:   2026-09-23T17:55:52+01:00
+sdk-version:   3.39.0
+source-sha:    c6d47bda21831fae60cdfddb614544cf6ce0f994
+source-date:   2026-09-24T16:44:29Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
 
@@ -6495,6 +6495,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Diff a parquet artifact's footer schema against a field-map declaration.
 - **Defined in:** `application_sdk/validation/parquet.py`
 
+#### `PklModuleDeclaration`
+
+- **Import:** `from application_sdk.validation import PklModuleDeclaration`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `class PklModuleDeclaration(amends_module: str, artifact_format: str = FORMAT_PKL)`
+- **Summary:** A declaration resolved to a Pkl module the artifact must amend.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.validation import ReferentialFailure`
@@ -6936,6 +6944,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Also importable from:** `application_sdk.validation.artifacts`
 - **Signature:** `FORMAT_PARQUET: Final`
 - **Summary:** Columnar. Checked by reading the file footer — no row is ever read.
+- **Defined in:** `application_sdk/validation/artifacts.py`
+
+#### `FORMAT_PKL`
+
+- **Import:** `from application_sdk.validation import FORMAT_PKL`
+- **Also importable from:** `application_sdk.validation.artifacts`
+- **Signature:** `FORMAT_PKL: Final`
+- **Summary:** A Pkl module that must amend a named, published module.
 - **Defined in:** `application_sdk/validation/artifacts.py`
 
 #### `MODE_HARD`

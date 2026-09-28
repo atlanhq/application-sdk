@@ -204,6 +204,27 @@ local extendedSchemas = parser.parse(
   extendedApp.output.files["app/generated/artifact_schemas.json"].text
 )
 
+// ── Pkl-module artifact with nothing but the module URI ───────────────────────
+
+local pklBareApp = (App) {
+  name = "pkl-bare-app"
+  displayName = "Pkl Bare App"
+  icon = "https://example.com/icon.svg"
+  hasCredentialConfig = false
+  pipeline { publish = null }
+  uiConfig = bundleUiConfig
+
+  artifactSchemas {
+    ["module"] = new App.PklArtifactSchema {
+      amendsModule = "package://example.com/tk/models@2.0.0-rc.1#/sub/Typedefs.pkl"
+    }
+  }
+}
+
+local pklBareSchemas = parser.parse(
+  pklBareApp.output.files["app/generated/artifact_schemas.json"].text
+)
+
 // ── Element paths: arrays of structs, and scalar arrays ───────────────────────
 
 local arraysApp = (App) {
@@ -285,7 +306,31 @@ facts {
 
   // ── Keying: contract field names, never path shapes ────────────────────────
   ["declarations are keyed by output-contract field name"] {
-    exampleSchemas["schemas"].keys == Set("raw_queries", "transformed_entities", "upstream_lineage")
+    exampleSchemas["schemas"].keys ==
+      Set("raw_queries", "transformed_entities", "upstream_lineage", "typedef_module")
+  }
+
+  // ── Pkl-module artifacts: the amended module is the declaration ────────────
+  // No field list is rendered: the module already fixes every property, and a
+  // restated field map would be a weaker hand-maintained copy. Readers dispatch
+  // on `format` exactly as for a field map. (The refusals for an unpinned or
+  // non-`package:` URI live in scripts/check-invariants.sh.)
+  ["a Pkl-module artifact renders format, description and amends_module only"] {
+    exampleSchemas["schemas"]["typedef_module"] == new Mapping {
+      ["format"] = "pkl"
+      ["description"] = "Typedef module this app renders into Atlas typedefs."
+      ["amends_module"] = "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
+    }
+  }
+
+  ["a Pkl-module artifact omits description when unset"] {
+    !pklBareSchemas["schemas"]["module"].containsKey("description")
+    pklBareSchemas["schemas"]["module"]["format"] == "pkl"
+  }
+
+  ["a pre-release package version is a valid pin"] {
+    pklBareSchemas["schemas"]["module"]["amends_module"] ==
+      "package://example.com/tk/models@2.0.0-rc.1#/sub/Typedefs.pkl"
   }
 
   // ── Field rendering ────────────────────────────────────────────────────────

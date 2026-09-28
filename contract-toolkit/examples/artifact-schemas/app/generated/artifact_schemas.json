@@ -144,6 +144,11 @@
           "description": "Id of the process that produced the edge. Groups edges into one lineage process on read."
         }
       ]
+    },
+    "typedef_module": {
+      "format": "pkl",
+      "description": "Typedef module this app renders into Atlas typedefs.",
+      "amends_module": "package://example.com/toolkits/typedef/models@1.2.3#/Typedefs.pkl"
     }
   }
 }

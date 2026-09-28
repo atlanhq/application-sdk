@@ -57,6 +57,7 @@ from application_sdk.validation.artifacts import (
     ArtifactValidationReport,
     FieldMapDeclaration,
     ModelDeclaration,
+    PklModuleDeclaration,
 )
 from application_sdk.validation.protocols import FormatValidator, SchemaSource
 from application_sdk.validation.sources import ArtifactDeclarationError
@@ -191,7 +192,9 @@ def validate_artifact(
     if declaration is None:
         return ArtifactValidationReport.not_declared(boundary=boundary)
 
-    if not isinstance(declaration, (FieldMapDeclaration, ModelDeclaration)):
+    if not isinstance(
+        declaration, (FieldMapDeclaration, ModelDeclaration, PklModuleDeclaration)
+    ):
         # `isinstance` against a runtime protocol never checked what `resolve()`
         # *returns*, only that the method exists. A structurally-matching source can
         # hand back anything, and reading `.artifact_format` off it would raise

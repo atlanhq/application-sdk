@@ -28,6 +28,7 @@ from application_sdk.validation.artifacts import (
     ARTIFACT_VALIDATION_OUTCOMES,
     FORMAT_NDJSON,
     FORMAT_PARQUET,
+    FORMAT_PKL,
     OUTCOME_ABSENT,
     OUTCOME_CLEAN,
     OUTCOME_FLAGGED,
@@ -256,6 +257,30 @@ def test_a_format_with_no_builtin_validator_says_so_out_loud(tmp_path: Path) -> 
     _assert_emits(report, OUTCOME_UNSUPPORTED)
     assert "no validator registered" in report.reason
     assert "avro" in report.reason
+
+
+def test_a_pkl_module_declaration_is_unsupported_until_its_validator_ships(
+    tmp_path: Path,
+) -> None:
+    """Declared, loaded, and reported as unchecked — through the real loader.
+
+    Driven from the committed toolkit fixture rather than a stub, so the path under
+    test is the one production takes: the generated ``pkl`` entry must reach
+    dispatch as a declaration (not ``absent`` from a loader that choked on its
+    missing ``fields``, and not ``not_declared``), and dispatch must name ``pkl``
+    as the format with no validator.
+    """
+    _load_schemas.cache_clear()
+    (tmp_path / ARTIFACT_SCHEMAS_FILENAME).write_bytes(FIXTURE.read_bytes())
+
+    report = validate_artifact(
+        tmp_path / "typedefs.pkl",
+        ContractSource(field="typedef_module", generated_dir=tmp_path),
+    )
+
+    _assert_emits(report, OUTCOME_UNSUPPORTED)
+    assert report.artifact_format == FORMAT_PKL
+    assert "no validator registered for format 'pkl'" in report.reason
 
 
 def test_the_builtin_parquet_validator_is_wired_end_to_end(tmp_path: Path) -> None:
