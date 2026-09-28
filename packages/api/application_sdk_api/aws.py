@@ -85,7 +85,7 @@ class AwsClientCreationError(DependencyUnavailableError):
             message=f"Failed to create AWS client for {service}",
             service=service,
             target="boto3.client",
-            failure_reason=str(cause),
+            cause=cause,
         )
 
 
