@@ -352,10 +352,37 @@ jobs:
           version: v0.70.0
           cache: true
 
+      # setup-trivy's `cache` covers the binary only, so without this every
+      # scan pulls the vuln DB. A release fans that pull out across the whole
+      # fleet at once, and the anonymous registry answered with
+      # `TOOMANYREQUESTS` — failing the scan, and with it the merge-queue
+      # entry, with no CVE involved. A restored DB that has gone stale is
+      # safe: Trivy checks its NextUpdate and downloads a fresh one.
+      #
+      # Keyed by day, the same scheme trivy-action uses, so each cache scope
+      # saves at most one DB per day. Only the DB directories are cached, not
+      # the per-image layer cache beside them.
+      - name: Get date for the Trivy DB cache key
+        id: trivy-db-date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Trivy DB cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/trivy/db
+            ~/.cache/trivy/java-db
+          key: trivy-db-${{ runner.os }}-${{ steps.trivy-db-date.outputs.date }}
+          restore-keys: trivy-db-${{ runner.os }}-
+
+      # The DB repositories are an ordered fallback list: Trivy moves on to
+      # the next one when a pull fails with a temporary error, which includes
+      # a 429. The first two are Trivy's own defaults; ECR, which used to be
+      # the only source, stays as the last resort.
       - name: Run Trivy scan
         env:
-          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
-          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+          TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
           IMAGE="${{ inputs.image || needs.build.outputs.scan_image }}"
           trivy image \
