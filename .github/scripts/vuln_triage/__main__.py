@@ -10,6 +10,16 @@ from pathlib import Path
 from .run import Context, Deps, run
 
 
+def parse_bool(value: str) -> bool:
+    """`true`/`false` as the workflow's boolean input renders them; nothing else."""
+    v = value.strip().lower()
+    if v == "true":
+        return True
+    if v == "false":
+        return False
+    raise argparse.ArgumentTypeError(f"expected true or false, got {value!r}")
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="vuln_triage")
     p.add_argument("--repo", required=True)
@@ -23,13 +33,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--run-url", default="")
     p.add_argument("--run-id", default="")
     # `--dry-run` alone, or `--dry-run true|false` so the workflow can pass its
-    # boolean input straight through without branching shell.
+    # boolean input straight through without branching shell. Anything else is an
+    # error: a typo in the no-write switch must never fall through to a live run.
     p.add_argument(
         "--dry-run",
         nargs="?",
         const=True,
         default=False,
-        type=lambda s: s.strip().lower() == "true",
+        type=parse_bool,
         help="classify, read Linear, print the comment; push and comment nothing",
     )
     a = p.parse_args(argv)

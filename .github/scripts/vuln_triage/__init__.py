@@ -2,7 +2,9 @@
 
 It replaces the mothership rover (.mothership/vuln-triage, retired). Every call that
 rover made came from data already on disk, so this does the same work in plain code
-with no model, no VPN and no sandbox:
+with no model, no VPN and no sandbox. There is one exception. Case 2 vs Case 3 (no fix:
+is upstream still maintained?) asks PyPI live. That verdict and its evidence (the newest
+release date) are written to the ticket, so a re-run can be checked against them:
 
     ticket marker  ─┐
     Trivy JSON     ─┼─► classify (case 1-4 / killed) ─► allowlist PR (Critical/High)

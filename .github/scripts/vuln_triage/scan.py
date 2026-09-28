@@ -50,14 +50,24 @@ class Finding:
     hits: list[Hit] = field(default_factory=list)
 
 
+class ScanIncomplete(RuntimeError):
+    """The scan artifact lacks one of the two Trivy results."""
+
+
 def load_findings(scan_dir: Path) -> dict[str, Finding]:
-    """Every CVE in both scans, with each package it was found in."""
+    """Every CVE in both scans, with each package it was found in.
+
+    Both results files are required. The scan uploads its artifact even when a scan
+    step failed, and a missing file must not read as "no findings": every ticket CVE
+    only that scanner reports would then be killed as cleared."""
+    missing = [f for f in (FS_FILE, IMAGE_FILE) if not (scan_dir / f).is_file()]
+    if missing:
+        raise ScanIncomplete(
+            f"scan artifact in {scan_dir} is missing {', '.join(missing)}"
+        )
     findings: dict[str, Finding] = {}
     for fname, source in ((FS_FILE, "fs"), (IMAGE_FILE, "image")):
-        path = scan_dir / fname
-        if not path.exists():
-            continue
-        data = json.loads(path.read_text())
+        data = json.loads((scan_dir / fname).read_text())
         for result in data.get("Results") or []:
             for v in result.get("Vulnerabilities") or []:
                 cve = v.get("VulnerabilityID")

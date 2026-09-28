@@ -30,8 +30,9 @@ ROOT_LOCK = (
 )
 OTHER_MANIFEST = "manifest"  # Triage.source prefix for a hit from any other manifest
 
-# Returns True (maintained), False (unmaintained) or None (could not tell).
-UpstreamCheck = Callable[[str], bool | None]
+# (verdict, evidence): True maintained, False unmaintained, None could not tell, plus
+# a one-line record of what the verdict rests on (it goes on the ticket).
+UpstreamCheck = Callable[[str], tuple[bool | None, str]]
 
 
 def version_key(v: str) -> tuple[int, ...]:
@@ -94,21 +95,21 @@ def classify_hit(hit: Hit, lock: dict[str, dict], upstream: UpstreamCheck) -> Tr
                 "dependency bump is merged and released (see ticket)."
             )
             return base
-        alive = upstream(hit.package)
+        alive, evidence = upstream(hit.package)
         if alive is False:
             base.case = 3
             base.reason = (
                 f"Case 3: no fix and {hit.package} looks unmaintained upstream; "
                 "needs a replacement (see ticket)."
             )
-            base.note = "Newest upstream release is past the staleness window."
+            base.note = f"Past the staleness window: {evidence}."
         else:
             base.case = 2
             base.reason = f"Case 2: no upstream fix for {hit.package} yet; upstream is maintained."
             if alive is None:
-                base.note = (
-                    "Upstream liveness could not be checked; assumed maintained."
-                )
+                base.note = f"Upstream liveness could not be checked ({evidence}); assumed maintained."
+            else:
+                base.note = f"Upstream check: {evidence}."
         return base
     if hit.vendored_in and hit.source == "fs":
         wheel = hit.vendored_in

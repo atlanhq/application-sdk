@@ -14,8 +14,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import vuln_triage.__main__ as cli  # noqa: E402
 from vuln_triage import allowlist, bump, classify, report, scan  # noqa: E402
-from vuln_triage.effects import newest_successful_run  # noqa: E402
-from vuln_triage.run import Context, Deps, _listing, _uv_cause, run  # noqa: E402
+from vuln_triage.effects import newest_successful_run, parse_open_pr  # noqa: E402
+from vuln_triage.run import Context, Deps, _listing, _slug, _uv_cause, run  # noqa: E402
 
 NOW = datetime(2026, 9, 28, 12, 0, tzinfo=UTC)
 
@@ -88,9 +88,9 @@ def lock(tmp_path):
     return scan.load_lock(p)
 
 
-alive = lambda _pkg: True  # noqa: E731
-dead = lambda _pkg: False  # noqa: E731
-unknown = lambda _pkg: None  # noqa: E731
+alive = lambda _pkg: (True, "PyPI newest release 2026-09-01")  # noqa: E731
+dead = lambda _pkg: (False, "PyPI newest release 2019-01-01")  # noqa: E731
+unknown = lambda _pkg: (None, "PyPI unreadable (URLError)")  # noqa: E731
 
 
 # --------------------------------------------------------------------------- scan
@@ -113,6 +113,14 @@ def test_vendored_in_reads_the_wheel_dir_not_dist_info():
         "x", "1", "", "fs", ".venv/lib/python3.12/site-packages/x-1.dist-info/METADATA"
     )
     assert h2.vendored_in == ""
+
+
+@pytest.mark.parametrize("missing", [scan.FS_FILE, scan.IMAGE_FILE])
+def test_load_findings_requires_both_results_files(tmp_path, missing):
+    write_scan(tmp_path, fs=[vuln("CVE-1", "requests", "2.32.3", "2.32.4")])
+    (tmp_path / missing).unlink()
+    with pytest.raises(scan.ScanIncomplete, match=missing):
+        scan.load_findings(tmp_path)
 
 
 def test_load_findings_merges_both_scans(tmp_path):
@@ -167,6 +175,8 @@ def test_case1_our_dep_with_fix(lock):
 def test_case2_our_dep_no_fix_upstream_alive(lock):
     t = _one([scan.Hit("requests", "2.32.3", "", "fs", "uv.lock")], lock)
     assert t.case == 2
+    # The live PyPI verdict is recorded with its evidence, not just applied.
+    assert "PyPI newest release 2026-09-01" in t.note
 
 
 def test_case2_when_liveness_unknown_says_so(lock):
@@ -400,7 +410,10 @@ class FakeRunner:
     def __init__(
         self, root: Path, *, open_prs=(), remote=(), uv_version="2.32.4", uv_rc=0
     ):
-        self.root, self.open_prs, self.remote = root, set(open_prs), set(remote)
+        # open_prs: {branch: [labels]} (or an iterable of branches, labelled)
+        if not isinstance(open_prs, dict):
+            open_prs = {b: ["vuln-auto-merge"] for b in open_prs}
+        self.root, self.open_prs, self.remote = root, open_prs, set(remote)
         self.uv_version, self.uv_rc = uv_version, uv_rc
         self.calls: list[list[str]] = []
 
@@ -412,7 +425,11 @@ class FakeRunner:
             out = "basesha\n"
         elif cmd[:3] == ["gh", "pr", "list"]:
             branch = cmd[cmd.index("--head") + 1]
-            out = f"https://gh/existing/{branch}" if branch in self.open_prs else ""
+            prs = []
+            if branch in self.open_prs:
+                labels = [{"name": n} for n in self.open_prs[branch]]
+                prs = [{"url": f"https://gh/existing/{branch}", "labels": labels}]
+            out = json.dumps(prs)
         elif cmd[:2] == ["git", "ls-remote"]:
             out = "sha\trefs/heads/x" if cmd[-1] in self.remote else ""
         elif cmd[:3] == ["gh", "pr", "create"]:
@@ -529,6 +546,47 @@ def test_run_suffixes_a_leftover_branch_instead_of_force_pushing(repo):
     assert not any("--force" in c for c in r.cmds("git", "push"))
 
 
+def test_run_skips_a_suffix_branch_that_is_also_taken(repo):
+    # A re-run of the same job (same run id) after its first attempt pushed the
+    # suffixed branch and then failed: the next free candidate is used, not the
+    # occupied one (which would be a rejected non-fast-forward push).
+    base = "chore/allowlist-cve-1-cve-2"
+    r = FakeRunner(repo, remote={base, f"{base}-r42"})
+    _run(repo, r)
+    pushes = [c[-1] for c in r.cmds("git", "push")]
+    assert f"HEAD:refs/heads/{base}-r42-2" in pushes
+
+
+def test_run_reuses_the_open_pr_on_a_suffixed_branch(repo):
+    base = "chore/allowlist-cve-1-cve-2"
+    r = FakeRunner(
+        repo,
+        remote={base, f"{base}-r42"},
+        open_prs={f"{base}-r42": ["vuln-auto-merge"]},
+    )
+    out, _ = _run(repo, r)
+    assert out.allowlist_pr == f"https://gh/existing/{base}-r42"
+    assert all(".security/base-allowlist.json" not in c for c in r.cmds("git", "add"))
+
+
+def test_existing_unlabelled_bump_pr_still_needs_a_human(repo):
+    # A bump opened inside the cooldown carries no label; a re-run must not report
+    # it as auto-merging.
+    r = FakeRunner(repo, open_prs={"fix/bump-requests-fnd-1": []})
+    out, comments = _run(repo, r)
+    assert out.bump_pr == "https://gh/existing/fix/bump-requests-fnd-1"
+    assert out.bump_labelled is False
+    assert "not auto-merged" in comments[0][1]
+
+
+def test_run_refuses_a_scan_missing_a_results_file(repo):
+    (repo / "scan" / scan.IMAGE_FILE).unlink()
+    r = FakeRunner(repo)
+    with pytest.raises(SystemExit, match="missing trivy-image-results.json"):
+        _run(repo, r)
+    assert not r.cmds("gh", "pr", "create")
+
+
 def test_run_failed_lock_opens_no_bump_pr_and_says_why(repo):
     r = FakeRunner(repo, uv_rc=1)
     out, comments = _run(repo, r)
@@ -582,7 +640,7 @@ def test_listing_caps_long_titles():
         (["--dry-run"], True),
         (["--dry-run", "true"], True),
         (["--dry-run", "false"], False),
-        (["--dry-run", ""], False),
+        (["--dry-run", "FALSE"], False),
     ],
 )
 def test_cli_dry_run_accepts_the_workflow_boolean(monkeypatch, argv, want):
@@ -592,6 +650,32 @@ def test_cli_dry_run_accepts_the_workflow_boolean(monkeypatch, argv, want):
     )
     cli.main(["--repo", "o/r", "--root", ".", "--ticket", "FND-1", *argv])
     assert seen["dry"] is want
+
+
+@pytest.mark.parametrize("value", ["", "treu", "maybe", "1", "yes"])
+def test_cli_dry_run_rejects_anything_else_rather_than_running_live(monkeypatch, value):
+    called = []
+    monkeypatch.setattr(cli, "run", lambda ctx, deps: called.append(ctx))
+    with pytest.raises(SystemExit) as exc:
+        cli.main(
+            ["--repo", "o/r", "--root", ".", "--ticket", "FND-1", "--dry-run", value]
+        )
+    assert exc.value.code == 2 and not called  # argparse error, run() never reached
+
+
+def test_slug_hashes_the_whole_list_when_truncated():
+    a = ["CVE-1", "CVE-2", "CVE-3", "CVE-4"]
+    b = ["CVE-1", "CVE-2", "CVE-3", "CVE-9"]
+    assert _slug(a[:3]) == "cve-1-cve-2-cve-3"
+    assert _slug(a) != _slug(b)
+    assert _slug(a).startswith("cve-1-cve-2-cve-3-and-1-more-")
+    assert _slug(a) == _slug(list(a))  # deterministic, so a re-run finds its branch
+
+
+def test_parse_open_pr():
+    assert parse_open_pr("[]") is None
+    pr = parse_open_pr('[{"url": "u", "labels": [{"name": "vuln-auto-merge"}]}]')
+    assert pr.url == "u" and pr.labels == ("vuln-auto-merge",)
 
 
 def test_newest_successful_run_ignores_failures_and_order():

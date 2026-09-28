@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from collections.abc import Callable
@@ -45,8 +46,14 @@ class Deps:
 
 
 def _slug(ids: list[str], limit: int = 3) -> str:
+    """A branch-name slug. When the list is truncated it ends in a short hash of the
+    WHOLE list: two plans sharing their first ids must never share a branch, or the
+    second would "reuse" the first one's PR without its own entries."""
     head = "-".join(i.lower() for i in ids[:limit])
-    return head + (f"-and-{len(ids) - limit}-more" if len(ids) > limit else "")
+    if len(ids) <= limit:
+        return head
+    digest = hashlib.sha256(",".join(ids).encode()).hexdigest()[:8]
+    return f"{head}-and-{len(ids) - limit}-more-{digest}"
 
 
 def _listing(items: list[str], limit: int = 3) -> str:
@@ -64,15 +71,32 @@ def _uv_cause(stderr: str | None) -> str:
     return " / ".join(cause) or "(no output)"
 
 
-def _free_branch(ctx: Context, name: str, deps: Deps) -> tuple[str, str]:
-    """(branch to push, URL of an already-open PR for it). A leftover branch from a
-    closed PR gets a run-id suffix instead of a force-push over it."""
-    existing = effects.open_pr_url(ctx.repo, name, deps.runner)
-    if existing:
-        return name, existing
-    if effects.remote_branch_exists(name, deps.runner):
-        return f"{name}-r{ctx.run_id or ctx.now.strftime('%H%M%S')}", ""
-    return name, ""
+MAX_BRANCH_CANDIDATES = 10
+
+
+def _free_branch(
+    ctx: Context, name: str, deps: Deps
+) -> tuple[str, effects.OpenPR | None]:
+    """(branch to push, the open PR already on it or None).
+
+    Walks `name`, `name-r<run>`, `name-r<run>-2`, ... and stops at the first candidate
+    that either has an open PR (reuse it) or does not exist on the remote (push to it).
+    A leftover branch is never force-pushed over. Every candidate is checked for an
+    open PR, so a re-run of the same job finds the suffixed PR its first attempt
+    opened instead of pushing again onto that branch."""
+    tag = ctx.run_id or ctx.now.strftime("%H%M%S")
+    candidates = [name, f"{name}-r{tag}"] + [
+        f"{name}-r{tag}-{i}" for i in range(2, MAX_BRANCH_CANDIDATES)
+    ]
+    for branch in candidates:
+        pr = effects.open_pr(ctx.repo, branch, deps.runner)
+        if pr:
+            return branch, pr
+        if not effects.remote_branch_exists(branch, deps.runner):
+            return branch, None
+    raise SystemExit(
+        f"::error::no free branch name for {name} (tried {len(candidates)})"
+    )
 
 
 def _allowlist_pr(
@@ -100,7 +124,7 @@ def _allowlist_pr(
     ids = sorted(plan.entries)
     branch, existing = _free_branch(ctx, ALLOWLIST_BRANCH + _slug(ids), deps)
     if existing:
-        out.allowlist_pr = existing
+        out.allowlist_pr = existing.url
         return
     effects.start_branch(branch, base, deps.runner)
     path.write_text(
@@ -161,7 +185,10 @@ def _bump_pr(
         ctx, BUMP_BRANCH + _slug(pkgs, 2) + "-" + ctx.ticket.lower(), deps
     )
     if existing:
-        out.bump_pr, out.bump_labelled = existing, True
+        # Report what the open PR actually carries: one opened inside the cooldown has
+        # no label and still needs a human.
+        out.bump_pr = existing.url
+        out.bump_labelled = cfg.label in existing.labels
         return
 
     effects.start_branch(branch, base, deps.runner)
@@ -258,7 +285,10 @@ def run(ctx: Context, deps: Deps) -> report.Outcome:
     if ctx.scan_dir is None:
         rid = effects.download_scan(ctx.repo, ctx.scan_run_id, scan_dir, deps.runner)
         print(f"Read scan run {rid}.")
-    findings = scan.load_findings(scan_dir)
+    try:
+        findings = scan.load_findings(scan_dir)
+    except scan.ScanIncomplete as e:
+        raise SystemExit(f"::error::{e}; not triaging on a partial scan") from e
     lock = scan.load_lock(ctx.root / "uv.lock")
     upstream = deps.upstream or effects.pypi_upstream_check(
         cfg.stale_after_days, ctx.now

@@ -12,6 +12,7 @@ import subprocess
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -68,12 +69,15 @@ def pypi_upstream_check(
     stale_after_days: int,
     now: datetime,
     urlopen: Callable[..., Any] = urllib.request.urlopen,
-) -> Callable[[str], bool | None]:
+) -> Callable[[str], tuple[bool | None, str]]:
     """A Case 2/3 oracle: is the package's newest PyPI release inside the window?
 
-    Public, read-only package metadata; None when PyPI cannot be read."""
+    This is the triage's one input that is not in the scan artifact or the checkout:
+    live, public, read-only package metadata. So it returns its evidence with the
+    verdict, and the evidence is written to the ticket. A re-run can then be checked
+    against what PyPI said at the time. The verdict is None when PyPI cannot be read."""
 
-    def check(package: str) -> bool | None:
+    def check(package: str) -> tuple[bool | None, str]:
         req = urllib.request.Request(
             f"https://pypi.org/pypi/{package}/json",
             headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
@@ -81,8 +85,8 @@ def pypi_upstream_check(
         try:
             with urlopen(req, timeout=15) as resp:
                 data = json.loads(resp.read())
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError):
-            return None
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
+            return None, f"PyPI unreadable ({type(e).__name__})"
         uploads = [
             f.get("upload_time_iso_8601", "")
             for files in (data.get("releases") or {}).values()
@@ -90,9 +94,13 @@ def pypi_upstream_check(
         ]
         uploads = [u for u in uploads if u]
         if not uploads:
-            return None
+            return None, "PyPI lists no uploaded releases"
         newest = datetime.fromisoformat(max(uploads).replace("Z", "+00:00"))
-        return now - newest <= timedelta(days=stale_after_days)
+        alive = now - newest <= timedelta(days=stale_after_days)
+        return alive, (
+            f"PyPI newest release {newest.date().isoformat()} "
+            f"(staleness window {stale_after_days}d, checked {now.date().isoformat()})"
+        )
 
     return check
 
@@ -168,8 +176,14 @@ def _author_env() -> dict[str, str]:
     return env
 
 
-def open_pr_url(repo: str, branch: str, runner: Runner) -> str:
-    """The open PR for `branch`, or "". A failed lookup raises: reading it as "no PR"
+@dataclass(frozen=True)
+class OpenPR:
+    url: str
+    labels: tuple[str, ...] = ()
+
+
+def open_pr(repo: str, branch: str, runner: Runner) -> OpenPR | None:
+    """The open PR for `branch`, or None. A failed lookup raises: reading it as "no PR"
     would open a duplicate under a suffixed branch."""
     out = runner(
         [
@@ -183,16 +197,23 @@ def open_pr_url(repo: str, branch: str, runner: Runner) -> str:
             "--state",
             "open",
             "--json",
-            "url",
-            "--jq",
-            '.[0].url // ""',
+            "url,labels",
         ],
         check=True,
         capture_output=True,
         text=True,
         env=_author_env(),
     )
-    return (out.stdout or "").strip()
+    return parse_open_pr(out.stdout)
+
+
+def parse_open_pr(stdout: str | None) -> OpenPR | None:
+    prs = json.loads(stdout or "[]")
+    if not prs:
+        return None
+    first = prs[0]
+    labels = tuple(lbl.get("name", "") for lbl in first.get("labels") or [])
+    return OpenPR(url=first.get("url", ""), labels=labels)
 
 
 def remote_branch_exists(branch: str, runner: Runner) -> bool:

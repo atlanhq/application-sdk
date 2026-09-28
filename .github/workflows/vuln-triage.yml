@@ -106,7 +106,8 @@ jobs:
           SCAN_RUN_ID: ${{ inputs.scan_run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUN_ID: ${{ github.run_id }}
-          # Empty on the scan's dispatch (it does not pass the input), which reads as false.
+          # "true"/"false". The scan's dispatch omits it, so the input default (false)
+          # applies; the CLI rejects any other value rather than running live.
           DRY_RUN: ${{ inputs.dry_run }}
         run: >-
           python3 -m vuln_triage
