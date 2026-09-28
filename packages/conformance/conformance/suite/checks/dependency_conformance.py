@@ -39,6 +39,12 @@ Rules in this check module:
   3.22–3.27) and is fixed at the root in 3.28.0, where ``[daft]`` aliases
   ``[sql]`` again.
 
+* **D016 DirectApiDependency** — ``atlan-application-sdk-api`` must not be
+  declared in the root ``[project].dependencies``: ``atlan-application-sdk``
+  pins it exactly.  Root pyproject only (via :func:`scan_all`); the hosted
+  ``api/`` member's own declaration is correct.  D002 defers to it for that
+  one package.
+
 * **D012 UnpinnedPackageIndex** — the repo's root ``pyproject.toml`` must pin
   PyPI as the resolver's default index (``[[tool.uv.index]]`` with
   ``default = true``).  Without it a machine-wide default index — the Endor
@@ -104,12 +110,18 @@ RULE_D012 = "D012"
 RULE_D013 = "D013"
 RULE_D014 = "D014"
 RULE_D015 = "D015"
+RULE_D016 = "D016"
 
 SDK_PACKAGE = "atlan-application-sdk"
 # The conformance suite itself (D011).  Apps declare it in a dev group so
 # the remediation loop's ``uv run atlan-application-sdk-conformance``
 # invocation resolves; it is never a runtime dependency.
 CONFORMANCE_PACKAGE = "atlan-application-sdk-conformance"
+
+#: The thin handler/API distribution ``atlan-application-sdk`` pins exactly.  An
+#: app reaches it transitively; only a hosted ``api/`` workspace member declares
+#: it directly (D016).
+API_PACKAGE = "atlan-application-sdk-api"
 
 # The canonical build backend for Atlan apps (D007).
 HATCHLING_BACKEND = "hatchling.build"
@@ -994,6 +1006,11 @@ def scan_text(
         for entry in entries:
             if entry.name == sdk_norm:
                 continue  # the SDK itself is D001's concern
+            if (
+                entry.name == _normalise_name(API_PACKAGE)
+                and entry.array_path == "project.dependencies"
+            ):
+                continue  # D016 owns this line, with the reason specific to it
             if entry.name in managed:
                 findings.append(
                     _make_finding(
@@ -1880,6 +1897,36 @@ def _constraint_entry_lines(text: str) -> Iterator[tuple[str, int, int]]:
             in_array = False
 
 
+def _scan_direct_api_dependency(text: str, rel_pyproject: str) -> list[Finding]:
+    """D016 — ``atlan-application-sdk-api`` declared in the ROOT ``[project].dependencies``.
+
+    Called on the repo-root ``pyproject.toml`` only.  The hosted ``api/`` member
+    declares the package in its own ``pyproject.toml``, which is correct (the
+    consolidated API server installs that member without the SDK) and is never
+    read here.  Optional dependencies and dependency groups are not graded.
+    """
+    api_norm = _normalise_name(API_PACKAGE)
+    suppressions = parse_toml_suppressions(text)
+    return [
+        _make_finding(
+            rule_id=RULE_D016,
+            file=rel_pyproject,
+            line=entry.line,
+            column=entry.column,
+            message=(
+                f"'{API_PACKAGE}' is declared in the root [project].dependencies. "
+                f"'{SDK_PACKAGE}' pins it exactly, so the SDK version is the one "
+                f"knob that moves both; a second declaration has to be kept in "
+                f"step on every SDK bump. Remove the entry and re-lock. Declare it "
+                f"only in the hosted api/ member's own pyproject.toml."
+            ),
+            suppressions=suppressions,
+        )
+        for entry in _iter_dep_entries(text)
+        if entry.array_path == "project.dependencies" and entry.name == api_norm
+    ]
+
+
 def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
     """D003: an app's ``[tool.uv] constraint-dependencies`` floors.
 
@@ -2641,6 +2688,8 @@ def scan_all(
         )
         # ── D003 constraint floors (app-only: the SDK is where floors live) ──
         findings.extend(_scan_constraint_floors(text, rel_pyproject))
+        # ── D016 (root pyproject only: the api/ member declares it correctly)
+        findings.extend(_scan_direct_api_dependency(text, rel_pyproject))
 
     # ── D011 (repo-level: a property of the root pyproject, not of each) ────
     findings.extend(_scan_conformance_dependency(text, rel_pyproject, root))

@@ -470,6 +470,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
     assert app_scoped == {
+        "D016",
         "B009",
         "B001",
         "B007",
