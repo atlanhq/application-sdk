@@ -58,6 +58,41 @@ def test_table_holds_filter_map_under_both_import_paths() -> None:
         assert ast.unparse(table[path].value).startswith("Annotated[dict[str,")
 
 
+def test_table_holds_lazily_exported_credential_types() -> None:
+    # application_sdk.credentials exports the routing types through a module
+    # __getattr__ (an import cycle rules out an eager import) and declares them
+    # under ``if TYPE_CHECKING:``; the package path is the one apps import.
+    table = load_sdk_type_aliases()
+
+    for name in ("CredentialValue", "CredentialMap", "InlineCredentials"):
+        assert f"application_sdk.credentials.{name}" in table, name
+        assert f"application_sdk.credentials.routing.{name}" in table, name
+
+
+def test_type_checking_reexport_is_followed(tmp_path: Path) -> None:
+    pkg = tmp_path / SDK_PACKAGE / "pkg"
+    pkg.mkdir(parents=True)
+    (tmp_path / SDK_PACKAGE / "__init__.py").write_text("")
+    (pkg / "impl.py").write_text("Alias = dict[str, int]\n")
+    (pkg / "__init__.py").write_text(
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.pkg.impl import Alias\n"
+    )
+
+    (pkg / "user.py").write_text(
+        "from typing import TYPE_CHECKING\n"
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.pkg.impl import Alias\n"
+    )
+
+    table = build_sdk_type_aliases(tmp_path)
+
+    assert ast.unparse(table["application_sdk.pkg.Alias"].value) == "dict[str, int]"
+    # A plain module's TYPE_CHECKING import is for its own annotations only.
+    assert "application_sdk.pkg.user.Alias" not in table
+
+
 def test_only_sdk_imports_are_bound() -> None:
     tree = ast.parse(
         "from application_sdk.templates.contracts import FilterMap as F\n"
