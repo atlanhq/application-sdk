@@ -80,7 +80,7 @@ jobs:
           owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-contents: read # PR diff and head-side file text, as data
-          permission-pull-requests: write # inline review comments
+          permission-pull-requests: write # PR reads; withdrawing lens's own approval (lens/approve.py). No inline review threads.
           permission-issues: write # the sticky summary and reactions (PR comments are Issues-scope)
           permission-statuses: write # the `lens` commit status: green/red for the reviewed head
           permission-actions: read # lens/lock.py: is an older review of this PR still running?

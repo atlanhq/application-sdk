@@ -218,7 +218,7 @@ class FakeGitHub:
         self.comments: list[dict[str, Any]] = []
         self.reviews: list[dict[str, Any]] = []
         self.statuses: list[dict[str, Any]] = []
-        self.resolved: list[str] = []  # review threads lens resolved
+        self.repo = "o/r"
         self.posted: list[str] = []  # plain PR comments (the per-run verdict)
         self.status = "ahead"
 
@@ -264,24 +264,6 @@ class FakeGitHub:
     def comment(self, n, body):
         self.posted.append(body)
         return len(self.posted)
-
-    def review_threads(self, n):
-        out = []
-        for i, r in enumerate(self.reviews):
-            for j, c in enumerate(r["comments"]):
-                tid = f"T{i}-{j}"
-                out.append(
-                    {
-                        "id": tid,
-                        "resolved": tid in self.resolved,
-                        "author": "atlan-app-fleet",
-                        "body": c["body"],
-                    }
-                )
-        return out
-
-    def resolve_thread(self, thread_id):
-        self.resolved.append(thread_id)
 
     def set_status(self, sha, state, description, target_url=""):
         self.statuses.append(
@@ -663,7 +645,9 @@ def _factory(script):
     )
 
 
-def test_first_round_posts_inline_with_suggestion_and_a_sticky_summary(repo: Path):
+def test_first_round_puts_every_finding_in_the_summary_and_opens_no_thread(repo: Path):
+    """lens opens no inline review threads (they had to be resolved by hand to merge):
+    each finding, its explanation and its suggested change are in the summary."""
     gh = FakeGitHub()
     res = run(
         gh=gh,
@@ -674,20 +658,23 @@ def test_first_round_posts_inline_with_suggestion_and_a_sticky_summary(repo: Pat
         client_factory=_factory(_review_script()),
     )
     assert res.action == "reviewed" and res.mode == "full"
-    [review] = gh.reviews
-    [c] = review["comments"]
-    assert (
-        c["path"] == "application_sdk/storage/fetch.py"
-        and c["line"] == 4
-        and c["side"] == "RIGHT"
-    )
-    assert "```suggestion" in c["body"]
+    assert gh.reviews == []  # no review, no inline comment, no thread
     [summary] = gh.comments
-    assert SUMMARY_MARKER in summary["body"] and "Changes requested" in summary["body"]
-    st = PRState.decode(summary["body"])
+    body = summary["body"]
+    assert SUMMARY_MARKER in body and "Changes requested" in body
+    fid = res.state.findings[0].id
+    details = body.split("**Details**")[1]
+    assert f"{fid} · high · bug — decode() on a None result" in details
+    assert "client.get returns None for a missing key" in details
+    assert "**Suggested change:**" in details and "```python" in details
+    assert "data.decode() if data is not None else None" in details
+    link = "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4"
+    assert f"[`application_sdk/storage/fetch.py:4`]({link})" in body
+    st = PRState.decode(body)
     # review + reflect + approach, each booked at the cost LiteLLM reported.
     assert st and st.round == 1 and st.ledger["calls"] == 3
     assert st.ledger["spent_usd"] == pytest.approx(0.006)
+    assert st.findings[0].suggestion  # kept: the next round's summary still shows it
 
 
 def test_unchanged_head_costs_zero_model_calls(repo: Path):
@@ -1172,25 +1159,27 @@ def test_cli_exits_nonzero_only_on_model_failure():
     assert not RunResult("reviewed", bundles=[BundleResult("b", stop="budget")]).failed
 
 
-def test_a_comment_github_refuses_is_moved_to_the_summary_not_lost(repo: Path):
-    class Picky(FakeGitHub):
-        def review(self, n, head, body, comments):
-            if any(c["line"] == 4 for c in comments):
-                raise GitHubError("HTTP 422: line must be part of the diff")
-            super().review(n, head, body, comments)
-
-    gh = Picky()
-    res = run(
+def test_no_round_ever_opens_a_review_thread(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
         gh=gh,
         number=1,
         root=repo,
         cfg=cfg_for(repo),
-        rules=load_rules(repo / ".github" / "lens"),
+        rules=rules,
         client_factory=_factory(_review_script()),
     )
+    _round_two_elsewhere(gh)
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+    )
     assert gh.reviews == []
-    assert [f.title for f in res.unplaced] == ["decode() on a None result"]
-    assert "not posted inline" in gh.comments[0]["body"]
 
 
 def test_temperature_is_omitted_by_default():
@@ -2416,7 +2405,9 @@ def test_workflow_uploads_the_run_report_even_on_failure():
 # ---- the verdict at the bottom, and the step trace -----------------------------------------------------------
 
 
-def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo: Path):
+def test_the_verdict_at_the_bottom_carries_the_new_findings_and_the_approach_check(
+    repo: Path,
+):
     gh = FakeGitHub()
     _seed_summary(gh)  # a later run: the summary sits far above
     concern = response(
@@ -2446,14 +2437,15 @@ def test_the_verdict_with_the_full_approach_check_is_carried_by_the_review(repo:
         rules=load_rules(repo / ".github" / "lens"),
         client_factory=_factory(Script(*_review_script().responses, approach=concern)),
     )
-    [review] = gh.reviews
-    assert gh.posted == []  # the review carries it; no extra comment
-    body = review["body"]
+    assert gh.reviews == []
+    [body] = gh.posted  # the verdict is a comment at the bottom
     assert (
         "❌ **lens · round 1 · first review**" in body
         and "🟠 1 high" in body
         and "New this round:** 1" in body
     )
+    # the reader is at the bottom, so this round's new findings are there in full
+    assert "decode() on a None result" in body and "**Suggested change:**" in body
     assert (
         "Approach check — ⚠️ concerns (advisory)" in body
         and "*Problem:* fetch() returned bytes" in body
@@ -3081,9 +3073,10 @@ def test_a_normal_pr_keeps_the_full_detail():
     back = PRState.decode(render_summary(RunResult("reviewed", mode="full", state=st)))
     kept = back.findings[0]
     assert len(kept.body) == findings_mod.BODY_KEEP and kept.evidence == "code()"
+    assert kept.scenario == ""  # never read again
     assert (
-        kept.scenario == kept.suggestion == ""
-    )  # posted inline already; never read again
+        kept.suggestion == "fix()"
+    )  # the summary shows it; no inline comment holds it
     assert (
         f.scenario == "s" and f.suggestion == "fix()"
     )  # the live finding is untouched
@@ -3113,7 +3106,7 @@ def test_the_run_is_linked_from_the_status_the_verdict_and_the_history(repo: Pat
     )  # the verdict replaces pending
     summary = gh.comments[0]["body"]
     assert f"| [run]({url}) |" in summary.split("🕘 Round history")[1]
-    assert f"[Run log]({url})" in gh.reviews[-1]["body"]
+    assert f"[Run log]({url})" in gh.posted[-1]
 
 
 # ---- the code-owner approval (lens/approve.py, the workflow's last step) ------------------------------------------
@@ -3487,10 +3480,8 @@ def test_a_finding_off_the_diff_is_counted_stored_and_can_block_readiness(repo: 
     body = gh.comments[0]["body"]
     assert "⚪ 1 low (nit)" in body  # counted in the tally
     assert "#### ⚪ Low (nit) (1)" in body and off[0].id in body.split("#### ⚪ Low")[1]
-    assert "1 finding(s) not posted inline" in body  # its full text is still shown
-    # Only the diff-line finding went inline; the off-diff one never reaches the review API.
-    assert all(c["line"] for r in gh.reviews for c in r["comments"])
-    assert "1 inline, the rest in the summary" in gh.reviews[-1]["body"]
+    assert OFF_DIFF["title"] in body.split("**Details**")[1]  # its full text is shown
+    assert gh.reviews == []
     # Once the blocking one is fixed, the open nit still keeps the PR from "ready to merge".
     for f in res.state.findings:
         if f.severity == "high":
@@ -3655,9 +3646,7 @@ def test_a_first_review_does_not_post_the_verdict_twice(repo: Path):
     )  # the verdict is in the summary
 
 
-def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating_it(
-    repo: Path,
-):
+def test_a_first_review_with_findings_posts_only_the_summary(repo: Path):
     gh = FakeGitHub()
     run(
         gh=gh,
@@ -3667,14 +3656,9 @@ def test_a_first_review_with_findings_points_to_the_summary_instead_of_repeating
         rules=load_rules(repo / ".github" / "lens"),
         client_factory=_factory(_review_script()),
     )
-    [review] = gh.reviews
-    assert (
-        review["body"]
-        == "lens: 1 new finding(s) — the verdict is in the summary above."
-    )
-    assert review["comments"]  # the inline finding is still posted
-    assert gh.posted == []
+    assert gh.reviews == [] and gh.posted == []  # the new summary is the bottom comment
     assert "❌ **Changes requested**" in gh.comments[0]["body"]
+    assert "**Details**" in gh.comments[0]["body"]
 
 
 def test_a_failed_review_still_leaves_a_withdraw_decision(monkeypatch, tmp_path):
@@ -3773,91 +3757,7 @@ def test_the_recheck_finds_the_quoted_code_where_it_is_now():
     )  # no stale guess: the quote is gone
 
 
-def test_lens_resolves_its_own_thread_when_the_finding_is_fixed(repo: Path):
-    gh = FakeGitHub()
-    rules = load_rules(repo / ".github" / "lens")
-    run(
-        gh=gh,
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        rules=rules,
-        client_factory=_factory(_review_script()),
-    )
-    assert gh.resolved == []  # open finding: its thread stays open
-    fixed = SRC_V2.replace(
-        "    return data.decode()",
-        "    return data.decode() if data is not None else None",
-    )
-    gh.head = "h2"
-    gh.diffs[("h1", "h2")] = (
-        "diff --git a/application_sdk/storage/fetch.py b/application_sdk/storage/fetch.py\n"
-        "--- a/application_sdk/storage/fetch.py\n+++ b/application_sdk/storage/fetch.py\n"
-        "@@ -4 +4 @@\n-    return data.decode()\n+    return data.decode() if data is not None else None\n"
-    )
-    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
-    gh.files[("application_sdk/storage/fetch.py", "h2")] = fixed
-    run(
-        gh=gh,
-        number=1,
-        root=repo,
-        cfg=cfg_for(repo),
-        rules=rules,
-        client_factory=_factory(Script()),
-    )
-    assert gh.resolved == ["T0-0"]
-
-
-def test_only_lens_threads_for_closed_findings_are_resolved():
-    class G:
-        resolved: list = []
-
-        def review_threads(self, n):
-            return [
-                {
-                    "id": "a",
-                    "resolved": False,
-                    "author": "atlan-app-fleet",
-                    "body": "x <sub>lens F-aaaaaa</sub>",
-                },
-                {
-                    "id": "b",
-                    "resolved": False,
-                    "author": "atlan-app-fleet",
-                    "body": "x <sub>lens F-bbbbbb</sub>",
-                },
-                {
-                    "id": "c",
-                    "resolved": False,
-                    "author": "a-person",
-                    "body": "x <sub>lens F-aaaaaa</sub>",
-                },
-                {
-                    "id": "d",
-                    "resolved": True,
-                    "author": "atlan-app-fleet",
-                    "body": "x <sub>lens F-aaaaaa</sub>",
-                },
-            ]
-
-        def resolve_thread(self, tid):
-            self.resolved.append(tid)
-
-    st = PRState(
-        findings=[
-            Finding(
-                "a.py", 1, "high", "bug", "t", "b", "e", id="F-aaaaaa", status="fixed"
-            ),
-            Finding(
-                "a.py", 2, "high", "bug", "t", "b", "e", id="F-bbbbbb"
-            ),  # still open
-        ]
-    )
-    g = G()
-    assert review_mod.resolve_closed_threads(g, 1, st) == 1 and g.resolved == ["a"]
-
-
-def test_a_dismissal_resolves_its_thread(repo: Path):
+def test_a_dismissal_is_labelled_as_one(repo: Path):
     gh = FakeGitHub()
     rules = load_rules(repo / ".github" / "lens")
     first = run(
@@ -3872,10 +3772,10 @@ def test_a_dismissal_resolves_its_thread(repo: Path):
     review_mod.dismiss(
         gh, 1, [fid], "tracked separately", actor="reviewer", pr_author="author"
     )
-    assert gh.resolved == ["T0-0"]
     assert gh.posted[-1].startswith(
         "✅ **lens · dismissal after round 1 · " + fid + " by @reviewer**"
     )
+    assert "**Details**" not in gh.comments[0]["body"]  # nothing open is left to detail
 
 
 def test_a_file_drawing_new_blocking_findings_round_after_round_gets_a_step_back_note():
@@ -4006,119 +3906,6 @@ def test_a_spiral_counts_only_earlier_blocking_findings():
     assert (
         review_mod.spiral_paths(st, new, 3) == []
     )  # first blocking finding, not a spiral
-
-
-def test_thread_resolution_retries_a_rate_limit_then_warns(monkeypatch, capsys):
-    monkeypatch.setattr(review_mod.time, "sleep", lambda s: None)
-    st = PRState(
-        findings=[
-            Finding(
-                "a.py", 1, "high", "bug", "t", "b", "e", id="F-aaaaaa", status="fixed"
-            )
-        ]
-    )
-    thread = {
-        "id": "a",
-        "resolved": False,
-        "author": "atlan-app-fleet",
-        "body": "<sub>lens F-aaaaaa</sub>",
-    }
-
-    class Flaky:
-        calls = 0
-
-        def review_threads(self, n):
-            Flaky.calls += 1
-            if Flaky.calls == 1:
-                raise GitHubError("POST /graphql: HTTP 403: API rate limit exceeded")
-            return [thread]
-
-        def resolve_thread(self, tid):
-            self.done = tid
-
-    g = Flaky()
-    assert review_mod.resolve_closed_threads(g, 1, st) == 1 and g.done == "a"
-
-    class Down:
-        def review_threads(self, n):
-            raise GitHubError("POST /graphql: HTTP 403: API rate limit exceeded")
-
-    assert review_mod.resolve_closed_threads(Down(), 1, st) == 0
-    assert (
-        "::warning::lens could not resolve its review threads"
-        in capsys.readouterr().out
-    )
-
-    class Denied:
-        def review_threads(self, n):
-            raise GitHubError(
-                "POST /graphql: HTTP 403: Resource not accessible by integration"
-            )
-
-    sleeps = []
-    monkeypatch.setattr(review_mod.time, "sleep", lambda s: sleeps.append(s))
-    assert review_mod.resolve_closed_threads(Denied(), 1, st) == 0
-    assert sleeps == []  # a permission error is not retried
-
-
-def test_the_github_client_pages_threads_and_resolves_them():
-    """Drive the real GraphQL client through a fake transport: two pages, a
-    resolution, and a GraphQL error."""
-    from lens.github import GitHub  # noqa: PLC0415
-
-    sent = []
-
-    def page(nodes, nxt):
-        return json.dumps(
-            {
-                "data": {
-                    "repository": {
-                        "pullRequest": {
-                            "reviewThreads": {
-                                "pageInfo": {
-                                    "hasNextPage": bool(nxt),
-                                    "endCursor": nxt,
-                                },
-                                "nodes": nodes,
-                            }
-                        }
-                    }
-                }
-            }
-        )
-
-    def node(i, resolved=False):
-        return {
-            "id": f"T{i}",
-            "isResolved": resolved,
-            "comments": {
-                "nodes": [{"author": {"login": "atlan-app-fleet"}, "body": f"b{i}"}]
-            },
-        }
-
-    replies = [
-        (200, page([node(1), node(2, True)], "CUR1")),
-        (200, page([node(3)], None)),
-        (200, json.dumps({"data": {"resolveReviewThread": {"thread": {"id": "T3"}}}})),
-        (200, json.dumps({"errors": [{"message": "Could not resolve to a node"}]})),
-    ]
-
-    def transport(method, path, body, accept):
-        sent.append((method, path, body))
-        return replies.pop(0)
-
-    gh = GitHub("o/r", token="t", transport=transport)
-    threads = gh.review_threads(7)
-    assert [t["id"] for t in threads] == ["T1", "T2", "T3"]
-    assert threads[1]["resolved"] and threads[0]["author"] == "atlan-app-fleet"
-    assert sent[0][2]["variables"] == {"o": "o", "n": "r", "pr": 7, "after": None}
-    assert sent[1][2]["variables"]["after"] == "CUR1"  # the cursor is followed
-    gh.resolve_thread("T3")
-    assert "resolveReviewThread" in sent[2][2]["query"] and sent[2][2]["variables"] == {
-        "id": "T3"
-    }
-    with pytest.raises(GitHubError, match="graphql"):
-        gh.resolve_thread("T9")
 
 
 def test_the_round_diff_is_bounded_and_puts_finding_files_first():
@@ -4283,3 +4070,86 @@ def test_concerns_alone_still_get_rechecked(repo: Path):
     st = PRState(approach=json.loads(json.dumps(_CONCERNS)))
     fixed = review_mod._verify(client, ws, [], "--- a.py", review_mod.open_concerns(st))
     assert fixed == ["A1"] and len(script.requests) == 1
+
+
+# ---- lens's review of the no-threads change -----------------------------------------------------------------------
+
+
+def test_the_verdict_comment_stays_within_githubs_limit():
+    """The verdict now carries this round's findings in full, so a round with many
+    verbose findings must shorten them, then list them, rather than be refused."""
+    fs = [
+        Finding(
+            f"a{i}.py",
+            i + 1,
+            "medium",
+            "bug",
+            f"t{i}",
+            "b" * 900,
+            f"e{i}",
+            suggestion="s" * 900,
+        )
+        for i in range(150)
+    ]
+    st = PRState(round=2, findings=fs, ledger={"spent_usd": 0.1, "cap_usd": 1.0})
+    res = RunResult(
+        "reviewed",
+        mode="incremental",
+        mode_label="re-review",
+        state=st,
+        new_findings=fs,
+        blob_base="https://github.com/o/r/blob/h",
+    )
+    body = review_mod.verdict_brief(res, "https://example.test/summary")
+    assert len(body) <= review_mod.COMMENT_LIMIT
+    assert all(f.id in body for f in fs)  # every new finding is still named
+    few = RunResult(
+        "reviewed",
+        mode="incremental",
+        mode_label="re-review",
+        state=PRState(round=2, findings=fs[:1]),
+        new_findings=fs[:1],
+    )
+    assert "b" * 900 in review_mod.verdict_brief(
+        few, ""
+    )  # a normal round shows it in full
+
+
+def test_a_path_is_url_encoded_in_its_link():
+    f = Finding("src/a#b c.py", 3, "low", "bug", "t", "b", "e")
+    where = review_mod._where(f, "https://github.com/o/r/blob/h")
+    assert "(https://github.com/o/r/blob/h/src/a%23b%20c.py#L3)" in where
+
+
+def test_a_suggestion_holding_a_code_fence_cannot_close_its_block():
+    sug = "Use this:\n\n```python\nx = 1\n```\n"
+    f = Finding("docs/x.md", 3, "low", "documentation", "t", "b", "e", suggestion=sug)
+    out = review_mod._details(f, "")
+    assert "````markdown\n" + sug.rstrip() + "\n````" in out
+
+
+def test_a_dismissal_keeps_the_location_links(repo: Path):
+    gh = FakeGitHub()
+    script = Script(
+        response(
+            [
+                tool_call("code_comment", {"comments": [COMMENT, OFF_DIFF]}),
+                tool_call("task_done", {"state": "DONE"}, 1),
+            ]
+        ),
+        response([tool_call("approve_all_comments", {})]),
+    )
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    low = next(f for f in first.state.findings if f.severity == "low")
+    review_mod.dismiss(
+        gh, 1, [low.id], "tracked separately", actor="reviewer", pr_author="author"
+    )
+    body = gh.comments[0]["body"]
+    assert "https://github.com/o/r/blob/h1/application_sdk/storage/fetch.py#L4" in body

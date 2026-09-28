@@ -109,16 +109,18 @@ class PRState:
     def encode(self, body_keep: int = BODY_KEEP) -> str:
         """The state as a hidden comment block, kept small: a GitHub comment holds at most
         65,536 characters. Only what a later round reads is stored. An open finding keeps
-        its quoted code (free resolution matches it) and a capped body (the verify call
-        reads it); the scenario and suggestion were already posted inline. A resolved
-        finding keeps only what the Resolved table shows."""
+        its quoted code (free resolution matches it), a capped body (the verify call
+        reads it) and a capped suggested change (the summary shows it; there is no
+        inline comment holding it). A resolved finding keeps only what the Resolved
+        table shows."""
         data = asdict(self)
         for f in data["findings"]:
-            f["scenario"] = f["suggestion"] = ""
+            f["scenario"] = ""
             if f["status"] == "open":
                 f["body"] = f["body"][:body_keep]
+                f["suggestion"] = f["suggestion"][:body_keep]
             else:
-                f["body"] = ""
+                f["body"] = f["suggestion"] = ""
                 f["evidence"] = f["evidence"][:EVIDENCE_KEEP_RESOLVED]
         raw = json.dumps(data, separators=(",", ":")).encode()
         return f"<!-- {STATE_MARKER}:{base64.b64encode(zlib.compress(raw, 9)).decode()} -->"

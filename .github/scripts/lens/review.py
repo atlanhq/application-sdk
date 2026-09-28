@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -40,7 +41,7 @@ from .diff import (
     snippet_in_text,
 )
 from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
-from .github import GitHub, GitHubError, bot_login
+from .github import GitHub, bot_login
 from .index import build_index
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
@@ -81,6 +82,9 @@ class RunResult:
     )
     # This run creates the sticky summary, so it is already at the bottom.
     summary_is_new: bool = False
+    blob_base: str = (
+        ""  # https://github.com/<repo>/blob/<head>: finding locations link here
+    )
     # Observability: per-request records from the client and per-phase wall time.
     calls: list[dict[str, Any]] = field(default_factory=list)
     timings_ms: dict[str, int] = field(default_factory=dict)
@@ -341,6 +345,7 @@ def run(
         ledger=ledger,
         mode_label=mode_label,
         run_url=run_url,
+        blob_base=f"https://github.com/{gh.repo}/blob/{head}",
     )
     if post:
         # Pending while it runs: the checks box links straight to the live log.
@@ -563,9 +568,9 @@ def run(
     res.calls = list(getattr(client, "calls", []))
     fresh: list[Finding] = []
     for br in res.bundles:
-        # A finding that is not on a diff line (unchanged code, or a line GitHub will not
-        # take a comment on) is still a finding: it is stored, counted and re-verified like
-        # any other. Only its delivery differs: the summary carries it, not an inline comment.
+        # A finding that is not on a diff line (unchanged code) is still a finding: it is
+        # stored, counted and re-verified like any other. Every finding is delivered in the
+        # summary and the verdict; lens opens no inline review threads.
         fresh.extend(br.findings)
         fresh.extend(br.unplaced)
     if round_no > 1:
@@ -713,6 +718,11 @@ def dismiss(
         mode_label=label,
         state=state,
         run_url=run_url,
+        blob_base=(
+            f"https://github.com/{gh.repo}/blob/{state.reviewed_head}"
+            if state.reviewed_head
+            else ""
+        ),
     )
     trace.line(
         f"dismiss by @{actor}: closed {closed or 'none'}; refused {refused or 'none'}"
@@ -751,7 +761,6 @@ def dismiss(
         gh.comment(number, "\n".join([brief, "", *lines]) if lines else brief)
         if state.reviewed_head:
             gh.set_status(state.reviewed_head, *verdict_status(res), url)
-        resolve_closed_threads(gh, number, state)
     else:
         gh.comment(number, "lens: nothing was dismissed.\n\n" + "\n".join(lines))
     return res
@@ -941,13 +950,6 @@ _SEV_LABEL = {
 }
 
 
-def inline_body(f: Finding) -> str:
-    out = f"{_SEV_ICON[f.severity]} **{f.severity} · {f.category}** — {f.title}\n\n{f.body}"
-    if f.suggestion and f.end_line:
-        out += f"\n\n```suggestion\n{f.suggestion.rstrip()}\n```"
-    return out + f"\n\n<sub>lens {f.id}</sub>"
-
-
 _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
@@ -1090,47 +1092,62 @@ def _concern_lines(ap: dict[str, Any], *, brief: bool) -> list[str]:
     return out
 
 
-def resolve_closed_threads(gh: GitHub, number: int, state: PRState) -> int:
-    """Resolve lens's own review threads for findings that are fixed or dismissed,
-    so a person doesn't have to (the ruleset requires resolved threads to merge).
-    Only threads lens opened are touched, matched by the finding id in the comment."""
-    closed = {f.id for f in state.findings if f.status in ("fixed", "wontfix")}
-    if not closed:
-        return 0
-    login = bot_login().removesuffix("[bot]")
-    done = 0
-    try:
-        for t in _retry_rate_limit(lambda: gh.review_threads(number)):
-            if t["resolved"] or t["author"].removesuffix("[bot]") != login:
-                continue
-            m = re.search(r"<sub>lens (F-[0-9a-f]{6})</sub>", t["body"])
-            if m and m.group(1) in closed:
-                _retry_rate_limit(lambda tid=t["id"]: gh.resolve_thread(tid))
-                done += 1
-    except GitHubError as e:
-        # Visible on the run, not only in the trace: an unresolved thread blocks the
-        # merge. Nothing is lost; the next `/lens` resolves these threads again.
-        print(
-            "::warning::lens could not resolve its review threads for closed findings "
-            f"({trace.short(str(e), 140)}); comment `/lens` to retry, or resolve them by hand",
-            flush=True,
+_FENCE = {
+    ".py": "python",
+    ".toml": "toml",
+    ".yml": "yaml",
+    ".yaml": "yaml",
+    ".md": "markdown",
+    ".pkl": "",
+}
+
+
+def _where(f: Finding, blob_base: str) -> str:
+    """The finding's location, linked to the file at the reviewed commit."""
+    line = f.line or f.head_line
+    label = f"{f.path}:{line}" if line else f.path
+    if blob_base:
+        url = f"{blob_base}/{urllib.parse.quote(f.path, safe='/')}"
+        where = f"[`{label}`]({url}" + (f"#L{line}" if line else "") + ")"
+    else:
+        where = f"`{label}`"
+    if f.scope == "unchanged":
+        where += " (unchanged code: same pattern)"
+    return where
+
+
+def _details(f: Finding, blob_base: str, chars: int | None = None) -> str:
+    """One finding in full, collapsed: where, what goes wrong, and the suggested change
+    (what used to be an inline comment; lens opens no review threads). `chars` caps the
+    text for a PR too large to show every finding in full."""
+    ext = "." + f.path.rsplit(".", 1)[-1] if "." in f.path else ""
+
+    def cap(text: str) -> str:
+        return (
+            text
+            if chars is None or len(text) <= chars
+            else text[:chars].rstrip() + " …"
         )
-    return done
 
-
-RATE_LIMIT_WAIT_S = 10.0
-
-
-def _retry_rate_limit(call: Any) -> Any:
-    """One retry after a short wait when GitHub answers with a rate limit (403/429
-    with "rate limit" in the body); any other error propagates at once."""
-    try:
-        return call()
-    except GitHubError as e:
-        if "rate limit" not in str(e).lower():
-            raise
-        time.sleep(RATE_LIMIT_WAIT_S)
-        return call()
+    out = [
+        f"<details><summary>{_SEV_ICON[f.severity]} {f.id} · {f.severity} · {f.category} — "
+        f"{f.title}</summary>\n",
+        f"**Where:** {_where(f, blob_base)}\n",
+        cap(f.body.strip()),
+    ]
+    if f.scenario.strip():
+        out.append(f"\n**When it fails:** {cap(f.scenario.strip())}")
+    if f.suggestion.strip() and chars != 0:
+        # Longer than any backtick run inside, so a suggestion that itself holds a
+        # fenced example (a Markdown doc) cannot close the block early.
+        runs = [len(m) for m in re.findall(r"`+", f.suggestion)]
+        fence = "`" * max(3, max(runs, default=0) + 1)
+        out.append(
+            f"\n**Suggested change:**\n\n{fence}{_FENCE.get(ext, '')}\n"
+            f"{f.suggestion.rstrip()}\n{fence}"
+        )
+    out.append("\n</details>")
+    return "\n".join(out)
 
 
 def render_summary(res: RunResult) -> str:
@@ -1185,28 +1202,12 @@ def render_summary(res: RunResult) -> str:
         )
         lines.append("| id | where | finding |\n|---|---|---|")
         for f in items:
-            where = (
-                f"`{f.path}:{f.line or f.head_line}`"
-                if (f.line or f.head_line)
-                else f"`{f.path}`"
-            )
-            if f.scope == "unchanged":
-                where += " (unchanged code: same pattern)"
-            elif not f.line:
-                where += " (not on a diff line)"
-            lines.append(f"| {f.id} | {where} | {f.title} |")
+            lines.append(f"| {f.id} | {_where(f, res.blob_base)} | {f.title} |")
         lines.append("")
+    opened = st.open_findings()
+    details_at = len(lines)  # the details block is sized last (see the size backstop)
     lines.extend(_resolved_section(st))
     lines.extend(_history_section(st))
-    if res.unplaced:
-        lines.append(
-            f"\n<details><summary>{len(res.unplaced)} finding(s) not posted inline — "
-            "details (counted above)</summary>\n"
-        )
-        for f in res.unplaced:
-            loc = f"{f.path}:{f.head_line}" if f.head_line else f.path
-            lines.append(f"- **{f.severity}** `{loc}` — {f.title}: {f.body}")
-        lines.append("\n</details>")
     t = res.triage
     mech_files = {p for ps in t.mechanical.values() for p in ps} | set(t.duplicate_of)
     if mech_files:
@@ -1245,17 +1246,31 @@ def render_summary(res: RunResult) -> str:
         f"{led.get('calls', 0)} model calls · {failed} failed requests · "
         f"{hit:.0%} prompt cache hits · {st.model}</sub>"
     )
-    head = "\n".join(lines) + "\n"
     # GitHub refuses a comment over 65,536 characters, and a refused edit would lose
-    # the state. Only a very large PR gets here: open findings' stored bodies are then
-    # shortened (the verify call still sees the code itself), then the Resolved table
-    # is dropped from view. The findings, their ids and the quoted code always stay.
-    for keep in (BODY_KEEP, 200, 0):
-        body = head + st.encode(body_keep=keep)
-        if len(body) <= COMMENT_LIMIT:
-            return body
-    lean = "\n".join(line for line in _without_resolved(lines)) + "\n"
+    # the state. Only a very large PR gets past the first try: each finding's details
+    # are shortened, then the stored bodies, then the details and the Resolved table
+    # are dropped from view. The findings, their ids and the quoted code always stay.
+    for detail_chars in (None, 600, 200):
+        block = _details_block(opened, res.blob_base, detail_chars)
+        head = "\n".join(lines[:details_at] + block + lines[details_at:]) + "\n"
+        for keep in (BODY_KEEP, 200, 0):
+            body = head + st.encode(body_keep=keep)
+            if len(body) <= COMMENT_LIMIT:
+                return body
+    lean = "\n".join(_without_resolved(lines)) + "\n"
     return lean + st.encode(body_keep=0)
+
+
+def _details_block(
+    opened: list[Finding], blob_base: str, chars: int | None
+) -> list[str]:
+    if not opened:
+        return []
+    return [
+        "**Details** — each finding, what goes wrong, and a suggested change:\n",
+        *(_details(f, blob_base, chars) for f in opened),
+        "",
+    ]
 
 
 def _without_resolved(lines: list[str]) -> list[str]:
@@ -1274,19 +1289,17 @@ def _without_resolved(lines: list[str]) -> list[str]:
     return out
 
 
-def _inline(f: Finding) -> dict[str, Any]:
-    c: dict[str, Any] = {
-        "path": f.path,
-        "line": f.end_line or f.line,
-        "side": "RIGHT",
-        "body": inline_body(f),
-    }
-    if f.end_line and f.end_line != f.line:
-        c["start_line"], c["start_side"] = f.line, "RIGHT"
-    return c
-
-
 def verdict_brief(res: RunResult, summary_url: str) -> str:
+    """The verdict, kept within GitHub's comment limit: this round's new findings are
+    shown in full, then shortened, then listed by title (the summary has them all)."""
+    for chars in (None, 600, 200, 0):
+        body = _verdict_brief(res, summary_url, chars)
+        if len(body) <= COMMENT_LIMIT:
+            return body
+    return body[: COMMENT_LIMIT - 200] + "\n\n… (truncated: see the full summary)"
+
+
+def _verdict_brief(res: RunResult, summary_url: str, detail_chars: int | None) -> str:
     """This run's verdict, posted at the BOTTOM of the conversation.
 
     The sticky summary is edited in place, so it stays wherever the PR's first
@@ -1309,13 +1322,19 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
         f"**Open findings:** {counts}",
     ]
     if res.new_findings:
-        inline = sum(1 for f in res.new_findings if f.line)
-        where = (
-            "inline below"
-            if inline == len(res.new_findings)
-            else f"{inline} inline, the rest in the summary"
-        )
-        lines.append(f"**New this round:** {len(res.new_findings)} ({where})")
+        lines.append(f"**New this round:** {len(res.new_findings)}\n")
+        if detail_chars == 0:
+            lines.extend(
+                f"- {_SEV_ICON[f.severity]} {f.id} — {f.title} ({_where(f, res.blob_base)})"
+                for f in res.new_findings
+            )
+            lines.append(
+                "\nToo many to show here in full: the summary has every finding's details."
+            )
+        else:
+            lines.extend(
+                _details(f, res.blob_base, detail_chars) for f in res.new_findings
+            )
     if state == "failure" and not st.open_findings(BLOCKING):
         lines.append(_CLOSE_HINT)
     fixed = len(res.resolved_free) + len(res.resolved_verified)
@@ -1359,62 +1378,26 @@ def verdict_brief(res: RunResult, summary_url: str) -> str:
 
 
 def publish(gh: GitHub, number: int, head: str, res: RunResult) -> None:
-    """Summary, then inline comments carrying this run's verdict, then status.
+    """Summary, then the verdict at the bottom, then the status.
 
-    A comment GitHub refuses (a 422 on a line it does not consider part of the
-    diff) is moved to the summary instead of being lost, and one bad line never
-    sinks the rest. The verdict always lands at the bottom of the conversation:
-    as the review body when there are new findings, as a comment otherwise."""
+    lens opens no inline review threads: every finding, with its explanation and
+    suggested change, is in the summary and (for this round's new ones) in the
+    verdict. Threads had to be resolved by hand to merge, and resolving them needs
+    a token with write access to the repository contents, which the step that reads
+    PR text must never hold. A summary created by this run is already the bottom
+    comment and carries the verdict, so the verdict is not repeated under it."""
     url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
-    # A summary created by this run is already at the bottom and carries the verdict,
-    # so the verdict is not repeated under it: no extra comment, and a review with
-    # inline comments gets a one-line pointer. Later runs edit the summary in place,
-    # far above, so they post the verdict at the bottom again.
-    body = (
-        f"lens: {len(res.new_findings)} new finding(s) — the verdict is in the summary above."
-        if res.summary_is_new
-        else verdict_brief(res, url)
-    )
-    todo = [
-        f for f in res.new_findings if f.line
-    ]  # the rest are carried by the summary
-    posted = False
-    refused = False
-    for i in range(0, len(todo), 50):
-        batch = todo[i : i + 50]
-        try:
-            gh.review(number, head, body, [_inline(f) for f in batch])
-            posted = True
-        except GitHubError:
-            for f in batch:
-                try:
-                    gh.review(number, head, body, [_inline(f)])
-                    posted = True
-                except GitHubError:
-                    res.unplaced.append(f)
-                    refused = True
-    if refused:
-        url = gh.upsert_comment(number, SUMMARY_MARKER, render_summary(res))
-    if not posted and not res.summary_is_new:
+    if not res.summary_is_new:
         gh.comment(number, verdict_brief(res, url))
     state, description = verdict_status(res)
     gh.set_status(head, state, description, url)
     trace.line(f"sticky summary: {url or '(url unavailable)'}")
     trace.line(
-        f"inline comments: {len(todo) - sum(1 for f in res.unplaced if f in todo)} posted"
-        + (", some refused by GitHub (moved to the summary)" if refused else "")
-        + (
-            "; verdict in the new summary"
-            if res.summary_is_new
-            else "; verdict carried by the review"
-            if posted
-            else "; verdict posted as a comment"
-        )
+        "verdict in the new summary"
+        if res.summary_is_new
+        else "verdict posted at the bottom"
     )
     trace.line(f"status 'lens' on {head[:9]}: {state} — {description}")
-    if res.state is not None:
-        n = resolve_closed_threads(gh, number, res.state)
-        trace.line(f"review threads resolved: {n}")
 
 
 def verdict_status(res: RunResult) -> tuple[str, str]:
