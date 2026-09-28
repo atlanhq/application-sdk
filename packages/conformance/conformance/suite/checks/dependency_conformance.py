@@ -1641,15 +1641,20 @@ def _collect_source_usage(
 def _references_sdk_sql_client(tree: ast.AST) -> bool:
     """Whether *tree* uses an SDK SQL client class, not merely imports it.
 
-    A use is a load of a name bound to ``BaseSQLClient``/``AsyncBaseSQLClient``
-    by ``from <loader module> import …`` (subclassing or calling it), or an
-    attribute access such as ``sql.BaseSQLClient`` whose owner resolves to a
-    loader module through the file's imports. An import statement alone never
-    counts, because the SDK only imports SQLAlchemy when a client loads.
+    A use is ``BaseSQLClient``/``AsyncBaseSQLClient`` as a class base or as the
+    callee of a call — reached by a name ``from <loader module> import …``
+    bound, or by an attribute access such as ``sql.BaseSQLClient`` whose owner
+    resolves to a loader module through the file's imports. An import alone,
+    an import under ``if TYPE_CHECKING:``, and a type annotation never count,
+    because none of them runs ``BaseSQLClient.load()``, the only place the SDK
+    imports SQLAlchemy.
     """
+    type_only = _type_checking_ids(tree)
     class_names: set[str] = set()
     bound_modules: dict[str, str] = {}
     for node in ast.walk(tree):
+        if id(node) in type_only:
+            continue
         if isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.asname:
@@ -1667,18 +1672,66 @@ def _references_sdk_sql_client(tree: ast.AST) -> bool:
                     class_names.add(local)
                 else:
                     bound_modules[local] = f"{node.module}.{alias.name}"
+    # A name the file also binds some other way may not be the SDK's class or
+    # module where it is used; the scan is file-wide, so drop it outright.
+    rebound = _non_import_bindings(tree)
+    class_names -= rebound | bound_modules.keys()
+    for name in rebound:
+        bound_modules.pop(name, None)
     for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            if isinstance(node.ctx, ast.Load) and node.id in class_names:
+        if isinstance(node, ast.ClassDef):
+            runtime_refs: list[ast.expr] = node.bases
+        elif isinstance(node, ast.Call):
+            runtime_refs = [node.func]
+        else:
+            continue
+        for ref in runtime_refs:
+            if isinstance(ref, ast.Name) and ref.id in class_names:
                 return True
-        elif isinstance(node, ast.Attribute):
             if (
-                node.attr in _SQLALCHEMY_LOADER_CLASSES
-                and _resolve_dotted(node.value, bound_modules)
+                isinstance(ref, ast.Attribute)
+                and ref.attr in _SQLALCHEMY_LOADER_CLASSES
+                and _resolve_dotted(ref.value, bound_modules)
                 in _SQLALCHEMY_LOADER_MODULES
             ):
                 return True
     return False
+
+
+def _non_import_bindings(tree: ast.AST) -> set[str]:
+    """Return every name *tree* binds other than by an import statement."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return names
+
+
+def _type_checking_ids(tree: ast.AST) -> set[int]:
+    """Return ``id()`` of every node inside an ``if TYPE_CHECKING:`` body."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        name = (
+            test.id
+            if isinstance(test, ast.Name)
+            else test.attr
+            if isinstance(test, ast.Attribute)
+            else None
+        )
+        if name != "TYPE_CHECKING":
+            continue
+        for stmt in node.body:
+            ids.update(id(child) for child in ast.walk(stmt))
+    return ids
 
 
 def _resolve_dotted(node: ast.expr, bound_modules: dict[str, str]) -> str | None:

@@ -1652,6 +1652,44 @@ def test_d003_sdk_sql_client_use_loads_sqlalchemy(tmp_path: Path, source: str) -
             id="class-name-on-non-sql-module",
         ),
         pytest.param(
+            "from __future__ import annotations\n"
+            "from typing import TYPE_CHECKING\n"
+            "if TYPE_CHECKING:\n"
+            "    from application_sdk.clients.sql import BaseSQLClient\n"
+            "def f(client: BaseSQLClient) -> BaseSQLClient:\n"
+            "    return client\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="type-checking-import-and-annotation",
+        ),
+        pytest.param(
+            "import typing\n"
+            "if typing.TYPE_CHECKING:\n"
+            "    from application_sdk.clients import sql\n"
+            "class C(sql.BaseSQLClient): ...\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="type-checking-module-import",
+        ),
+        pytest.param(
+            "from application_sdk.clients.sql import BaseSQLClient\n"
+            "client: BaseSQLClient | None = None\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="annotation-only",
+        ),
+        pytest.param(
+            "from application_sdk.clients.sql import BaseSQLClient\n"
+            "def build(BaseSQLClient):\n"
+            "    return BaseSQLClient()\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="shadowed-by-argument",
+        ),
+        pytest.param(
+            "from application_sdk.clients.sql import BaseSQLClient\n"
+            "from app.fakes import FakeClient as BaseSQLClient\n"
+            "client = BaseSQLClient()\n"
+            'URL = "crate://{host}:{port}/"\n',
+            id="shadowed-by-later-import",
+        ),
+        pytest.param(
             _SDK_SQL_CLIENT_SOURCE.replace('template="crate://{host}:{port}/"', ""),
             id="sdk-sql-client-without-scheme",
         ),
