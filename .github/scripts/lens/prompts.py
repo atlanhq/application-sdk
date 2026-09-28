@@ -126,7 +126,10 @@ everything the new commits changed. A fix can land away from the quoted line (in
 calls, or in another file that feeds it): judge whether the defect can still occur, not whether the
 quoted line was edited. A <concern id="A…"> is an earlier concern about the PR's approach: it is
 fixed when the PR no longer has that problem (the code changed, or the claim it contradicted was
-corrected). Answer by calling verdicts once, with one verdict per finding and concern id.
+corrected). <paths_removed_by_this_pr> lists every path the PR deletes or renames away
+(`renamed: old -> new`): at the PR head those paths do not exist. A finding or concern that depends
+on one of them still existing can no longer occur. Answer by calling verdicts once, with one verdict
+per finding and concern id.
 fixed: the defect can no longer occur. open: it still can. Do not raise new issues.
 """
 

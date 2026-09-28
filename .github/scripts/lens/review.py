@@ -215,16 +215,25 @@ def head_side_text(
             head_text[fd.path] = ""
         elif not fd.is_binary:
             head_text[fd.path] = gh.file_at(fd.path, head) or ""
-    at_head = {fd.path for fd in files if fd.status != "deleted"}
-    for fd in files:
-        if (
-            fd.status == "renamed"
-            and fd.old_path
-            and fd.old_path != fd.path
-            and fd.old_path not in at_head
-        ):
-            head_text[fd.old_path] = ""
+    for fd in renamed_away(files):
+        head_text[str(fd.old_path)] = ""
     return head_text
+
+
+def renamed_away(files: list[FileDiff]) -> list[FileDiff]:
+    """The renames whose old path no file occupies at the PR head.
+
+    A path the PR puts a file back at (anywhere in the diff) is not removed,
+    so it is left out."""
+    at_head = {fd.path for fd in files if fd.status != "deleted"}
+    return [
+        fd
+        for fd in files
+        if fd.status == "renamed"
+        and fd.old_path
+        and fd.old_path != fd.path
+        and fd.old_path not in at_head
+    ]
 
 
 def find_state(gh: GitHub, number: int) -> tuple[PRState | None, str]:
@@ -512,7 +521,12 @@ def run(
         ):
             fixed = (
                 _verify(
-                    client, ws, to_verify, round_diff(all_files, to_verify), concerns
+                    client,
+                    ws,
+                    to_verify,
+                    round_diff(all_files, to_verify),
+                    concerns,
+                    removed=removed_paths(full_files),
                 )
                 if to_verify or concerns
                 else []
@@ -836,6 +850,22 @@ def plan_bundles(files: list, cfg: Config, res: RunResult) -> list[Bundle]:  # n
 ROUND_DIFF_CHARS = 12_000  # this round's changes shown to the verify call
 
 
+def removed_paths(files: list[FileDiff]) -> str:
+    """Every path the whole PR deletes or renames away, one per line, for the
+    verify call.
+
+    Verify sees the site of each finding and this round's diff, never the
+    repository, so a finding that says another file "is still present" could
+    not be judged at all and stayed open for good. The list is the whole PR's,
+    not this round's: a rename made in an earlier round is still in effect. A
+    path the PR puts a file back at is not removed and is left out
+    (`renamed_away`, the same rule the head-text overlay uses).
+    """
+    lines = [f"deleted: {fd.path}" for fd in files if fd.status == "deleted"]
+    lines += [f"renamed: {fd.old_path} -> {fd.path}" for fd in renamed_away(files)]
+    return "\n".join(sorted(lines, key=lambda line: line.split(": ", 1)[1]))
+
+
 def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
     """What changed this round, for the verify call: files holding an open finding
     first, then the rest, within a fixed budget (a cached, bounded prompt)."""
@@ -885,16 +915,21 @@ def _verify(
     open_: list[Finding],
     changes: str = "",
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
+    *,
+    removed: str = "",
 ) -> list[str]:
     """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
-    (with the first batch). The round's changes lead each call, so the batches
-    share one cached prefix. Returns the ids judged fixed: F-… and A…."""
+    (with the first batch). The paths the PR removes, then the round's changes,
+    lead each call, so the batches share one cached prefix. Returns the ids
+    judged fixed: F-… and A…."""
     batches = [
         open_[i : i + VERIFY_BATCH] for i in range(0, len(open_), VERIFY_BATCH)
     ] or [[]]
     fixed: list[str] = []
     for n, batch in enumerate(batches):
-        fixed += _verify_batch(client, ws, batch, changes, concerns if n == 0 else None)
+        fixed += _verify_batch(
+            client, ws, batch, changes, concerns if n == 0 else None, removed=removed
+        )
     return fixed
 
 
@@ -904,10 +939,16 @@ def _verify_batch(
     open_: list[Finding],
     changes: str,
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
+    *,
+    removed: str = "",
 ) -> list[str]:
     items = (
-        [f"<changes_this_round>\n{changes}\n</changes_this_round>"] if changes else []
+        [f"<paths_removed_by_this_pr>\n{removed}\n</paths_removed_by_this_pr>"]
+        if removed
+        else []
     )
+    if changes:
+        items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     for cid, c in concerns or []:
         items.append(
             f'<concern id="{cid}">\n{c.get("title", "")}. {c.get("why", "")}\n</concern>'
