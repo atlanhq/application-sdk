@@ -141,6 +141,18 @@ def test_category_conformance_package_fallback_ungrouped_branch() -> None:
     assert pr.category is Category.CONFORMANCE_PACKAGE
 
 
+def test_category_atlan_platform_grouped_branch() -> None:
+    pr = classify(make_pr(labels=[], branch="renovate/atlan-platform"))
+    assert pr.category is Category.ATLAN_PLATFORM
+    assert pr.auto_merge_expected is True
+
+
+def test_category_atlan_platform_major_branch() -> None:
+    pr = classify(make_pr(labels=[], branch="renovate/major-atlan-platform"))
+    assert pr.category is Category.ATLAN_PLATFORM
+    assert pr.auto_merge_expected is True
+
+
 def test_category_conformance_package_fallback_title() -> None:
     # Title arm of categorize(): the branch carries no conformance signal, so the
     # "conformance package" substring in the title is what classifies it.
