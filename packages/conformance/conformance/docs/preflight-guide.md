@@ -80,7 +80,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 **Contract:** probes remain awaitable and bounded across connection, authentication, query and fetch phases.
 
-**Investigate:** inspect the underlying driver, not just an async wrapper. Confirm whether a flagged call actually blocks. **Fix:** use supported async operations or bounded offloading with driver-level deadlines. **Verify:** hang each phase, confirm event-loop progress and bounded completion. Cancelling a thread await does not establish termination of the thread.
+**Investigate:** inspect the underlying driver, not just an async wrapper. Confirm whether a flagged call actually blocks. Every thread offload is an executor wait here: `asyncio.to_thread`, `run_in_executor`, and the SDK's `run_in_thread`, which moves the work to the SDK pool but adds no deadline. On a preflight path use the module-level `application_sdk.execution.heartbeat.run_in_thread`: preflight runs on `Handler`, which has no `run_in_thread`, and `App.run_in_thread` / `task_context.run_in_thread` raise `AppContextError` outside a `@task`. **Fix:** use supported async operations or bounded offloading with driver-level deadlines. When P031 moves an offload to `run_in_thread`, keep or add the enclosing `asyncio.wait_for(..., timeout=...)` or `async with asyncio.timeout(...)`. **Verify:** hang each phase, confirm event-loop progress and bounded completion. Cancelling a thread await does not establish termination of the thread.
 
 ## F012
 
