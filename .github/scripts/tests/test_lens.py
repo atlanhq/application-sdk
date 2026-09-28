@@ -3768,7 +3768,9 @@ def test_the_recheck_finds_the_quoted_code_where_it_is_now():
     now = "import x\n\n\n\ndef fetch(client, key):\n    data = client.get(key)\n    return data.decode()\n"
     assert review_mod._current_line(None, f, now) == 7
     f.evidence = "gone()"
-    assert review_mod._current_line(None, f, now) == 2  # falls back to the stored line
+    assert (
+        review_mod._current_line(None, f, now) == 0
+    )  # no stale guess: the quote is gone
 
 
 def test_lens_resolves_its_own_thread_when_the_finding_is_fixed(repo: Path):
@@ -3960,3 +3962,210 @@ def test_the_whole_description_reaches_the_reviewer(repo: Path):
     from lens import prompts  # noqa: PLC0415
 
     assert "unless <description> declares it as intended" in prompts.REVIEW_SYSTEM
+
+
+# ---- review findings on the loop fixes ---------------------------------------------------------------------------
+
+
+def test_verify_checks_every_open_finding_in_batches(repo: Path):
+    """The re-check stopped at 20: anything past it was never re-checked."""
+    ws, _ = _ws(repo)
+    fs = [
+        Finding(
+            "application_sdk/storage/fetch.py", 1, "low", "bug", f"t{i}", "b", f"x{i}"
+        )
+        for i in range(25)
+    ]
+    script = Script(
+        response(
+            [tool_call("verdicts", {"items": [{"id": fs[0].id, "status": "fixed"}]})]
+        ),
+        response(
+            [tool_call("verdicts", {"items": [{"id": fs[24].id, "status": "fixed"}]})]
+        ),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    fixed = review_mod._verify(client, ws, fs, "--- a.py\n@@ -1 +1 @@")
+    assert fixed == [fs[0].id, fs[24].id]
+    assert len(script.requests) == 2  # 20 + 5
+    first, second = (json.dumps(r) for r in script.requests)
+    assert fs[19].id in first and fs[20].id not in first and fs[24].id in second
+    # the round's changes lead each call, so both batches share a cached prefix
+    for r in script.requests:
+        user = r["messages"][1]["content"] if "messages" in r else json.dumps(r)
+        assert user.index("<changes_this_round>") < user.index("<finding ")
+
+
+def test_a_spiral_counts_only_earlier_blocking_findings():
+    old = [
+        Finding("d.py", 1, "medium", "bug", f"t{r}", "b", f"e{r}", round=r)
+        for r in (1, 2)
+    ]
+    new = [Finding("d.py", 9, "high", "bug", "t3", "b", "e3", round=3)]
+    st = PRState(round=3, findings=old + new)
+    assert (
+        review_mod.spiral_paths(st, new, 3) == []
+    )  # first blocking finding, not a spiral
+
+
+def test_thread_resolution_retries_a_rate_limit_then_warns(monkeypatch, capsys):
+    monkeypatch.setattr(review_mod.time, "sleep", lambda s: None)
+    st = PRState(
+        findings=[
+            Finding(
+                "a.py", 1, "high", "bug", "t", "b", "e", id="F-aaaaaa", status="fixed"
+            )
+        ]
+    )
+    thread = {
+        "id": "a",
+        "resolved": False,
+        "author": "atlan-app-fleet",
+        "body": "<sub>lens F-aaaaaa</sub>",
+    }
+
+    class Flaky:
+        calls = 0
+
+        def review_threads(self, n):
+            Flaky.calls += 1
+            if Flaky.calls == 1:
+                raise GitHubError("POST /graphql: HTTP 403: API rate limit exceeded")
+            return [thread]
+
+        def resolve_thread(self, tid):
+            self.done = tid
+
+    g = Flaky()
+    assert review_mod.resolve_closed_threads(g, 1, st) == 1 and g.done == "a"
+
+    class Down:
+        def review_threads(self, n):
+            raise GitHubError("POST /graphql: HTTP 403: API rate limit exceeded")
+
+    assert review_mod.resolve_closed_threads(Down(), 1, st) == 0
+    assert (
+        "::warning::lens could not resolve its review threads"
+        in capsys.readouterr().out
+    )
+
+    class Denied:
+        def review_threads(self, n):
+            raise GitHubError(
+                "POST /graphql: HTTP 403: Resource not accessible by integration"
+            )
+
+    sleeps = []
+    monkeypatch.setattr(review_mod.time, "sleep", lambda s: sleeps.append(s))
+    assert review_mod.resolve_closed_threads(Denied(), 1, st) == 0
+    assert sleeps == []  # a permission error is not retried
+
+
+def test_the_github_client_pages_threads_and_resolves_them():
+    """Drive the real GraphQL client through a fake transport: two pages, a
+    resolution, and a GraphQL error."""
+    from lens.github import GitHub  # noqa: PLC0415
+
+    sent = []
+
+    def page(nodes, nxt):
+        return json.dumps(
+            {
+                "data": {
+                    "repository": {
+                        "pullRequest": {
+                            "reviewThreads": {
+                                "pageInfo": {
+                                    "hasNextPage": bool(nxt),
+                                    "endCursor": nxt,
+                                },
+                                "nodes": nodes,
+                            }
+                        }
+                    }
+                }
+            }
+        )
+
+    def node(i, resolved=False):
+        return {
+            "id": f"T{i}",
+            "isResolved": resolved,
+            "comments": {
+                "nodes": [{"author": {"login": "atlan-app-fleet"}, "body": f"b{i}"}]
+            },
+        }
+
+    replies = [
+        (200, page([node(1), node(2, True)], "CUR1")),
+        (200, page([node(3)], None)),
+        (200, json.dumps({"data": {"resolveReviewThread": {"thread": {"id": "T3"}}}})),
+        (200, json.dumps({"errors": [{"message": "Could not resolve to a node"}]})),
+    ]
+
+    def transport(method, path, body, accept):
+        sent.append((method, path, body))
+        return replies.pop(0)
+
+    gh = GitHub("o/r", token="t", transport=transport)
+    threads = gh.review_threads(7)
+    assert [t["id"] for t in threads] == ["T1", "T2", "T3"]
+    assert threads[1]["resolved"] and threads[0]["author"] == "atlan-app-fleet"
+    assert sent[0][2]["variables"] == {"o": "o", "n": "r", "pr": 7, "after": None}
+    assert sent[1][2]["variables"]["after"] == "CUR1"  # the cursor is followed
+    gh.resolve_thread("T3")
+    assert "resolveReviewThread" in sent[2][2]["query"] and sent[2][2]["variables"] == {
+        "id": "T3"
+    }
+    with pytest.raises(GitHubError, match="graphql"):
+        gh.resolve_thread("T9")
+
+
+def test_the_round_diff_is_bounded_and_puts_finding_files_first():
+    def fd(path, n):
+        body = "".join(f"+line {i}\n" for i in range(n))
+        return parse_unified_diff(
+            f"diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -0,0 +1,{n} @@\n{body}"
+        )[0]
+
+    files = [fd("a_first.py", 5), fd("b_owner.py", 5)] + [
+        fd(f"z{i}.py", 190) for i in range(10)
+    ]
+    open_ = [Finding("b_owner.py", 1, "high", "bug", "t", "b", "e")]
+    out = review_mod.round_diff(files, open_)
+    assert out.index("--- b_owner.py") < out.index(
+        "--- a_first.py"
+    )  # the finding's file leads
+    assert len(out) <= review_mod.ROUND_DIFF_CHARS + 200
+    assert "(diff omitted: budget)" in out  # ten large files do not all fit
+    assert (
+        "--- b_owner.py\n" in out and "--- a_first.py\n" in out
+    )  # the small ones do, in full
+    assert review_mod.round_diff(files, []) == ""  # nothing open: nothing to show
+
+
+def test_force_is_a_full_re_review(repo: Path):
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    _round_two_elsewhere(gh)  # new commits that descend from the reviewed head
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script()),
+        force=True,
+    )
+    assert (
+        res.mode == "full"
+        and res.mode_label == "re-review · full, because requested with force"
+    )

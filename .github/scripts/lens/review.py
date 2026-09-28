@@ -291,6 +291,7 @@ def run(
         and bool(state.reviewed_head)
         and same_reviewer
         and ancestry == "ahead"
+        and not force  # `/lens force` re-reviews the whole PR
     )
     mode = "retry" if retry_only else ("incremental" if incremental else "full")
     mode_label = describe_mode(
@@ -797,17 +798,32 @@ def round_diff(files: list[FileDiff], open_: list[Finding]) -> str:
 
 def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     """Where the finding's quoted code is NOW. Stored line numbers are from an
-    earlier head and drift as commits land; the quote is what identifies the site."""
-    return locate_in_text(text, f.evidence) or f.head_line or f.line
+    earlier head and drift as commits land; the quote is what identifies the site,
+    so when it is gone the model is told so instead of shown unrelated code."""
+    return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
+
+
+VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
 
 
 def _verify(
     client: Client, ws: Workspace, open_: list[Finding], changes: str = ""
 ) -> list[str]:
-    if not open_:
-        return []
-    items = []
-    for f in open_[:20]:
+    """Every open finding, VERIFY_BATCH at a time. The round's changes lead each
+    call, so the batches share one cached prefix."""
+    fixed: list[str] = []
+    for i in range(0, len(open_), VERIFY_BATCH):
+        fixed += _verify_batch(client, ws, open_[i : i + VERIFY_BATCH], changes)
+    return fixed
+
+
+def _verify_batch(
+    client: Client, ws: Workspace, open_: list[Finding], changes: str
+) -> list[str]:
+    items = (
+        [f"<changes_this_round>\n{changes}\n</changes_this_round>"] if changes else []
+    )
+    for f in open_:
         text = ws.text(f.path) or ""
         lines = text.splitlines()
         at = _current_line(ws, f, text)
@@ -829,8 +845,6 @@ def _verify(
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
             f"<code_now>\n{code}\n</code_now>\n</finding>"
         )
-    if changes:
-        items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     messages = [
         {"role": "system", "content": prompts.VERIFY_SYSTEM},
         {"role": "user", "content": "\n".join(items)},
@@ -975,7 +989,13 @@ def spiral_paths(
         return []
     out = []
     for path in sorted({f.path for f in new if f.severity in BLOCKING}):
-        rounds = sorted({f.round for f in state.findings if f.path == path})
+        rounds = sorted(
+            {
+                f.round
+                for f in state.findings
+                if f.path == path and f.severity in BLOCKING
+            }
+        )
         if len(rounds) >= SPIRAL_ROUNDS:
             out.append((path, rounds))
     return out
@@ -1000,16 +1020,37 @@ def resolve_closed_threads(gh: GitHub, number: int, state: PRState) -> int:
     login = bot_login().removesuffix("[bot]")
     done = 0
     try:
-        for t in gh.review_threads(number):
+        for t in _retry_rate_limit(lambda: gh.review_threads(number)):
             if t["resolved"] or t["author"].removesuffix("[bot]") != login:
                 continue
             m = re.search(r"<sub>lens (F-[0-9a-f]{6})</sub>", t["body"])
             if m and m.group(1) in closed:
-                gh.resolve_thread(t["id"])
+                _retry_rate_limit(lambda tid=t["id"]: gh.resolve_thread(tid))
                 done += 1
     except GitHubError as e:
-        trace.line(f"could not resolve review threads: {trace.short(str(e), 140)}")
+        # Visible on the run, not only in the trace: an unresolved thread blocks the
+        # merge. Nothing is lost; the next `/lens` resolves these threads again.
+        print(
+            "::warning::lens could not resolve its review threads for closed findings "
+            f"({trace.short(str(e), 140)}); comment `/lens` to retry, or resolve them by hand",
+            flush=True,
+        )
     return done
+
+
+RATE_LIMIT_WAIT_S = 10.0
+
+
+def _retry_rate_limit(call: Any) -> Any:
+    """One retry after a short wait when GitHub answers with a rate limit (403/429
+    with "rate limit" in the body); any other error propagates at once."""
+    try:
+        return call()
+    except GitHubError as e:
+        if "rate limit" not in str(e).lower():
+            raise
+        time.sleep(RATE_LIMIT_WAIT_S)
+        return call()
 
 
 def render_summary(res: RunResult) -> str:
