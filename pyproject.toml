@@ -433,6 +433,7 @@ constraint-dependencies = [
     "pyjwt>=2.12.0",             # CVE-2026-32597
     "simpleeval>=1.0.5",         # CVE-2026-32640
     "python-dotenv>=1.2.2",      # CVE-2026-28684 (symlink file overwrite)
+    "boto3>=1.43.103",  # CVE-SELFTEST-1
 ]
 
 [tool.uv.sources]
