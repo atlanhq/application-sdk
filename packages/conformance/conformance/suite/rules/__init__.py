@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from types import MappingProxyType
 
+from conformance.suite.rules.api_member import RULES as _API_MEMBER_RULES
 from conformance.suite.rules.app_name_alignment import (
     RULES as _APP_NAME_ALIGNMENT_RULES,
 )
@@ -62,6 +63,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _P_RULES,
     _PREFLIGHT_RULES,
     _ORCHESTRATION_RULES,
+    _API_MEMBER_RULES,
     _ERROR_SEAM_RULES,
     _DETERMINISM_RULES,
     _ENTRYPOINT_RULES,

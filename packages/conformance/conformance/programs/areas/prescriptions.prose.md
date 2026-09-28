@@ -454,6 +454,25 @@ is always `"judgment"`:
   stop re-exporting it) — a public-contract refactor. Route to residue with that
   guidance. Do not attempt a mechanical edit.
 
+**Hosted API member rule (P053)** — detect-only, scope=app, BLOCK-tier;
+`not_remediable = true`, every finding routes to **residue**.  It is backed by
+its own `suite.checks.api_member` check and reports nothing unless the repo
+declares a `[project.entry-points."atlan.app_api"]` entry point.
+
+- **P053 HostedApiMemberNotThin** (app) — the hosted `api/<pkg>/` member
+  imports `application_sdk[.*]` or the worker package `app[.*]`, reads
+  `os.environ` / `os.getenv` at import time, or its entry-point name differs
+  from the app's `atlan.yaml` name.  **Do not edit** — each fix is a design
+  decision about where code lives: whether a shared helper moves into the
+  member or into a third package, which configuration the handler reads per
+  call, and whether renaming the entry point changes a route something already
+  calls.  Record in residue with the finding message and, for an import
+  finding, which names the member uses from the forbidden module (the handler
+  surface and errors have a direct `application_sdk_api` equivalent; anything
+  else does not).  Never "fix" an `application_sdk` import by rewriting it to
+  `application_sdk_api` unless every imported name exists there — the member
+  would then fail to import on the server instead.
+
 **Storage-seam rules (P008–P012, P044)** — all suggest-only, scope=app,
 WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context

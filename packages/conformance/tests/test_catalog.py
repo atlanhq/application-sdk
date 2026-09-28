@@ -470,6 +470,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
     assert app_scoped == {
+        "P053",
         "D016",
         "B009",
         "B001",
@@ -765,6 +766,9 @@ def test_catalog_p_series_present() -> None:
     P052 is EntitySerializationBypass — app code serializing a pyatlan asset
     itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
     instead of through the SDK's entity_bytes seam (FND-2725).
+    P053 is HostedApiMemberNotThin — a hosted atlan.app_api member importing
+    application_sdk or the worker package, reading the environment at import,
+    or named unlike the app; not evaluated without the entry point (FND-2964).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -817,6 +821,7 @@ def test_catalog_p_series_present() -> None:
         "P050",
         "P051",
         "P052",
+        "P053",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
