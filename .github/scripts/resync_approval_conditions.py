@@ -61,6 +61,13 @@ _MARKER_RE = re.compile(r"<!--\s*conformance-resync-lane\s+suite=(\d+\.\d+\.\d+)
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 BOOTSTRAP_TIMEOUT = 600
 
+
+def pr_marker(suite_version: str) -> str:
+    """The hidden marker every lane PR body leads with. Shared with the lane
+    (``conformance_resync.py``) so the two never render it differently."""
+    return f"<!-- conformance-resync-lane suite={suite_version} -->"
+
+
 RESYNC_APPROVAL_BODY = (
     f"{RESYNC_SIGNATURE} this PR's tree is byte-identical to an independent "
     "`bootstrap --resync` render of its base commit at the conformance version "
