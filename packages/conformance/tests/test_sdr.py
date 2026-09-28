@@ -889,6 +889,73 @@ def test_p037_ignores_a_same_named_non_sdk_callable(tmp_path: Path, src: str) ->
     assert any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
+_SDK_ROUTE_ALIAS = (
+    "from application_sdk.credentials import CredentialRef\n"
+    "from application_sdk.credentials import route_credentials as route\n"
+)
+_GUID_ONLY_READ = (
+    "async def _named(context):\n"
+    '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n'
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A helper's own parameter shadows the imported alias.
+        "def _call(route, input_obj):\n    return route(input_obj)\n",
+        # ... and so does a local assignment.
+        "def _call(input_obj):\n"
+        "    route = input_obj.router\n"
+        "    return route(input_obj)\n",
+        # A lambda parameter.
+        "_call = lambda route, input_obj: route(input_obj)\n",
+        # The module rebinds the alias, so it may not be the SDK's at the call.
+        "route = object()\ndef _call(input_obj):\n    return route(input_obj)\n",
+    ],
+    ids=["parameter", "local-assignment", "lambda-parameter", "module-rebinding"],
+)
+def test_p037_ignores_a_shadowed_router_alias(tmp_path: Path, body: str) -> None:
+    src = _SDK_ROUTE_ALIAS + body + _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A nested function sees the module import.
+        "def _outer(input_obj):\n"
+        "    def _inner():\n"
+        "        return route(input_obj)\n"
+        "    return _inner()\n",
+        # A method: the class body does not shadow for the functions in it.
+        "class Connector:\n"
+        "    route = None\n"
+        "    def run(self, input_obj):\n"
+        "        return route(input_obj)\n",
+        # `global` refers the name back to the module import.
+        "def _call(input_obj):\n" "    global route\n" "    return route(input_obj)\n",
+    ],
+    ids=["nested-function", "method-skips-class-scope", "global-declaration"],
+)
+def test_p037_trusts_an_unshadowed_router_alias(tmp_path: Path, body: str) -> None:
+    src = _SDK_ROUTE_ALIAS + body + _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_trusts_a_function_local_sdk_import(tmp_path: Path) -> None:
+    src = (
+        "from application_sdk.credentials import CredentialRef\n"
+        "def _call(input_obj):\n"
+        "    from application_sdk.credentials import route_credentials\n"
+        "    return route_credentials(input_obj)\n" + _GUID_ONLY_READ
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
 def test_p037_still_fires_without_route_credentials(tmp_path: Path) -> None:
     # Red leg for the exemption above: the same module minus the seam call.
     src = _CREDS_ROUTE_CREDENTIALS.replace(
