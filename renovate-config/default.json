@@ -67,11 +67,12 @@
       "enabled": false
     },
     {
-      "description": "SDK lane: give atlan-application-sdk bumps their own uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the SDK PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Auto-merged on green as of FND-359: an SDK release must reach the fleet in minutes, and now that the lock-refresh lane is release-age bounded this is the only lane that can deliver it promptly. A repo not ready for that opts OUT in its own renovate.json, since repo-local packageRules are appended after this preset's and later matching rules win: {matchPackageNames: ['atlan-application-sdk'], automerge: false, platformAutomerge: false}. Set it inside a packageRule — a top-level automerge:false will not override this. The soft-mode bootstrap template already opts every package out this way. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. The fleet scanner classifies this lane by its branch slug (renovate/atlan-application-sdk-*-lockfile), not by a label — see conformance/renovate/classify.py and the label note at the top of this file.",
+      "description": "SDK lane: FND-2868: grouped with the conformance and contract-toolkit rules under groupName 'atlan platform', so all three first-party bumps land in one PR per repo. The three rules share prPriority 10 and run their postUpgradeTasks in executionMode 'update': Renovate builds a grouped branch's config from its first upgrade, so branch-mode tasks would run for only one member, while update mode runs each member's own task once, after every file in the branch is updated. Give atlan-application-sdk bumps a uv.lock-only PR (rangeStrategy update-lockfile, mirroring the conformance-package rule) instead of riding the batched lockFileMaintenance refresh — a stale lock-refresh branch that is not behind main never re-resolves, so it can sit pinned one SDK release behind indefinitely. prPriority 10: when prConcurrentLimit is contended, the atlan platform PR is created before every other dependency PR (Renovate cannot exempt a package from the limit; priority ordering + the bounded lanes below are the substitute). Auto-merged on green as of FND-359: an SDK release must reach the fleet in minutes, and now that the lock-refresh lane is release-age bounded this is the only lane that can deliver it promptly. A repo not ready for that opts OUT in its own renovate.json, since repo-local packageRules are appended after this preset's and later matching rules win: {matchPackageNames: ['atlan-application-sdk'], groupName: 'atlan-application-sdk', automerge: false, platformAutomerge: false}. The groupName splits the SDK out of the atlan platform group: Renovate auto-merges a group only when every member does, so without it the opt-out would also hold the conformance and contract-toolkit bumps. Set it inside a packageRule — a top-level automerge:false will not override this. The soft-mode bootstrap template already opts every package out this way. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. The fleet scanner classifies this lane by its branch slug (renovate/atlan-platform), not by a label — see conformance/renovate/classify.py and the label note at the top of this file.",
       "matchPackageNames": [
         "atlan-application-sdk"
       ],
       "rangeStrategy": "update-lockfile",
+      "groupName": "atlan platform",
       "prPriority": 10,
       "automerge": true,
       "automergeType": "pr",
@@ -79,19 +80,22 @@
       "minimumReleaseAge": null
     },
     {
-      "description": "app-contract-toolkit (Pkl): minor+patch in one PR; auto-merge on green. Matched by the regex customManager below. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
+      "description": "app-contract-toolkit (Pkl): minor+patch, grouped into the atlan platform PR (see the SDK lane rule); auto-merge on green. Matched by the regex customManager below, and scoped to its depName so no other regex-managed dependency (a repo-local customManager, or application-sdk's own pkl pin) joins the group. postUpgradeTasks re-resolves contract/PklProject.deps.json and regenerates app/generated/** (+ atlan.yaml/app.yaml) in-branch via the shared renovate-pkl-sync driver, so the bump lands as a self-contained PR with no follow-up glue workflow. Runs ONLY under self-hosted Renovate: postUpgradeTasks commands are gated by the allowedCommands admin allowlist (set in application-sdk's central renovate workflow), so this block is an inert no-op under the Mend-hosted app. The driver is installed as a bare PATH command by that workflow (Renovate does NOT shell-expand the command, so it must not contain ${VARS}); --no-commit leaves the fileFilters commit to Renovate.",
       "matchManagers": [
         "custom.regex"
+      ],
+      "matchDepNames": [
+        "app-contract-toolkit"
       ],
       "matchUpdateTypes": [
         "minor",
         "patch"
       ],
-      "groupName": "app-contract-toolkit",
+      "groupName": "atlan platform",
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true,
-      "prPriority": 9,
+      "prPriority": 10,
       "postUpgradeTasks": {
         "commands": [
           "renovate-pkl-sync --contract-dir contract --regenerate true --no-commit"
@@ -102,7 +106,7 @@
           "atlan.yaml",
           "app.yaml"
         ],
-        "executionMode": "branch"
+        "executionMode": "update"
       }
     },
     {
@@ -116,13 +120,13 @@
       "enabled": false
     },
     {
-      "description": "Conformance package: give in-range bumps their own uv.lock-only PR instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. A dedicated single-package PR lets the soft-mode template carve out auto-merge for just this package while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean. Auto-merged on green for EVERY update type, majors included (FND-378) — deliberately unlike the SDK and contract-toolkit lanes, which disable majors as opt-in migrations. Those two ship runtime code; this one ships a checker, whose worst case is a red check on the very PR that introduced it, so the conformance suite is its own gate and a major it cannot pass simply never merges. Treating majors as opt-in instead would be a silent hold, not a reviewed one: dependencyDashboard is false fleet-wide, so a disabled lane raises nothing and announces nothing, and the fleet would drift on the one package whose job is to propagate fleet policy. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. CONTRACT LEDGER (FND-607): postUpgradeTasks regenerates contract_schema.lock.json at the version this PR locks. That file is a generated artifact whose content depends on the generating version — the SDK contract-base field registry the generator reads grows as the SDK gains fields on Input/Output/PublishInputMixin — while CI runs the B006 checker from an unpinned `uvx` install, i.e. always the latest release. So a release that adds a base field makes B006 fire on every repo whose lock still trails it, this PR included, and the lane whose whole job is to adopt that release is then the one thing that cannot go green. Regenerating in-branch is what makes the lane self-healing rather than self-blocking; the driver is a no-op in a repo with no committed ledger, and the append-only invariant means it can only add entries, never launder a removal past B005.",
+      "description": "Conformance package: give in-range bumps a uv.lock-only PR, grouped into the atlan platform PR (see the SDK lane rule), instead of riding the batched lockFileMaintenance refresh. Apps declare atlan-application-sdk-conformance as an in-range dev dep, so without update-lockfile a new release only reaches an app inside the full lock refresh — which soft-mode apps hold for human review. Renovate auto-merges a group only when every member does, so the soft-mode template splits this package back out under groupName 'conformance package' to carve out auto-merge for it while everything else keeps requiring approval. The lock refresh may still pick up the same bump; whichever PR merges first wins and the other rebases clean. Auto-merged on green for EVERY update type, majors included (FND-378) — deliberately unlike the SDK and contract-toolkit lanes, which disable majors as opt-in migrations. Those two ship runtime code; this one ships a checker, whose worst case is a red check on the very PR that introduced it, so the conformance suite is its own gate and a major it cannot pass simply never merges. Treating majors as opt-in instead would be a silent hold, not a reviewed one: dependencyDashboard is false fleet-wide, so a disabled lane raises nothing and announces nothing, and the fleet would drift on the one package whose job is to propagate fleet policy. minimumReleaseAge is explicitly null: first-party releases are never subject to the cooldown. CONTRACT LEDGER (FND-607): postUpgradeTasks regenerates contract_schema.lock.json at the version this PR locks. That file is a generated artifact whose content depends on the generating version — the SDK contract-base field registry the generator reads grows as the SDK gains fields on Input/Output/PublishInputMixin — while CI runs the B006 checker from an unpinned `uvx` install, i.e. always the latest release. So a release that adds a base field makes B006 fire on every repo whose lock still trails it, this PR included, and the lane whose whole job is to adopt that release is then the one thing that cannot go green. Regenerating in-branch is what makes the lane self-healing rather than self-blocking; the driver is a no-op in a repo with no committed ledger, and the append-only invariant means it can only add entries, never launder a removal past B005.",
       "matchPackageNames": [
         "atlan-application-sdk-conformance"
       ],
       "rangeStrategy": "update-lockfile",
-      "groupName": "conformance package",
-      "prPriority": 9,
+      "groupName": "atlan platform",
+      "prPriority": 10,
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true,
@@ -134,11 +138,11 @@
         "fileFilters": [
           "contract_schema.lock.json"
         ],
-        "executionMode": "branch"
+        "executionMode": "update"
       }
     },
     {
-      "description": "Lock-refresh lane's rung on the prPriority ladder: created ahead of the non-critical crowd (0) but after the SDK (10) and conformance/toolkit (9) lanes. It has to live in packageRules — prPriority declares parents: ['packageRules'], so Renovate ignores it anywhere else and only says so as a config warning. It sat inside the lockFileMaintenance object from the lane's introduction until FND-359, which means the ladder this preset documents was never fully in effect: the lock refresh ran at the default priority 0, tied with the non-critical group it was supposed to outrank. Only observable under contention, since prConcurrentLimit (8) is what makes creation order matter at all — which is why it went unnoticed, along with nothing validating this preset until FND-359 added renovate-config-validator to pre-commit.",
+      "description": "Lock-refresh lane's rung on the prPriority ladder: created ahead of the non-critical crowd (0) but after the atlan platform lane (10). It has to live in packageRules — prPriority declares parents: ['packageRules'], so Renovate ignores it anywhere else and only says so as a config warning. It sat inside the lockFileMaintenance object from the lane's introduction until FND-359, which means the ladder this preset documents was never fully in effect: the lock refresh ran at the default priority 0, tied with the non-critical group it was supposed to outrank. Only observable under contention, since prConcurrentLimit (8) is what makes creation order matter at all — which is why it went unnoticed, along with nothing validating this preset until FND-359 added renovate-config-validator to pre-commit.",
       "matchUpdateTypes": [
         "lockFileMaintenance"
       ],
@@ -162,7 +166,7 @@
       "minimumReleaseAge": "3 days"
     },
     {
-      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — SDK (1) + conformance (1) + contract-toolkit (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
+      "description": "Lane model: group every OTHER PyPI dependency's non-major updates into ONE rolling PR. With bounded lanes — atlan platform (1) + lock maintenance (1) + this group (1) + github-actions (1) — the crowd occupies a single prConcurrentLimit slot and can never starve the critical lanes, which soft-mode repos previously hit: 5 human-review dep PRs squatting every slot meant an SDK bump PR was simply never created. Excludes the packages with dedicated lanes above.",
       "matchDatasources": [
         "pypi"
       ],

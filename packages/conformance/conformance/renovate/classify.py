@@ -35,6 +35,9 @@ Auto-merge policy mirrors renovate-config/default.json:
                          cannot pass simply never merges; dedicated uv.lock-only
                          PR via update-lockfile, auto-merged even under the
                          soft-mode template's '*' automerge=false rule)
+  - atlan-platform:      automerge=true  (FND-2868 — SDK + conformance + toolkit
+                         grouped into one PR; soft mode splits conformance
+                         back out under its own groupName)
   - python-dep:          automerge=false (edits pyproject.toml constraint → human)
 
 Blocking-reason mirrors renovate-auto-approve-reusable.yml conditions:
@@ -68,7 +71,13 @@ _DEP_FILE_RE = re.compile(
     r"|(.*/)?uv\.lock"
     r"|(.*/)?package-lock\.json"
     r"|(.*/)?requirements\.txt"
-    r"|(.*/)?pyproject\.toml)$"
+    r"|(.*/)?pyproject\.toml"
+    r"|(.*/)?contract/PklProject"
+    r"|(.*/)?contract/PklProject\.deps\.json"
+    r"|app/generated/.*"
+    r"|atlan\.yaml"
+    r"|app\.yaml"
+    r"|contract_schema\.lock\.json)$"
 )
 
 
@@ -307,6 +316,8 @@ def categorize(pr: RenovatePR) -> Category:
         return Category.LOCK_MAINTENANCE
     if "github-actions" in branch:
         return Category.GITHUB_ACTIONS
+    if "atlan-platform" in branch or "atlan platform" in title:
+        return Category.ATLAN_PLATFORM
     if "app-contract-toolkit" in branch or "app-contract-toolkit" in title:
         return Category.CONTRACT_TOOLKIT
     # groupName "conformance package" → branch slug renovate/conformance-package;
@@ -492,7 +503,11 @@ def auto_merge_expected(
     what lets the update:<type> labels go (FND-2201); it is also simply correct.
     """
     if repo_automerge_mode == "soft":
-        return False
+        # The soft template carves conformance minor/patch back out under
+        # groupName "conformance package" with automerge on, so that one lane
+        # still auto-merges. Its majors stay in "atlan platform", which
+        # classifies as ATLAN_PLATFORM and falls through to False here.
+        return category == Category.CONFORMANCE_PACKAGE
     if category == Category.LOCK_MAINTENANCE:
         return True
     if category == Category.GITHUB_ACTIONS:
@@ -502,6 +517,8 @@ def auto_merge_expected(
     if category == Category.CONFORMANCE_PACKAGE:
         return True
     if category == Category.SDK_PACKAGE:
+        return True
+    if category == Category.ATLAN_PLATFORM:
         return True
     # python-dep, unknown
     return False
