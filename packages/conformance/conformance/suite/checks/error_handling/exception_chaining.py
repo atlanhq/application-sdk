@@ -55,8 +55,9 @@ class ExceptionChainingMixin:
                     f"message= on {ctor} contains interpolated exception text "
                     f"(f-string/str(exc)/repr(exc)) — leaks unsanitised text across the "
                     f"typed boundary and breaks dashboard grouping. Classify into a typed "
-                    f"AppError and return message=err.message and error=err; a fixed string "
-                    f"clears the rule but is not the default fix.",
+                    f"AppError and return it as error=err.to_failure_details() — a failed "
+                    f"result renders error.message, so no message= is needed; a fixed "
+                    f"string clears the rule but is not the default fix.",
                 )
                 return
 

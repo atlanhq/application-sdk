@@ -1,11 +1,11 @@
 # actionlint configuration.
 #
-# Enabled after three consecutive @sdk-loop startup failures that a schema
+# Enabled after three consecutive workflow startup failures that a schema
 # validator would have caught before merge: a duplicate `description` key, and
 # a `needs.<job>` reference to a job the caller did not depend on. Both make
 # GitHub refuse to parse the workflow, and a workflow GitHub will not parse
 # runs NO jobs — so the symptom is silence, not an error, and CI stays green
-# while the lane is dead.
+# while the workflow is dead.
 #
 # ── About the ignores below ────────────────────────────────────────────────
 # Every one is a checked FALSE POSITIVE, not deferred work. Each was read

@@ -611,7 +611,8 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`),
+  `run_until_complete`), a blocking sync call (`requests.get`/`post`/…,
+  `urllib.request.urlopen`, `time.sleep`),
   tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
   `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
   `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
@@ -621,7 +622,13 @@ drafting.
 
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
-    `App.run_in_thread()` inside a `@task`.
+    `App.run_in_thread()` inside a `@task`.  Only the send is a finding
+    (`requests.get`, `s.get`/`s.send` on a `requests.Session()`, or `o.open`
+    on a urllib `build_opener()`, whether the client is built inline, in the
+    same or an enclosing function, or on a `self.<attr>` in the class):
+    building a `requests.Session()`, `HTTPAdapter()` or `build_opener()` does
+    no I/O and is not flagged, so never move a constructor behind a sync
+    helper to clear P023.
   - *tree op, data-scale I/O, whole-file, serialization* — offload with the
     callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
     `await run_in_thread(pd.read_parquet, path)`,
