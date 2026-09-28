@@ -15,9 +15,8 @@ run-name: "vuln triage ${{ inputs.selftest && 'SELFTEST' || inputs.ticket }}${{ 
 # successful scan).
 #
 # Security shape:
-#   * Only trusted code runs: the checkout is the default branch; there is no PR code here.
-#     The one exception is a self-test, which runs the dispatched ref's code. Dispatching
-#     already needs write access to the repo, and a self-test's PRs never reach the gate.
+#   * Only trusted code runs: the checkout is always main, for every input, including
+#     selftest; there is no PR or branch code here.
 #   * PRs are authored as atlan-app-fleet[bot] (a token minted per run, scoped to
 #     contents/pull-requests/issues write). vuln_auto_merge_gate.py trusts that identity,
 #     and atlan-ci stays free to approve (GitHub forbids approving your own PR). App-token
@@ -91,14 +90,15 @@ jobs:
           permission-issues: write # the vuln-auto-merge label
 
       # Checked out with the App token so the pushed branches trigger CI.
-      # Live and dry runs always check out main: a triage PR is based on the checked-out
-      # commit, so anything else would carry that ref's changes into it. A self-test checks
-      # out the dispatched ref, so a branch's triage code can be tested before merge; its
-      # PRs are drafts, unlabelled, on selftest/ branches, and closed by the same run.
-      - name: Check out main (or the dispatched ref for a self-test)
+      # Always main, self-test included. The Triage step runs the checked-out code with the
+      # App's write token and LINEAR_API_KEY in its environment, so it must only ever be
+      # trusted code. A dispatched branch's code would be able to exfiltrate both. Test a
+      # branch's triage code with the unit tests or a local `--selftest --dry-run`; the
+      # CI self-test exercises what is on main.
+      - name: Check out main
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.selftest && github.ref || 'main' }}
+          ref: main
           token: ${{ steps.app.outputs.token }}
 
       # Same uv as setup-deps and the security scan, so a Case-1 `uv lock` writes the
@@ -118,7 +118,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }} # artifact download and read-only gh calls
           PR_AUTHOR_TOKEN: ${{ steps.app.outputs.token }} # PR list/create/close only
-          LINEAR_API_KEY: ${{ secrets.LINEAR_API_KEY }}
+          # A self-test makes no Linear call, so it is not handed the key at all.
+          LINEAR_API_KEY: ${{ !inputs.selftest && secrets.LINEAR_API_KEY || '' }}
           REPO: ${{ github.repository }}
           ROOT: ${{ github.workspace }}
           TICKET: ${{ inputs.ticket }}
