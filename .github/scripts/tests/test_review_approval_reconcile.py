@@ -18,6 +18,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+import yaml
 
 SCRIPTS = Path(__file__).resolve().parents[1]
 
@@ -46,8 +47,10 @@ APP_TOKEN = "app-token"
 PAT = "pat-atlan-ci"
 
 NOW = datetime(2026, 8, 17, 12, 0, 0, tzinfo=timezone.utc)
-OLD = "2026-08-17T11:00:00Z"  # an hour before NOW — past the age gate
-RECENT = "2026-08-17T11:59:00Z"  # a minute before NOW — still possibly in flight
+OLD = "2026-08-17T11:00:00Z"  # an hour before NOW
+RECENT = (
+    "2026-08-17T11:59:00Z"  # a minute before NOW — its own run may still be in flight
+)
 
 RATE_LIMIT_STDERR = "gh: API rate limit exceeded for user ID 62283865. (HTTP 403)"
 
@@ -375,18 +378,31 @@ def test_verdict_without_reviewed_head_is_left_alone():
     assert gh.called(is_approve) == []
 
 
-def test_recent_verdict_is_left_to_the_fast_path():
-    """A fast-path run for the same comment may still be retrying; reconciling
-    underneath it would risk a duplicate approval."""
+def test_a_fresh_verdict_is_reconciled_without_waiting():
+    """There is no minimum age. Waiting out a grace for the fast path to finish
+    left reviewed PRs blocked for 20-30 minutes; a duplicate approval, the only
+    thing the wait prevented, is harmless."""
     gh = base_gh(comments=[comment(created_at=RECENT)])
     outcomes = run_sweep(gh)
 
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    assert len(gh.called(is_approve)) == 1
+
+
+def test_a_fresh_verdict_with_an_approval_already_posted_is_left_alone():
+    """No grace does not mean duplicates on a healthy PR: an existing signed
+    approval still makes the PR a no-op."""
+    gh = base_gh(
+        comments=[comment(created_at=RECENT)],
+        reviews=[bot_approval()],
+    )
+    outcomes = run_sweep(gh)
+
     assert [o.action for o in outcomes] == [reconcile.SKIPPED]
-    assert outcomes[0].reason == "verdict too recent to be lost"
     assert gh.called(is_approve) == []
 
 
-def test_unparseable_comment_timestamp_is_treated_as_too_recent():
+def test_unparseable_comment_timestamp_is_skipped():
     gh = base_gh(comments=[comment(created_at="not-a-date")])
     outcomes = run_sweep(gh)
 
@@ -693,16 +709,6 @@ def test_pr_listing_failure_is_loud():
         run_sweep(gh)
 
 
-# --- min-age plumbing -----------------------------------------------------
-
-
-def test_min_age_is_configurable():
-    gh = base_gh(comments=[comment(created_at=RECENT)])
-    outcomes = run_sweep(gh, min_age=timedelta(seconds=30))
-
-    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
-
-
 # === lens ==================================================================
 #
 # The same regression for the second source: lens's last step posts its
@@ -980,7 +986,6 @@ def test_a_withdrawal_landing_after_the_sweep_read_is_still_caught():
     verdict = source.verdict(
         pull(labels=[]),
         {(PR, HEAD): OLD},
-        min_age=timedelta(minutes=12),
         stale_after=timedelta(minutes=90),
         now=NOW,
     )
@@ -1065,13 +1070,12 @@ def test_a_summary_not_posted_by_lens_is_not_trusted():
     assert api.approvals() == []
 
 
-def test_a_recent_lens_verdict_is_left_to_its_own_run():
+def test_a_fresh_lens_verdict_is_reconciled_without_waiting():
     api = FakeLensAPI(statuses=[lens_status(created_at=RECENT)])
     outcomes = run_lens_sweep(lens_gh(), api)
 
-    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
-    assert "too recent" in outcomes[0].reason
-    assert api.approvals() == []
+    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
+    assert len(api.approvals()) == 1
 
 
 @pytest.mark.parametrize(
@@ -1250,11 +1254,11 @@ def test_lens_prefilter_keeps_only_green_heads():
     assert "--paginate" in argv and 'context(name: "lens")' in " ".join(argv)
 
 
-# --- manual dispatch ------------------------------------------------------
+# --- no minimum age, anywhere ---------------------------------------------
 #
-# A person who dispatches the workflow has seen the approval missing and the
-# run finished. The grace exists for the unattended cron; it must never answer
-# them "too recent" and skip the PR they asked about.
+# The grace used to apply to the cron and was skipped only on a manual
+# dispatch, so the unattended path -- the one that matters -- still stalled.
+# These pin that it is gone from every path, and cannot come back as a flag.
 
 
 def _a_minute_ago() -> str:
@@ -1264,57 +1268,84 @@ def _a_minute_ago() -> str:
     )
 
 
-def test_a_manual_dispatch_reconciles_a_verdict_the_cron_would_call_too_recent():
+def test_a_scheduled_run_reconciles_a_minute_old_verdict():
     gh = base_gh(comments=[comment(created_at=_a_minute_ago())])
     assert reconcile.main(["--repo", REPO], runner=gh) == 0
-    assert gh.called(is_approve) == [], "the cron keeps its grace"
-
-    gh = base_gh(comments=[comment(created_at=_a_minute_ago())])
-    assert (
-        reconcile.main(["--repo", REPO, "--event-name", "workflow_dispatch"], runner=gh)
-        == 0
-    )
     assert len(gh.called(is_approve)) == 1
 
 
-def test_a_manual_dispatch_reconciles_a_fresh_lens_verdict():
-    api = FakeLensAPI(statuses=[lens_status(created_at=RECENT)])
-    outcomes = run_lens_sweep(
-        lens_gh(), api, min_age=reconcile.min_age_for("workflow_dispatch", 12)
-    )
+@pytest.mark.parametrize(
+    "flag", [["--min-age-minutes", "12"], ["--event-name", "schedule"]]
+)
+def test_the_grace_flags_are_gone(flag):
+    """A flag that could reintroduce the wait is refused, not ignored."""
+    with pytest.raises(SystemExit):
+        reconcile.main(["--repo", REPO, *flag], runner=base_gh())
 
-    assert [o.action for o in outcomes] == [reconcile.RECONCILED]
 
-
-def test_a_manual_dispatch_still_never_approves_a_withdrawn_or_open_verdict():
-    """Only the timer is dropped. Every other guard still holds."""
-    min_age = reconcile.min_age_for("workflow_dispatch", 12)
+def test_no_grace_still_never_approves_a_withdrawn_or_open_lens_verdict():
+    """Only the timer is gone. Every other guard still holds on a fresh verdict."""
     api = FakeLensAPI(
         statuses=[lens_status(created_at=RECENT)],
         reviews=[lens_review(state="DISMISSED")],
     )
-    assert [o.action for o in run_lens_sweep(lens_gh(), api, min_age=min_age)] == [
-        reconcile.SKIPPED
-    ]
+    assert [o.action for o in run_lens_sweep(lens_gh(), api)] == [reconcile.SKIPPED]
     assert api.approvals() == []
 
     api = FakeLensAPI(statuses=[lens_status(state="pending", created_at=RECENT)])
-    assert [o.action for o in run_lens_sweep(lens_gh(), api, min_age=min_age)] == [
-        reconcile.SKIPPED
-    ]
+    assert [o.action for o in run_lens_sweep(lens_gh(), api)] == [reconcile.SKIPPED]
     assert api.approvals() == []
 
 
-def test_the_cron_keeps_the_default_grace():
-    assert reconcile.min_age_for("schedule", 12) == timedelta(minutes=12)
-    assert reconcile.min_age_for("workflow_dispatch", 12) == timedelta(0)
+def test_no_grace_still_never_approves_a_verdict_on_an_old_head():
+    gh = base_gh(
+        comments=[comment(body=verdict_body(head=OTHER), created_at=RECENT)],
+    )
+    outcomes = run_sweep(gh)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert "head moved" in outcomes[0].reason
+    assert gh.called(is_approve) == []
+
+
+# --- the workflow runs when a review finishes --------------------------------
+
+WORKFLOWS = Path(__file__).resolve().parents[2] / "workflows"
+
+
+def _workflow(name: str) -> dict:
+    return yaml.safe_load((WORKFLOWS / name).read_text())
+
+
+def test_the_reconciler_runs_when_either_review_source_completes():
+    """`workflow_run` matches on the source workflow's `name:`, so a rename of
+    either source would silently turn this back into cron-only recovery."""
+    wf = _workflow("review-approval-reconcile.yml")
+    on = wf.get(True, wf.get("on"))
+    listened = set(on["workflow_run"]["workflows"])
+    assert on["workflow_run"]["types"] == ["completed"]
+    assert listened == {
+        _workflow("lens.yml")["name"],
+        _workflow("sdk-review-approve-on-verdict.yml")["name"],
+    }
+
+
+def test_skipped_source_runs_do_not_start_a_sweep():
+    job = _workflow("review-approval-reconcile.yml")["jobs"]["reconcile"]
+    assert "workflow_run.conclusion != 'skipped'" in job["if"]
+    assert "github.event_name != 'workflow_run'" in job["if"]
+
+
+def test_the_workflow_no_longer_passes_the_grace_flags():
+    text = (WORKFLOWS / "review-approval-reconcile.yml").read_text()
+    assert "--event-name" not in text and "--min-age" not in text
 
 
 def test_pr_input_limits_the_sweep_to_that_pr():
     gh = base_gh(prs=[pull(number=3), pull(number=PR)])
     assert (
         reconcile.main(
-            ["--repo", REPO, "--event-name", "workflow_dispatch", "--pr", str(PR)],
+            ["--repo", REPO, "--pr", str(PR)],
             runner=gh,
         )
         == 0
@@ -1343,7 +1374,6 @@ def _owed_lens_verdict(api):
     verdict = api.source().verdict(
         pull(labels=[]),
         {(PR, HEAD): OLD},
-        min_age=timedelta(minutes=12),
         stale_after=timedelta(minutes=90),
         now=NOW,
     )
@@ -1417,14 +1447,39 @@ def test_an_unreadable_lens_status_outlasting_a_window_reds_the_run():
     assert [o.action for o in outcomes] == [reconcile.FAILED]
 
 
-def test_an_unreadable_lens_status_on_a_fresh_verdict_is_just_too_recent():
-    gh = lens_gh(nodes=[_lens_node_at(RECENT)])
+@pytest.mark.parametrize("created_at", ["not-a-date", ""])
+def test_a_lens_status_with_an_unreadable_timestamp_is_skipped(created_at):
+    """With no grace the age only feeds the stale path, but a status whose age
+    cannot be read still must not be approved on (F-fcf2bd)."""
+    api = FakeLensAPI(statuses=[lens_status(created_at=created_at)])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert outcomes[0].reason == "lens status has no readable timestamp"
+    assert api.approvals() == []
+
+
+def test_an_unreadable_lens_status_with_no_readable_prefilter_time_is_skipped():
+    """The unreadable-status path falls back on the prefilter's timestamp; when
+    that is unreadable too, it skips rather than approving or deferring."""
+    gh = lens_gh(nodes=[_lens_node_at("not-a-date")])
     api = FakeLensAPI()
     api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
     outcomes = run_lens_sweep(gh, api)
 
     assert [o.action for o in outcomes] == [reconcile.SKIPPED]
-    assert "too recent" in outcomes[0].reason
+    assert outcomes[0].reason == "lens status has no readable timestamp"
+    assert api.approvals() == []
+
+
+def test_an_unreadable_lens_status_on_a_fresh_verdict_is_deferred_not_failed():
+    gh = lens_gh(nodes=[_lens_node_at(RECENT)])
+    api = FakeLensAPI()
+    api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [o.action for o in outcomes] == [reconcile.DEFERRED]
+    assert "unreadable" in outcomes[0].reason
 
 
 def test_a_lens_status_past_the_first_page_is_still_found():
