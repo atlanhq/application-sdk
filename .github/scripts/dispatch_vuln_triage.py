@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Dispatch the vuln-triage rover once per newly-filed security ticket.
+"""Dispatch the vuln triage once per newly-filed security ticket.
 
 ``security_scan_create_linear.py`` emits a ``new_issues`` output — a JSON
 array of ``{identifier, url, severity}``. This script reads that array and
-runs ``gh workflow run vuln-triage-cron.yml`` once per ticket, passing the
-ticket identifier and its severity.
+runs ``gh workflow run vuln-triage.yml`` once per ticket, passing the ticket
+identifier, its severity and the scan run that filed it (so the triage reads
+exactly those artifacts, not a later hourly scan).
 
 Loop logic lives here (a tested script) rather than inlined in the workflow
 YAML, per docs/standards/ci.md.
@@ -12,10 +13,11 @@ YAML, per docs/standards/ci.md.
 Environment:
     NEW_ISSUES   JSON array of {identifier, severity, ...} (default "[]")
     GH_REF       git ref to dispatch the workflow on (default "main")
+    SCAN_RUN_ID  the dispatching scan's run id (optional)
     GH_TOKEN     consumed by ``gh`` for auth (not read here directly)
 
 Optional:
-    VULN_TRIAGE_WORKFLOW   workflow file name (default "vuln-triage-cron.yml")
+    VULN_TRIAGE_WORKFLOW   workflow file name (default "vuln-triage.yml")
 """
 
 from __future__ import annotations
@@ -27,7 +29,7 @@ import sys
 from collections.abc import Callable
 from typing import Any
 
-DEFAULT_WORKFLOW = "vuln-triage-cron.yml"
+DEFAULT_WORKFLOW = "vuln-triage.yml"
 
 
 def parse_issues(raw: str | None) -> list[dict[str, Any]]:
@@ -48,6 +50,7 @@ def dispatch(
     ref: str,
     workflow: str = DEFAULT_WORKFLOW,
     runner: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    scan_run_id: str = "",
 ) -> int:
     """Run ``gh workflow run`` once per issue. Returns the number of
     successful dispatches; raises SystemExit if any ticket is malformed or a
@@ -70,6 +73,8 @@ def dispatch(
             "-f",
             f"severity={severity}",
         ]
+        if scan_run_id:
+            cmd += ["-f", f"scan_run_id={scan_run_id}"]
         print(f"Dispatching {workflow} for {ticket} (severity={severity or 'n/a'})")
         result = runner(cmd, check=False)
         if result.returncode != 0:
@@ -88,7 +93,7 @@ def main() -> int:
         return 0
     ref = os.environ.get("GH_REF", "main")
     workflow = os.environ.get("VULN_TRIAGE_WORKFLOW", DEFAULT_WORKFLOW)
-    n = dispatch(issues, ref, workflow)
+    n = dispatch(issues, ref, workflow, scan_run_id=os.environ.get("SCAN_RUN_ID", ""))
     print(f"Dispatched vuln-triage for {n} ticket(s).")
     return 0
 

@@ -398,6 +398,20 @@ _CONTRACT_RULES = (
         short_description="Keep source probes awaitable and bounded across every connection phase.",
         full_description="Keep source probes awaitable and bounded across every connection phase.",
         rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
+        rule_interactions=(
+            "Applied together with P031. P031 moves asyncio.to_thread / "
+            "run_in_executor(None, ...) onto the SDK's run_in_thread; on a preflight "
+            "path that is the module-level "
+            "application_sdk.execution.heartbeat.run_in_thread, because Handler has "
+            "no run_in_thread and App.run_in_thread raises outside a @task. "
+            "run_in_thread "
+            "carries no deadline of its own, so the swapped call is still an "
+            "executor wait in F011's view. On a preflight path, add the deadline "
+            "when moving: wrap the run_in_thread await in asyncio.wait_for(..., "
+            "timeout=...) or async with asyncio.timeout(...) sized from the "
+            "remaining preflight budget. Swapping without the deadline leaves F011 "
+            "firing on the new line."
+        ),
         help_uri=f"{_HELP_BASE}#f011",
     ),
     RuleDefinition(
@@ -528,50 +542,6 @@ _CONTRACT_RULES = (
         ),
         rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime, so each scenario must exist as a test the test gate runs. A missing scenario is a behaviour nothing verifies.",
         help_uri=f"{_HELP_BASE}#f016",
-    ),
-    RuleDefinition(
-        id="F017",
-        name="PreflightWorkflowEnforcement",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        until="0.40.0",
-        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
-        full_description=(
-            "Retired in 0.39.0 and removed in 0.40.0; F017 no longer fires. It was "
-            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
-            "conformance rule over the SDK's own behaviour only restated those "
-            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
-            "a suppression that still cites this id suppresses nothing and is "
-            "reported by F020."
-        ),
-        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
-        help_uri=f"{_HELP_BASE}#f017",
-    ),
-    RuleDefinition(
-        id="F018",
-        name="PreflightExitEvidence",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        until="0.40.0",
-        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
-        full_description=(
-            "Retired in 0.39.0 and removed in 0.40.0; F018 no longer fires. It was "
-            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
-            "conformance rule over the SDK's own behaviour only restated those "
-            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
-            "a suppression that still cites this id suppresses nothing and is "
-            "reported by F020."
-        ),
-        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
-        help_uri=f"{_HELP_BASE}#f018",
     ),
     RuleDefinition(
         id="F019",

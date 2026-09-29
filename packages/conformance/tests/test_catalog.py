@@ -365,6 +365,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # mint asset qualifiedNames; the SDK is the framework, not an asset author
     # (BLDX-1499). P052: asset serialization that bypasses entity_bytes —
     # only apps map and write assets; the SDK owns the seam (FND-2725).
+    # P053: local credential routing — only apps route their own inputs'
+    # credential channels; the SDK is the router (route_credentials) and defines
+    # CredentialValue by definition (FND-2949).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -484,6 +487,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P049",
         "P051",
         "P052",
+        "P053",
         "C002",
         "D001",
         "D002",
@@ -599,8 +603,6 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P007",
         "P046",
         "P050",
-        "F017",
-        "F018",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -763,6 +765,11 @@ def test_catalog_p_series_present() -> None:
     P052 is EntitySerializationBypass — app code serializing a pyatlan asset
     itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
     instead of through the SDK's entity_bytes seam (FND-2725).
+    P053 is LocalCredentialRouting — app code routing a workflow input's
+    credential channels itself (CredentialRef.resolve / resolve_or_none,
+    CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
+    declaring its own CredentialValue alias, instead of the SDK's
+    route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -815,6 +822,7 @@ def test_catalog_p_series_present() -> None:
         "P050",
         "P051",
         "P052",
+        "P053",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -823,14 +831,14 @@ def test_catalog_p_series_present() -> None:
 
 
 def test_catalog_f_series_present() -> None:
-    """The F-series preflight-gate rules are exactly F001–F020.
+    """The F-series preflight-gate rules are exactly F001–F020 less F017–F018.
 
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
-    lifetime and behavioral rules; F016 checks the scenario matrix is defined,
-    and F017–F018 are retired in place until 0.40.0.  F020 flags a suppression
-    that still cites a retired id.
+    lifetime and behavioral rules; F016 checks the scenario matrix is defined.
+    F017–F018 were retired in 0.39.0 and deleted in 0.40.0; their ids are never
+    reused.  F020 flags a suppression that still cites a retired id.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports
@@ -838,7 +846,7 @@ def test_catalog_f_series_present() -> None:
     line is worse than one.
     """
     f_ids = {r.id for r in load_catalog() if r.id.startswith("F")}
-    expected = {f"F{n:03}" for n in range(1, 21)}
+    expected = {f"F{n:03}" for n in range(1, 21)} - {"F017", "F018"}
     assert f_ids == expected, f"F-series drift: {sorted(f_ids ^ expected)}"
 
 

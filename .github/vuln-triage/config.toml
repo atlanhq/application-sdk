@@ -1,0 +1,27 @@
+# vuln-triage configuration (.github/scripts/vuln_triage). Read from the checked-out base
+# branch only; the workflow never runs PR code.
+#
+# The SLA windows are NOT here: they come from `_expiry_policy` in
+# .security/base-allowlist.json, the same place validate_allowlist.py reads them, so the two
+# can never disagree.
+
+[pr]
+# The label vuln-auto-merge.yml requires. Its branch filter (chore/allowlist-**, fix/bump-**)
+# is hardcoded in vuln_triage/run.py for the same reason: a drift there fails closed.
+label = "vuln-auto-merge"
+added_by = "@atlan-app-fleet (vuln-triage)"
+
+[upstream]
+# Case 2 vs Case 3 for our own dependency with no fix: upstream counts as unmaintained when
+# its newest PyPI release is older than this. An unreachable PyPI means Case 2 (alive): the
+# softer call, and the ticket says the check could not run.
+stale_after_days = 730
+
+[bump]
+# Case 1 opens a bump PR: a `constraint-dependencies` floor in pyproject.toml plus
+# `uv lock --upgrade-package` for the affected packages only. No blanket `--upgrade`, which
+# would also pull in unrelated releases that are too new for the org's 7-day cooldown.
+enabled = true
+# A fix version published less recently than this is allowed through (it patches the CVE),
+# but its PR is opened WITHOUT the auto-merge label so a human reviews it (org baseline §5).
+cooldown_days = 7

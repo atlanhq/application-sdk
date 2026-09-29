@@ -2434,7 +2434,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.19"
+          version: "0.12.20"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2938,7 +2938,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.19"
+          version: "0.12.20"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
@@ -3135,6 +3135,34 @@ jobs:
           overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
+  renovate-artifacts:
+    name: Renovate artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      statuses: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Require renovate/artifacts on Renovate PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 .github/scripts/require_renovate_artifacts.py \
+            --repo "$REPO" \
+            --head-ref "$HEAD_REF" \
+            --sha "$HEAD_SHA"
+
   tests-passed:
     name: Tests Gate
     needs:
@@ -3150,6 +3178,7 @@ jobs:
         lease-tenant,
         prepare-tenant,
         e2e,
+        renovate-artifacts,
       ]
     if: always()
     runs-on: ubuntu-latest
@@ -3292,6 +3321,11 @@ jobs:
 
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".
+      - name: Enforce Renovate artifacts
+        if: always() && needs.renovate-artifacts.result != 'success'
+        shell: bash
+        run: exit 1
+
       - name: Enforce gate
         if: always() && steps.gate.outputs.passed != 'true'
         shell: bash

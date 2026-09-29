@@ -43,7 +43,7 @@ REQUIRED_FIELDS = [
     "ticket",
 ]
 
-# Valid vuln-triage classification cases (see .mothership/vuln-triage/ORCHESTRATION.md).
+# Valid vuln-triage classification cases (see .github/scripts/vuln_triage/classify.py).
 VALID_CASES = {"1", "2", "3", "4"}
 
 # F-cross.2 compliance fields. Optional during the migration window; promoted

@@ -341,8 +341,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "checker also matches a URL scheme (``crate://``, ``foo+bar://``) against "
             "the ``sqlalchemy.dialects`` entry points each dependency registers, so a "
             "third-party dialect package loaded only through that entry point is "
-            "counted as used too. A dynamically-loaded dependency the checker can see "
-            "is not a finding at all."
+            "counted as used too, whether the repo imports SQLAlchemy directly or "
+            "builds its engine through the SDK's ``BaseSQLClient`` "
+            "(``application_sdk.clients.sql``). A dynamically-loaded dependency the "
+            "checker can see is not a finding at all."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[D003] <reason>` IS the correct "

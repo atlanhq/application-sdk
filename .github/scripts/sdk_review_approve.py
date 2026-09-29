@@ -64,7 +64,7 @@ not write the commit status (its workflow has its own failure-path step), and
 sets REQUIRE_APPROVED_LABEL so it will not approve a verdict something has since
 invalidated.
 
-The reconciler (`sdk_review_reconcile.py`, on a cron) drives this per PR with the
+The reconciler (`review_approval_reconcile.py`, on a cron) drives this per PR with the
 same environment as the slow path, on a short retry budget: it exists to recover
 approvals the other two paths lost, so waiting out a long rate-limit window
 in-process would only duplicate the loop it already is. It calls
@@ -177,7 +177,7 @@ SUMMARY_MARKERS = ("<!-- SDK_REVIEW -->", "<!-- TEST_SDK_REVIEW -->")
 #
 # Kept in step with the `if:` in `sdk-review-approve-on-verdict.yml`: every
 # consumer that FINDS a verdict by listing comments — `latest_summary_comment()`,
-# and so `sdk_review_reconcile.py` — reads this set, so a login admitted there
+# and so `review_approval_reconcile.py` — reads this set, so a login admitted there
 # but missing here produces a verdict nothing can reconcile.
 VERDICT_AUTHORS = frozenset({"mothership-ai[bot]"})
 
@@ -505,7 +505,7 @@ class Client:
         page order.
 
         Returns the whole comment rather than just its body so a caller that
-        also needs the metadata (`sdk_review_reconcile.py` reads `created_at`
+        also needs the metadata (`review_approval_reconcile.py` reads `created_at`
         to age-gate a verdict) can get both from one listing request.
         """
         comments = self._summary_comments()

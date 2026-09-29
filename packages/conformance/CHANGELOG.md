@@ -2,6 +2,28 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.40.1] - 2026-09-29
+
+### Bug fixes
+
+- P037 no longer crashes on required keyword-only parameters (#4053) ([9a8367d](https://github.com/atlanhq/application-sdk/commit/9a8367d))
+
+## [0.40.0] - 2026-09-29
+
+### Features
+
+- FND-2981 group SDK, conformance and contract-toolkit bumps into one Renovate PR (#4027) ([d6d1af7](https://github.com/atlanhq/application-sdk/commit/d6d1af7))
+- add P053 LocalCredentialRouting for hand-rolled credential routing (#4030) ([f0a0efb](https://github.com/atlanhq/application-sdk/commit/f0a0efb))
+- route workflow-input credentials centrally with route_credentials (#4029) ([5ef14b8](https://github.com/atlanhq/application-sdk/commit/5ef14b8))
+
+### Bug fixes
+
+- delete F017/F018 and the no-ops scheduled for 0.40.0 (#4049) ([1584bad](https://github.com/atlanhq/application-sdk/commit/1584bad))
+- mirror exclude_table_regex and pin SDK 3.39.1 (#4045) ([d5f3f98](https://github.com/atlanhq/application-sdk/commit/d5f3f98))
+- D003 credits dialect schemes loaded through the SDK SQL client (FND-2983) (#4021) ([160447f](https://github.com/atlanhq/application-sdk/commit/160447f))
+- O001 terminal state for externally byte-consumed json.dumps (FND-2509) (#4022) ([c9d0b5a](https://github.com/atlanhq/application-sdk/commit/c9d0b5a))
+- F011 sees run_in_thread probes P031 prescribes (FND-2509) (#4023) ([831c97c](https://github.com/atlanhq/application-sdk/commit/831c97c))
+
 ## [0.39.1] - 2026-09-27
 
 ### Bug fixes

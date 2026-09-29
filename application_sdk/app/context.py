@@ -1,7 +1,7 @@
 # conformance: ignore[L002] deliberate low-level loguru fallback for the workflow-safe logger's activity path; get_logger (the AtlanLoggerAdapter) would recurse here
 """Execution context for Apps."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -30,6 +30,7 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.credentials.ref import CredentialRef
+    from application_sdk.credentials.routing import CredentialValue
     from application_sdk.credentials.types import Credential
     from application_sdk.execution.heartbeat import HeartbeatController
     from application_sdk.infrastructure.secrets import SecretStore
@@ -461,6 +462,49 @@ class AppContext:
             raise SecretStoreNotConfiguredError()
         resolver = CredentialResolver(self._secret_store)
         return await resolver.resolve_raw(ref)
+
+    async def resolve_credential_raw_or_inline(
+        self,
+        ref: "CredentialRef | None",
+        inline: "Mapping[str, CredentialValue]",
+    ) -> dict[str, Any]:
+        """Resolve a ``@task``'s credential from its ref, else its inline credentials.
+
+        The task-side half of :func:`~application_sdk.credentials.route_credentials`:
+        pass the ``(ref, inline)`` pair it produced, as threaded onto the task
+        input. Both paths return the same nested shape — the ref through
+        :meth:`resolve_credential_raw`, the flat dotted-key inline dict through
+        :func:`~application_sdk.credentials.expand_dotted_keys` — so one parser
+        reads either.
+
+        Args:
+            ref: The task input's credential ref, if any.
+            inline: The task input's inline credentials (local dev and tests).
+
+        Returns:
+            The raw credential dict, with nested sections such as ``extra``.
+
+        Raises:
+            CredentialRoutingError: Neither a ref nor inline credentials were given.
+            SecretStoreNotConfiguredError: A ref was given and no secret store
+                is configured.
+        """
+        if ref is not None:
+            return await self.resolve_credential_raw(ref)
+        if inline:
+            from application_sdk.common.transforms import (  # noqa: PLC0415 — keeps context.py's import surface unchanged; only the inline path needs it
+                expand_dotted_keys,
+            )
+
+            return expand_dotted_keys(dict(inline))
+        from application_sdk.credentials.errors import (  # noqa: PLC0415 — only the error path needs it
+            CredentialRoutingError,
+        )
+
+        raise CredentialRoutingError(
+            message="Task input carries neither a credential ref nor inline credentials",
+            field="credential_ref",
+        )
 
     def log_error(self, message: str, **kwargs: Any) -> None:
         """Log an error message."""

@@ -42,7 +42,7 @@ F016 reports a required scenario that is not defined: missing, skipped, not
 asserting the contract, or unreadable.  Conformance never runs the scenarios;
 the test gate does.  The fix is a source adapter and a pytest scenario, not an
 edit to the handler, so F016 is `not_remediable` here and routes to residue with
-the scenario name.  F017 and F018 are retired and never fire.  F019 reports what static analysis could not resolve; it has
+the scenario name.  F017 and F018 were deleted in 0.40.0.  F019 reports what static analysis could not resolve; it has
 no fix of its own and routes to residue as an investigation pointer.
 
 ### Requires
@@ -118,7 +118,10 @@ action the source does not support.
 
 - **F001–F015, F020** — static findings.  Draft the edit the guide's **Fix**
   paragraph describes, cite the **Verify** paragraph in `result.evidence`, and
-  return `outcome = "fix"`.  Never suggest a `# conformance: ignore[F0xx]` for
+  return `outcome = "fix"`.  For F011 a `run_in_thread` offload is an executor
+  wait like `asyncio.to_thread`: bound it with an enclosing deadline, and do
+  not swap between the two to clear the finding (P031 governs which pool;
+  F011 governs the deadline).  Never suggest a `# conformance: ignore[F0xx]` for
   a BLOCK-tier finding; for a WARN-tier finding in strict mode a suppression is
   a valid draft only when the guide's **Investigate** paragraph names the case.
 - **F016** — a required scenario is not defined.

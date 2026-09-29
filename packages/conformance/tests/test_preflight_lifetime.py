@@ -167,3 +167,77 @@ def test_other_except_branch_does_not_taint_traceback(tmp_path):
         'try:\n    await probe()\nexcept ValueError:\n    consume(token)\nexcept Exception as exc:\n    logger.exception("failed")',
     )
     assert "F014" not in {row.rule_id for row in rows}
+
+
+_SDK_RUN_IN_THREAD = "from application_sdk.execution.heartbeat import run_in_thread\n"
+
+
+@pytest.mark.parametrize(
+    "offload",
+    [
+        "self.run_in_thread(probe)",
+        "self.task_context.run_in_thread(probe)",
+        "run_in_thread(probe)",
+    ],
+)
+def test_run_in_thread_requires_outer_deadline(tmp_path, offload):
+    assert "F011" in {
+        f.rule_id
+        for f in findings(
+            tmp_path, f"await {offload}", "import asyncio\n" + _SDK_RUN_IN_THREAD
+        )
+    }
+
+
+@pytest.mark.parametrize(
+    "offload",
+    [
+        "self.run_in_thread(probe)",
+        "self.task_context.run_in_thread(probe)",
+        "run_in_thread(probe)",
+    ],
+)
+@pytest.mark.parametrize(
+    "template",
+    [
+        "await asyncio.wait_for({offload}, timeout=input.timeout_seconds)",
+        "async with asyncio.timeout(input.timeout_seconds):\n    await {offload}",
+    ],
+)
+def test_bounded_run_in_thread_is_valid(tmp_path, offload, template):
+    assert not findings(
+        tmp_path,
+        template.format(offload=offload),
+        "import asyncio\n" + _SDK_RUN_IN_THREAD,
+    )
+
+
+def test_module_attribute_run_in_thread_requires_outer_deadline(tmp_path):
+    assert "F011" in {
+        f.rule_id
+        for f in findings(
+            tmp_path,
+            "await heartbeat.run_in_thread(probe)",
+            "import asyncio\nfrom application_sdk.execution import heartbeat\n",
+        )
+    }
+
+
+def test_aliased_sdk_run_in_thread_requires_outer_deadline(tmp_path):
+    assert "F011" in {
+        f.rule_id
+        for f in findings(
+            tmp_path,
+            "await offload(probe)",
+            "import asyncio\n"
+            "from application_sdk.execution.heartbeat import run_in_thread as offload\n",
+        )
+    }
+
+
+def test_unrelated_bare_run_in_thread_is_not_an_executor(tmp_path):
+    assert not findings(
+        tmp_path,
+        "await run_in_thread(probe)",
+        "from somewhere_else import run_in_thread\n",
+    )
