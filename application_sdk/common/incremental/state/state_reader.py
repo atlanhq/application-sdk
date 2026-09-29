@@ -11,9 +11,13 @@ connection, used for:
 """
 
 import shutil
+import warnings
 from pathlib import Path
 from typing import Tuple
 
+# The module, not the name: a module-scope ``StorageError`` binding would
+# resolve before ``__getattr__`` runs, and the deprecation would never fire.
+import application_sdk.storage.errors as _storage_errors
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.common.incremental.helpers import (
     count_json_files_recursive,
@@ -25,6 +29,31 @@ from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.errors import StorageNotFoundError
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). This module no longer uses StorageError, which
+#: made it importable from here by accident; it is served once more so imports
+#: of it keep working, with a warning pointing at its home.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "StorageError": (
+        "application_sdk.storage.errors.StorageError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    return _storage_errors.StorageError
 
 
 async def download_current_state(

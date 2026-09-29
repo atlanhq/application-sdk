@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from application_sdk.common.incremental.state import state_reader
 from application_sdk.common.incremental.state.state_reader import download_current_state
 from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.ops import _put
@@ -220,3 +221,29 @@ class TestDownloadCurrentState:
                 offloaded = mock_offload.await_args_list[0].args
                 assert offloaded[0] is shutil.rmtree
                 assert offloaded[1] == state_dir
+
+
+class TestDeprecatedStorageErrorReexport:
+    """``StorageError`` was importable from here only because this module used it.
+
+    It no longer does, so the name is served by ``__getattr__`` until v4.0.0,
+    with a warning pointing at ``application_sdk.storage.errors``.
+    """
+
+    def test_import_resolves_to_the_real_class_with_a_warning(self) -> None:
+        with pytest.warns(DeprecationWarning, match=r"v4\.0\.0") as record:
+            from application_sdk.common.incremental.state.state_reader import (
+                StorageError as reexported,
+            )
+
+        assert reexported is StorageError
+        assert "application_sdk.storage.errors.StorageError" in str(record[0].message)
+
+    def test_no_module_scope_binding_shadows_the_shim(self) -> None:
+        # A real binding would resolve before __getattr__ and the warning
+        # would never fire.
+        assert "StorageError" not in vars(state_reader)
+
+    def test_unknown_names_still_raise(self) -> None:
+        with pytest.raises(AttributeError, match="no attribute 'missing'"):
+            state_reader.missing  # noqa: B018

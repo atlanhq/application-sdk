@@ -619,6 +619,7 @@ def _read_sync_index(root: Path) -> _SyncIndex:
             "Ignoring unreadable sync index %s; every object will be downloaded: %s",
             path,
             exc,
+            exc_info=True,
         )
         return {}
     if not isinstance(raw, dict) or raw.get("version") != _SYNC_INDEX_VERSION:
