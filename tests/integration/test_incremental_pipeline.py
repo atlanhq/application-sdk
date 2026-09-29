@@ -624,7 +624,10 @@ async def test_next_run_reads_each_column_once(tmp_path, monkeypatch, store, inf
 
     await _run_two_snapshots(tmp_path, monkeypatch)
     state_dir, _, exists, _ = await download_current_state(_STALE_CONN, _STALE_APP)
-    assert exists
+    if not exists:
+        # pytest.fail, not assert: the xfail accepts AssertionError, so a bare
+        # assert here would pass a broken setup off as the expected failure.
+        pytest.fail("precondition: snapshots must leave downloadable state")
 
     column_qns = [
         row["attributes"]["qualifiedName"]

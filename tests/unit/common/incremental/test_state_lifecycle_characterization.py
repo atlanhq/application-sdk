@@ -13,7 +13,8 @@ the marker. The ``reason`` names the issue that owns the flip:
 ``raises=AssertionError`` on every marker is deliberate: each test converts its
 bug into an assertion, so an incidental error (a fixture typo, an import
 failure, a changed signature) is reported as a real failure instead of being
-absorbed by the xfail.
+absorbed by the xfail. Setup checks go through ``_require`` (``pytest.fail``)
+rather than ``assert`` for the same reason.
 
 Scenario #1 (stale-key accumulation across two runs) lives in
 ``tests/integration/test_incremental_pipeline.py`` alongside the other
@@ -171,6 +172,18 @@ with warnings.catch_warnings():
             return "SELECT 1"
 
 
+def _require(condition: bool, precondition: str) -> None:
+    """Fail — outside the xfail — when a test's setup did not hold.
+
+    Every marker here is ``raises=AssertionError``, so a bare ``assert`` on a
+    precondition would be absorbed as the expected failure and hide a broken
+    setup. ``pytest.fail`` raises ``Failed``, which the marker does not accept,
+    so only the bug assertion itself can xfail.
+    """
+    if not condition:
+        pytest.fail(f"precondition: {precondition}")
+
+
 def _extractor() -> _Extractor:
     """An extractor instance without App registration (tasks are plain calls)."""
     return _Extractor.__new__(_Extractor)
@@ -248,12 +261,13 @@ async def test_retry_after_partial_upload_sees_a_consistent_previous_state(
                 application_name=APP,
                 upload_concurrency=1,
             )
-    assert landed, "precondition: the injected failure must hit mid-upload"
+    _require(landed, "the injected failure must hit mid-upload")
 
     # The retry's view of the previous state must be one committed snapshot —
     # run 1 whole, since run 2 never committed.
     retry_previous = await prepare_previous_state(CONN_QN, True, current_state_dir, APP)
-    assert retry_previous is not None
+    if retry_previous is None:
+        pytest.fail("precondition: the retry must find a previous state")
     assert _tree(retry_previous) == committed, (
         "retry downloaded a previous state mixing run 1 and a failed run 2: "
         f"{sorted(k for k, v in _tree(retry_previous).items() if committed.get(k) != v)}"
@@ -305,8 +319,12 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
 
     writer = threading.Thread(target=_abandoned_attempt_copy, daemon=True)
     writer.start()
-    started.wait(timeout=5)
     try:
+        # Without a live writer the retry trivially finds no foreign files and
+        # XPASSes, which would read as "fixed" rather than "never raced".
+        _require(
+            started.wait(timeout=5), "the abandoned-attempt writer must be running"
+        )
         try:
             state_dir, _, exists, _ = await download_current_state(CONN_QN, APP)
         except OSError as exc:
@@ -319,7 +337,7 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
         stop.set()
         writer.join(timeout=5)
 
-    assert exists
+    _require(exists, "the retry must download the seeded state")
     foreign = sorted(p.name for p in state_dir.rglob("stale-attempt-*.json"))
     assert not foreign, (
         f"retry's state directory holds {len(foreign)} files written by the "
@@ -397,7 +415,7 @@ async def test_first_run_marker_read_is_not_a_warning(
     store: LocalStore, staging: Path, loguru_capture: list[dict]
 ) -> None:
     marker, _next = await fetch_marker_from_storage(CONN_QN, APP)
-    assert marker is None
+    _require(marker is None, "an empty store must yield no marker")
 
     tracebacks = [
         r["message"]
@@ -478,7 +496,7 @@ async def test_write_current_state_diff_includes_backfill_tables(
             )
         )
 
-    assert out.incremental_diff_path, "precondition: an incremental diff was built"
+    _require(bool(out.incremental_diff_path), "an incremental diff must be built")
     metadata = json.loads(
         (Path(out.incremental_diff_path) / "metadata.json").read_text(encoding="utf-8")
     )
@@ -553,7 +571,7 @@ async def test_partial_local_state_from_killed_attempt_is_not_trusted(
 
     backfill, changed = await _prepare_column_queries(tmp_path, tmp_path / "run-2")
 
-    assert changed == 0, "precondition: both tables are NO CHANGE"
+    _require(changed == 0, "both tables must be NO CHANGE")
     assert backfill == 0, (
         f"{backfill} table(s) flagged for backfill: the partial local tree was "
         "trusted as the previous state instead of the committed snapshot"
