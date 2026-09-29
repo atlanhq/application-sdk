@@ -32,6 +32,7 @@ import os
 import random
 import signal
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -1045,6 +1046,86 @@ _WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS = _env_int(
 _WORKER_ZERO_POLLER_READINGS_BEFORE_STALE = _env_int(
     "ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE", 3
 )
+# Upper bound on temporalio's own worker teardown after a fatal poll error.
+# The teardown drains in-flight activities for up to graceful_shutdown_timeout,
+# so it should never take much longer than that. Unset, the bound is that
+# timeout plus a margin; 0 or negative disables the bound.
+_WORKER_FATAL_TEARDOWN_TIMEOUT_ENV = "ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS"
+_WORKER_FATAL_TEARDOWN_MARGIN_SECONDS = 60
+_WORKER_FATAL_TEARDOWN_EXIT_CODE = 1
+
+
+class _FatalTeardownWatchdog:
+    """Exits the process when a worker's teardown after a fatal error never ends.
+
+    The restart supervisor regains control only when ``Worker.__aexit__``
+    returns. After a fatal poll error that teardown has been seen to never
+    finish: the process stays up with a refreshing token and green probes,
+    nothing polls the task queue, and no restart policy fires because nothing
+    exited. Temporal's ``on_fatal_error`` hook still fires first, so it arms
+    this watchdog, and the supervisor disarms it as soon as the teardown
+    returns. If the bound passes first, the process exits non-zero and the pod
+    or container restart policy brings up a fresh worker — the one recovery
+    that works from inside a wedged teardown.
+
+    The timer runs on a daemon thread so it fires even if the event loop is
+    blocked, and ``os._exit`` is used because a clean interpreter shutdown
+    would wait on the very teardown that is stuck.
+    """
+
+    def __init__(
+        self,
+        timeout_seconds: float,
+        exit_fn: Callable[[int], Any] = os._exit,
+    ) -> None:
+        self._timeout_seconds = timeout_seconds
+        self._exit_fn = exit_fn
+        self._lock = threading.Lock()
+        self._timer: threading.Timer | None = None
+
+    @classmethod
+    def from_settings(cls) -> _FatalTeardownWatchdog:
+        from application_sdk.execution.settings import (  # noqa: PLC0415 — cold path: worker startup only
+            load_execution_settings,
+        )
+
+        default = (
+            load_execution_settings().graceful_shutdown_timeout_seconds
+            + _WORKER_FATAL_TEARDOWN_MARGIN_SECONDS
+        )
+        return cls(_env_int(_WORKER_FATAL_TEARDOWN_TIMEOUT_ENV, default))
+
+    @property
+    def armed(self) -> bool:
+        with self._lock:
+            return self._timer is not None
+
+    def arm(self) -> None:
+        """Start the bound. A second fatal before disarm keeps the first deadline."""
+        if self._timeout_seconds <= 0:
+            return
+        with self._lock:
+            if self._timer is not None:
+                return
+            self._timer = threading.Timer(self._timeout_seconds, self._expire)
+            self._timer.daemon = True
+            self._timer.start()
+
+    def disarm(self) -> None:
+        """The teardown returned; the supervisor has control again."""
+        with self._lock:
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+
+    def _expire(self) -> None:
+        logger.error(
+            "Temporal worker teardown did not finish within %ds of a fatal "
+            "error; exiting with code %d so the process is restarted",
+            self._timeout_seconds,
+            _WORKER_FATAL_TEARDOWN_EXIT_CODE,
+        )
+        self._exit_fn(_WORKER_FATAL_TEARDOWN_EXIT_CODE)
 
 
 async def _observe_worker_poll_state(
@@ -1171,6 +1252,7 @@ async def _run_worker_with_restart(
     client: Any = None,
     health_server: Any = None,
     reconnect: Callable[[], Awaitable[None]] | None = None,
+    teardown_watchdog: _FatalTeardownWatchdog | None = None,
 ) -> None:
     """Run a Temporal worker under a bounded restart supervisor.
 
@@ -1196,6 +1278,9 @@ async def _run_worker_with_restart(
             observer's readings so they are also reachable over the probes.
         reconnect: Optional; rebuilds the Temporal client before each restart.
             Preferred over ``force_refresh`` — see ``_supervise_worker``.
+        teardown_watchdog: Optional; armed by the worker's ``on_fatal_error``
+            hook and disarmed here once the teardown returns. Bounds a teardown
+            that never finishes — see ``_FatalTeardownWatchdog``.
     """
     # Runs for the whole supervised lifetime, across worker rebuilds, so a
     # rebuilt worker that comes back without pollers is still observed. Purely
@@ -1215,6 +1300,7 @@ async def _run_worker_with_restart(
             auth_manager=auth_manager,
             client=client,
             reconnect=reconnect,
+            teardown_watchdog=teardown_watchdog,
         )
     finally:
         observer.cancel()
@@ -1237,6 +1323,7 @@ async def _supervise_worker(
     auth_manager: Any = None,
     client: Any = None,
     reconnect: Callable[[], Awaitable[None]] | None = None,
+    teardown_watchdog: _FatalTeardownWatchdog | None = None,
 ) -> None:
     """The restart loop itself; see ``_run_worker_with_restart`` for the contract."""
     consecutive_failures = 0
@@ -1245,8 +1332,14 @@ async def _supervise_worker(
         worker = build_worker()
         started_at = time.monotonic()
         try:
-            async with worker:
-                await shutdown_event.wait()
+            try:
+                async with worker:
+                    await shutdown_event.wait()
+            finally:
+                # Reaching here at all means the teardown returned, so a bound
+                # armed by a fatal error has done its job.
+                if teardown_watchdog is not None:
+                    teardown_watchdog.disarm()
             # Body returned normally — a shutdown signal, not a failure. Stop.
             return
         except Exception:
@@ -1478,6 +1571,12 @@ async def run_worker_mode(config: AppConfig) -> None:
     # no /metrics endpoint to scrape. Combined mode (run_combined_mode below)
     # leaves enable_pushgateway=False so the FastAPI /metrics endpoint
     # exposes everything via in-process proxy.
+    teardown_watchdog = _FatalTeardownWatchdog.from_settings()
+
+    def _on_worker_fatal(exc: BaseException) -> None:
+        health_server.record_worker_fatal(exc)
+        teardown_watchdog.arm()
+
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
         # on_activity feeds the health server's liveness window (BLDX-1552): the
@@ -1489,7 +1588,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             handler=handler_for_sdr,
             enable_pushgateway=True,
             on_activity=health_server.record_activity,
-            on_fatal_error=health_server.record_worker_fatal,
+            on_fatal_error=_on_worker_fatal,
         )
 
     # Log registrations
@@ -1533,6 +1632,7 @@ async def run_worker_mode(config: AppConfig) -> None:
             client=client,
             health_server=health_server,
             reconnect=_reconnect,
+            teardown_watchdog=teardown_watchdog,
         )
         # Reached only when the worker drained on request. Anything that escapes
         # leaves the marker in place, which is what makes the next start a restart.
@@ -1798,6 +1898,12 @@ async def run_combined_mode(config: AppConfig) -> None:
         )
         logger.info("Reconnected to Temporal before worker restart")
 
+    teardown_watchdog = _FatalTeardownWatchdog.from_settings()
+
+    def _on_worker_fatal(exc: BaseException) -> None:
+        health_server.record_worker_fatal(exc)
+        teardown_watchdog.arm()
+
     def _build_worker() -> Any:
         # Rebuilt on each supervisor restart — Worker instances are single-use.
         # on_activity feeds the /live liveness window (BLDX-1552).
@@ -1806,7 +1912,7 @@ async def run_combined_mode(config: AppConfig) -> None:
             task_queue=config.task_queue,
             handler=handler,
             on_activity=health_server.record_activity,
-            on_fatal_error=health_server.record_worker_fatal,
+            on_fatal_error=_on_worker_fatal,
         )
 
     for registered_app in AppRegistry.get_instance().list_apps():
@@ -1891,6 +1997,7 @@ async def run_combined_mode(config: AppConfig) -> None:
                 client=client,
                 health_server=health_server,
                 reconnect=_reconnect,
+                teardown_watchdog=teardown_watchdog,
             ),
         )
 

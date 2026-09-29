@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import signal
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -17,6 +18,7 @@ from application_sdk.main import (
     AppConfig,
     _create_infrastructure,
     _derive_service_name,
+    _FatalTeardownWatchdog,
     _flush_observability,
     _install_excepthook,
     _install_graceful_signal_handlers,
@@ -2969,6 +2971,153 @@ class _RecordingHealthServer:
 
     def record_poller_counts(self, counts: dict[str, float] | None) -> None:
         self.readings.append(counts)
+
+
+class _HungTeardownWorker:
+    """A worker whose teardown after a fatal error never returns.
+
+    Models the incident shape the teardown watchdog exists for: temporalio
+    cancels the body on a fatal poll error, but ``__aexit__`` then blocks
+    forever instead of re-raising. ``release`` stands in for the process
+    dying, so the test can end.
+    """
+
+    def __init__(self, *, on_fatal: Any, release: asyncio.Event) -> None:
+        self.on_fatal = on_fatal
+        self.release = release
+
+    async def __aenter__(self) -> _HungTeardownWorker:
+        task = asyncio.current_task()
+        assert task is not None
+        self.on_fatal(RuntimeError("Activity worker failed"))
+        task.cancel()
+        return self
+
+    async def __aexit__(self, exc_type: Any, *args: Any) -> bool:
+        await self.release.wait()
+        if exc_type is asyncio.CancelledError:
+            # What temporalio re-raises if its teardown ever does return.
+            raise RuntimeError("Activity worker failed")
+        return False
+
+
+class TestFatalTeardownWatchdog:
+    """The bound on temporalio's teardown after a fatal poll error."""
+
+    def test_expiry_exits_nonzero(self) -> None:
+        exited = threading.Event()
+        codes: list[int] = []
+
+        def exit_fn(code: int) -> None:
+            codes.append(code)
+            exited.set()
+
+        watchdog = _FatalTeardownWatchdog(0.05, exit_fn=exit_fn)
+        watchdog.arm()
+
+        assert exited.wait(timeout=2)
+        assert codes == [1]
+
+    def test_disarm_before_expiry_prevents_exit(self) -> None:
+        exit_fn = MagicMock()
+        watchdog = _FatalTeardownWatchdog(0.2, exit_fn=exit_fn)
+        watchdog.arm()
+        watchdog.disarm()
+
+        threading.Event().wait(0.4)
+        exit_fn.assert_not_called()
+        assert not watchdog.armed
+
+    def test_non_positive_timeout_disables(self) -> None:
+        watchdog = _FatalTeardownWatchdog(0, exit_fn=MagicMock())
+        watchdog.arm()
+        assert not watchdog.armed
+
+    def test_second_arm_keeps_the_first_deadline(self) -> None:
+        watchdog = _FatalTeardownWatchdog(30, exit_fn=MagicMock())
+        watchdog.arm()
+        first = watchdog._timer
+        watchdog.arm()
+        assert watchdog._timer is first
+        watchdog.disarm()
+
+    def test_default_bound_is_graceful_timeout_plus_margin(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS", raising=False)
+        settings = MagicMock(graceful_shutdown_timeout_seconds=3600)
+        with patch(
+            "application_sdk.execution.settings.load_execution_settings",
+            return_value=settings,
+        ):
+            assert _FatalTeardownWatchdog.from_settings()._timeout_seconds == 3660
+
+    def test_env_overrides_the_bound(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS", "120")
+        assert _FatalTeardownWatchdog.from_settings()._timeout_seconds == 120
+
+    async def test_supervisor_disarms_once_the_teardown_returns(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr(
+            "application_sdk.main._WORKER_RESTART_BACKOFF_CAP_SECONDS", 0
+        )
+        shutdown = asyncio.Event()
+        exit_fn = MagicMock()
+        watchdog = _FatalTeardownWatchdog(30, exit_fn=exit_fn)
+        armed_during_teardown: list[bool] = []
+        calls = {"n": 0}
+
+        def on_exit() -> None:
+            armed_during_teardown.append(watchdog.armed)
+
+        def build() -> Any:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                watchdog.arm()  # what the on_fatal_error hook does
+                return _CancelThenFailWorker(on_exit=on_exit)
+            return _FakeWorker(fail=False, on_enter=shutdown.set)
+
+        await _run_worker_with_restart(
+            build_worker=build,
+            shutdown_event=shutdown,
+            teardown_watchdog=watchdog,
+        )
+
+        assert armed_during_teardown == [True]
+        assert not watchdog.armed
+        assert calls["n"] == 2
+        exit_fn.assert_not_called()
+
+    async def test_hung_teardown_exits_the_process(self) -> None:
+        loop = asyncio.get_running_loop()
+        shutdown = asyncio.Event()
+        release = asyncio.Event()
+        codes: list[int] = []
+
+        def exit_fn(code: int) -> None:
+            codes.append(code)
+            # Stand-in for the process going away: unblock the test.
+            loop.call_soon_threadsafe(shutdown.set)
+            loop.call_soon_threadsafe(release.set)
+
+        watchdog = _FatalTeardownWatchdog(0.1, exit_fn=exit_fn)
+
+        def on_fatal(exc: BaseException) -> None:
+            watchdog.arm()
+
+        await asyncio.wait_for(
+            _run_worker_with_restart(
+                build_worker=lambda: _HungTeardownWorker(
+                    on_fatal=on_fatal, release=release
+                ),
+                shutdown_event=shutdown,
+                teardown_watchdog=watchdog,
+            ),
+            timeout=5,
+        )
+
+        assert codes == [1]
 
 
 class TestObserveWorkerPollState:
