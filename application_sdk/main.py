@@ -1082,6 +1082,9 @@ class _FatalTeardownWatchdog:
         self._exit_fn = exit_fn
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
+        # Bumped on every arm so a callback can tell whether its own arm is
+        # still the live one; see _expire.
+        self._generation = 0
 
     @classmethod
     def from_settings(cls) -> _FatalTeardownWatchdog:
@@ -1107,7 +1110,10 @@ class _FatalTeardownWatchdog:
         with self._lock:
             if self._timer is not None:
                 return
-            self._timer = threading.Timer(self._timeout_seconds, self._expire)
+            self._generation += 1
+            self._timer = threading.Timer(
+                self._timeout_seconds, self._expire, args=(self._generation,)
+            )
             self._timer.daemon = True
             self._timer.start()
 
@@ -1118,14 +1124,22 @@ class _FatalTeardownWatchdog:
                 self._timer.cancel()
                 self._timer = None
 
-    def _expire(self) -> None:
-        logger.error(
-            "Temporal worker teardown did not finish within %ds of a fatal "
-            "error; exiting with code %d so the process is restarted",
-            self._timeout_seconds,
-            _WORKER_FATAL_TEARDOWN_EXIT_CODE,
-        )
-        self._exit_fn(_WORKER_FATAL_TEARDOWN_EXIT_CODE)
+    def _expire(self, generation: int) -> None:
+        # Timer.cancel() cannot stop a callback that has already started, so a
+        # teardown returning right at the bound can disarm while this runs.
+        # Re-check under the lock and hold it through the exit, so a disarm
+        # either lands first (and this returns) or blocks until the process is
+        # gone — never "disarmed, then exited anyway".
+        with self._lock:
+            if self._timer is None or generation != self._generation:
+                return
+            logger.error(
+                "Temporal worker teardown did not finish within %ds of a fatal "
+                "error; exiting with code %d so the process is restarted",
+                self._timeout_seconds,
+                _WORKER_FATAL_TEARDOWN_EXIT_CODE,
+            )
+            self._exit_fn(_WORKER_FATAL_TEARDOWN_EXIT_CODE)
 
 
 async def _observe_worker_poll_state(

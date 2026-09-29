@@ -3028,6 +3028,35 @@ class TestFatalTeardownWatchdog:
         exit_fn.assert_not_called()
         assert not watchdog.armed
 
+    def test_expiry_already_running_when_disarmed_does_not_exit(self) -> None:
+        """Timer.cancel() cannot stop a callback already in flight."""
+        exit_fn = MagicMock()
+        watchdog = _FatalTeardownWatchdog(30, exit_fn=exit_fn)
+        watchdog.arm()
+        timer = watchdog._timer
+        assert timer is not None
+        watchdog.disarm()
+
+        # The timer thread entered its callback just before disarm ran.
+        timer.function(*timer.args)
+
+        exit_fn.assert_not_called()
+
+    def test_stale_expiry_from_an_earlier_arm_does_not_exit(self) -> None:
+        exit_fn = MagicMock()
+        watchdog = _FatalTeardownWatchdog(30, exit_fn=exit_fn)
+        watchdog.arm()
+        stale = watchdog._timer
+        assert stale is not None
+        watchdog.disarm()
+        watchdog.arm()
+
+        stale.function(*stale.args)
+
+        exit_fn.assert_not_called()
+        assert watchdog.armed
+        watchdog.disarm()
+
     def test_non_positive_timeout_disables(self) -> None:
         watchdog = _FatalTeardownWatchdog(0, exit_fn=MagicMock())
         watchdog.arm()
