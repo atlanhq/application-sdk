@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 _PRESET = Path(__file__).resolve().parents[3] / "renovate-config/default.json"
-_GROUP = "atlan platform"
+_GROUP = "atlan framework dependencies"
 
 
 def _first_party_rules() -> list[dict]:
@@ -28,6 +28,7 @@ def test_first_party_lanes_share_one_group() -> None:
     assert len(rules) == 3
     assert {r.get("groupName") for r in rules} == {_GROUP}
     assert {r.get("prPriority") for r in rules} == {10}
+    assert not any("groupSlug" in r for r in rules)
 
 
 def test_group_rules_name_their_dependency() -> None:
