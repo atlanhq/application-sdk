@@ -40,7 +40,9 @@ async def _run_bounded(
         StorageError: The first failure, when every failure is a
             ``StorageError``. Remaining coroutines are cancelled, and both
             they and any ``run_in_thread`` work they started have finished
-            before this raises.
+            before this raises. It keeps its own ``__cause__`` -- the
+            provider or filesystem error that made it -- and the group, with
+            any sibling failures, is its ``__context__``.
         BaseExceptionGroup: When a failure is not a ``StorageError``.
             Unwrapping a mixed group would demote every other leaf to
             ``__cause__`` — reachable in a traceback, invisible to an
@@ -73,7 +75,12 @@ async def _run_bounded(
         except BaseExceptionGroup as group:
             await drain_offloads(pending)
             if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
-                raise group.exceptions[0] from group
+                # Not `from group`: that would overwrite the leaf's own
+                # __cause__ (the OSError or provider error behind it) with the
+                # group, and any caller walking the cause chain for the real
+                # reason would find only the wrapper. Raised in this handler,
+                # the group is still attached as __context__.
+                raise group.exceptions[0]
             raise
         except BaseException:
             await drain_offloads(pending)

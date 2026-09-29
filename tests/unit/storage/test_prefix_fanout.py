@@ -122,7 +122,23 @@ class TestRunBounded:
             await _run_bounded([fail(), fail()], 2)
 
         assert not isinstance(exc_info.value, BaseExceptionGroup)
-        assert isinstance(exc_info.value.__cause__, BaseExceptionGroup)
+        assert isinstance(exc_info.value.__context__, BaseExceptionGroup)
+
+    async def test_the_storage_error_keeps_its_own_cause(self) -> None:
+        """Unwrapping the group must not replace the leaf's cause with the group.
+
+        A caller walking ``__cause__`` for the filesystem error behind a failed
+        download (a lost staging directory, a full disk) has to find it.
+        """
+        root = FileNotFoundError("staging directory vanished")
+
+        async def fail() -> None:
+            raise StorageError("Failed to write downloaded file") from root
+
+        with pytest.raises(StorageError) as exc_info:
+            await _run_bounded([fail()], 2)
+
+        assert exc_info.value.__cause__ is root
 
     async def test_non_storage_failure_surfaces_as_the_group(self) -> None:
         async def fail() -> None:
