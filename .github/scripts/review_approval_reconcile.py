@@ -11,7 +11,7 @@ approvals in the first place. A second cron would compete for both.
 Each source is an adapter (`sdk_review_verdict`, `LensSource`) that answers,
 for one PR: is there a verdict on the live head that should carry an approval,
 and is that approval missing? Everything after that is shared: the dry-run
-stop, the quota pre-flight, the grace and staleness rules, and reporting.
+stop, the quota pre-flight, the staleness rule, and reporting.
 
 When both sources are owed an approval on one PR, each posts its own. One
 approval would satisfy branch protection, but each source's invalidators only
@@ -41,10 +41,12 @@ after it lands — it could not protect its own approval.
 
 This reconciler is the durable answer because it does not care *why* the stamp
 was lost. It sweeps open PRs on a cron and re-invokes the existing stamper for
-any PR whose verdict still stands but whose approval is missing.
+any PR whose verdict still stands but whose approval is missing. It also
+runs as soon as a review workflow finishes (`workflow_run`), so a lost approval
+is recovered in about a minute rather than at the next cron tick.
 
-Guards (all four must hold before a PR is touched)
---------------------------------------------------
+Guards (all three must hold before a PR is touched)
+---------------------------------------------------
 1. `sdk-review-approved` is still on the PR. This is the solo-approval safety
    property: it is the one signal every invalidator clears — `dismiss-on-human`
    strips it (and notably does NOT touch the commit status, so the status cannot
@@ -55,13 +57,15 @@ Guards (all four must hold before a PR is touched)
 3. The newest `mothership-ai[bot]` verdict comment says READY_TO_MERGE and its
    REVIEWED_HEAD equals the PR's live head. Reconciling a verdict whose head has
    moved would bless unreviewed code.
-4. That verdict comment is at least `--min-age-minutes` old, so the reconciler
-   cannot race a fast-path run that is still in flight for the same comment (its
-   job ceiling is 10 minutes, including rate-limit backoff). The cost is latency:
-   recovery lands one grace period plus up to one cron interval after the loss,
-   not within a single interval. A manual dispatch skips this guard
-   (`min_age_for`): a person asking for the approval has already checked
-   that the run finished.
+
+There is deliberately no minimum age. An earlier version waited 12 minutes
+after a verdict before treating its approval as lost, so it could never race a
+fast-path run still retrying the same approval. That turned every lost approval
+into a 20-30 minute stall (the grace, plus up to a cron interval, plus GitHub's
+own cron drift), which cost far more than it saved. Racing the fast path is not
+unsafe: every approval path re-reads the verdict, head and label or status just
+before posting, and refuses when a signed approval is already there. The worst
+case is two approvals from `atlan-ci` on one PR, which is harmless.
 
 The stamper re-checks 1, 2 and 3 itself against fresh reads, so a dismissal
 landing between this sweep and the stamp is still caught. The checks here are a
@@ -160,11 +164,6 @@ from lens.github import bot_login as lens_bot_login  # noqa: E402
 from lens.review import find_state as lens_find_state  # noqa: E402
 
 Runner = Callable[..., subprocess.CompletedProcess]
-
-# Long enough to clear the fast path's 10-minute job ceiling (checkout, plus
-# APPROVE_MAX_WAIT_SECONDS of rate-limit backoff), so a verdict this reconciler
-# acts on cannot still be in flight elsewhere.
-DEFAULT_MIN_AGE_MINUTES = 12
 
 # Past this, an unapproved verdict is no longer explainable as "waiting for the
 # next quota window". `atlan-ci`'s primary quota resets hourly, so a verdict that
@@ -470,12 +469,11 @@ def sdk_review_verdict(
     pr: dict,
     *,
     runner: Runner,
-    min_age: timedelta,
     stale_after: timedelta,
     now: datetime,
     sleeper: Callable[[float], None],
 ) -> Verdict:
-    """sdk-review's guards 1-4 for one PR (see the module docstring).
+    """sdk-review's guards 1-3 for one PR (see the module docstring).
 
     None when the PR is not sdk-review's (no `sdk-review-approved` label): that
     is almost every PR, and it costs nothing because the listing carries labels.
@@ -512,8 +510,8 @@ def sdk_review_verdict(
         )
 
     age = comment_age(comment, now)
-    if age is None or age < min_age:
-        return Outcome(number, SKIPPED, "verdict too recent to be lost")
+    if age is None:
+        return Outcome(number, SKIPPED, "verdict comment has no readable timestamp")
 
     # None is not []: an unreadable listing cannot prove there is no approval,
     # and treating it as proof is what turned a GitHub degradation into
@@ -650,9 +648,7 @@ class LensSource:
        one from another creator is never trusted, only ever a reason to skip.
     2. lens's sticky summary decodes, its `reviewed_head` is the live head, and
        the state says ready (`lens_not_ready`).
-    3. The status is at least `min_age` old, so the run that set it has had
-       time to reach its approval step.
-    4. No lens-signed `atlan-ci` review on this head is APPROVED (a healthy PR
+    3. No lens-signed `atlan-ci` review on this head is APPROVED (a healthy PR
        is a no-op) or DISMISSED. This is the solo-approval guard. sdk-review
        has a label every invalidator clears; lens has none, so this keys on
        what an invalidation leaves on lens's own approval. A dismissed lens
@@ -718,7 +714,6 @@ class LensSource:
         pr: dict,
         ready: dict[tuple[int, str], str],
         *,
-        min_age: timedelta,
         stale_after: timedelta,
         now: datetime,
     ) -> Verdict:
@@ -735,8 +730,8 @@ class LensSource:
             # The prefilter's timestamp stands in for the status's own: a read
             # that keeps failing must reach the stale path, not skip forever.
             age = comment_age({"created_at": ready[(number, head)]}, now)
-            if age is None or age < min_age:
-                return skip("verdict too recent to be lost")
+            if age is None:
+                return skip("lens status has no readable timestamp")
             return _blocked_outcome(
                 number,
                 f"{what} is unreadable, so it is unknowable whether an "
@@ -768,8 +763,8 @@ class LensSource:
             return skip(f"lens is not ready: {not_ready}")
 
         age = comment_age(status, now)
-        if age is None or age < min_age:
-            return skip("verdict too recent to be lost")
+        if age is None:
+            return skip("lens status has no readable timestamp")
 
         try:
             reviews = self.gh.reviews(number)
@@ -847,7 +842,6 @@ def sweep(
     repo: str,
     *,
     runner: Runner = subprocess.run,
-    min_age: timedelta = timedelta(minutes=DEFAULT_MIN_AGE_MINUTES),
     stale_after: timedelta = timedelta(minutes=DEFAULT_STALE_AFTER_MINUTES),
     now: datetime | None = None,
     dry_run: bool = False,
@@ -883,14 +877,11 @@ def sweep(
                 repo,
                 pr,
                 runner=runner,
-                min_age=min_age,
                 stale_after=stale_after,
                 now=now,
                 sleeper=sleeper,
             ),
-            lens_source.verdict(
-                pr, lens_ready, min_age=min_age, stale_after=stale_after, now=now
-            ),
+            lens_source.verdict(pr, lens_ready, stale_after=stale_after, now=now),
         ]
         for verdict in verdicts:
             if verdict is None:
@@ -1010,22 +1001,6 @@ def report(outcomes: list[Outcome], repo: str) -> None:
         handle.write("\n".join(lines) + "\n")
 
 
-def min_age_for(event_name: str, min_age_minutes: int) -> timedelta:
-    """The grace a verdict must outlive before its missing approval counts as lost.
-
-    The grace exists only so the cron does not race the source's own approval
-    run while that run may still be retrying. Racing it is not unsafe (every
-    approval path re-reads the verdict, head and label or status right before
-    posting), it just risks a duplicate approval. A manual dispatch is a person
-    who has looked at the PR, seen the approval missing and the run finished,
-    and asked for it now. Making them wait out a timer built for the unattended
-    case, and reporting "too recent" instead, is the failure this removes.
-    """
-    if event_name == "workflow_dispatch":
-        return timedelta(0)
-    return timedelta(minutes=min_age_minutes)
-
-
 def parse_pr(value: str) -> int | None:
     """`--pr` as a PR number, or None for "every PR". Empty is what the
     workflow passes on a cron tick, where there is no `pr` input."""
@@ -1047,16 +1022,6 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
         "--repo", required=True, help="owner/repo, e.g. atlanhq/application-sdk"
     )
     parser.add_argument(
-        "--min-age-minutes",
-        type=int,
-        default=DEFAULT_MIN_AGE_MINUTES,
-        help=(
-            "Age a verdict comment must reach before its missing approval counts "
-            "as lost rather than in flight (default "
-            f"{DEFAULT_MIN_AGE_MINUTES}min, above the fast path's 10min ceiling)."
-        ),
-    )
-    parser.add_argument(
         "--stale-after-minutes",
         type=int,
         default=DEFAULT_STALE_AFTER_MINUTES,
@@ -1072,14 +1037,6 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
         help="Report which PRs would be reconciled without approving any of them.",
     )
     parser.add_argument(
-        "--event-name",
-        default="schedule",
-        help=(
-            "The GitHub event that started this run. `workflow_dispatch` means a "
-            "person asked for it, and the min-age grace does not apply."
-        ),
-    )
-    parser.add_argument(
         "--pr",
         default="",
         help="Reconcile only this PR number. Empty (the default) sweeps every PR.",
@@ -1089,7 +1046,6 @@ def main(argv: list[str] | None = None, runner: Runner = subprocess.run) -> int:
     outcomes = sweep(
         args.repo,
         runner=runner,
-        min_age=min_age_for(args.event_name, args.min_age_minutes),
         stale_after=timedelta(minutes=args.stale_after_minutes),
         dry_run=args.dry_run,
         only_pr=parse_pr(args.pr),
