@@ -616,15 +616,20 @@ a clear evidence trail and a short time-to-diagnosis.
 | # | When | Level | Where | Grep |
 |---|------|-------|-------|------|
 | 1 | Worker/combined/handler startup | `INFO` | pod log (first lines) | `"Process memory at start"` |
-| 2 | During an active task while RSS ≥ 80 % of limit — on crossing, then at most every 5 min | `WARNING` | pod log | `"Memory pressure on task"` |
+| 2 | During an active task while RSS ≥ 80 % of limit — on crossing, on each 5-point band climbed, and every 5 min in between | `WARNING` | pod log | `"Memory pressure on task"` |
 | 3 | Immediately after pod restart, if `exitCode == 137` | `CRITICAL` | pod log (first lines of new pod) | `"exit code 137 = SIGKILL"` |
 | 4 | When Temporal re-dispatches an activity after worker loss | `WARNING` | workflow log | `"re-dispatched after worker eviction"` |
 
 Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
-where memory stood when the pod was last healthy. Signal 2 fires on the rising
-edge, repeats at most every 5 minutes while the ratio stays at or above 80 %,
-and re-arms immediately once it drops below 75 %, giving pre-kill leading
-indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
+where memory stood when the pod was last healthy. Signal 2 fires on crossing
+80 %, again each time the ratio climbs another 5 points (85 / 90 / 95 %), and
+every 5 minutes while it stays within a band; it re-arms once the ratio drops
+below 75 %. Each repeat carries the change since the previous line (e.g.
+`+0.60 GiB in 40s`), so a fast climb to a kill shows its rate, and the
+container's cgroup usage (`container 0.95 GiB`), which also counts child
+processes such as the offload pool that the process RSS misses. The throttle is
+per process, not per activity: concurrent activities share it. Together these
+give pre-kill leading indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
 entrypoint immediately on restart — before any Temporal heartbeat timeout — so
 the first thing you see in `kubectl logs` is the exit code, along with the
 diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly

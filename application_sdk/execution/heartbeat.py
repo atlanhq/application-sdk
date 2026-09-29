@@ -25,6 +25,7 @@ import math
 import time
 from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from application_sdk._runtime.offload import (
@@ -85,10 +86,71 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
-# While the ratio stays at or above the threshold, repeat the warning at most this
-# often, so a long activity near its limit keeps a recent line in the log without
-# one per heartbeat.
+# Above the threshold, warn again each time the ratio climbs another band
+# (85 / 90 / 95 %), so a fast climb to an OOM kill logs its rate in a few lines...
+_MEMORY_WARN_BAND_STEP = 0.05
+# ...and, while it stays within a band, repeat at most this often, so a slow leak
+# still leaves a reading close to the kill.
 _MEMORY_WARN_REPEAT_SECONDS = 300.0
+
+
+@dataclass
+class _MemoryWarnState:
+    """Last memory-pressure warning. Process-wide: RSS belongs to the process, so
+    concurrent activities share one throttle instead of each warning on its own
+    (and a new activity does not start with a fresh one)."""
+
+    warned_at: float | None = None
+    band: int = -1
+    rss_bytes: int = 0
+
+
+_memory_warn_state = _MemoryWarnState()
+
+
+def _check_memory_pressure(
+    task_name: str, rss_bytes: int, limit_bytes: int, now: float
+) -> None:
+    """Warn on crossing the threshold, on each band climbed, and every repeat
+    interval while above it. Re-arms once the ratio drops below the hysteresis."""
+    state = _memory_warn_state
+    ratio = rss_bytes / limit_bytes
+    if ratio < _MEMORY_WARN_THRESHOLD:
+        if (
+            state.warned_at is not None
+            and ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
+        ):
+            state.warned_at, state.band, state.rss_bytes = None, -1, 0
+        return
+
+    # The epsilon keeps exactly 85 % in band 1 despite float division.
+    band = int((ratio - _MEMORY_WARN_THRESHOLD) / _MEMORY_WARN_BAND_STEP + 1e-9)
+    if state.warned_at is not None and not (
+        band > state.band or now - state.warned_at >= _MEMORY_WARN_REPEAT_SECONDS
+    ):
+        return
+
+    detail = ""
+    if state.warned_at is not None:
+        delta_gib = (rss_bytes - state.rss_bytes) / (1024**3)
+        detail += f"; {delta_gib:+.2f} GiB in {now - state.warned_at:.0f}s"
+    # What the OOM killer acts on: includes child processes (the offload pool)
+    # that parent RSS misses. Context only — it also counts reclaimable page
+    # cache, so it would raise false alarms as the trigger.
+    container = _cgroup.memory_usage_bytes()
+    if container is not None:
+        detail += f"; container {container / (1024**3):.2f} GiB"
+
+    logger.warning(
+        "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)%s"
+        " — OOM kill imminent if this continues rising",
+        task_name,
+        ratio * 100,
+        rss_bytes / (1024**3),
+        limit_bytes / (1024**3),
+        detail,
+    )
+    state.warned_at, state.band, state.rss_bytes = now, band, rss_bytes
 
 
 async def stop_heartbeat_task(
@@ -413,7 +475,6 @@ async def auto_heartbeat_loop(
     # The container's enforced cgroup limit first (it tracks VPA resizes and needs
     # no Downward API wiring), then K8S_POD_MEMORY_LIMIT; 0 disables the warning.
     _limit_bytes = _cgroup.memory_limit_bytes() or 0
-    _memory_warned_at: float | None = None
 
     watchdog_budget: float | None = (
         max_no_progress_seconds
@@ -501,27 +562,9 @@ async def auto_heartbeat_loop(
             try:
                 _mem = _resource_sampler.sample()
                 if _mem is not None:
-                    _ratio = _mem.rss_bytes / _limit_bytes
-                    if _ratio >= _MEMORY_WARN_THRESHOLD:
-                        _now = time.monotonic()
-                        if (
-                            _memory_warned_at is None
-                            or _now - _memory_warned_at >= _MEMORY_WARN_REPEAT_SECONDS
-                        ):
-                            _memory_warned_at = _now
-                            logger.warning(
-                                "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
-                                " — OOM kill imminent if this continues rising",
-                                task_name,
-                                _ratio * 100,
-                                _mem.rss_bytes / (1024**3),
-                                _limit_bytes / (1024**3),
-                            )
-                    elif (
-                        _memory_warned_at is not None
-                        and _ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
-                    ):
-                        _memory_warned_at = None
+                    _check_memory_pressure(
+                        task_name, _mem.rss_bytes, _limit_bytes, time.monotonic()
+                    )
             # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
             except Exception as e:
                 # Best-effort; must never interrupt the heartbeat loop.

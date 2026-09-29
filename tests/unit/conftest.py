@@ -115,6 +115,25 @@ def _safe_patch(target, side_effect=None, mock_obj=None):
 
 
 @pytest.fixture(autouse=True)
+def _hermetic_memory_limit(monkeypatch):
+    """Keep the host's cgroup limit out of every unit test, and reset the
+    process-wide memory-pressure throttle.
+
+    ``cgroup.memory_limit_bytes()`` reads the cgroup before
+    ``K8S_POD_MEMORY_LIMIT``, so on a runner inside a memory-capped container
+    the host limit would win over a test's ``setenv``. Emptying the limit paths
+    makes the env var the only source unless a test sets the paths itself.
+    ``heartbeat._memory_warn_state`` is a module global, so without a reset one
+    test's warning would throttle the next test's.
+    """
+    from application_sdk.execution import heartbeat
+    from application_sdk.observability import cgroup
+
+    monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", ())
+    monkeypatch.setattr(heartbeat, "_memory_warn_state", heartbeat._MemoryWarnState())
+
+
+@pytest.fixture(autouse=True)
 def _reset_dapr_sidecar_cold_start_gate(monkeypatch):
     """Reset the process-level Dapr cold-start gates before every unit test.
 
