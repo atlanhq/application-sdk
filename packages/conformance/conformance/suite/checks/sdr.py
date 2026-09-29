@@ -861,6 +861,15 @@ def _import_binding(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
     return bound
 
 
+def _default_exprs(args: ast.arguments) -> list[ast.expr]:
+    """The default expressions of *args*.
+
+    ``kw_defaults`` holds ``None`` for each required keyword-only parameter
+    (``def f(*, x)``); those are not expressions and are skipped.
+    """
+    return [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+
+
 def _scope_bindings(scope: _ScopeNode) -> dict[str, str]:
     """Every name *scope* binds itself, classified for the SDK router.
 
@@ -896,10 +905,10 @@ def _scope_bindings(scope: _ScopeNode) -> dict[str, str]:
             # Decorators and defaults evaluate in this scope; the body does not.
             stack.extend(node.decorator_list)
             if not isinstance(node, ast.ClassDef):
-                stack.extend([*node.args.defaults, *node.args.kw_defaults])
+                stack.extend(_default_exprs(node.args))
             continue
         if isinstance(node, ast.Lambda):
-            stack.extend([*node.args.defaults, *node.args.kw_defaults])
+            stack.extend(_default_exprs(node.args))
             continue
         if isinstance(node, (ast.Global, ast.Nonlocal)):
             declared_outer.update(node.names)
