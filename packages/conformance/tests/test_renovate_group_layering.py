@@ -140,15 +140,13 @@ def test_sdk_opt_out_recipe_splits_the_sdk_and_leaves_the_group_auto_merging() -
     assert conformance.get("automerge") is True
 
 
-def test_hard_mode_conformance_major_auto_merges_on_the_major_group_branch() -> None:
+def test_hard_mode_conformance_major_auto_merges() -> None:
     config = _effective(HARD, CONFORMANCE, "major")
     assert _branch(config, "major") == "renovate/major-atlan-framework-dependencies"
     assert config.get("automerge") is True
 
 
-def test_soft_mode_conformance_major_stays_on_the_major_group_branch_for_a_human() -> (
-    None
-):
+def test_soft_mode_conformance_major_waits_for_a_human() -> None:
     config = _effective(SOFT, CONFORMANCE, "major")
     assert _branch(config, "major") == "renovate/major-atlan-framework-dependencies"
     assert config.get("automerge") is False
