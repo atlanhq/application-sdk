@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.40.0
-source-sha:    b1068c6167f192d2b0d9da3d4ddcba218268f1f3
-source-date:   2026-09-29T13:38:29+05:30
+source-sha:    23198c532666033219b05aeebd5fb2ad92cea273
+source-date:   2026-09-29T13:47:49+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 48 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 47 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 46 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -682,7 +682,6 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `get_actual_cpu_count`
 
 - **Import:** `from application_sdk.common import get_actual_cpu_count`
-- **Also importable from:** `application_sdk.common.concurrency`
 - **Signature:** `get_actual_cpu_count()`
 - **Summary:** Get the actual number of CPUs available to the current process.
 - **Defined in:** `application_sdk/common/concurrency.py`
@@ -711,7 +710,6 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 #### `get_safe_num_threads`
 
 - **Import:** `from application_sdk.common import get_safe_num_threads`
-- **Also importable from:** `application_sdk.common.concurrency`
 - **Signature:** `get_safe_num_threads()`
 - **Summary:** Get recommended number of threads for parallel processing.
 - **Defined in:** `application_sdk/common/concurrency.py`
@@ -785,13 +783,6 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `resolve_last_sync_details(*, *, ...)`
 - **Summary:** Resolve last-sync values from the current execution + correlation
 - **Defined in:** `application_sdk/common/last_sync.py`
-
-#### `run_in_thread`
-
-- **Import:** `from application_sdk.common.concurrency import run_in_thread`
-- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
-- **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
-- **Defined in:** `application_sdk/_runtime/offload.py`
 
 #### `set_last_sync_details_on_asset`
 
