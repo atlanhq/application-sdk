@@ -22,7 +22,7 @@ from application_sdk.common.incremental.helpers import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
-from application_sdk.storage.errors import StorageError
+from application_sdk.storage.errors import StorageNotFoundError
 
 logger = get_logger(__name__)
 
@@ -50,6 +50,11 @@ async def download_current_state(
             - current_state_s3_prefix: S3 prefix for current-state
             - exists: Whether current state was successfully downloaded
             - json_count: Number of JSON files in the current state
+
+    Raises:
+        StorageError: If the download fails for any reason other than the
+            state not existing.
+        OSError: If the downloaded tree cannot be walked.
 
     Example:
         >>> dir, prefix, exists, count = await download_current_state(
@@ -88,24 +93,24 @@ async def download_current_state(
             strip_prefix=True,
         )
 
-        json_count = count_json_files_recursive(current_state_dir)
+    except StorageNotFoundError:
+        # Missing state means "first run". Any other StorageError propagates:
+        # treating an outage as "no state" would silently turn this run into a
+        # full extraction instead of letting the task retry.
+        logger.info(
+            "Current-state not found in S3 (prefix=%s) — first run",
+            current_state_s3_prefix,
+        )
+    else:
+        # Offloaded: one JSON file per asset, so the walk scales with the
+        # connection and would stall the loop (and the heartbeat) inline.
+        json_count = await run_in_thread(count_json_files_recursive, current_state_dir)
         exists = json_count > 0
 
         if exists:
             logger.info("Current-state downloaded (%d JSON files)", json_count)
         else:
             logger.info("Current-state downloaded but empty (no JSON files)")
-    except FileNotFoundError:
-        logger.info(
-            "Current-state not found in S3 (prefix=%s) — first run",
-            current_state_s3_prefix,
-        )
-    except StorageError:
-        logger.warning(
-            "Failed to download current-state from S3 (prefix=%s)",
-            current_state_s3_prefix,
-            exc_info=True,
-        )
 
     if not exists:
         logger.info("Current-state not available (first run or empty)")
