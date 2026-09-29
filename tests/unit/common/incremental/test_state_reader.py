@@ -10,7 +10,10 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from application_sdk.common.incremental.state.state_reader import download_current_state
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.ops import _put
 
 
@@ -18,7 +21,7 @@ class TestDownloadCurrentState:
     """Tests for download_current_state (S3 download with first-run handling)."""
 
     async def test_first_run_returns_not_exists(self):
-        """First run (S3 raises exception) returns exists=False."""
+        """First run (store raises StorageNotFoundError) returns exists=False."""
         with (
             patch(
                 "application_sdk.common.incremental.state.state_reader.download_prefix"
@@ -28,7 +31,7 @@ class TestDownloadCurrentState:
                 "get_persistent_artifacts_path"
             ) as mock_path,
         ):
-            mock_store.side_effect = FileNotFoundError("not found")
+            mock_store.side_effect = StorageNotFoundError("not found")
             with tempfile.TemporaryDirectory() as temp_dir:
                 state_dir = Path(temp_dir) / "current-state"
                 state_dir.mkdir(parents=True)
@@ -41,6 +44,27 @@ class TestDownloadCurrentState:
 
         assert exists is False
         assert json_count == 0
+
+    async def test_storage_error_other_than_not_found_propagates(self):
+        """A store outage raises so the task retries, rather than reading as
+        "no state" and turning the run into a full extraction."""
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(side_effect=StorageError("injected: store unavailable")),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path"
+            ) as mock_path,
+            tempfile.TemporaryDirectory() as temp_dir,
+        ):
+            mock_path.return_value = Path(temp_dir) / "current-state"
+            with pytest.raises(StorageError, match="store unavailable"):
+                await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
 
     async def test_existing_state_returns_exists(self):
         """Existing state with JSON files returns exists=True and file count."""

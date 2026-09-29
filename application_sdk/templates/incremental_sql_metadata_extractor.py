@@ -50,7 +50,6 @@ Example subclass::
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import os
 import warnings
 from abc import abstractmethod
@@ -452,7 +451,11 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             get_tables_needing_column_extraction,
         )
         from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            count_json_files_recursive,
             get_persistent_artifacts_path,
+        )
+        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            StateDownloadError,
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_object_store_prefix,
@@ -498,31 +501,32 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             )
             previous_current_state_dir.mkdir(parents=True, exist_ok=True)
 
-            table_dir = previous_current_state_dir.joinpath("table")
-            has_table_files = table_dir.exists() and any(table_dir.glob("*.json"))
+            # Offloaded: the cached table directory holds one file per table
+            # chunk and scales with the connection (ADR-0010).
+            table_file_count = await run_in_thread(
+                count_json_files_recursive,
+                previous_current_state_dir.joinpath("table"),
+            )
 
-            if not has_table_files:
+            if not table_file_count:
                 logger.info(
                     "Downloading current-state from S3 for backfill comparison: %s",
                     input.current_state_s3_prefix,
                 )
+                # A failure here must fail the task rather than skip backfill:
+                # without the previous state, tables newly entering the filter
+                # are never detected and never get columns.
                 try:
                     await download_prefix(
                         prefix=input.current_state_s3_prefix,
                         local_dir=previous_current_state_dir,
                         strip_prefix=True,
                     )
-                    logger.info(
-                        "Current-state downloaded: %s", previous_current_state_dir
-                    )
-                except Exception:
-                    logger.warning(
-                        "Failed to download current-state for backfill",
-                        exc_info=True,
-                    )
-                    previous_current_state_dir = None
+                # conformance: ignore[E004] re-raises as typed StateDownloadError; exception propagates to caller
+                except Exception as e:
+                    raise StateDownloadError(cause=e) from e
+                logger.info("Current-state downloaded: %s", previous_current_state_dir)
             else:
-                table_file_count = len(list(table_dir.glob("*.json")))
                 logger.info(
                     "Previous current-state already present: %d files", table_file_count
                 )
@@ -754,6 +758,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         4. Call ``create_current_state_snapshot()`` (copy + diff + delete detection + upload).
         5. Clean up temporary previous state directory.
         """
+        from application_sdk.common.incremental.column_extraction import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            get_backfill_tables,
+        )
         from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_persistent_artifacts_path,
             get_persistent_s3_prefix,
@@ -801,6 +808,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 application_name=app_name,
                 copy_workers=input.copy_workers,
                 upload_concurrency=input.upload_concurrency,
+                # Without it the diff has no backfill tables: tables newly
+                # entering the filter get columns extracted but never reach
+                # publish through the diff.
+                get_backfill_tables_fn=get_backfill_tables,
             )
 
             return WriteCurrentStateOutput(
@@ -852,8 +863,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 except asyncio.CancelledError:
                     cancelled = True
             # Surface a cleanup failure, if any, before the cancellation.
-            with contextlib.suppress(Exception):
-                cleanup.result()
+            # cleanup_previous_state already logs and absorbs a failed rmtree,
+            # so anything raised here is unexpected and must not be hidden.
+            cleanup.result()
             if cancelled:
                 raise asyncio.CancelledError
 

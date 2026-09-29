@@ -126,6 +126,8 @@ The marker timestamp tracks when the last successful extraction occurred. It's s
 persistent-artifacts/apps/{app}/connection/{connection_id}/marker.txt
 ```
 
+A missing marker (`StorageNotFoundError`) means a first run and triggers a full extraction. Any other storage error while reading the marker or the current state raises, so the task retries instead of silently running a full extraction.
+
 During extraction, queries use this timestamp to filter for changed assets:
 ```sql
 WHERE last_modified_time > '{marker_timestamp}'
