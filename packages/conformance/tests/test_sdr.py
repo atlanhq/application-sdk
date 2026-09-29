@@ -956,6 +956,41 @@ def test_p037_trusts_a_function_local_sdk_import(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
+#: Required keyword-only parameters: ast stores ``None`` in ``kw_defaults`` for
+#: each, which the scope walk must skip rather than descend into.
+_REQUIRED_KWONLY = {
+    "function": "def _f(*, x):\n    return x\n",
+    "async-function": "async def _g(*, y):\n    return y\n",
+    "lambda": "_h = lambda *, z: z\n",
+    "mixed-defaults": "def _m(*, a, b=1, c):\n    return a\n",
+}
+
+
+@pytest.mark.parametrize(
+    "shape", list(_REQUIRED_KWONLY.values()), ids=list(_REQUIRED_KWONLY)
+)
+def test_p037_scans_required_keyword_only_parameters(
+    tmp_path: Path, shape: str
+) -> None:
+    # Fires on the GUID-only read: the scan completes rather than crashing.
+    src = "from application_sdk.credentials import CredentialRef\n" + shape
+    src += _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_trusts_router_alias_inside_required_keyword_only_function(
+    tmp_path: Path,
+) -> None:
+    src = (
+        _SDK_ROUTE_ALIAS
+        + "def _call(*, input_obj):\n    return route(input_obj)\n"
+        + _GUID_ONLY_READ
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
 def test_p037_still_fires_without_route_credentials(tmp_path: Path) -> None:
     # Red leg for the exemption above: the same module minus the seam call.
     src = _CREDS_ROUTE_CREDENTIALS.replace(
