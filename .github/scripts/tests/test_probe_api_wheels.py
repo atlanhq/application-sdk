@@ -76,3 +76,7 @@ def test_latest_tag_reads_the_newest_reachable_release(tmp_path: Path) -> None:
     git("tag", "v3.39.1")
     git("tag", "conformance-v0.40.1")
     assert probe.resolve_release("latest-tag", tmp_path) == "3.39.1"
+    # The built wheels carry the released version right after a release: probe
+    # the upgrade from the release before it, never from itself.
+    assert probe.resolve_release("latest-tag", tmp_path, below="3.39.1") == "3.39.0"
+    assert probe.resolve_release("latest-tag", tmp_path, below="3.40.0") == "3.39.1"

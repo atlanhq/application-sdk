@@ -25,7 +25,8 @@ Usage::
     python3 .github/scripts/probe_api_wheels.py --dist dist --from-release 3.39.1
 
 ``--from-release latest-tag`` starts from the newest ``vX.Y.Z`` tag reachable
-from HEAD (CI's choice: always the release this commit would upgrade from).
+from HEAD that is older than the built wheels (CI's choice: the release this
+commit would upgrade from).
 """
 
 from __future__ import annotations
@@ -104,18 +105,35 @@ print("upgrade: every listed file present, worker imports")
 """
 
 
-def resolve_release(value: str, root: Path) -> str:
-    """``value`` itself, or for ``latest-tag`` the newest reachable release tag."""
+def _version_tuple(text: str) -> tuple[int, ...] | None:
+    parts = text.split(".")
+    return tuple(int(p) for p in parts) if all(p.isdigit() for p in parts) else None
+
+
+def resolve_release(value: str, root: Path, below: str | None = None) -> str:
+    """``value`` itself, or for ``latest-tag`` the newest reachable release tag.
+
+    With ``below`` (the version being probed), the newest release strictly older
+    than it. On main right after a release the built wheels carry the released
+    version, and pip treats an equal version as already installed — the probe
+    would upgrade nothing and test a mix no real upgrade produces.
+    """
     if value != "latest-tag":
         return value
-    tag = subprocess.run(
-        ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+    tags = subprocess.run(
+        ["git", "tag", "--list", "v[0-9]*", "--merged", "HEAD", "--sort=-v:refname"],
         cwd=root,
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.strip()
-    return tag.removeprefix("v")
+    ).stdout.split()
+    ceiling = _version_tuple(below) if below else None
+    for tag in tags:
+        version = tag.removeprefix("v")
+        parsed = _version_tuple(version)
+        if parsed is not None and (ceiling is None or parsed < ceiling):
+            return version
+    raise ValueError(f"no release tag below {below} reachable from HEAD")
 
 
 def _wheel(dist: Path, prefix: str) -> Path:

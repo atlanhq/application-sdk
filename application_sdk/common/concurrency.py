@@ -8,12 +8,12 @@ Both paths are the same function.
 
 import os
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (  # noqa: F401 — re-exported for handler code
+    run_in_thread,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
-
-__all__ = ["get_actual_cpu_count", "get_safe_num_threads", "run_in_thread"]
 
 
 def get_actual_cpu_count() -> int:
