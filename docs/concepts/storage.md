@@ -107,6 +107,33 @@ the prefix (the usual shape when recovering a run's `transformed/` or
 `current-state/` tree), otherwise the prefix appears twice and a reader keyed on
 a fixed subpath such as `<out>/table` finds nothing.
 
+### Prefix fan-out: failure, cancellation, mirroring
+
+`download_prefix`, `upload_prefix` and `delete_prefix` transfer objects
+concurrently. If one transfer fails, or the caller is cancelled, the rest are
+cancelled and the call **waits for their in-flight file I/O to stop** before it
+propagates the error or cancellation. Once it has propagated, nothing is still
+writing under `local_dir` (or to the prefix), so a retry cannot race the
+previous attempt. The error is still a bare `StorageError`, not an
+`ExceptionGroup`.
+
+Both prefix transfers can mirror instead of adding:
+
+```python
+# local tree == listing: current files are skipped, unlisted files deleted
+await download_prefix("artifacts/run/state", "<out>", strip_prefix=True, sync=True)
+
+# prefix == local tree: keys this call did not upload are deleted
+await upload_prefix("<out>", "artifacts/run/state", prune=True)
+```
+
+`sync=True` skips an object when its local file still has the size and etag it
+was downloaded at. Those values are recorded in a `.sdk-sync/` index inside the
+mirrored tree, which every walker and `upload_prefix` skip. Pruning happens
+only after every download succeeds, and only inside the tree the prefix maps
+to. `prune=True` deletes nothing if an upload fails, keeps each uploaded key's
+`.sha256` sidecar, and refuses an empty prefix.
+
 ---
 
 ## FileReference
@@ -310,7 +337,8 @@ without the atomicity.
 Staging lives in a `.sdk-partial/` directory beside the artifact rather than as
 a `.tmp` suffix next to it, so it is never picked up by a directory listing, a
 directory `FileReference`, or a prefix upload. `safe_list_directory` and
-`upload_prefix` read one shared definition of what to skip.
+`upload_prefix` read one shared definition of what to skip (`.sdk-partial/`,
+`.sdk-writer-staging/`, and the `.sdk-sync/` index of a synced download).
 
 The chunked staging file (`.sdk-partial/{name}.part`) and its resume checkpoint
 are deterministic functions of the destination, so `download_file_chunked`
