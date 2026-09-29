@@ -3309,6 +3309,7 @@ def _create_task_activity_wrapper(
 
 # Keep FileReference accessible via base module for convenience
 __all__ = [
+    "AppContextError",
     "App",
     "AppError",
     "AppStateAccessor",

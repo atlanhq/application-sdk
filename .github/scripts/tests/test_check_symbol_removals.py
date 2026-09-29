@@ -624,3 +624,102 @@ def test_check_exits_2_when_no_tag_is_reachable(tmp_path: Path):
     _run_git(repo, "add", "-A")
     _run_git(repo, "commit", "-qm", "c")
     assert mod.main(["check", "--repo", str(repo)]) == 2
+
+
+# ---------------------------------------------------------------------------
+# Lazy package exports and re-export resolution (the api-distribution split)
+# ---------------------------------------------------------------------------
+
+
+def _tree_snapshot(tmp_path: Path, files: dict[str, str]) -> mod.Snapshot:
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return mod.build_snapshot(tmp_path)
+
+
+_LAZY_INIT = """
+import importlib
+from typing import Any
+
+_LAZY: dict[str, tuple[str, str]] = {
+    "Thing": ("application_sdk.pkg.thing", "Thing"),
+}
+
+
+def __getattr__(name: str) -> Any:
+    module, attr = _LAZY[name]
+    return getattr(importlib.import_module(module), attr)
+"""
+
+_THING = "class Thing:\n    def run(self, x): ...\n"
+
+
+def test_moving_a_reexport_behind_a_lazy_map_is_not_a_removal(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {
+            "application_sdk/pkg/__init__.py": "from application_sdk.pkg.thing import Thing\n",
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/pkg/__init__.py": _LAZY_INIT,
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    assert "application_sdk.pkg:Thing.run" in base.symbols
+    assert mod.compare(base, head) == []
+
+
+def test_a_lazy_map_without_getattr_serves_nothing(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {
+            "application_sdk/pkg/__init__.py": "from application_sdk.pkg.thing import Thing\n",
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/pkg/__init__.py": _LAZY_INIT.split("def __getattr__")[0],
+            "application_sdk/pkg/thing.py": _THING,
+        },
+    )
+    assert "application_sdk.pkg:Thing" in blocking(mod.compare(base, head))
+
+
+def test_a_class_moved_and_reexported_keeps_its_methods(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {"application_sdk/__init__.py": "", "application_sdk/old.py": _THING},
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/new.py": _THING,
+            "application_sdk/old.py": "from application_sdk.new import Thing\n",
+        },
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_narrowing_a_moved_class_method_is_still_caught(tmp_path: Path):
+    base = _tree_snapshot(
+        tmp_path / "base",
+        {"application_sdk/__init__.py": "", "application_sdk/old.py": _THING},
+    )
+    head = _tree_snapshot(
+        tmp_path / "head",
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/new.py": "class Thing:\n    def run(self): ...\n",
+            "application_sdk/old.py": "from application_sdk.new import Thing\n",
+        },
+    )
+    assert "application_sdk.old:Thing.run" in blocking(mod.compare(base, head))

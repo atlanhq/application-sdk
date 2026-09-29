@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 
 import orjson
 
+from application_sdk._context_errors import ObjectStoreNotConfiguredError
+from application_sdk._install import worker_only_missing
 from application_sdk.constants import (
     APPLICATION_NAME,
     DEPLOYMENT_NAME,
@@ -117,10 +119,16 @@ class AtlanObservability(Generic[T], ABC):
     @classmethod
     def _get_deployment_store(cls) -> "BoundStore":
         if AtlanObservability._deployment_store is None:
-            from application_sdk.storage.binding import (  # noqa: PLC0415
-                create_store_from_binding_with_put_attrs,
-            )
-            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+            try:
+                from application_sdk.storage.binding import (  # noqa: PLC0415
+                    create_store_from_binding_with_put_attrs,
+                )
+                from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+            except ModuleNotFoundError as exc:
+                if not worker_only_missing(exc):
+                    raise
+                # api-only install (the API host): no object store to export to.
+                raise ObjectStoreNotConfiguredError() from exc
 
             store, put_attrs = create_store_from_binding_with_put_attrs(
                 DEPLOYMENT_OBJECT_STORE_NAME,
@@ -132,10 +140,16 @@ class AtlanObservability(Generic[T], ABC):
     @classmethod
     def _get_upstream_store(cls) -> "BoundStore":
         if AtlanObservability._upstream_store is None:
-            from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
-                create_store_from_binding_with_put_attrs,
-            )
-            from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+            try:
+                from application_sdk.storage.binding import (  # noqa: PLC0415 — deferred to break the observability→storage circular import
+                    create_store_from_binding_with_put_attrs,
+                )
+                from application_sdk.storage.ops import BoundStore  # noqa: PLC0415
+            except ModuleNotFoundError as exc:
+                if not worker_only_missing(exc):
+                    raise
+                # api-only install (the API host): no object store to export to.
+                raise ObjectStoreNotConfiguredError() from exc
 
             store, put_attrs = create_store_from_binding_with_put_attrs(
                 UPSTREAM_OBJECT_STORE_NAME,
@@ -280,7 +294,13 @@ class AtlanObservability(Generic[T], ABC):
             local_path: Absolute path to the local ``.json.gz`` file.
             remote_key: S3 key (from :meth:`_build_remote_key`) to upload to.
         """
-        from application_sdk.storage import upload_file  # noqa: PLC0415
+        try:
+            from application_sdk.storage import upload_file  # noqa: PLC0415
+        except ModuleNotFoundError as exc:
+            if not worker_only_missing(exc):
+                raise
+            # api-only install (the API host): no object store to export to.
+            raise ObjectStoreNotConfiguredError() from exc
 
         # write_sidecar=False: telemetry exports are not artifacts anyone
         # downloads through the SDK, and the ingestion pipelines that read this
@@ -529,9 +549,15 @@ class AtlanObservability(Generic[T], ABC):
         - Updates last cleanup time after successful cleanup
         """
         try:
-            from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
-                get_infrastructure,
-            )
+            try:
+                from application_sdk.infrastructure.context import (  # noqa: PLC0415 — circular: infrastructure imports observability
+                    get_infrastructure,
+                )
+            except ModuleNotFoundError as exc:
+                if not worker_only_missing(exc):
+                    raise
+                # api-only install (the API host): no worker infrastructure.
+                return
 
             infra = get_infrastructure()
             state_store = infra.state_store if infra else None
@@ -569,7 +595,14 @@ class AtlanObservability(Generic[T], ABC):
             from application_sdk._runtime.offload import (  # noqa: PLC0415 — circular: offload imports observability.logger_adaptor, which imports this module
                 run_in_thread,
             )
-            from application_sdk.storage import delete  # noqa: PLC0415
+
+            try:
+                from application_sdk.storage import delete  # noqa: PLC0415
+            except ModuleNotFoundError as exc:
+                if not worker_only_missing(exc):
+                    raise
+                # api-only install (the API host): nothing was exported to delete.
+                return
 
             # Use local subdir (same as _get_partition_path)
             signal_type = self._get_signal_type()

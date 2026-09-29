@@ -47,8 +47,9 @@ jobs:
         if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
+          # Full history: the diff below is computed locally against the merge
+          # base, because the API refuses `gh pr diff` for PRs over 20,000 lines.
+          fetch-depth: 0
 
       - name: Evaluate PR diff against the guard
         id: detect
@@ -57,11 +58,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.head_ref }}
-          REPO: ${{ github.repository }}
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
           echo "PR #${PR_NUMBER} (${HEAD_REF})"
-          gh pr diff "${PR_NUMBER}" --repo "${REPO}" > pr.diff
+          # The same unified diff `gh pr diff` returns (merge base → PR head),
+          # without the API's 20,000-line ceiling.
+          git diff "origin/${BASE_REF}...HEAD" > pr.diff
           python3 .github/scripts/guard_release_files.py \
             --diff pr.diff \
             --head-ref "${HEAD_REF}" \

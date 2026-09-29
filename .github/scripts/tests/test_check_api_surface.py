@@ -99,6 +99,16 @@ def test_clean(tmp_path: Path, src: str) -> None:
             "without a try/except ModuleNotFoundError",
         ),
         ("def f():\n    import temporalio\n", "does not declare"),
+        ("from application_sdk.revision import X\n", "does not exist"),
+        (
+            "def f():\n"
+            "    try:\n"
+            "        from application_sdk.revision import X\n"
+            "    except ModuleNotFoundError:\n"
+            "        pass\n",
+            "does not exist",
+        ),
+        ("import application_sdk.handler.nope\n", "does not exist"),
     ],
 )
 def test_flagged(tmp_path: Path, src: str, fragment: str) -> None:

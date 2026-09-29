@@ -78,14 +78,12 @@ import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
+from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
 
 _logger = get_logger(__name__)
-
-#: Module roots a contract may reach lazily that the api distribution omits.
-_WORKER_ONLY_ROOTS = ("temporalio", "application_sdk.app", "application_sdk.constants")
 
 
 @dataclass(frozen=True)
@@ -912,7 +910,7 @@ class PublishInputMixin(BaseModel):
                 )
             except ModuleNotFoundError as exc:
                 # api-only install: no Temporal, so never a workflow context.
-                if not (exc.name or "").startswith(_WORKER_ONLY_ROOTS):
+                if not worker_only_missing(exc):
                     raise
                 _wf = None
             try:

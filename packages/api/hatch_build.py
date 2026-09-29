@@ -1,9 +1,11 @@
 """Package the files listed in ``api-files.txt`` into the api wheel.
 
 The source lives once, under ``application_sdk/`` at the repo root, and ships in
-both distributions. A regular (standard) build copies the listed files in. An
-editable build copies nothing: the SDK's dev env already imports the whole tree
-from source, and a copy in site-packages would shadow it.
+both distributions. The sdist and a regular wheel copy the listed files in; a
+wheel built from the unpacked sdist (what ``uv build`` does) finds them next to
+this file, a wheel built in the repo reads them from the repo root. An editable
+build copies nothing: the SDK's dev env already imports the whole tree from
+source, and a copy in site-packages would shadow it.
 """
 
 from __future__ import annotations
@@ -27,6 +29,8 @@ class ApiFilesHook(BuildHookInterface):
     def initialize(self, version: str, build_data: dict[str, Any]) -> None:
         if version == "editable":
             return
-        repo = Path(self.root).resolve().parent.parent
-        for rel in listed_files(Path(self.root)):
-            build_data["force_include"][str(repo / rel)] = rel
+        here = Path(self.root).resolve()
+        repo = here.parent.parent
+        for rel in listed_files(here):
+            source = here / rel if (here / rel).is_file() else repo / rel
+            build_data["force_include"][str(source)] = rel

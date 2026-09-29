@@ -15,10 +15,12 @@ file's imports and fails on:
   ``application_sdk`` module;
 * a function-level import of an unlisted ``application_sdk`` module (or of a
   third-party package the api distribution does not declare) that is not inside
-  a ``try`` naming ``ModuleNotFoundError`` in an ``except`` — on the host such an
+  a ``try`` naming ``ModuleNotFoundError`` (or ``ImportError``) in an ``except`` — on the host such an
   import raises at call time, so it must have a stated fallback;
 * a module-level import of a third-party package the api distribution does not
-  declare.
+  declare as a dependency (a function-level import of one of its extras is fine:
+  the handler that needs it declares the extra, as it does on the worker);
+* an import of an ``application_sdk`` module that does not exist at all.
 
 Usage (from the repo root)::
 
@@ -44,6 +46,10 @@ PROVIDED_BY = {
     "pydantic_core": "pydantic",
     "starlette": "fastapi",
     "typing_extensions": "pydantic",
+    "dotenv": "python_dotenv",
+    "opentelemetry": "opentelemetry_sdk",
+    "certifi": "httpx",
+    "botocore": "boto3",
 }
 
 
@@ -62,14 +68,25 @@ def listed_files(root: Path) -> list[str]:
     return [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")]
 
 
-def declared_requirements(root: Path) -> set[str]:
-    project = tomllib.loads((root / API_DIR / "pyproject.toml").read_text())["project"]
+def _names(reqs: list[str]) -> set[str]:
     names = set()
-    for req in project.get("dependencies", []):
+    for req in reqs:
         match = re.match(r"[A-Za-z0-9_.\-]+", req)
         if match:
             names.add(match.group(0).lower().replace("-", "_"))
     return names
+
+
+def declared_requirements(root: Path) -> set[str]:
+    project = tomllib.loads((root / API_DIR / "pyproject.toml").read_text())["project"]
+    return _names(project.get("dependencies", []))
+
+
+def optional_requirements(root: Path) -> set[str]:
+    """Packages behind an extra: importable lazily, never at module level."""
+    project = tomllib.loads((root / API_DIR / "pyproject.toml").read_text())["project"]
+    extras = project.get("optional-dependencies", {})
+    return _names([r for reqs in extras.values() for r in reqs])
 
 
 def module_of(rel: str) -> str:
@@ -98,14 +115,19 @@ def _catches_module_not_found(node: ast.Try) -> bool:
             else []
         )
         if any(
-            isinstance(n, ast.Name) and n.id == "ModuleNotFoundError" for n in names
+            isinstance(n, ast.Name) and n.id in ("ModuleNotFoundError", "ImportError")
+            for n in names
         ):
             return True
     return False
 
 
 def _imports(tree: ast.Module, module: str, is_package: bool):
-    """Yield ``(node, imported module, at module level, guarded)``."""
+    """Yield ``(node, module, at module level, guarded, required)``.
+
+    ``required`` is False for the ``pkg.name`` candidates of ``from pkg import
+    name``, where ``name`` may be an attribute rather than a submodule.
+    """
     package = module if is_package else module.rpartition(".")[0]
 
     def resolve(node: ast.ImportFrom) -> list[str]:
@@ -124,10 +146,12 @@ def _imports(tree: ast.Module, module: str, is_package: bool):
                 continue
             if isinstance(node, ast.Import):
                 for alias in node.names:
-                    yield node, alias.name, top, guarded
+                    yield node, alias.name, top, guarded, True
             elif isinstance(node, ast.ImportFrom):
-                for name in resolve(node):
-                    yield node, name, top, guarded
+                base, *candidates = resolve(node)
+                yield node, base, top, guarded, True
+                for name in candidates:
+                    yield node, name, top, guarded, False
             inner_top = top and not isinstance(
                 node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
             )
@@ -151,6 +175,7 @@ def check(root: Path) -> list[Problem]:
     listed = listed_files(root)
     listed_set = set(listed)
     declared = declared_requirements(root)
+    optional = optional_requirements(root)
     problems: list[Problem] = []
     for rel in listed:
         path = root / rel
@@ -173,7 +198,7 @@ def check(root: Path) -> list[Problem]:
                 )
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=rel)
         reported: set[int] = set()  # one problem per import statement
-        for node, name, top, guarded in _imports(
+        for node, name, top, guarded, required in _imports(
             tree, module, rel.endswith("__init__.py")
         ):
             if id(node) in reported:
@@ -182,6 +207,14 @@ def check(root: Path) -> list[Problem]:
             root_name = name.split(".")[0]
             if root_name == "application_sdk":
                 target = file_of(root, name)
+                if target is None and required:
+                    problems.append(
+                        Problem(
+                            rel, node.lineno, f"imports {name}, which does not exist"
+                        )
+                    )
+                    reported.add(id(node))
+                    continue
                 if target is None or target in listed_set:
                     continue  # a name inside a listed module, or a listed module
                 if top:
@@ -209,6 +242,8 @@ def check(root: Path) -> list[Problem]:
             provider = PROVIDED_BY.get(root_name, root_name).lower()
             if provider in declared:
                 continue
+            if not top and provider in optional:
+                continue  # a lazy import of an extra, as on the worker
             if top or not guarded:
                 problems.append(
                     Problem(

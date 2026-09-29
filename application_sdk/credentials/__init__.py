@@ -109,6 +109,32 @@ if TYPE_CHECKING:
 #: Worker-side names: imported on first access, so the api distribution
 #: (which ships this ``__init__`` without them) imports cleanly.
 _LAZY: dict[str, tuple[str, str]] = {
+    "route_credentials": (
+        "application_sdk.credentials.routing",
+        "route_credentials",
+    ),
+    "ResolvedCredentials": (
+        "application_sdk.credentials.routing",
+        "ResolvedCredentials",
+    ),
+    "find_prebuilt_credential_ref": (
+        "application_sdk.credentials.routing",
+        "find_prebuilt_credential_ref",
+    ),
+    "normalize_inline_credentials": (
+        "application_sdk.credentials.routing",
+        "normalize_inline_credentials",
+    ),
+    "flatten_dotted_keys": (
+        "application_sdk.credentials.routing",
+        "flatten_dotted_keys",
+    ),
+    "CredentialValue": ("application_sdk.credentials.routing", "CredentialValue"),
+    "CredentialMap": ("application_sdk.credentials.routing", "CredentialMap"),
+    "InlineCredentials": (
+        "application_sdk.credentials.routing",
+        "InlineCredentials",
+    ),
     "ApiKeyCredential": ("application_sdk.credentials.types", "ApiKeyCredential"),
     "AtlanApiToken": ("application_sdk.credentials.atlan", "AtlanApiToken"),
     "AtlanClientMixin": (
@@ -256,36 +282,6 @@ __all__ = [
 # ``routing`` builds bounded contract types from ``contracts.types``, which itself
 # imports ``credentials.ref`` — loading it eagerly here would close that cycle
 # whenever ``contracts`` is imported first. Its names resolve on first access too.
-_LAZY.update(
-    {
-        "route_credentials": (
-            "application_sdk.credentials.routing",
-            "route_credentials",
-        ),
-        "ResolvedCredentials": (
-            "application_sdk.credentials.routing",
-            "ResolvedCredentials",
-        ),
-        "find_prebuilt_credential_ref": (
-            "application_sdk.credentials.routing",
-            "find_prebuilt_credential_ref",
-        ),
-        "normalize_inline_credentials": (
-            "application_sdk.credentials.routing",
-            "normalize_inline_credentials",
-        ),
-        "flatten_dotted_keys": (
-            "application_sdk.credentials.routing",
-            "flatten_dotted_keys",
-        ),
-        "CredentialValue": ("application_sdk.credentials.routing", "CredentialValue"),
-        "CredentialMap": ("application_sdk.credentials.routing", "CredentialMap"),
-        "InlineCredentials": (
-            "application_sdk.credentials.routing",
-            "InlineCredentials",
-        ),
-    }
-)
 
 if TYPE_CHECKING:
     from application_sdk.credentials.routing import (

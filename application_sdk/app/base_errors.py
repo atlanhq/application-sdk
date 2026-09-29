@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
+    ObjectStoreNotConfiguredError,
     SecretStoreNotConfiguredError,
 )
 from application_sdk.errors.leaves import (
@@ -13,19 +14,6 @@ from application_sdk.errors.leaves import (
     PreconditionError,
     UnimplementedError,
 )
-
-
-@dataclass(kw_only=True)
-class ObjectStoreNotConfiguredError(PreconditionError):
-    """Object store required by a @task but not configured in the deployment."""
-
-    code: ClassVar[str] = "PRECONDITION_OBJECT_STORE_NOT_CONFIGURED"
-    message: str = (
-        "No object store configured. "
-        "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
-    )
-    resource: str | None = "object_store"
-    expected_state: str | None = "configured"
 
 
 @dataclass(kw_only=True)

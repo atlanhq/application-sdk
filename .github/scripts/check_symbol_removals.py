@@ -98,7 +98,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
@@ -117,6 +117,9 @@ DEFAULT_PACKAGE = "application_sdk"
 #: set statically; ``application_sdk/execution/_temporal/preflight_gate.py`` is
 #: the reference implementation.
 ALIAS_MAPPING_NAME = "_DEPRECATED_CONSTANTS"
+#: A package ``__init__``'s PEP 562 map of names it serves lazily (not
+#: deprecated): ``{"Name": ("defining.module", "attr")}``.
+LAZY_MAPPING_NAME = "_LAZY"
 
 #: Decorator names that mark a def/class as deprecated (``typing_extensions``
 #: and ``warnings`` both export ``deprecated``; either import style is matched
@@ -362,6 +365,81 @@ def _alias_names(tree: ast.Module) -> set[str]:
     return names
 
 
+def _lazy_names(tree: ast.Module) -> dict[str, tuple[str, str]]:
+    """Names served lazily by the module's ``__getattr__``, mapped to their source.
+
+    Reads the module-level ``_LAZY`` dict literal of ``"Name": ("module", "attr")``
+    entries, and only when the module also defines ``__getattr__``. A package
+    ``__init__`` uses it to keep a name importable without importing its module
+    at package-import time, so the name is surface exactly like an eager
+    re-export.
+    """
+    if not any(
+        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == "__getattr__"
+        for n in tree.body
+    ):
+        return {}
+    served: dict[str, tuple[str, str]] = {}
+    for node in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        else:
+            continue
+        if not any(
+            isinstance(t, ast.Name) and t.id == LAZY_MAPPING_NAME for t in targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            continue
+        for k, v in zip(node.value.keys, node.value.values):
+            if (
+                isinstance(k, ast.Constant)
+                and isinstance(k.value, str)
+                and isinstance(v, ast.Tuple)
+                and len(v.elts) == 2
+                and all(
+                    isinstance(e, ast.Constant) and isinstance(e.value, str)
+                    for e in v.elts
+                )
+            ):
+                served[k.value] = (v.elts[0].value, v.elts[1].value)  # type: ignore[union-attr]
+    return served
+
+
+def reexport_sources(
+    tree: ast.Module, module: str, package: str = DEFAULT_PACKAGE
+) -> dict[str, tuple[str, str]]:
+    """``{bound name: (source module, source name)}`` for intra-package re-exports.
+
+    Covers ``from <package>... import X`` at module level (relative or absolute)
+    and the ``_LAZY`` map. Used to follow a re-export to the definition it
+    names, so a class that moves to another module keeps its methods on the
+    surface of every module that re-exports it.
+    """
+    is_package = module.split(".")[-1] == "__init__"
+    here = module.removesuffix(".__init__") if is_package else module
+    parent = here if is_package else here.rpartition(".")[0]
+    sources: dict[str, tuple[str, str]] = dict(_lazy_names(tree))
+    for node in tree.body:
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        src = node.module or ""
+        if node.level:
+            parts = parent.split(".")
+            parts = parts[: len(parts) - (node.level - 1)]
+            src = ".".join([*parts, src] if src else parts)
+        if not (src == package or src.startswith(package + ".")):
+            continue
+        for alias in node.names:
+            if alias.name != "*":
+                sources.setdefault(alias.asname or alias.name, (src, alias.name))
+    return sources
+
+
 def _declared_all(tree: ast.Module) -> frozenset[str] | None:
     """The module's ``__all__`` as a set, or ``None`` when it declares none."""
     for node in tree.body:
@@ -503,6 +581,12 @@ def extract_module(
             for bound in _reexported_names(node, declared_all, package):
                 add(bound, "reexport")
 
+    # A name a package ``__init__`` serves lazily is surface like an eager
+    # re-export; record it so moving it behind ``__getattr__`` is not a removal.
+    bound = {s.qualname for s in symbols}
+    for name in sorted(set(_lazy_names(tree)) - bound - aliases):
+        add(name, "reexport")
+
     # A name served by the shim need not exist as a real binding; record the
     # remainder so the alias keeps the old name present in the snapshot.
     bound = {s.qualname for s in symbols}
@@ -524,6 +608,7 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
     if not package_root.is_dir():
         raise ValueError(f"no package {package!r} under {root}")
     snapshot = Snapshot(package=package)
+    sources: dict[str, tuple[str, str]] = {}
     for file in iter_modules(package_root):
         try:
             text = file.read_text(encoding="utf-8")
@@ -536,7 +621,60 @@ def build_snapshot(root: Path, package: str = DEFAULT_PACKAGE) -> Snapshot:
         module = module_path(file, package_root, package)
         for symbol in extract_module(tree, module, package):
             snapshot.symbols[symbol.key] = symbol
+        is_init = file.name == "__init__.py"
+        for bound, source in reexport_sources(
+            tree, f"{module}.__init__" if is_init else module, package
+        ).items():
+            sources[f"{module}:{bound}"] = source
+    _resolve_reexports(snapshot, sources)
     return snapshot
+
+
+def _resolve_reexports(snapshot: Snapshot, sources: dict[str, tuple[str, str]]) -> None:
+    """Give each re-export the kind, signature and methods of what it names.
+
+    A re-export recorded only as a name hides a class's methods: moving the
+    class to another module and re-exporting it would drop them from the old
+    module's surface, and narrowing a re-exported function's signature would go
+    unseen. Following each re-export (through chains) to its definition makes
+    the old path carry exactly what the definition carries, in both snapshots.
+    """
+    for key, (src_module, src_name) in sorted(sources.items()):
+        symbol = snapshot.symbols.get(key)
+        if symbol is None or symbol.kind != "reexport":
+            continue
+        target_module, target_name, seen = src_module, src_name, set()
+        target = snapshot.symbols.get(f"{target_module}:{target_name}")
+        while (
+            target is not None and target.kind == "reexport" and target.key not in seen
+        ):
+            seen.add(target.key)
+            nxt = sources.get(target.key)
+            if nxt is None:
+                break
+            target_module, target_name = nxt
+            target = snapshot.symbols.get(f"{target_module}:{target_name}")
+        if target is None or target.kind in ("reexport", "alias"):
+            continue
+        snapshot.symbols[key] = replace(
+            target,
+            module=symbol.module,
+            qualname=symbol.qualname,
+            deprecated=symbol.deprecated or target.deprecated,
+        )
+        if target.kind != "class":
+            continue
+        prefix = f"{target_module}:{target_name}."
+        for member_key, member in list(snapshot.symbols.items()):
+            if member_key.startswith(prefix):
+                qual = f"{symbol.qualname}.{member.qualname[len(target_name) + 1 :]}"
+                moved = replace(
+                    member,
+                    module=symbol.module,
+                    qualname=qual,
+                    deprecated=symbol.deprecated or member.deprecated,
+                )
+                snapshot.symbols.setdefault(moved.key, moved)
 
 
 # ---------------------------------------------------------------------------

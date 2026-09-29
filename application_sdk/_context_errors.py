@@ -16,6 +16,19 @@ from application_sdk.errors.leaves import PreconditionError
 
 
 @dataclass(kw_only=True)
+class ObjectStoreNotConfiguredError(PreconditionError):
+    """Object store required by a @task but not configured in the deployment."""
+
+    code: ClassVar[str] = "PRECONDITION_OBJECT_STORE_NOT_CONFIGURED"
+    message: str = (
+        "No object store configured. "
+        "Ensure the deployment has a storage binding or APP_STORAGE_ROOT set."
+    )
+    resource: str | None = "object_store"
+    expected_state: str | None = "configured"
+
+
+@dataclass(kw_only=True)
 class SecretStoreNotConfiguredError(PreconditionError):
     """Secret store required by get_secret / resolve_credential but not configured."""
 

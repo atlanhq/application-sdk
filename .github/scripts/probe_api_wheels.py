@@ -23,6 +23,9 @@ Usage::
 
     uv build --wheel -o dist . && uv build --wheel -o dist packages/api
     python3 .github/scripts/probe_api_wheels.py --dist dist --from-release 3.39.1
+
+``--from-release latest-tag`` starts from the newest ``vX.Y.Z`` tag reachable
+from HEAD (CI's choice: always the release this commit would upgrade from).
 """
 
 from __future__ import annotations
@@ -46,7 +49,9 @@ for m in listed:
     importlib.import_module(m)
 extra = sorted(
     m for m in sys.modules
-    if (m == "application_sdk" or m.startswith("application_sdk.")) and m not in listed
+    if (m == "application_sdk" or m.startswith("application_sdk."))
+    and m not in listed
+    and getattr(sys.modules[m], "__file__", None)  # a namespace dir has no file
 )
 if extra:
     sys.exit(f"api-only install loaded unlisted modules: {extra[:10]}")
@@ -61,7 +66,30 @@ client = TestClient(build_asgi_app(DefaultHandler(), app_name="probe"))
 assert client.get("/health").status_code == 200, "GET /health"
 bad = client.post("/workflows/v1/auth", content=b"[1]", headers={"content-type": "application/json"})
 assert bad.status_code == 422, f"non-object body answered {bad.status_code}"
-print(f"api alone: {len(listed)} modules, {rss_mb:.0f} MB, host routes OK")
+creds = {"credentials": [{"key": "username", "value": "u"}], "connection_config": {"host": "h"}}
+for route in ("auth", "check", "metadata"):
+    r = client.post(f"/workflows/v1/{route}", json=creds)
+    assert r.status_code == 200 and isinstance(r.json(), dict), f"{route}: {r.status_code} {r.text[:200]}"
+empty = client.post("/workflows/v1/auth", json={"credentials": []})
+assert isinstance(empty.json(), dict), f"empty credentials answered a bare {empty.status_code}"
+
+from application_sdk.errors import AuthError
+class _Failing(DefaultHandler):
+    async def test_auth(self, input):
+        raise AuthError(message="bad password for postgres://u:secret@h/db")
+failing = TestClient(build_asgi_app(_Failing(), app_name="probe"), raise_server_exceptions=False)
+r = failing.post("/workflows/v1/auth", json=creds)
+assert r.status_code != 500 or isinstance(r.json(), dict), "AppError answered a bare 500"
+assert "secret" not in r.text, "AppError response leaked the DSN password"
+extra = sorted(
+    m for m in sys.modules
+    if (m == "application_sdk" or m.startswith("application_sdk."))
+    and m not in listed
+    and getattr(sys.modules[m], "__file__", None)  # a namespace dir has no file
+)
+if extra:
+    sys.exit(f"serving requests loaded unlisted modules: {extra[:10]}")
+print(f"api alone: {len(listed)} modules, {rss_mb:.0f} MB, auth/check/metadata + AppError path OK")
 """
 
 _PRESENT = r"""
@@ -74,6 +102,20 @@ if missing:
 import application_sdk.execution, application_sdk.handler.service  # the worker still imports
 print("upgrade: every listed file present, worker imports")
 """
+
+
+def resolve_release(value: str, root: Path) -> str:
+    """``value`` itself, or for ``latest-tag`` the newest reachable release tag."""
+    if value != "latest-tag":
+        return value
+    tag = subprocess.run(
+        ["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return tag.removeprefix("v")
 
 
 def _wheel(dist: Path, prefix: str) -> Path:
@@ -127,7 +169,10 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         py = _venv(Path(tmp) / "upgrade")
-        _pip(py, f"atlan-application-sdk=={args.from_release}")
+        _pip(
+            py,
+            f"atlan-application-sdk=={resolve_release(args.from_release, args.root)}",
+        )
         _pip(py, "pip")
         subprocess.run(
             [str(py), "-m", "pip", "install", "-q", "-U", str(api), str(sdk)],

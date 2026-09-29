@@ -19,6 +19,7 @@ from application_sdk._context_errors import (  # noqa: F401 — AppContextError 
     AppContextError,
     SecretStoreNotConfiguredError,
 )
+from application_sdk._install import worker_only_missing
 from application_sdk._logging import get_logger
 
 if TYPE_CHECKING:
@@ -37,11 +38,6 @@ class SecretStore(Protocol):
     async def get(self, name: str) -> str: ...
 
     async def get_optional(self, name: str) -> str | None: ...
-
-
-_INFRASTRUCTURE_MODULES = frozenset(
-    {"application_sdk.infrastructure", "application_sdk.infrastructure.context"}
-)
 
 
 def _utc_now() -> datetime:
@@ -199,7 +195,7 @@ def bind_invocation_context(
             get_infrastructure,
         )
     except ModuleNotFoundError as exc:
-        if exc.name not in _INFRASTRUCTURE_MODULES:
+        if not worker_only_missing(exc):
             raise
         infra = None  # api-only install: no worker infrastructure, so no secret store
     else:

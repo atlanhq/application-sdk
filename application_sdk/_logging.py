@@ -14,19 +14,21 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-_WORKER_MODULES = frozenset(
-    {"application_sdk.observability", "application_sdk.observability.logger_adaptor"}
-)
+from application_sdk._install import worker_only_missing
 
 
-def get_logger(name: str) -> Any:
-    """The SDK logger for ``name``, or a stdlib logger on an api-only install."""
+def get_logger(name: str | None = None) -> Any:
+    """The SDK logger for ``name``, or a stdlib logger on an api-only install.
+
+    Same signature as :func:`application_sdk.observability.logger_adaptor.get_logger`,
+    which the modules using this helper re-exported before.
+    """
     try:
         from application_sdk.observability.logger_adaptor import (  # noqa: PLC0415 — absent on an api-only install
             get_logger as _sdk_get_logger,
         )
     except ModuleNotFoundError as exc:
-        if exc.name not in _WORKER_MODULES:
+        if not worker_only_missing(exc):
             raise
-        return logging.getLogger(name)
+        return logging.getLogger(name or __name__)
     return _sdk_get_logger(name)
