@@ -79,7 +79,7 @@ Implementation references:
 
 ## Proposed rule allocation
 
-The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F016, F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or F017/F018, retired in 0.39.0 and deleted in 0.40.0). The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020.
+The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F016, F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or F017/F018, retired in 0.39.0 and deleted in 0.40.0). The vacated P-ids and F017/F018 stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020, excluding F017 and F018.
 
 Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006 and F007 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. F016 reports each required scenario that is not defined — missing, skipped, declared unsupported, not calling the contract assertion, or not statically resolvable. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 
