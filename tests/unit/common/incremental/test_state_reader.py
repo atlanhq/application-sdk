@@ -2,15 +2,22 @@
 
 Tests cover public functions with real business logic:
 - download_current_state: First-run handling, S3 download, JSON counting,
-  and offloading the stale-state rmtree off the event loop.
+  offloading the stale-state removal off the event loop, and a stale tree
+  that cannot be removed in place.
 """
 
-import shutil
+import errno
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from application_sdk.common.incremental.state.state_reader import download_current_state
+import pytest
+
+from application_sdk.common.incremental.state.state_reader import (
+    _discard_local_state,
+    download_current_state,
+)
 from application_sdk.storage.ops import _put
 
 
@@ -194,5 +201,65 @@ class TestDownloadCurrentState:
                     mock_offload.await_args_list
                 ), "stale-state removal was not offloaded"
                 offloaded = mock_offload.await_args_list[0].args
-                assert offloaded[0] is shutil.rmtree
+                assert offloaded[0] is _discard_local_state
                 assert offloaded[1] == state_dir
+
+
+def _rmtree_blocked_by_live_writer(err: int):
+    """shutil.rmtree as it behaves while a timed-out attempt's download
+    threads still hold files open in the tree: the removal fails partway with
+    ENOTEMPTY or EBUSY. With ignore_errors it swallows that, as the real one
+    does."""
+
+    def rmtree(path, ignore_errors=False, **kwargs):
+        if not ignore_errors:
+            raise OSError(err, os.strerror(err), str(path))
+
+    return rmtree
+
+
+@pytest.mark.parametrize("err", [errno.ENOTEMPTY, errno.EBUSY])
+async def test_a_stale_tree_that_cannot_be_removed_does_not_fail_the_read(err):
+    """A retry must not fail because the previous attempt's tree is still busy.
+
+    The previous attempt timed out, but its download threads cannot be
+    cancelled and keep writing into the tree, so removing it in place fails.
+    The read has to start from an empty directory anyway, and never see the
+    stale files."""
+    seen_before_download: list[list[str]] = []
+
+    async def fake_download(prefix, local_dir, strip_prefix):
+        seen_before_download.append(sorted(p.name for p in Path(local_dir).iterdir()))
+        (Path(local_dir) / "table").mkdir()
+        (Path(local_dir) / "table" / "t.json").write_text("{}")
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        state_dir = Path(temp_dir) / "current-state"
+        (state_dir / "column").mkdir(parents=True)
+        (state_dir / "column" / "stale.json").write_text("{}")
+        # Patched only around the read: the temp dir's own cleanup needs the
+        # real rmtree.
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                side_effect=fake_download,
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path",
+                return_value=state_dir,
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader.shutil.rmtree",
+                side_effect=_rmtree_blocked_by_live_writer(err),
+            ),
+        ):
+            returned, _, exists, json_count = await download_current_state(
+                connection_qualified_name="t/c/123",
+                application_name="oracle",
+            )
+
+        assert returned == state_dir
+        assert seen_before_download == [[]]
+        assert (exists, json_count) == (True, 1)
+        assert not (state_dir / "column").exists()

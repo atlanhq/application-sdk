@@ -10,7 +10,9 @@ connection, used for:
 - Supporting incremental diff generation
 """
 
+import os
 import shutil
+import uuid
 from pathlib import Path
 from typing import Tuple
 
@@ -25,6 +27,31 @@ from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.errors import StorageError
 
 logger = get_logger(__name__)
+
+
+_STALE_SUFFIX = ".stale-"
+
+
+def _discard_local_state(current_state_dir: Path) -> None:
+    """Move the existing tree out of the way, then delete every moved-aside tree.
+
+    Removing the tree in place can fail with ENOTEMPTY or EBUSY: an activity
+    attempt that timed out is cancelled, but its download threads cannot be,
+    and they keep writing into the tree while the retry removes it. A rename
+    is one atomic metadata operation that succeeds with files still open, so
+    the retry always gets an empty directory. The moved-aside trees are then
+    deleted on a best-effort basis; one still being written is left for a
+    later read to delete.
+    """
+    if current_state_dir.exists():
+        aside = current_state_dir.with_name(
+            f"{current_state_dir.name}{_STALE_SUFFIX}{uuid.uuid4().hex}"
+        )
+        os.rename(current_state_dir, aside)
+    for stale in current_state_dir.parent.glob(
+        f"{current_state_dir.name}{_STALE_SUFFIX}*"
+    ):
+        shutil.rmtree(stale, ignore_errors=True)
 
 
 async def download_current_state(
@@ -66,11 +93,10 @@ async def download_current_state(
         connection_qualified_name, "current-state", application_name
     )
 
-    # Clear and recreate local directory to prevent stale data from prior runs.
+    # Start from an empty directory so no stale data from a prior run is read.
     # Offloaded: a prior run's current-state is one JSON file per asset, so this
     # tree scales with the connection and would stall the loop inline.
-    if current_state_dir.exists():
-        await run_in_thread(shutil.rmtree, current_state_dir)
+    await run_in_thread(_discard_local_state, current_state_dir)
     current_state_dir.mkdir(parents=True, exist_ok=True)
 
     logger.info("Downloading current-state folder from S3: %s", current_state_s3_prefix)
