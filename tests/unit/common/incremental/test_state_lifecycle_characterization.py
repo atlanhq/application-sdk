@@ -345,11 +345,32 @@ async def test_concurrent_runs_of_one_connection_use_distinct_directories(
 ) -> None:
     await _seed_state(tmp_path, {"table/chunk-0.json": [_table(T1)]})
 
-    (dir_a, *_), (dir_b, *_) = await asyncio.gather(
+    async def _both(a, b):
+        # The collision shows up one of two ways depending on how the race
+        # interleaves: one run's rmtree hits the directory the other is
+        # downloading into (ENOTEMPTY on Linux), or both finish and share a
+        # path. Either is the bug, so both become the assertion. The OSError
+        # may arrive wrapped (prepare_previous_state raises StateDownloadError),
+        # so the cause chain is walked.
+        results = await asyncio.gather(a, b, return_exceptions=True)
+        for r in results:
+            if not isinstance(r, BaseException):
+                continue
+            cause: BaseException | None = r
+            while cause is not None and not isinstance(cause, OSError):
+                cause = cause.__cause__
+            if cause is not None:
+                raise AssertionError(
+                    f"concurrent runs clobbered one shared directory: {cause!r}"
+                ) from r
+            raise r
+        return results
+
+    (dir_a, *_), (dir_b, *_) = await _both(
         download_current_state(CONN_QN, APP),
         download_current_state(CONN_QN, APP),
     )
-    prev_a, prev_b = await asyncio.gather(
+    prev_a, prev_b = await _both(
         prepare_previous_state(CONN_QN, True, dir_a, APP),
         prepare_previous_state(CONN_QN, True, dir_b, APP),
     )
