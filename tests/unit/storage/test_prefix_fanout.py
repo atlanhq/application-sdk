@@ -221,35 +221,51 @@ class TestDrainGivesUpWithoutProgress:
         assert elapsed < _SAFETY_RELEASE / 2, f"cancel held {elapsed:.2f}s"
 
     async def test_a_progressing_drain_outlives_the_allowance(self) -> None:
-        """Threads finishing one by one keep the drain waiting past the allowance."""
+        """Threads finishing one by one keep the drain waiting past the allowance.
+
+        Driven by an injected clock and one release per thread, not by sleeps:
+        each finish lands 0.6 allowances after the last, so the drain's stall
+        clock never reaches the allowance, while the whole drain spans 2.4 of
+        them. Real-time spacing made this flaky on loaded runners.
+        """
+        budget = 10.0
+        now = [0.0]
         count = 4
-        gap = _BUDGET * 0.6  # each finish lands inside the allowance...
+        releases = [threading.Event() for _ in range(count)]
         finished: list[int] = []
-        started = threading.Barrier(count + 1)
 
         def staggered(i: int) -> None:
-            started.wait()
-            time.sleep(gap * (i + 1))
+            releases[i].wait(_SAFETY_RELEASE)
             finished.append(i)
 
-        async def fail_once_started() -> None:
-            await asyncio.to_thread(started.wait)
-            raise StorageError("boom")
-
-        began = time.monotonic()
-        with (
-            bind_progress_tracker(ProgressTracker(max_no_progress_seconds=_BUDGET)),
-            pytest.raises(StorageError),
-        ):
-            await _run_bounded(
-                [run_in_thread(staggered, i) for i in range(count)]
-                + [fail_once_started()],
-                count + 1,
+        with tracking_offloads() as pending:
+            tasks = [
+                asyncio.ensure_future(run_in_thread(staggered, i)) for i in range(count)
+            ]
+            while len(pending) < count:
+                await asyncio.sleep(0.005)
+            await asyncio.sleep(0.02)  # let every thread pick its call up
+            for task in tasks:
+                task.cancel()
+            drain = asyncio.ensure_future(
+                drain_offloads(
+                    pending, max_no_progress_seconds=budget, clock=lambda: now[0]
+                )
             )
+            for i in range(count):
+                now[0] += budget * 0.6
+                releases[i].set()
+                while len(finished) <= i:
+                    await asyncio.sleep(0.005)
+                await asyncio.sleep(0.01)  # let the drain observe the finish
+                assert not drain.done() or i == count - 1, f"gave up after {i + 1}"
+            await asyncio.wait_for(drain, _SAFETY_RELEASE)
 
-        # ...while the whole unwind is well past it, and nothing was left behind.
-        assert time.monotonic() - began > 2 * _BUDGET
+        assert now[0] > 2 * budget
         assert sorted(finished) == list(range(count))
+        for task in tasks:
+            with pytest.raises(asyncio.CancelledError):
+                await task
 
     async def test_an_explicit_allowance_overrides_the_attempts(self) -> None:
         release = threading.Event()

@@ -64,6 +64,15 @@
       "symbol": "AtlanError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "StorageError is deprecated; use application_sdk.storage.errors.StorageError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "StorageError"
+    },
+    {
       "kind": "enum_member",
       "marker_via": "enum-member",
       "message": "DataframeType.daft is deprecated; use DataframeType.pandas instead \u2014 will be removed in v4.0.0. It routes to the pandas/pyarrow path.",
