@@ -15,7 +15,7 @@ on ingress (``model_validate``), direct JSON serialization on egress
 from __future__ import annotations
 
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import Any
 
 from pydantic import (
@@ -23,17 +23,62 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     field_validator,
     model_validator,
 )
 from pydantic.alias_generators import to_camel
 
+from application_sdk._logging import get_logger
 from application_sdk.contracts.base import SerializableEnum
+from application_sdk.credentials.extra import parse_credentials_extra
 from application_sdk.credentials.spec import AgentCredentialSpec
-from application_sdk.credentials.utils import parse_credentials_extra
-from application_sdk.errors.base import AppError, sanitize_cause_repr
+from application_sdk.errors.base import AppError, redact_secrets, sanitize_cause_repr
 from application_sdk.errors.leaves import InternalError
 from application_sdk.errors.wire import FailureDetails
+
+logger = get_logger(__name__)
+
+
+def _pairs_to_mapping(items: Sequence[Any], origin: str) -> tuple[dict[str, Any], bool]:
+    """Fold a v3-style ``[{key, value}]`` sequence into a mapping.
+
+    The credential plane on the same request uses that shape, so a caller that
+    builds one config block the same way it builds credentials is a shape
+    confusion we can absorb rather than 500 on. Entries that are not
+    ``{"key": ...}`` mappings are skipped; ``extra.<k>`` keys are hoisted the
+    same way :func:`flatten_credentials_to_pairs` writes them.
+
+    Returns the mapping and whether anything was dropped on the way.
+    """
+    folded: dict[str, Any] = {}
+    extra: dict[str, Any] = {}
+    skipped = 0
+    for item in items:
+        if not isinstance(item, Mapping) or "key" not in item:
+            skipped += 1
+            continue
+        key = str(item["key"])
+        value = item.get("value")
+        if key.startswith("extra."):
+            extra[key[len("extra.") :]] = value
+        else:
+            folded[key] = value
+    if extra:
+        existing = folded.get("extra")
+        folded["extra"] = (
+            {**existing, **extra} if isinstance(existing, Mapping) else extra
+        )
+    if skipped:
+        # Count only — a config block can carry customer-identifying values, so
+        # nothing from the payload itself is ever logged.
+        logger.warning(
+            "%s: skipped %d sequence entr%s with no 'key' field",
+            origin,
+            skipped,
+            "y" if skipped == 1 else "ies",
+        )
+    return folded, bool(skipped)
 
 
 class _DictLikeConfigBase(BaseModel):
@@ -102,6 +147,114 @@ class _DictLikeConfigBase(BaseModel):
 
     def __len__(self) -> int:
         return sum(1 for _ in self)
+
+    _wire_degraded: bool = PrivateAttr(default=False)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _coerce_wire_shape(cls, value: Any, handler: Any) -> Any:
+        """Normalize whatever the wire carried into a mapping before validating.
+
+        These config blocks are **not** shape-stable across the callers that
+        POST them. Observed on this route: a mapping (the documented shape), a
+        JSON *string* (the setup form serializes nested form state), an explicit
+        JSON ``null``, and a ``[{key, value}]`` list copied from the credential
+        plane. Only the first validated; the rest raised a pydantic
+        ``ValidationError`` from ``model_validate`` in the route, which runs
+        *outside* the route's ``try``, so they surfaced as a bare HTTP 500 with
+        the handler never invoked — taking down the whole preflight, including
+        the checks that need no config at all.
+
+        The coercion itself never raises. A subclass that declares typed fields
+        still validates them normally.
+        """
+        coerced, degraded = cls._normalize_wire_shape(value)
+        instance = handler(coerced)
+        if degraded and isinstance(instance, _DictLikeConfigBase):
+            instance._wire_degraded = True
+        return instance
+
+    @classmethod
+    def _normalize_wire_shape(cls, value: Any) -> tuple[Any, bool]:
+        """Return ``(mapping, degraded)``. ``degraded`` means data was lost.
+
+        Nothing from the payload is ever logged — only its type and length. A
+        config block is form state and can carry customer-identifying values.
+        """
+        if value is None:
+            # "Sent nothing" — not a degradation, just an absent block.
+            return {}, False
+        if isinstance(value, (_DictLikeConfigBase, Mapping)):
+            return value, False
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return {}, False
+            try:
+                parsed = json.loads(text)
+            except (ValueError, RecursionError) as exc:
+                # RecursionError as well as ValueError: this string was *inside*
+                # the request body, so starlette's own json parse never looked
+                # at it, and a deeply-nested one ("[[[[...") reaches json.loads
+                # unbounded. Letting it escape would be the 500 this coercion
+                # exists to prevent.
+                logger.warning(
+                    "%s: ignoring unreadable JSON string config (%d chars, %s)",
+                    cls.__name__,
+                    len(text),
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                return {}, True
+            if isinstance(parsed, Mapping):
+                return parsed, False
+            if isinstance(parsed, (list, tuple)):
+                return _pairs_to_mapping(parsed, cls.__name__)
+            logger.warning(
+                "%s: ignoring JSON string config decoding to %s, not an object",
+                cls.__name__,
+                type(parsed).__name__,
+            )
+            return {}, True
+        if isinstance(value, (list, tuple)):
+            return _pairs_to_mapping(value, cls.__name__)
+        logger.warning(
+            "%s: ignoring config of unsupported type %s",
+            cls.__name__,
+            type(value).__name__,
+        )
+        return {}, True
+
+    @property
+    def wire_degraded(self) -> bool:
+        """True when the wire sent a config block that could not be read.
+
+        The difference matters to any check that authorizes *against* this
+        block. An empty config is ambiguous on its own: a check that iterates
+        the include filter passes **vacuously** when the filter is empty, so
+        "the form sent no filter" and "the form sent a filter I could not parse"
+        would otherwise both render as a green authorization row. They are not
+        the same claim — the second one verified nothing. A blocking tier should
+        treat this as a failed check, not a passed one::
+
+            cfg = input.connection_config
+            if cfg.wire_degraded:
+                return PreflightCheck(
+                    name="databaseSchemaCheck",
+                    passed=False,
+                    message="Could not read the connection config to verify access",
+                )
+        """
+        return self._wire_degraded
+
+    def as_dict(self) -> dict[str, Any]:
+        """Plain ``dict`` view, including ``extra`` keys.
+
+        For helpers annotated ``dict[str, Any]`` that would otherwise need a
+        type-checker suppression at the call site even though the dict protocol
+        above already satisfies them at runtime.
+        """
+        return self.model_dump()
 
 
 class BaseConnectionConfig(_DictLikeConfigBase):
@@ -244,6 +397,70 @@ def flatten_credentials_to_pairs(creds_dict: dict[str, Any]) -> list[dict[str, s
     return pairs
 
 
+_CREDENTIAL_KEYS = frozenset(
+    {
+        "host",
+        "port",
+        "authType",
+        "username",
+        "password",
+        "connectorType",
+        "connectorConfigName",
+        "extra",
+    }
+)
+
+
+def normalize_credentials(body: dict[str, Any]) -> dict[str, Any]:
+    """Normalize any accepted credential shape to v3 ``list[{key, value}]``.
+
+    Handles three inbound shapes: a v3 ``credentials`` list (passthrough), a v2
+    nested dict under ``credentials``, and v2 flat top-level keys. In every case
+    credential material ends up **only** under ``credentials`` and nowhere else
+    in the body — the flat top-level keys are removed — so a caller that must
+    not forward credentials (``/start`` → Temporal history) can strip them by
+    deleting that single key.
+    """
+
+    # The remainder, on EVERY path: no credential-shaped key, and no
+    # "credentials". Only the flat-only branch used to build it this way, so a
+    # body carrying BOTH a credentials key and v2 flat keys kept the flat ones
+    # at the top level -- and /start strips exactly one key before handing the
+    # body to Temporal, so the duplicates went into workflow history in
+    # plaintext and stayed there for the retention period.
+    def _rest() -> dict[str, Any]:
+        return {
+            k: v
+            for k, v in body.items()
+            if k not in _CREDENTIAL_KEYS and k != "credentials"
+        }
+
+    creds = body.get("credentials")
+    if isinstance(creds, list):
+        return {**_rest(), "credentials": creds}
+    if isinstance(creds, dict):
+        logger.info(
+            "Converting v2 nested-dict credentials to v3 list, keys=%s",
+            list(creds.keys()),
+        )
+        return {**_rest(), "credentials": flatten_credentials_to_pairs(dict(creds))}
+    if creds is None and _CREDENTIAL_KEYS & body.keys():
+        flat = {k: v for k, v in body.items() if k in _CREDENTIAL_KEYS}
+        logger.info(
+            "Converting v2 flat top-level credentials to v3 list, keys=%s",
+            list(flat.keys()),
+        )
+        return {**_rest(), "credentials": flatten_credentials_to_pairs(flat)}
+    if creds is not None:
+        # A scalar/unusable `credentials` matches no branch above. It is already
+        # unusable for auth (the contract wants a list), but the flat keys beside
+        # it are real credential material and must not survive into the body.
+        return {**_rest(), "credentials": creds}
+    # No credential material anywhere (creds is None and no flat keys): nothing
+    # to strip, so the body passes through as sent.
+    return dict(body)
+
+
 class AuthStatus(SerializableEnum):
     """Result of an authentication attempt."""
 
@@ -272,6 +489,9 @@ _AUTH_STATUS_HTTP_CODES: dict[AuthStatus, int] = {
     AuthStatus.EXPIRED: 401,
     AuthStatus.INVALID_CREDENTIALS: 401,
 }
+
+#: Public name for the AuthStatus → HTTP status map (the serving routes read it).
+AUTH_STATUS_HTTP_CODES = _AUTH_STATUS_HTTP_CODES
 
 
 class AuthInput(BaseModel):
@@ -358,6 +578,15 @@ class AuthOutput(BaseModel):
         if self.error is not None and not self.status.is_success:
             self.message = self.error.message
         return self
+
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        # Same reason as PreflightCheck.message, and it was missed: SQLHandler
+        # .test_auth reports a failure as `message=str(e)`, and a driver's
+        # str() embeds the DSN. Heracles calls this route on every "Test
+        # authentication" press, so the value reaches the browser network tab.
+        return redact_secrets(v)
 
 
 class PreflightStatus(SerializableEnum):
@@ -475,6 +704,14 @@ class PreflightCheck(BaseModel):
         dumped["message"] = self.resolved_message
         return dumped
 
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        # Does not go through FailureDetails, so it needs its own scrub: the
+        # documented fallback for a SQL connector is `message=str(exc)`, and a
+        # driver's str() embeds the DSN.
+        return redact_secrets(v)
+
 
 class PreflightInput(BaseModel):
     """Input for the preflight_check handler operation."""
@@ -513,7 +750,10 @@ class PreflightInput(BaseModel):
     for back-compat and for handlers that still read it."""
 
     connection_config: BaseConnectionConfig = Field(
-        default_factory=BaseConnectionConfig
+        default_factory=BaseConnectionConfig,
+        # The setup form and some Heracles paths send camelCase; with
+        # extra="ignore" on the input, that spelling was silently dropped.
+        validation_alias=AliasChoices("connection_config", "connectionConfig"),
     )
     """Connection configuration (host, port, database, etc.).
 
@@ -615,6 +855,12 @@ class PreflightOutput(BaseModel):
         if self.error is not None:
             return self.error.message
         return self.message
+
+    @field_validator("message")
+    @classmethod
+    def _scrub_message(cls, v: str) -> str:
+        """The aggregate message, scrubbed like the per-check one."""
+        return redact_secrets(v)
 
 
 UNVERIFIABLE_CHECK_NAME = "preflightVerdict"
@@ -767,7 +1013,10 @@ class MetadataInput(BaseModel):
     the legacy field."""
 
     connection_config: BaseConnectionConfig = Field(
-        default_factory=BaseConnectionConfig
+        default_factory=BaseConnectionConfig,
+        # The setup form and some Heracles paths send camelCase; with
+        # extra="ignore" on the input, that spelling was silently dropped.
+        validation_alias=AliasChoices("connection_config", "connectionConfig"),
     )
     """Connection configuration.
 

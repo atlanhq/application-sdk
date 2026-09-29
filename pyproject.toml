@@ -20,6 +20,7 @@ classifiers = [
 ]
 keywords = ["atlan", "sdk", "platform", "app", "development"]
 dependencies = [
+    "atlan-application-sdk-api==3.40.0",
     "aiohttp>=3.10.0,<4.0.0",
     "opentelemetry-exporter-otlp>=1.41.1,<2.0.0",
     "opentelemetry-exporter-prometheus>=0.62b1,<0.63",
@@ -441,6 +442,7 @@ constraint-dependencies = [
 # the local path means a packages/conformance change is picked up here
 # immediately, with no separate release-then-bump-the-pin cycle.
 atlan-application-sdk-conformance = { path = "packages/conformance" }
+atlan-application-sdk-api = { path = "packages/api", editable = true }
 
 # Uncomment the following section in case you want to publish to testpypi
 # [[tool.uv.index]]

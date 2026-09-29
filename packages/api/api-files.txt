@@ -1,0 +1,27 @@
+# Files of application_sdk/ shipped in atlan-application-sdk-api (paths from the repo root).
+# The one list: hatch_build.py packages it, the api-surface check verifies its import closure.
+application_sdk/__init__.py
+application_sdk/_context_errors.py
+application_sdk/_logging.py
+application_sdk/contracts/__init__.py
+application_sdk/contracts/base.py
+application_sdk/credentials/__init__.py
+application_sdk/credentials/errors.py
+application_sdk/credentials/extra.py
+application_sdk/credentials/ingress.py
+application_sdk/credentials/spec.py
+application_sdk/errors/__init__.py
+application_sdk/errors/base.py
+application_sdk/errors/categories.py
+application_sdk/errors/leaves.py
+application_sdk/errors/wire.py
+application_sdk/handler/__init__.py
+application_sdk/handler/asgi.py
+application_sdk/handler/base.py
+application_sdk/handler/context.py
+application_sdk/handler/contracts.py
+application_sdk/handler/manifest.py
+application_sdk/handler/request_contract.py
+application_sdk/handler/routes.py
+application_sdk/handler/service_errors.py
+application_sdk/version.py

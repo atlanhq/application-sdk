@@ -244,6 +244,7 @@ version = "3.40.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "atlan-application-sdk-api" },
     { name = "azure-identity" },
     { name = "boto3" },
     { name = "fastapi", extra = ["standard"] },
@@ -372,6 +373,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
     { name = "atlan-application-sdk", extras = ["storage"], marker = "extra == 'incremental'" },
+    { name = "atlan-application-sdk-api", editable = "packages/api" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
@@ -460,8 +462,25 @@ test = [
 ]
 
 [[package]]
+name = "atlan-application-sdk-api"
+version = "3.40.0"
+source = { editable = "packages/api" }
+dependencies = [
+    { name = "fastapi" },
+    { name = "orjson" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fastapi", specifier = ">=0.141.1,<0.142.0" },
+    { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
+    { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
+]
+
+[[package]]
 name = "atlan-application-sdk-conformance"
-version = "0.40.0"
+version = "0.40.1"
 source = { directory = "packages/conformance" }
 dependencies = [
     { name = "jinja2" },

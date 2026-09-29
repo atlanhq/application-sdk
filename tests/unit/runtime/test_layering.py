@@ -204,7 +204,7 @@ def test_auto_heartbeat_loop_stays_patchable_through_the_heartbeat_module() -> N
 
 
 def test_serializable_enum_never_left_contracts_base() -> None:
-    """``SerializableEnum`` stays exactly where consumers already subclass it.
+    """``SerializableEnum`` stays importable where consumers already subclass it.
 
     App code subclasses this to make its own enums Temporal-serialisable, so its
     definition site is part of the contract, not an implementation detail:
@@ -218,10 +218,14 @@ def test_serializable_enum_never_left_contracts_base() -> None:
     """
     from application_sdk.contracts import SerializableEnum as public_enum
     from application_sdk.contracts.base import OutputStatus
+    from application_sdk.contracts.base import SerializableEnum as api_enum
     from application_sdk.contracts.base import SerializableEnum as base_enum
 
-    assert public_enum is base_enum
-    assert base_enum.__module__ == "application_sdk.contracts.base"
+    # Defined once, in the api package (the handler contracts' enums subclass it
+    # and must be servable without this distribution); every path is the same
+    # class. Pickling an enum member records its own class, not this base, so
+    # the base's __module__ moving changes no payload.
+    assert public_enum is base_enum is api_enum
     assert issubclass(OutputStatus, base_enum)
 
     class AppOwnedStatus(base_enum):

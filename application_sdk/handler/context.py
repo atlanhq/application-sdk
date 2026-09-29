@@ -12,15 +12,36 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import UUID, uuid4
 
-from application_sdk.app.base_errors import SecretStoreNotConfiguredError
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._context_errors import (  # noqa: F401 — AppContextError re-exported
+    AppContextError,
+    SecretStoreNotConfiguredError,
+)
+from application_sdk._logging import get_logger
 
 if TYPE_CHECKING:
     from application_sdk.handler.contracts import HandlerCredential
-    from application_sdk.infrastructure.secrets import SecretStore
+
+
+class SecretStore(Protocol):
+    """What :class:`HandlerContext` needs from a secret store.
+
+    The worker passes its Dapr-backed store. The consolidated API host has no
+    secret store and passes none, so ``get_secret`` raises
+    :class:`SecretStoreNotConfiguredError` there while ``get_credential`` (the
+    request's own credentials) works everywhere.
+    """
+
+    async def get(self, name: str) -> str: ...
+
+    async def get_optional(self, name: str) -> str | None: ...
+
+
+_INFRASTRUCTURE_MODULES = frozenset(
+    {"application_sdk.infrastructure", "application_sdk.infrastructure.context"}
+)
 
 
 def _utc_now() -> datetime:
@@ -173,11 +194,16 @@ def bind_invocation_context(
     invocation runs with the same ContextVar-backed context the HTTP path builds
     (app name, credentials, and the worker's secret store when present).
     """
-    from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: avoid import cycle at module load
-        get_infrastructure,
-    )
-
-    infra = get_infrastructure()
+    try:
+        from application_sdk.infrastructure.context import (  # noqa: PLC0415 — lazy: avoid import cycle; absent on an api-only install
+            get_infrastructure,
+        )
+    except ModuleNotFoundError as exc:
+        if exc.name not in _INFRASTRUCTURE_MODULES:
+            raise
+        infra = None  # api-only install: no worker infrastructure, so no secret store
+    else:
+        infra = get_infrastructure()
     secret_store = infra.secret_store if infra is not None else None
     context = HandlerContext(
         app_name=app_name,

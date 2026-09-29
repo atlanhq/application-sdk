@@ -13,6 +13,7 @@ import warnings
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, ClassVar
 
+from application_sdk._context_errors import AppContextError
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
 from application_sdk.errors.base import AppError
 from application_sdk.handler.context import get_handler_context
@@ -116,10 +117,6 @@ class Handler(ABC):
         """
         ctx = get_handler_context()
         if ctx is None:
-            from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
-                AppContextError,
-            )
-
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside test_auth, preflight_check, or fetch_metadata."

@@ -14,7 +14,6 @@ Key types:
 
 from __future__ import annotations
 
-import dataclasses
 import uuid
 from enum import StrEnum
 from pathlib import Path
@@ -31,6 +30,9 @@ from pydantic import (
 from pydantic.alias_generators import to_camel
 
 from application_sdk.common._listing import safe_list_directory
+from application_sdk.contracts.base import (  # noqa: F401 — re-exported; defined with the contract base
+    MaxItems,
+)
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
 from application_sdk.credentials.ref import CredentialRef
 
@@ -192,21 +194,6 @@ class StorageTier(StrEnum):
             if app_name
             else "persistent-artifacts/file_refs"
         )
-
-
-@dataclasses.dataclass(frozen=True)
-class MaxItems:
-    """Constraint marker indicating maximum collection size.
-
-    Use with Annotated to declare bounded collections in contracts:
-
-        class MyInput(Input):
-            settings: Annotated[dict[str, str], MaxItems(100)]
-            items: Annotated[list[Record], MaxItems(1000)]
-    """
-
-    limit: int
-    """Maximum number of items allowed in the collection."""
 
 
 class Lazy:

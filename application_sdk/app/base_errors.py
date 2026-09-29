@@ -5,6 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import ClassVar
 
+from application_sdk._context_errors import (  # noqa: F401 — re-exported; defined in the api distribution
+    SecretStoreNotConfiguredError,
+)
 from application_sdk.errors.leaves import (
     InternalError,
     PreconditionError,
@@ -74,16 +77,6 @@ class StateStoreNotConfiguredError(PreconditionError):
     code: ClassVar[str] = "PRECONDITION_STATE_STORE_NOT_CONFIGURED"
     message: str = "No state store configured"
     resource: str | None = "state_store"
-    expected_state: str | None = "configured"
-
-
-@dataclass(kw_only=True)
-class SecretStoreNotConfiguredError(PreconditionError):
-    """Secret store required by get_secret / resolve_credential but not configured."""
-
-    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
-    message: str = "No secret store configured"
-    resource: str | None = "secret_store"
     expected_state: str | None = "configured"
 
 
