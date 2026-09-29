@@ -20,13 +20,31 @@ from conformance.bootstrap.render import render
 
 _PRESET = Path(__file__).resolve().parents[3] / "renovate-config" / "default.json"
 
-SDK = {"name": "atlan-application-sdk", "manager": "pep621", "datasource": "pypi"}
-CONFORMANCE = {
-    "name": "atlan-application-sdk-conformance",
+SDK = {
+    "depName": "atlan-application-sdk",
+    "packageName": "atlan-application-sdk",
     "manager": "pep621",
     "datasource": "pypi",
 }
-TOOLKIT = {"name": "app-contract-toolkit", "manager": "custom.regex", "datasource": ""}
+CONFORMANCE = {
+    "depName": "atlan-application-sdk-conformance",
+    "packageName": "atlan-application-sdk-conformance",
+    "manager": "pep621",
+    "datasource": "pypi",
+}
+TOOLKIT = {
+    "depName": "app-contract-toolkit",
+    "packageName": "atlanhq/application-sdk",
+    "manager": "custom.regex",
+    "datasource": "github-tags",
+}
+_KNOWN_MATCHERS = {
+    "matchPackageNames",
+    "matchDepNames",
+    "matchManagers",
+    "matchDatasources",
+    "matchUpdateTypes",
+}
 
 
 def _names_match(patterns: list[str], name: str) -> bool:
@@ -38,9 +56,14 @@ def _names_match(patterns: list[str], name: str) -> bool:
 
 
 def _matches(rule: dict, dep: dict, update_type: str) -> bool:
+    unknown = {k for k in rule if k.startswith("match")} - _KNOWN_MATCHERS
+    if unknown:
+        raise AssertionError(
+            f"layering model cannot evaluate {sorted(unknown)} in {rule!r}; teach _matches"
+        )
     checks = {
-        "matchPackageNames": dep["name"],
-        "matchDepNames": dep["name"],
+        "matchPackageNames": dep["packageName"],
+        "matchDepNames": dep["depName"],
     }
     for key, value in checks.items():
         if key in rule and not _names_match(rule[key], value):
@@ -65,9 +88,12 @@ def _effective(repo_json: dict, dep: dict, update_type: str = "minor") -> dict:
     return config
 
 
-def _branch(config: dict) -> str:
+def _branch(config: dict, update_type: str = "minor") -> str:
     slug = config.get("groupSlug") or config.get("groupName") or ""
-    return "renovate/" + re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+    slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+    if update_type == "major" and config.get("separateMajorMinor", True):
+        slug = f"major-{slug}"
+    return f"renovate/{slug}"
 
 
 HARD = json.loads(render("renovate.json"))
@@ -75,7 +101,7 @@ SOFT = json.loads(render("renovate.json", automerge="false"))
 GROUP_BRANCH = "renovate/atlan-framework-dependencies"
 
 
-@pytest.mark.parametrize("dep", [SDK, CONFORMANCE, TOOLKIT], ids=lambda d: d["name"])
+@pytest.mark.parametrize("dep", [SDK, CONFORMANCE, TOOLKIT], ids=lambda d: d["depName"])
 def test_hard_mode_groups_every_first_party_bump_and_auto_merges(dep: dict) -> None:
     config = _effective(HARD, dep)
     assert _branch(config) == GROUP_BRANCH
@@ -88,7 +114,7 @@ def test_soft_mode_splits_conformance_onto_its_own_auto_merged_branch() -> None:
     assert config.get("automerge") is True
 
 
-@pytest.mark.parametrize("dep", [SDK, TOOLKIT], ids=lambda d: d["name"])
+@pytest.mark.parametrize("dep", [SDK, TOOLKIT], ids=lambda d: d["depName"])
 def test_soft_mode_keeps_the_rest_grouped_for_a_human(dep: dict) -> None:
     config = _effective(SOFT, dep)
     assert _branch(config) == GROUP_BRANCH
@@ -112,3 +138,27 @@ def test_sdk_opt_out_recipe_splits_the_sdk_and_leaves_the_group_auto_merging() -
     conformance = _effective(opt_out, CONFORMANCE)
     assert _branch(conformance) == GROUP_BRANCH
     assert conformance.get("automerge") is True
+
+
+def test_hard_mode_conformance_major_auto_merges_on_the_major_group_branch() -> None:
+    config = _effective(HARD, CONFORMANCE, "major")
+    assert _branch(config, "major") == "renovate/major-atlan-framework-dependencies"
+    assert config.get("automerge") is True
+
+
+def test_soft_mode_conformance_major_stays_on_the_major_group_branch_for_a_human() -> (
+    None
+):
+    config = _effective(SOFT, CONFORMANCE, "major")
+    assert _branch(config, "major") == "renovate/major-atlan-framework-dependencies"
+    assert config.get("automerge") is False
+
+
+@pytest.mark.parametrize("dep", [SDK, TOOLKIT], ids=lambda d: d["depName"])
+def test_sdk_and_toolkit_majors_stay_disabled(dep: dict) -> None:
+    assert _effective(HARD, dep, "major").get("enabled") is False
+
+
+def test_unknown_match_condition_fails_loudly() -> None:
+    with pytest.raises(AssertionError, match="matchFileNames"):
+        _matches({"matchFileNames": ["x"]}, SDK, "minor")
