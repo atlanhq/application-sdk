@@ -187,10 +187,9 @@ def main(argv: list[str] | None = None) -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         py = _venv(Path(tmp) / "upgrade")
-        _pip(
-            py,
-            f"atlan-application-sdk=={resolve_release(args.from_release, args.root)}",
-        )
+        built = sdk.name.split("-")[1]
+        release = resolve_release(args.from_release, args.root, below=built)
+        _pip(py, f"atlan-application-sdk=={release}")
         _pip(py, "pip")
         subprocess.run(
             [str(py), "-m", "pip", "install", "-q", "-U", str(api), str(sdk)],
@@ -198,7 +197,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         done = subprocess.run([str(py), "-c", _PRESENT, ",".join(listed)], cwd=tmp)
         if done.returncode:
-            failures.append("upgrade from the release lost listed files")
+            failures.append(
+                f"upgrade from {release} left a broken install (listed files "
+                "missing, or the worker does not import)"
+            )
 
         py = _venv(Path(tmp) / "alone")
         _pip(py, str(api), "httpx")
