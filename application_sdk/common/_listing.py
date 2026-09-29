@@ -50,6 +50,13 @@ PARTIAL_DIRNAME = ".sdk-partial"
 #: stays a single fact and this module keeps its stdlib-only imports.
 WRITER_STAGING_DIRNAME = ".sdk-writer-staging"
 
+#: Directory ``download_prefix(..., sync=True)`` keeps its index in — the
+#: size and etag each mirrored file was downloaded at, which is how a
+#: later sync knows a local file is already current without re-reading it.
+#: It sits inside the mirrored tree, so a walk of that tree (or a prefix
+#: upload of it) must not surface it.
+SYNC_INDEX_DIRNAME = ".sdk-sync"
+
 #: Every directory name that holds SDK working files rather than
 #: artifacts. An explicit set rather than a ``.sdk-`` prefix rule: a
 #: denylist that silently swallowed a customer directory because its
@@ -57,7 +64,9 @@ WRITER_STAGING_DIRNAME = ".sdk-writer-staging"
 #: short enough that adding to it is a one-line change. Add here when
 #: introducing a new SDK-internal working directory — every walker
 #: picks it up with no further edit.
-INTERNAL_DIRNAMES: frozenset[str] = frozenset({PARTIAL_DIRNAME, WRITER_STAGING_DIRNAME})
+INTERNAL_DIRNAMES: frozenset[str] = frozenset(
+    {PARTIAL_DIRNAME, WRITER_STAGING_DIRNAME, SYNC_INDEX_DIRNAME}
+)
 
 
 def is_internal_dirname(name: str) -> bool:

@@ -456,6 +456,7 @@ class TestStagingNeverUploads:
         assert _listing.INTERNAL_DIRNAMES == {
             PARTIAL_DIRNAME,
             _listing.WRITER_STAGING_DIRNAME,
+            _listing.SYNC_INDEX_DIRNAME,
         }
 
 

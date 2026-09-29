@@ -1,0 +1,455 @@
+"""Failure, cancellation and mirror contracts of the storage prefix primitives.
+
+``download_prefix``, ``upload_prefix``, ``delete_prefix`` (per-key fallback)
+and ``_gather_with_semaphore`` all fan out through ``_run_bounded``. The drain
+tests pin the property ``asyncio.gather`` lacked: once the error or the
+cancellation reaches the caller, no ``run_in_thread`` work the fan-out started
+is still running.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from application_sdk._runtime.offload import run_in_thread
+from application_sdk.common._listing import INTERNAL_DIRNAMES, SYNC_INDEX_DIRNAME
+from application_sdk.storage import batch as batch_module
+from application_sdk.storage._concurrency import _gather_with_semaphore, _run_bounded
+from application_sdk.storage.batch import download_prefix, list_keys, upload_prefix
+from application_sdk.storage.errors import StorageConfigError, StorageError
+from application_sdk.storage.factory import create_memory_store
+from application_sdk.storage.ops import _get_bytes, _put
+
+#: How long the offloaded "slow" call blocks its thread. Long enough that an
+#: undrained fan-out returns well before it ends; short enough to keep the
+#: suite fast.
+_THREAD_SECONDS = 0.3
+
+
+@pytest.fixture
+def store():
+    return create_memory_store()
+
+
+class _BlockingCall:
+    """A blocking callable for ``run_in_thread`` that records its lifecycle."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.finished = threading.Event()
+
+    def __call__(self) -> None:
+        self.started.set()
+        time.sleep(_THREAD_SECONDS)
+        self.finished.set()
+
+    async def wait_started(self) -> None:
+        while not self.started.is_set():
+            await asyncio.sleep(0.005)
+
+
+async def _fail_once_started(call: _BlockingCall) -> None:
+    await call.wait_started()
+    raise StorageError("boom")
+
+
+async def _cancel_once_started(
+    call: _BlockingCall, run: Callable[[], Awaitable[object]]
+) -> None:
+    """Start *run*, cancel it once *call*'s thread is running, await the unwind."""
+    task = asyncio.create_task(run())
+    await call.wait_started()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+
+# ---------------------------------------------------------------------------
+# _run_bounded / _gather_with_semaphore
+# ---------------------------------------------------------------------------
+
+
+class TestRunBounded:
+    async def test_failure_drains_in_flight_threads(self) -> None:
+        call = _BlockingCall()
+
+        with pytest.raises(StorageError):
+            await _run_bounded([run_in_thread(call), _fail_once_started(call)], 4)
+
+        assert call.finished.is_set(), "sibling thread still running after raise"
+
+    async def test_cancellation_drains_in_flight_threads(self) -> None:
+        call = _BlockingCall()
+
+        await _cancel_once_started(call, lambda: _run_bounded([run_in_thread(call)], 4))
+
+        assert call.finished.is_set(), "thread still running after cancel"
+
+    async def test_error_is_a_bare_storage_error(self) -> None:
+        async def fail() -> None:
+            raise StorageError("boom")
+
+        with pytest.raises(StorageError) as exc_info:
+            await _run_bounded([fail(), fail()], 2)
+
+        assert not isinstance(exc_info.value, BaseExceptionGroup)
+        assert isinstance(exc_info.value.__cause__, BaseExceptionGroup)
+
+    async def test_non_storage_failure_surfaces_as_the_group(self) -> None:
+        async def fail() -> None:
+            raise ValueError("not a storage failure")
+
+        with pytest.raises(BaseExceptionGroup) as exc_info:
+            await _run_bounded([fail()], 2)
+
+        assert [type(e) for e in exc_info.value.exceptions] == [ValueError]
+
+    async def test_results_keep_input_order_and_respect_the_bound(self) -> None:
+        running = 0
+        peak = 0
+
+        async def item(i: int) -> int:
+            nonlocal running, peak
+            running += 1
+            peak = max(peak, running)
+            await asyncio.sleep(0.01 * (5 - i))
+            running -= 1
+            return i
+
+        assert await _run_bounded([item(i) for i in range(5)], 2) == list(range(5))
+        assert peak == 2
+
+    async def test_gather_with_semaphore_drains_on_failure(self) -> None:
+        call = _BlockingCall()
+
+        with pytest.raises(StorageError):
+            await _gather_with_semaphore(
+                [run_in_thread(call), _fail_once_started(call)], asyncio.Semaphore(4)
+            )
+
+        assert call.finished.is_set()
+
+    async def test_offloads_outside_a_fanout_are_untracked(self) -> None:
+        """A plain ``run_in_thread`` keeps its old behaviour: no scope, no marker."""
+        assert await run_in_thread(lambda: 7) == 7
+
+
+# ---------------------------------------------------------------------------
+# Each primitive drains
+# ---------------------------------------------------------------------------
+
+
+class TestPrimitivesDrain:
+    async def test_download_prefix_drains_on_failure(self, store, tmp_path) -> None:
+        await _put("p/a.txt", b"a", store, normalize=False)
+        await _put("p/b.txt", b"b", store, normalize=False)
+        call = _BlockingCall()
+
+        async def fake_download(key, *args, **kwargs):
+            if key == "p/a.txt":
+                await run_in_thread(call)
+            else:
+                await _fail_once_started(call)
+
+        with (
+            patch.object(batch_module, "download_file_chunked", fake_download),
+            pytest.raises(StorageError),
+        ):
+            await download_prefix("p/", tmp_path, store, normalize=False)
+
+        assert call.finished.is_set()
+
+    async def test_download_prefix_drains_on_cancel(self, store, tmp_path) -> None:
+        await _put("p/a.txt", b"a", store, normalize=False)
+        call = _BlockingCall()
+
+        async def fake_download(key, *args, **kwargs):
+            await run_in_thread(call)
+
+        with patch.object(batch_module, "download_file_chunked", fake_download):
+            await _cancel_once_started(
+                call,
+                lambda: download_prefix("p/", tmp_path, store, normalize=False),
+            )
+
+        assert call.finished.is_set()
+
+    async def test_upload_prefix_drains_on_failure(self, store, tmp_path) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        (tmp_path / "b.txt").write_bytes(b"b")
+        call = _BlockingCall()
+
+        async def fake_upload(key, *args, **kwargs):
+            if key.endswith("a.txt"):
+                await run_in_thread(call)
+            else:
+                await _fail_once_started(call)
+
+        with (
+            patch.object(batch_module, "upload_file", fake_upload),
+            pytest.raises(StorageError),
+        ):
+            await upload_prefix(tmp_path, "out", store, normalize=False)
+
+        assert call.finished.is_set()
+
+    async def test_upload_prefix_drains_on_cancel(self, store, tmp_path) -> None:
+        (tmp_path / "a.txt").write_bytes(b"a")
+        call = _BlockingCall()
+
+        async def fake_upload(key, *args, **kwargs):
+            await run_in_thread(call)
+
+        with patch.object(batch_module, "upload_file", fake_upload):
+            await _cancel_once_started(
+                call, lambda: upload_prefix(tmp_path, "out", store, normalize=False)
+            )
+
+        assert call.finished.is_set()
+
+    async def test_delete_fallback_drains_on_failure(self, store) -> None:
+        call = _BlockingCall()
+
+        async def fake_delete(path, *args, **kwargs):
+            if path == "k/a":
+                await run_in_thread(call)
+                return True
+            await _fail_once_started(call)
+            return True
+
+        with (
+            patch.object(batch_module, "_delete_object", fake_delete),
+            pytest.raises(StorageError) as exc_info,
+        ):
+            await batch_module._delete_paths_individually(store, ["k/a", "k/b"])
+
+        assert not isinstance(exc_info.value, BaseExceptionGroup)
+        assert call.finished.is_set()
+
+
+# ---------------------------------------------------------------------------
+# download_prefix(sync=True)
+# ---------------------------------------------------------------------------
+
+
+def _downloaded_keys() -> tuple[list[str], Callable[..., Awaitable[None]]]:
+    """A pass-through ``download_file_chunked`` that records each key fetched."""
+    fetched: list[str] = []
+    real = batch_module.download_file_chunked
+
+    async def spy(key, *args, **kwargs):
+        fetched.append(key)
+        await real(key, *args, **kwargs)
+
+    return fetched, spy
+
+
+class TestDownloadPrefixSync:
+    async def test_second_sync_skips_current_files(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await _put("s/sub/b.txt", b"beta", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            dests = await download_prefix(
+                "s/", tmp_path, store, normalize=False, sync=True
+            )
+
+        assert fetched == []
+        # The return value is the mirror's content, skipped files included.
+        assert sorted(Path(d).name for d in dests) == ["a.txt", "b.txt"]
+
+    async def test_changed_object_is_downloaded_again(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await _put("s/b.txt", b"beta", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        await _put("s/a.txt", b"ALPHA", store, normalize=False)  # new etag
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert fetched == ["s/a.txt"]
+        assert (tmp_path / "s" / "a.txt").read_bytes() == b"ALPHA"
+
+    async def test_local_size_drift_is_downloaded_again(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        (tmp_path / "s" / "a.txt").write_bytes(b"truncated-and-then-some")
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert fetched == ["s/a.txt"]
+        assert (tmp_path / "s" / "a.txt").read_bytes() == b"alpha"
+
+    async def test_unlisted_local_files_are_pruned(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        stale = tmp_path / "s" / "old" / "gone.txt"
+        stale.parent.mkdir(parents=True)
+        stale.write_bytes(b"stale")
+        partial = tmp_path / "s" / ".sdk-partial" / "x.part"
+        partial.parent.mkdir()
+        partial.write_bytes(b"in flight")
+
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert not stale.exists()
+        assert (tmp_path / "s" / "a.txt").exists()
+        # SDK working directories are not the listing's business.
+        assert partial.exists()
+
+    async def test_prune_stays_inside_the_prefix_tree(self, store, tmp_path) -> None:
+        """Without strip_prefix, a sibling prefix in the same local_dir survives."""
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        sibling = tmp_path / "other" / "keep.txt"
+        sibling.parent.mkdir()
+        sibling.write_bytes(b"not mine")
+
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert sibling.exists()
+
+    async def test_strip_prefix_syncs_local_dir_itself(self, store, tmp_path) -> None:
+        await _put("run/state/a.txt", b"alpha", store, normalize=False)
+        stale = tmp_path / "stale.txt"
+        stale.write_bytes(b"x")
+
+        await download_prefix(
+            "run/state", tmp_path, store, normalize=False, strip_prefix=True, sync=True
+        )
+
+        assert (tmp_path / "a.txt").read_bytes() == b"alpha"
+        assert not stale.exists()
+        assert (tmp_path / SYNC_INDEX_DIRNAME / "index.json").exists()
+
+    async def test_suffix_limits_what_is_pruned(self, store, tmp_path) -> None:
+        await _put("s/a.parquet", b"p", store, normalize=False)
+        other = tmp_path / "s" / "notes.json"
+        other.parent.mkdir()
+        other.write_bytes(b"{}")
+        stale = tmp_path / "s" / "old.parquet"
+        stale.write_bytes(b"old")
+
+        await download_prefix(
+            "s/", tmp_path, store, normalize=False, suffix=".parquet", sync=True
+        )
+
+        assert other.exists()
+        assert not stale.exists()
+
+    async def test_failed_sync_does_not_vouch_for_the_old_etag(
+        self, store, tmp_path
+    ) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        await _put("s/a.txt", b"ALPHA", store, normalize=False)
+
+        async def fail(*args, **kwargs):
+            raise StorageError("boom")
+
+        with (
+            patch.object(batch_module, "download_file_chunked", fail),
+            pytest.raises(StorageError),
+        ):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        index = json.loads(
+            (tmp_path / "s" / SYNC_INDEX_DIRNAME / "index.json").read_text()
+        )
+        assert "a.txt" not in index["files"]
+
+    async def test_unreadable_index_means_full_download(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        (tmp_path / "s" / SYNC_INDEX_DIRNAME / "index.json").write_text("{not json")
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert fetched == ["s/a.txt"]
+
+    async def test_sync_index_is_not_uploaded(self, store, tmp_path) -> None:
+        assert SYNC_INDEX_DIRNAME in INTERNAL_DIRNAMES
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix(
+            "s/", tmp_path, store, normalize=False, strip_prefix=True, sync=True
+        )
+
+        keys = await upload_prefix(tmp_path, "back", store, normalize=False)
+
+        assert keys == ["back/a.txt"]
+
+
+# ---------------------------------------------------------------------------
+# upload_prefix(prune=True)
+# ---------------------------------------------------------------------------
+
+
+class TestUploadPrefixPrune:
+    async def test_deletes_only_keys_not_uploaded(self, store, tmp_path) -> None:
+        await _put("out/old.txt", b"old", store, normalize=False)
+        await _put("out/old.txt.sha256", b"0" * 64, store, normalize=False)
+        await _put("out/keep.txt", b"previous", store, normalize=False)
+        await _put("out_backup/x.txt", b"sibling", store, normalize=False)
+        (tmp_path / "keep.txt").write_bytes(b"current")
+        (tmp_path / "new.txt").write_bytes(b"new")
+
+        uploaded = await upload_prefix(
+            tmp_path, "out", store, normalize=False, prune=True
+        )
+
+        remaining = set(await list_keys("out/", store, normalize=False))
+        assert set(uploaded) == {"out/keep.txt", "out/new.txt"}
+        assert "out/old.txt" not in remaining
+        assert "out/old.txt.sha256" not in remaining
+        assert set(uploaded) <= remaining
+        # Anything else left is an uploaded key's own sidecar.
+        assert remaining - set(uploaded) <= {f"{k}.sha256" for k in uploaded}
+        assert await _get_bytes("out/keep.txt", store, normalize=False) == b"current"
+        assert await list_keys("out_backup/", store, normalize=False) == [
+            "out_backup/x.txt"
+        ]
+
+    async def test_failed_upload_prunes_nothing(self, store, tmp_path) -> None:
+        await _put("out/old.txt", b"old", store, normalize=False)
+        (tmp_path / "a.txt").write_bytes(b"a")
+
+        async def fail(*args, **kwargs):
+            raise StorageError("boom")
+
+        with (
+            patch.object(batch_module, "upload_file", fail),
+            pytest.raises(StorageError),
+        ):
+            await upload_prefix(tmp_path, "out", store, normalize=False, prune=True)
+
+        assert await list_keys("out/", store, normalize=False) == ["out/old.txt"]
+
+    async def test_empty_prefix_is_refused(self, store, tmp_path) -> None:
+        await _put("anything.txt", b"x", store, normalize=False)
+        (tmp_path / "a.txt").write_bytes(b"a")
+
+        with pytest.raises(StorageConfigError):
+            await upload_prefix(tmp_path, "", store, normalize=False, prune=True)
+
+        assert await list_keys("", store, normalize=False) == ["anything.txt"]
+
+    async def test_default_prunes_nothing(self, store, tmp_path) -> None:
+        await _put("out/old.txt", b"old", store, normalize=False)
+        (tmp_path / "a.txt").write_bytes(b"a")
+
+        await upload_prefix(tmp_path, "out", store, normalize=False)
+
+        assert "out/old.txt" in await list_keys("out/", store, normalize=False)
