@@ -1,0 +1,106 @@
+# Remediate dispatch — reusable workflow behind the `/remediate` PR comment.
+#
+# A PR comment of `/remediate` asks the conformance remediation lane (it runs
+# in atlanhq/agent-sdk) to fix the PR's blocking auto-fixable conformance
+# findings and push one commit per rule to the PR branch:
+#
+#   /remediate            every blocking auto-fixable finding on this PR
+#   /remediate list       list them in a sticky comment; change nothing
+#   /remediate E001 L002  just these rules
+#
+# This workflow only forwards (repo, pr, comment_id) to agent-sdk's
+# `conformance-remediate-pr.yml`. It holds no model credentials and checks out
+# no code. agent-sdk trusts none of what it is sent: it reads the comment and
+# its author back from GitHub, requires the author to have write access to
+# this repo, and refuses fork PRs. (Unrelated to the `/remediate` Claude Code
+# skill the bootstrap installs under .claude/skills — that runs on a laptop.)
+#
+# Usage in each app repo (.github/workflows/remediate-comment.yml):
+#
+#   on:
+#     issue_comment:
+#       types: [created]
+#   jobs:
+#     remediate:
+#       if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+#       uses: atlanhq/application-sdk/.github/workflows/remediate-dispatch.yaml@main
+#       secrets: inherit
+#
+name: Remediate dispatch
+
+on:
+  workflow_call:
+    secrets:
+      FLEET_APP_ID:
+        required: false
+        description: "atlan-app-fleet App ID (org secret), available to callers through 'secrets: inherit'."
+      FLEET_APP_PRIVATE_KEY:
+        required: false
+        description: "atlan-app-fleet App private key (org secret)."
+
+permissions:
+  # Reactions and the fallback comment on this PR; `/issues/comments/{id}/reactions` needs issues: write.
+  issues: write
+  pull-requests: read
+
+jobs:
+  dispatch:
+    name: Forward /remediate to the remediation lane
+    # A cheap filter only; agent-sdk re-checks the author's access through the API.
+    if: >-
+      contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)
+      && !endsWith(github.event.comment.user.login, '[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout reaction helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          path: .ack
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: React to comment
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: eyes
+        run: python3 .ack/.github/scripts/react_to_comment.py
+
+      - name: Mint fleet App token for agent-sdk
+        id: app-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: agent-sdk
+          permission-actions: write
+
+      - name: Dispatch the remediation lane
+        id: dispatch
+        if: steps.app-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+        run: |
+          gh workflow run conformance-remediate-pr.yml -R atlanhq/agent-sdk \
+            -f repo="$REPO" -f pr="$PR" -f comment_id="$COMMENT_ID"
+
+      - name: Say so when the lane could not be reached
+        if: steps.app-token.outcome != 'success' || steps.dispatch.outcome != 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.issue.number }}
+        run: |
+          gh pr comment "$PR" -R "$REPO" --body \
+            "<!-- remediate-summary -->
+          /remediate: the remediation lane could not be reached from this repo, so nothing was changed. See this workflow run's log."

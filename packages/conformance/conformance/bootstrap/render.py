@@ -54,6 +54,7 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "stale.yml",
     "auto-fix.yml",
     "generated-freshness.yaml",
+    "remediate-comment.yml",
 )
 
 # Workflow shims bootstrap once managed and now actively removes (relative to
