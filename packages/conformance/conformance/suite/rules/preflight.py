@@ -544,50 +544,6 @@ _CONTRACT_RULES = (
         help_uri=f"{_HELP_BASE}#f016",
     ),
     RuleDefinition(
-        id="F017",
-        name="PreflightWorkflowEnforcement",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        until="0.40.0",
-        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
-        full_description=(
-            "Retired in 0.39.0 and removed in 0.40.0; F017 no longer fires. It was "
-            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
-            "conformance rule over the SDK's own behaviour only restated those "
-            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
-            "a suppression that still cites this id suppresses nothing and is "
-            "reported by F020."
-        ),
-        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
-        help_uri=f"{_HELP_BASE}#f017",
-    ),
-    RuleDefinition(
-        id="F018",
-        name="PreflightExitEvidence",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.WARN,
-        mechanism=RuleMechanism.STATIC,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        until="0.40.0",
-        short_description="Retired: SDK gate behaviour is covered by the SDK's own test suite.",
-        full_description=(
-            "Retired in 0.39.0 and removed in 0.40.0; F018 no longer fires. It was "
-            "SDK-scoped, and the SDK owns both the gate and its tests, so a "
-            "conformance rule over the SDK's own behaviour only restated those "
-            "tests. The behaviour is asserted in tests/unit/app/test_preflight_gate.py; "
-            "a suppression that still cites this id suppresses nothing and is "
-            "reported by F020."
-        ),
-        rationale="Conformance checks that required things are defined; whether tests pass is the test gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not already.",
-        help_uri=f"{_HELP_BASE}#f018",
-    ),
-    RuleDefinition(
         id="F019",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — every PreflightOutput in "

@@ -42,7 +42,7 @@ F016 reports a required scenario that is not defined: missing, skipped, not
 asserting the contract, or unreadable.  Conformance never runs the scenarios;
 the test gate does.  The fix is a source adapter and a pytest scenario, not an
 edit to the handler, so F016 is `not_remediable` here and routes to residue with
-the scenario name.  F017 and F018 are retired and never fire.  F019 reports what static analysis could not resolve; it has
+the scenario name.  F017 and F018 were deleted in 0.40.0.  F019 reports what static analysis could not resolve; it has
 no fix of its own and routes to residue as an investigation pointer.
 
 ### Requires
