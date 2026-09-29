@@ -318,6 +318,7 @@ def categorize(pr: RenovatePR) -> Category:
         return Category.GITHUB_ACTIONS
     if (
         "atlan-platform" in branch
+        or "atlan-framework-dependencies" in branch
         or "atlan platform" in title
         or "atlan framework dependencies" in title
     ):
