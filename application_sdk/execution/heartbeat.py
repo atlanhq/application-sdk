@@ -22,7 +22,6 @@ directly.
 
 import asyncio
 import math
-import os
 import time
 from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
@@ -43,10 +42,15 @@ from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.execution.progress_telemetry import record_no_progress_gap
 from application_sdk.execution.run_length import RunLengthWatch
 from application_sdk.observability import (
+    cgroup as _cgroup,  # module alias so tests can patch _cgroup.memory_limit_bytes()
+)
+from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
-from application_sdk.observability.resource_sampler import parse_pod_memory_limit
+from application_sdk.observability.resource_sampler import (  # noqa: F401 — no longer used here, but importable from this module before; kept so the import never regresses
+    parse_pod_memory_limit,
+)
 
 logger = get_logger(__name__)
 
@@ -81,6 +85,10 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
+# While the ratio stays at or above the threshold, repeat the warning at most this
+# often, so a long activity near its limit keeps a recent line in the log without
+# one per heartbeat.
+_MEMORY_WARN_REPEAT_SECONDS = 300.0
 
 
 async def stop_heartbeat_task(
@@ -402,8 +410,10 @@ async def auto_heartbeat_loop(
             because only the activity layer knows when the *run* started.
     """
     warning_threshold = interval_seconds * 0.5
-    _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
-    _memory_warn_active = False
+    # The container's enforced cgroup limit first (it tracks VPA resizes and needs
+    # no Downward API wiring), then K8S_POD_MEMORY_LIMIT; 0 disables the warning.
+    _limit_bytes = _cgroup.memory_limit_bytes() or 0
+    _memory_warned_at: float | None = None
 
     watchdog_budget: float | None = (
         max_no_progress_seconds
@@ -492,21 +502,26 @@ async def auto_heartbeat_loop(
                 _mem = _resource_sampler.sample()
                 if _mem is not None:
                     _ratio = _mem.rss_bytes / _limit_bytes
-                    if not _memory_warn_active and _ratio >= _MEMORY_WARN_THRESHOLD:
-                        _memory_warn_active = True
-                        logger.warning(
-                            "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
-                            " — OOM kill imminent if this continues rising",
-                            task_name,
-                            _ratio * 100,
-                            _mem.rss_bytes / (1024**3),
-                            _limit_bytes / (1024**3),
-                        )
+                    if _ratio >= _MEMORY_WARN_THRESHOLD:
+                        _now = time.monotonic()
+                        if (
+                            _memory_warned_at is None
+                            or _now - _memory_warned_at >= _MEMORY_WARN_REPEAT_SECONDS
+                        ):
+                            _memory_warned_at = _now
+                            logger.warning(
+                                "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
+                                " — OOM kill imminent if this continues rising",
+                                task_name,
+                                _ratio * 100,
+                                _mem.rss_bytes / (1024**3),
+                                _limit_bytes / (1024**3),
+                            )
                     elif (
-                        _memory_warn_active
+                        _memory_warned_at is not None
                         and _ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
                     ):
-                        _memory_warn_active = False
+                        _memory_warned_at = None
             # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
             except Exception as e:
                 # Best-effort; must never interrupt the heartbeat loop.
