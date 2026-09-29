@@ -1447,6 +1447,31 @@ def test_an_unreadable_lens_status_outlasting_a_window_reds_the_run():
     assert [o.action for o in outcomes] == [reconcile.FAILED]
 
 
+@pytest.mark.parametrize("created_at", ["not-a-date", ""])
+def test_a_lens_status_with_an_unreadable_timestamp_is_skipped(created_at):
+    """With no grace the age only feeds the stale path, but a status whose age
+    cannot be read still must not be approved on (F-fcf2bd)."""
+    api = FakeLensAPI(statuses=[lens_status(created_at=created_at)])
+    outcomes = run_lens_sweep(lens_gh(), api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert outcomes[0].reason == "lens status has no readable timestamp"
+    assert api.approvals() == []
+
+
+def test_an_unreadable_lens_status_with_no_readable_prefilter_time_is_skipped():
+    """The unreadable-status path falls back on the prefilter's timestamp; when
+    that is unreadable too, it skips rather than approving or deferring."""
+    gh = lens_gh(nodes=[_lens_node_at("not-a-date")])
+    api = FakeLensAPI()
+    api.fail[f"/repos/{REPO}/commits/{HEAD}/statuses"] = (502, "bad gateway")
+    outcomes = run_lens_sweep(gh, api)
+
+    assert [o.action for o in outcomes] == [reconcile.SKIPPED]
+    assert outcomes[0].reason == "lens status has no readable timestamp"
+    assert api.approvals() == []
+
+
 def test_an_unreadable_lens_status_on_a_fresh_verdict_is_deferred_not_failed():
     gh = lens_gh(nodes=[_lens_node_at(RECENT)])
     api = FakeLensAPI()
