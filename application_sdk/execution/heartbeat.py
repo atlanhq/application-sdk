@@ -92,6 +92,37 @@ _MEMORY_WARN_BAND_STEP = 0.05
 # ...and, while it stays within a band, repeat at most this often, so a slow leak
 # still leaves a reading close to the kill.
 _MEMORY_WARN_REPEAT_SECONDS = 300.0
+# How often the heartbeat re-reads the memory limit, to pick up a VPA resize.
+_MEMORY_LIMIT_REFRESH_SECONDS = 60.0
+
+
+@dataclass
+class _MemoryLimitCache:
+    """The memory limit the heartbeat compares RSS against. Process-wide, so
+    concurrent activities compare against the same limit and share one read."""
+
+    limit_bytes: int = 0
+    read_at: float | None = None
+
+
+_memory_limit_cache = _MemoryLimitCache()
+
+
+def _current_memory_limit(now: float) -> int:
+    """The container's memory limit, or 0 when none is known (warning off).
+
+    Enforced cgroup limit first (it tracks VPA resizes and needs no Downward API
+    wiring), then ``K8S_POD_MEMORY_LIMIT``. Re-read at most once per refresh
+    interval per process. The read stays synchronous, as in
+    ``cgroup.track_container_usage``'s poll: cgroupfs is an in-kernel
+    pseudo-filesystem, and ``run_in_thread`` would put a progress hold on the
+    activity and queue behind its offloaded work.
+    """
+    cache = _memory_limit_cache
+    if cache.read_at is None or now - cache.read_at >= _MEMORY_LIMIT_REFRESH_SECONDS:
+        cache.limit_bytes = _cgroup.memory_limit_bytes() or 0
+        cache.read_at = now
+    return cache.limit_bytes
 
 
 @dataclass
@@ -481,9 +512,6 @@ async def auto_heartbeat_loop(
             because only the activity layer knows when the *run* started.
     """
     warning_threshold = interval_seconds * 0.5
-    # The container's enforced cgroup limit first (it tracks VPA resizes and needs
-    # no Downward API wiring), then K8S_POD_MEMORY_LIMIT; 0 disables the warning.
-    _limit_bytes = _cgroup.memory_limit_bytes() or 0
 
     watchdog_budget: float | None = (
         max_no_progress_seconds
@@ -567,26 +595,26 @@ async def auto_heartbeat_loop(
             )
             raise
 
-        if _limit_bytes > 0:
-            try:
-                # Re-read each tick: every concurrent activity then compares
-                # against the same, current limit, including after an in-place
-                # VPA resize. Keep the last value if a read comes back empty.
-                _limit_bytes = _cgroup.memory_limit_bytes() or _limit_bytes
+        try:
+            # Looked up every tick, not only while a limit is known, so a limit
+            # that appears mid-activity (an in-place resize) enables the warning.
+            _now = time.monotonic()
+            _limit_bytes = _current_memory_limit(_now)
+            if _limit_bytes > 0:
                 _mem = _resource_sampler.sample()
                 if _mem is not None:
                     _check_memory_pressure(
-                        task_name, _mem.rss_bytes, _limit_bytes, time.monotonic()
+                        task_name, _mem.rss_bytes, _limit_bytes, _now
                     )
-            # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
-            except Exception as e:
-                # Best-effort; must never interrupt the heartbeat loop.
-                logger.debug(
-                    "Memory sampling failed for task '%s': %s",
-                    task_name,
-                    e,
-                    exc_info=True,
-                )
+        # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
+        except Exception as e:
+            # Best-effort; must never interrupt the heartbeat loop.
+            logger.debug(
+                "Memory sampling failed for task '%s': %s",
+                task_name,
+                e,
+                exc_info=True,
+            )
 
         # Ahead of the watchdog for the same reason the memory sample is: an
         # enforced stall returns out of the loop, and the tick that kills a

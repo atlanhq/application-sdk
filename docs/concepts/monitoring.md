@@ -641,7 +641,7 @@ alongside KEDA scale-down, spot preemption, and rolling deploys.
 Signal 2 and signal 1's percentage need the container's memory limit. The SDK
 reads the enforced cgroup limit (`/sys/fs/cgroup/memory.max`, or
 `memory/memory.limit_in_bytes` on cgroup v1) first. No pod-spec wiring is
-needed, and because the heartbeat re-reads it on every tick, a VPA resize
+needed, and because the heartbeat re-reads it every minute, a VPA resize
 (including an in-place one mid-activity) is picked up. Only when the cgroup reports no limit does it fall back
 to `K8S_POD_MEMORY_LIMIT`, which can still be injected via the Downward API:
 

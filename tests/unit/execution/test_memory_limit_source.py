@@ -244,22 +244,25 @@ def test_resize_rearms_band_against_the_new_limit() -> None:
     assert [round(w.args[2]) for w in warnings] == [92, 91]
 
 
-@pytest.mark.asyncio
-async def test_loop_rereads_the_limit_each_tick(monkeypatch) -> None:
-    """A limit that changes mid-activity is used from the next tick."""
+async def _run_with_limits(monkeypatch, limits: list[int | None], ticks: int) -> list:
+    """Run the loop for ``ticks`` ticks, the limit read returning ``limits`` in
+    turn (the last one repeating), re-read every tick; return the warnings."""
     monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
-    limits = iter([4 * _GIB, 4 * _GIB, 2 * _GIB, 2 * _GIB])
+    monkeypatch.setattr(hb_mod, "_MEMORY_LIMIT_REFRESH_SECONDS", 0.0)
+    reads = iter(limits)
     seen = {"n": 0}
     stop = asyncio.Event()
 
     def hb_fn():
         seen["n"] += 1
-        if seen["n"] >= 3:
+        if seen["n"] >= ticks:
             stop.set()
 
     with (
         patch.object(
-            hb_mod._cgroup, "memory_limit_bytes", side_effect=lambda: next(limits)
+            hb_mod._cgroup,
+            "memory_limit_bytes",
+            side_effect=lambda: next(reads, limits[-1]),
         ),
         patch.object(hb_mod._cgroup, "memory_usage_bytes", return_value=None),
         patch(
@@ -269,7 +272,33 @@ async def test_loop_rereads_the_limit_each_tick(monkeypatch) -> None:
         patch.object(hb_mod, "logger") as mock_logger,
     ):
         await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="resize")
+    return _pressure_warnings(mock_logger)
 
-    warnings = _pressure_warnings(mock_logger)
+
+@pytest.mark.asyncio
+async def test_loop_uses_a_limit_that_changes_mid_activity(monkeypatch) -> None:
+    warnings = await _run_with_limits(monkeypatch, [4 * _GIB, 2 * _GIB], ticks=3)
     assert len(warnings) == 1
     assert warnings[0].args[4] == pytest.approx(2.0)  # the new, smaller limit
+
+
+@pytest.mark.asyncio
+async def test_limit_appearing_after_an_unlimited_start_enables_warning(
+    monkeypatch,
+) -> None:
+    """An activity that starts with no limit still warns once one appears."""
+    warnings = await _run_with_limits(monkeypatch, [None, 2 * _GIB], ticks=3)
+    assert len(warnings) == 1
+    assert warnings[0].args[4] == pytest.approx(2.0)
+
+
+def test_limit_is_read_once_per_refresh_interval_per_process() -> None:
+    """However many activities tick, the cgroup is read once per interval."""
+    with patch.object(
+        hb_mod._cgroup, "memory_limit_bytes", return_value=2 * _GIB
+    ) as read:
+        for now in (0.0, 0.0, 10.0, 59.9):  # e.g. two activities, then later ticks
+            assert hb_mod._current_memory_limit(now) == 2 * _GIB
+        assert read.call_count == 1
+        hb_mod._current_memory_limit(hb_mod._MEMORY_LIMIT_REFRESH_SECONDS)
+        assert read.call_count == 2

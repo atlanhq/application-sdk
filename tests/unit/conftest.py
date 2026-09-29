@@ -123,14 +123,16 @@ def _hermetic_memory_limit(monkeypatch):
     ``K8S_POD_MEMORY_LIMIT``, so on a runner inside a memory-capped container
     the host limit would win over a test's ``setenv``. Emptying the limit paths
     makes the env var the only source unless a test sets the paths itself.
-    ``heartbeat._memory_warn_state`` is a module global, so without a reset one
-    test's warning would throttle the next test's.
+    ``heartbeat._memory_warn_state`` and ``heartbeat._memory_limit_cache`` are
+    module globals, so without a reset one test's warning would throttle the
+    next test's, and one test's limit would leak into the next.
     """
     from application_sdk.execution import heartbeat
     from application_sdk.observability import cgroup
 
     monkeypatch.setattr(cgroup, "_MEMORY_LIMIT_PATHS", ())
     monkeypatch.setattr(heartbeat, "_memory_warn_state", heartbeat._MemoryWarnState())
+    monkeypatch.setattr(heartbeat, "_memory_limit_cache", heartbeat._MemoryLimitCache())
 
 
 @pytest.fixture(autouse=True)
