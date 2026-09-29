@@ -641,7 +641,10 @@ def _read_sync_index(root: Path) -> _SyncIndex:
     try:
         with path.open(encoding="utf-8") as fh:
             header = json.loads(fh.readline() or "null")
-            if not isinstance(header, dict) or header.get("version") != _SYNC_INDEX_VERSION:
+            if (
+                not isinstance(header, dict)
+                or header.get("version") != _SYNC_INDEX_VERSION
+            ):
                 return {}
             for line in fh:
                 row = json.loads(line)

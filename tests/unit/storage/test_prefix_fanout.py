@@ -277,7 +277,9 @@ class TestDrainGivesUpWithoutProgress:
             for i in range(count):
                 now[0] += budget * 0.6
                 releases[i].set()
-                await asyncio.wait_for(_until(lambda: len(finished) > i), _START_TIMEOUT)
+                await asyncio.wait_for(
+                    _until(lambda: len(finished) > i), _START_TIMEOUT
+                )
                 await asyncio.sleep(0.01)  # let the drain observe the finish
                 assert not drain.done() or i == count - 1, f"gave up after {i + 1}"
             await asyncio.wait_for(drain, _SAFETY_RELEASE)
@@ -491,7 +493,9 @@ class TestDownloadPrefixSync:
     ) -> None:
         """An object keyed where the index lives would be overwritten by it."""
         await _put("s/a.txt", b"alpha", store, normalize=False)
-        await _put(f"s/{SYNC_INDEX_DIRNAME}/index.jsonl", b"theirs", store, normalize=False)
+        await _put(
+            f"s/{SYNC_INDEX_DIRNAME}/index.jsonl", b"theirs", store, normalize=False
+        )
 
         with pytest.raises(StorageConfigError, match="SDK working directory"):
             await download_prefix("s/", tmp_path, store, normalize=False, sync=True)

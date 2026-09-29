@@ -602,9 +602,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         self, tmp_path
     ) -> None:
         """A failed walk of the cached state leaves as JsonScanError, not OSError."""
-        from application_sdk.common.incremental.incremental_errors import (
-            JsonScanError,
-        )
+        from application_sdk.common.incremental.incremental_errors import JsonScanError
 
         extractor = _make_extractor()
         with (
@@ -615,7 +613,8 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             patch(
                 "application_sdk.storage.batch.download_prefix",
                 new=AsyncMock(return_value=None),
-            ),            patch(
+            ),
+            patch(
                 "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
                 return_value=tmp_path / "current-state",
             ),
