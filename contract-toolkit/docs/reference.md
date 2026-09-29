@@ -164,6 +164,174 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Streaming Dispatch on Event Triggers
+
+By default an event trigger fires a **fresh top-level workflow run** per ingest batch,
+and that run reads its events back out of the workflow's Iceberg events table. For a
+genuinely continuous, high-volume, seconds-level-latency workload that round trip is
+the cost — so AE offers a second dispatch shell: one short run per Kafka micro-batch,
+handed its events directly, with no Iceberg write on the path at all.
+
+Opt in per trigger via `EventTriggerConfig`:
+
+**`EventTriggerConfig`:**
+
+`EventTriggerConfig` separates two categories. **Contract** — what this app consumes
+and what it asserts about delivery (`maxRetries`, `ackPaths`) — survives any change to
+how AE dispatches. **Dispatch mechanics** — which AE execution shell to use — lives
+under `streaming` and is meaningless outside AE's current implementation.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maxRetries` | `Int` (≥ 0) | `3` | Redelivery bound for the batch path. **Inert under `streaming.enabled`, and suppressed from the rendered manifest** — the streaming path reads neither it nor `ack_paths`; a run's retries are Temporal's, set by AE. |
+| `ackPaths` | `Listing<String>` | `new Listing {}` | JSONPaths to the ack parquet. Empty renders AE's fire-and-forget `[""]`, never `[]` — and `[""]` is still rendered under streaming, because AE rejects a workflow whose event trigger has no `ack_paths` at all. **Declaring a real path alongside `streaming.enabled` is refused at eval time** — see Caveats. |
+| `streaming.enabled` | `Boolean` | `false` | Route this trigger to the streaming shell instead of a per-batch top-level run. |
+
+`enabled` is the whole surface. There is deliberately **no size or timing knob**: AE
+bounds a micro-batch by BYTES, not by a count the contract picks, and the unit of work
+is one Dapr bulk delivery split to fit the object it writes. A per-trigger count would
+not survive that split, and would describe a queue this shell does not have.
+
+The entrypoint also needs **`streamingWorkflowType`** — the workflow type the
+DAG dispatches when any of its triggers stream:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `streamingWorkflowType` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+
+Streaming is a different execution, not a faster one: the batch shell's workflow reads
+the entrypoint's Iceberg events table, while the streaming shell hands the run its
+events directly and never writes that table. Those are two different workflow types in
+the app, so one `workflowType` (or `workflowTypeOverride` on NativeApp.pkl) cannot
+serve both.
+
+#### Your streaming workflow must handle both delivery forms
+
+When streaming is on, the extract node renders the streaming type and gains **two**
+args:
+
+| Arg | Value | When |
+|---|---|---|
+| `args.batch` | `$.event.batch` | the events inline (a list of `{id, topic, data}`) when the serialised micro-batch fits AE's inline cap — otherwise `null` |
+| `args.batch_key` | `$.event.batch_key` | **always** — the object-store key the batch can be read from |
+
+Read the key whenever `batch` is null. A workflow that only ever reads `batch` works
+perfectly in testing and then applies **nothing, silently**, the first time a batch
+goes over the cap — and because AE acks Kafka once the run starts, those events are
+gone. Both args are rendered together for exactly this reason; there is no contract
+shape that yields one without the other.
+
+**Both directions are refused at eval time**, because both leave a contract saying one
+thing while the node renders the other:
+
+| Declared | Refused because |
+|---|---|
+| triggers stream, no `streamingWorkflowType` | the node dispatches the **batch** workflow, which starts with no events in its arguments |
+| `streamingWorkflowType` set, nothing streams | the node renders the batch type and the declared streaming type is dropped |
+
+The first was observed end to end on a tenant before the refusal existed: AE dispatched
+the run, the batch workflow started with nothing to apply, and nothing reported an
+error — streaming was on in name only. The second is its mirror and fails just as
+quietly, which is why a declared-but-inert value is refused here the same way it is
+for `ackPaths`.
+
+Streaming is declared **per entrypoint**, like `schedules` and `artifactSchemas`. A
+trigger binds to an entrypoint by containment — `events` lives in that entrypoint's
+`contract` — so for a **multi-entrypoint** app, declare `events` and
+`streamingWorkflowType` on each [entrypoint's `contract`](#multi-entrypoint-bundle),
+since each entrypoint renders its own manifest. Declaring either on a bundle root is
+refused at eval time: the root renders no manifest, so both would be dropped silently.
+
+An app may therefore have as many streaming entrypoints as it likes, each with its own
+topics and its own workflow type. One entrypoint has exactly one
+`streamingWorkflowType`, because the extract node it names is per-entrypoint.
+
+### A streaming entrypoint holds streaming triggers and nothing else
+
+An entrypoint renders **one** extract node, and every trigger on it — each schedule,
+each event trigger — starts that same node. Its `workflow_type` is therefore a
+property of the entrypoint, not of the trigger that fired, and it has only two
+possible shapes: the batch type, which reads the Iceberg events table, or the
+streaming type, which reads `args.batch`. They are mutually exclusive.
+
+So a streaming entrypoint may not also carry a schedule or a non-streaming event
+trigger. Both are refused at eval time, because both fail silently otherwise:
+
+| On a streaming entrypoint | What happens without the refusal |
+|---|---|
+| a non-streaming event trigger | starts the streaming workflow with `args.batch` resolving to nothing; applies nothing |
+| a schedule | same, and a scheduled run carries no events at all |
+
+Put the streaming triggers on their own entrypoint — `examples/streaming` is that
+shape, and `examples/scheduled` is the batch-plus-schedules shape.
+
+```pkl
+// Required whenever any trigger below streams.
+streamingWorkflowType = "example-app:cdc-stream"
+
+events {
+  // Real-time: one event, one DAG walk.
+  new EventTriggerSpec {
+    name = "cdc-user-realtime"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // A second topic on the same shell — same declaration, no knobs to tune.
+  new EventTriggerSpec {
+    name = "cdc-audit"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.audit" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
+```
+
+Renders into each trigger's `trigger_config`:
+
+```json
+{
+  "ack_paths": [""],
+  "streaming_enabled": true
+}
+```
+
+Note the absence of `max_retries`: it is inert on this path, so it is not rendered
+rather than shipped as a key AE will not act on. AE defaults it to `3` when absent.
+
+**Writing the DAG.** A streaming DAG does not read the Iceberg events table — it reads
+its events inline from the `$.event.*` jsonpath namespace:
+
+| Path | Shape |
+|---|---|
+| `$.event.batch` | A list of `{id, topic, data}` envelopes when the batch fits AE's inline cap — **`null` when it does not**. |
+| `$.event.batch_key` | Always set: the object-store key holding the same list. Read it whenever `batch` is null. |
+| `$.event.event_ids` | The batch's event ids. |
+| `$.event.data` | Convenience alias for the single event's payload — set only when the batch holds exactly one event. |
+| `$.event.topic` | Convenience alias for the single event's Kafka topic — set only when the batch holds exactly one event. Not derivable from the payload: a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
+
+**Caveats.**
+
+- The streaming keys are emitted **only** when `streaming.enabled` is true, so a trigger
+  that does not opt in renders byte-identically to before this feature existed.
+- **`ackPaths` together with `streaming.enabled` is refused at eval time.** Declaring an
+  ack path is an explicit at-least-once durability assertion, and the streaming path
+  writes no acks and has no watchdog backstop — so the contract would read as "acked once
+  the DAG produced its output" and behave as fire-and-forget. That costs events, not
+  latency, so it is refused rather than silently voided. Drop `ackPaths`, or drop
+  `streaming`.
+- **Handle `batch = null`.** Over AE's inline cap only the key is sent. A workflow that
+  reads `batch` alone applies nothing and reports success, and Kafka is already acked
+  by then — see *Your streaming workflow must handle both delivery forms* above.
+- There is no watchdog backstop on this path. A run that exhausts its Temporal retries
+  is not recovered: its events were acked to Kafka when the run started.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) and must not
+  expect to read the Iceberg events table — the streaming path never writes it.
+
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### Legacy Workflow Type Aliases
 
 A migration renames an app's Temporal workflow type, but external callers keep
