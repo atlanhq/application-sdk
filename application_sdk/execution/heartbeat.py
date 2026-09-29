@@ -103,6 +103,7 @@ class _MemoryWarnState:
     warned_at: float | None = None
     band: int = -1
     rss_bytes: int = 0
+    limit_bytes: int = 0
 
 
 _memory_warn_state = _MemoryWarnState()
@@ -115,42 +116,50 @@ def _check_memory_pressure(
     interval while above it. Re-arms once the ratio drops below the hysteresis."""
     state = _memory_warn_state
     ratio = rss_bytes / limit_bytes
-    if ratio < _MEMORY_WARN_THRESHOLD:
-        if (
-            state.warned_at is not None
-            and ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
-        ):
+    # -1 just below the threshold, 0 from 80 %, 1 from 85 %, ... The epsilon keeps
+    # exactly 85 % in band 1 despite float division.
+    band = math.floor((ratio - _MEMORY_WARN_THRESHOLD) / _MEMORY_WARN_BAND_STEP + 1e-9)
+    if state.warned_at is not None:
+        if ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS:
             state.warned_at, state.band, state.rss_bytes = None, -1, 0
+            return
+        # A warned band re-arms once the ratio falls a full band below it, so a
+        # fall-and-climb warns again while hovering on a boundary does not warn
+        # every tick. After a resize the stored band was measured against the old
+        # limit, so it re-arms down to the current band at once.
+        rearm_to = band if limit_bytes != state.limit_bytes else band + 1
+        state.band = min(state.band, rearm_to)
+        state.limit_bytes = limit_bytes
+    if ratio < _MEMORY_WARN_THRESHOLD:
         return
 
-    # The epsilon keeps exactly 85 % in band 1 despite float division.
-    band = int((ratio - _MEMORY_WARN_THRESHOLD) / _MEMORY_WARN_BAND_STEP + 1e-9)
     if state.warned_at is not None and not (
         band > state.band or now - state.warned_at >= _MEMORY_WARN_REPEAT_SECONDS
     ):
         return
 
-    detail = ""
+    msg = "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
+    args: list[object] = [
+        task_name,
+        ratio * 100,
+        rss_bytes / (1024**3),
+        limit_bytes / (1024**3),
+    ]
     if state.warned_at is not None:
-        delta_gib = (rss_bytes - state.rss_bytes) / (1024**3)
-        detail += f"; {delta_gib:+.2f} GiB in {now - state.warned_at:.0f}s"
+        msg += "; %+.2f GiB in %.0fs"
+        args += [(rss_bytes - state.rss_bytes) / (1024**3), now - state.warned_at]
     # What the OOM killer acts on: includes child processes (the offload pool)
     # that parent RSS misses. Context only — it also counts reclaimable page
     # cache, so it would raise false alarms as the trigger.
     container = _cgroup.memory_usage_bytes()
     if container is not None:
-        detail += f"; container {container / (1024**3):.2f} GiB"
+        msg += "; container %.2f GiB"
+        args.append(container / (1024**3))
+    msg += " — OOM kill imminent if this continues rising"
 
-    logger.warning(
-        "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)%s"
-        " — OOM kill imminent if this continues rising",
-        task_name,
-        ratio * 100,
-        rss_bytes / (1024**3),
-        limit_bytes / (1024**3),
-        detail,
-    )
-    state.warned_at, state.band, state.rss_bytes = now, band, rss_bytes
+    logger.warning(msg, *args)
+    state.warned_at, state.band = now, band
+    state.rss_bytes, state.limit_bytes = rss_bytes, limit_bytes
 
 
 async def stop_heartbeat_task(
@@ -560,6 +569,10 @@ async def auto_heartbeat_loop(
 
         if _limit_bytes > 0:
             try:
+                # Re-read each tick: every concurrent activity then compares
+                # against the same, current limit, including after an in-place
+                # VPA resize. Keep the last value if a read comes back empty.
+                _limit_bytes = _cgroup.memory_limit_bytes() or _limit_bytes
                 _mem = _resource_sampler.sample()
                 if _mem is not None:
                     _check_memory_pressure(

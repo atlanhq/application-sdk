@@ -31,6 +31,10 @@ def _pressure_warnings(mock_logger) -> list:
     ]
 
 
+def _rendered(warning) -> str:
+    return warning.args[0] % warning.args[1:]
+
+
 async def _run_ticks(ticks: int, limit: int | None, rss: int) -> list:
     seen = {"n": 0}
     stop = asyncio.Event()
@@ -71,7 +75,7 @@ async def test_warning_uses_cgroup_limit_without_env(monkeypatch) -> None:
 
     warnings = _pressure_warnings(mock_logger)
     assert len(warnings) == 1
-    _fmt, task, pct, _rss_gib, limit_gib, _detail = warnings[0].args
+    _fmt, task, pct, _rss_gib, limit_gib, *_ = warnings[0].args
     assert task == "cg-task"
     assert abs(pct - 90.0) < 0.5
     assert limit_gib == pytest.approx(2.0)
@@ -172,9 +176,9 @@ def test_same_band_is_quiet_until_the_repeat_interval() -> None:
 def test_line_carries_change_since_last_warning() -> None:
     """The second line shows how far RSS moved and over how long."""
     warnings = _warn_at([(0.80, 0.0), (0.86, 40.0)])
-    assert warnings[0].args[5] == ""
+    assert " GiB in " not in _rendered(warnings[0])
     delta = 0.06 * _LIMIT / _GIB
-    assert warnings[1].args[5] == f"; +{delta:.2f} GiB in 40s"
+    assert f"; +{delta:.2f} GiB in 40s —" in _rendered(warnings[1])
 
 
 def test_rearms_only_below_hysteresis() -> None:
@@ -183,7 +187,7 @@ def test_rearms_only_below_hysteresis() -> None:
         [(0.82, 0.0), (0.77, 10.0), (0.82, 20.0), (0.70, 30.0), (0.82, 40.0)]
     )
     assert len(warnings) == 2
-    assert warnings[1].args[5] == ""  # a fresh crossing carries no delta
+    assert " GiB in " not in _rendered(warnings[1])  # a fresh crossing: no delta
 
 
 def test_throttle_is_shared_across_activities() -> None:
@@ -208,4 +212,64 @@ def test_line_includes_container_usage() -> None:
     ):
         _check_memory_pressure("t", int(_LIMIT * 0.8), _LIMIT, 0.0)
     (warning,) = _pressure_warnings(mock_logger)
-    assert warning.args[5] == "; container 9.00 GiB"
+    assert "; container 9.00 GiB —" in _rendered(warning)
+
+
+def test_fall_and_climb_back_warns_again() -> None:
+    """Falling a full band below the last warned band re-arms it, even while
+    still above 75 %, so a second climb is not hidden for the repeat interval."""
+    warnings = _warn_at([(0.92, 0.0), (0.81, 10.0), (0.91, 20.0)])
+    assert [round(w.args[2]) for w in warnings] == [92, 91]
+
+
+def test_hovering_on_a_band_boundary_does_not_warn_every_tick() -> None:
+    warnings = _warn_at(
+        [(0.851, 0.0), (0.849, 5.0), (0.851, 10.0), (0.849, 15.0), (0.851, 20.0)]
+    )
+    assert len(warnings) == 1
+
+
+def test_resize_rearms_band_against_the_new_limit() -> None:
+    """After a VPA resize the stored band came from the old limit; it re-arms to
+    the current band at once, so the next band climbed warns."""
+    with (
+        patch.object(hb_mod._cgroup, "memory_usage_bytes", return_value=None),
+        patch.object(hb_mod, "logger") as mock_logger,
+    ):
+        _check_memory_pressure("t", int(_LIMIT * 0.92), _LIMIT, 0.0)
+        bigger = int(_LIMIT * 1.05)  # same RSS is now ~87.6 %, band 1
+        _check_memory_pressure("t", int(bigger * 0.876), bigger, 10.0)
+        _check_memory_pressure("t", int(bigger * 0.91), bigger, 20.0)
+    warnings = _pressure_warnings(mock_logger)
+    assert [round(w.args[2]) for w in warnings] == [92, 91]
+
+
+@pytest.mark.asyncio
+async def test_loop_rereads_the_limit_each_tick(monkeypatch) -> None:
+    """A limit that changes mid-activity is used from the next tick."""
+    monkeypatch.delenv("K8S_POD_MEMORY_LIMIT", raising=False)
+    limits = iter([4 * _GIB, 4 * _GIB, 2 * _GIB, 2 * _GIB])
+    seen = {"n": 0}
+    stop = asyncio.Event()
+
+    def hb_fn():
+        seen["n"] += 1
+        if seen["n"] >= 3:
+            stop.set()
+
+    with (
+        patch.object(
+            hb_mod._cgroup, "memory_limit_bytes", side_effect=lambda: next(limits)
+        ),
+        patch.object(hb_mod._cgroup, "memory_usage_bytes", return_value=None),
+        patch(
+            "application_sdk.execution.heartbeat._resource_sampler.sample",
+            return_value=ResourceSample(cpu_time_s=1.0, rss_bytes=int(1.8 * _GIB)),
+        ),
+        patch.object(hb_mod, "logger") as mock_logger,
+    ):
+        await auto_heartbeat_loop(0.001, hb_fn, stop, task_name="resize")
+
+    warnings = _pressure_warnings(mock_logger)
+    assert len(warnings) == 1
+    assert warnings[0].args[4] == pytest.approx(2.0)  # the new, smaller limit
