@@ -153,6 +153,17 @@ def test_category_atlan_platform_major_branch() -> None:
     assert pr.auto_merge_expected is True
 
 
+def test_category_atlan_platform_from_group_title() -> None:
+    pr = classify(
+        make_pr(
+            labels=[],
+            branch="renovate/renamed-by-hand",
+            title="chore(deps): update atlan framework dependencies",
+        )
+    )
+    assert pr.category is Category.ATLAN_PLATFORM
+
+
 def test_category_conformance_package_fallback_title() -> None:
     # Title arm of categorize(): the branch carries no conformance signal, so the
     # "conformance package" substring in the title is what classifies it.
