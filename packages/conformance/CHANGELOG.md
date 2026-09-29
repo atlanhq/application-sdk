@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.40.1] - 2026-09-29
+
+### Bug fixes
+
+- P037 no longer crashes on required keyword-only parameters (#4053) ([9a8367d](https://github.com/atlanhq/application-sdk/commit/9a8367d))
+
 ## [0.40.0] - 2026-09-29
 
 ### Features
