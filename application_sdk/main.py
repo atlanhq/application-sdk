@@ -107,18 +107,19 @@ def _log_process_memory_baseline() -> None:
 
     Gives a baseline so that — after an OOM kill — the log of the replacement
     pod shows the limit, and the log of the killed pod shows memory climbing
-    toward it via the heartbeat-loop pressure warnings.  No-ops when
-    K8S_POD_MEMORY_LIMIT is unset (local dev / non-Kubernetes environments).
+    toward it via the heartbeat-loop pressure warnings.  The limit is the
+    container's cgroup limit, falling back to K8S_POD_MEMORY_LIMIT; no-ops when
+    neither is set (local dev / non-Kubernetes environments).
     """
+    from application_sdk.observability import (  # noqa: PLC0415 — cold path: startup only
+        cgroup as _cgroup,
+    )
     from application_sdk.observability import (  # noqa: PLC0415 — cold path: startup only
         resource_sampler as _rs,
     )
-    from application_sdk.observability.resource_sampler import (  # noqa: PLC0415
-        parse_pod_memory_limit,
-    )
 
-    limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
-    if limit_bytes <= 0:
+    limit_bytes = _cgroup.memory_limit_bytes()
+    if not limit_bytes:
         return
     sample = _rs.sample()
     if sample is None:

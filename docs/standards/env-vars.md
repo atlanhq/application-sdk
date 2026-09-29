@@ -86,8 +86,10 @@ disabled.
 
 ### `K8S_POD_MEMORY_LIMIT`
 
-Gates the memory-pressure observability feature (startup RSS baseline log,
-heartbeat WARNING at ≥ 80 % of limit).
+Fallback limit for the memory-pressure observability feature (startup RSS
+baseline log, heartbeat WARNING at ≥ 80 % of limit). The SDK reads the
+container's cgroup limit first; this variable is used only when the cgroup
+reports none, so most pods need not set it.
 
 **Inject via:**
 
