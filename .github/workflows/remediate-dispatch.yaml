@@ -1,10 +1,11 @@
 # Remediate dispatch — reusable workflow behind the `/remediate` PR comment.
 #
 # A PR comment of `/remediate` asks the conformance remediation lane (it runs
-# in atlanhq/agent-sdk) to fix the PR's blocking auto-fixable conformance
-# findings and push one commit per rule to the PR branch:
+# in atlanhq/agent-sdk) to fix the PR's auto-fixable conformance findings and
+# push one commit per rule to the PR branch:
 #
-#   /remediate            every blocking auto-fixable finding on this PR
+#   /remediate            every auto-fixable finding on this PR, blocking and
+#                         warning alike (blocking rules first)
 #   /remediate list       list them in a sticky comment; change nothing
 #   /remediate E001 L002  just these rules
 #
