@@ -1,58 +1,54 @@
 ---
 name: api-server-consolidation-migration
-description: Move a connector app's handler into an `api/` workspace member so the consolidated API host can serve it on atlan-application-sdk-api. Use when onboarding an app to the common API server.
+description: Put a connector app's handler on the consolidated API host with atlan-application-sdk-api. The code stays in app/; api/ is generated. Use when onboarding an app to the common API server.
 ---
 
 # Serve an app's handler from the consolidated API host
 
-The host installs `atlan-application-sdk-api` (a listed subset of
-`application_sdk/`, see `docs/standards/api-distribution.md`) plus one small
-package per app. The app's handler moves into that package. **Import paths do
-not change**: `from application_sdk.handler import Handler` works on both
-installs. There is one copy of the handler, and the worker's preflight gate and
-the host run the same code.
+The host installs `atlan-application-sdk-api` (a subset of `application_sdk`,
+see `docs/standards/api-distribution.md`) plus one small generated package per
+app. The handler **stays in `app/`**, and imports stay `application_sdk.*`.
+The reference migration is atlan-mysql-app#778.
 
 ## Steps
 
-1. **Create the member.** `git mv` the handler, the failure classes it raises,
-   and everything it imports from the app (client, SQL files, constants) into
-   `api/<app>_api/`, for example `api/atlan_mysql_api/`. The import name must be
-   unique per app, because the host loads every app into one process. Never use
-   `app.*` there.
-2. **`api/pyproject.toml`:**
-   - `dependencies = ["atlan-application-sdk-api[<extras>]", <drivers>]`, where
-     the extras are `sql`, `pandas` and `aws` as the handler needs them. Never
-     depend on `atlan-application-sdk`.
-   - `[project.entry-points."atlan.app_api"]` with `<service-name> = "<app>_api:handler"`,
-     where `handler` is a module-level instance.
-   - Force-include the configmap JSON from `app/generated/` if the host serves it.
-3. **Root `pyproject.toml`:** add the member to `[tool.uv.workspace]`, depend on
-   it, and point `[tool.uv.sources]` at it (`workspace = true`).
-4. **Worker imports:** `app/` imports the handler and client from `<app>_api`.
-   Nothing under `api/` imports `app`.
-5. **The one import that changes:** `run_in_thread` from
-   `application_sdk.execution.heartbeat` loads the Temporal layer. Inside `api/`,
-   import it from `application_sdk.common.concurrency` instead. It is the same
-   function.
-6. **Check it the way CI will:**
+1. Add the config to the app's root `pyproject.toml`:
 
-   ```bash
-   uv venv /tmp/api-only && uv pip install --python /tmp/api-only ./api
-   /tmp/api-only/bin/python <sdk>/.github/scripts/probe_app_api_member.py \
-       --name <service-name> --package <app>_api
+   ```toml
+   [tool.atlan-app-api]
+   handler = "app.handler:MySQLAppHandler"      # the Handler subclass
+   data = ["app/sql/test_authentication.sql"]   # files the handler reads
+   dependencies = ["aiomysql>=0.3.0"]           # the handler's own deps
+   extras = ["sql", "aws"]                      # atlan-application-sdk-api extras
    ```
 
-   A `ModuleNotFoundError` names a worker-only import in handler code. Replace
-   it with its api-listed equivalent, or ask for the SDK file to be listed
-   (`check_api_surface.py` shows what that takes).
+2. Run the generator from the app repo root:
 
-## Before an SDK release that includes the api distribution
+   ```bash
+   python3 <sdk>/.github/scripts/gen_app_api.py --fix
+   ```
 
-Pin both packages to the same SDK git commit:
+   It makes imports between the handler's `app/` files relative
+   (`from .client import SQLClient`), moves `run_in_thread` to
+   `application_sdk.common.concurrency`, and writes `api/`. Commit all of it.
+   Don't hand-edit `api/`; change the config and rerun.
 
-```toml
-atlan-application-sdk = { git = "https://github.com/atlanhq/application-sdk.git", rev = "<sha>" }
-atlan-application-sdk-api = { git = "https://github.com/atlanhq/application-sdk.git", rev = "<sha>", subdirectory = "packages/api" }
-```
+3. Check it the way CI will:
 
-After the release, drop both sources and pin the released version.
+   ```bash
+   python3 <sdk>/.github/scripts/gen_app_api.py --check
+   uv venv /tmp/api-only && uv pip install --python /tmp/api-only ./api
+   /tmp/api-only/bin/python <sdk>/.github/scripts/probe_app_api_member.py \
+       --name <app> --package atlan_<app>_api
+   ```
+
+   A `ModuleNotFoundError` names a worker-only import in handler code. Use the
+   api-shipped equivalent, or ask for the SDK module to be added to
+   `[tool.atlan-api].seeds`.
+
+## Before the SDK release that ships the api distribution
+
+Pin both packages to the same SDK commit in `[tool.uv.sources]`
+(`atlan-application-sdk`, and `atlan-application-sdk-api` with
+`subdirectory = "packages/api"`), then regenerate: `api/pyproject.toml`
+copies the pin. After the release, drop both sources and regenerate again.

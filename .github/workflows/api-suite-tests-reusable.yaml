@@ -4,6 +4,8 @@ name: API package checks (reusable)
 # application_sdk/ published as its own wheel for the consolidated API host —
 # still installs and serves on its own.
 #
+#   * gen_api_files.py --check: api-files.txt is the import closure of the seed
+#     modules in packages/api/pyproject.toml, as committed.
 #   * check_api_surface.py reads every listed file's imports: nothing reaches an
 #     unlisted module or an undeclared package, and lazy worker-only imports have
 #     a stated fallback.
@@ -35,6 +37,9 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version: "0.12.17"
+
+      - name: Check the api file list is generated from the seeds
+        run: python3 .github/scripts/gen_api_files.py --check
 
       - name: Check the api file set's imports
         run: python3 .github/scripts/check_api_surface.py

@@ -809,6 +809,12 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
+      # An app on the in-place layout generates api/ from [tool.atlan-app-api];
+      # fail when the committed api/ is stale or a listed file imports app
+      # absolutely. No-op for an app without the config.
+      - name: Check a generated api/ is current
+        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py --check
+
       - name: Find an atlan.app_api entry point
         id: detect
         run: python3 application-sdk-scripts/.github/scripts/detect_api_member.py >> "$GITHUB_OUTPUT"

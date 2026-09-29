@@ -201,6 +201,7 @@ jobs:
               - 'packages/api/**'
               - '.github/workflows/api-suite-tests-reusable.yaml'
               - '.github/scripts/check_api_surface.py'
+              - '.github/scripts/gen_api_files.py'
               - '.github/scripts/probe_api_wheels.py'
             # A container change (base image / daprd / system deps / entrypoint)
             # can alter SDK runtime behaviour, so it runs ALL gate areas — in

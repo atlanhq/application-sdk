@@ -35,3 +35,25 @@ dev-mode-dirs = ["../.."]
 [tool.hatch.build.targets.wheel.hooks.custom]
 
 [tool.hatch.build.targets.sdist.hooks.custom]
+
+# What the api distribution is FOR: the modules the consolidated host needs.
+# api-files.txt is generated from these by .github/scripts/gen_api_files.py
+# (their import closure) and committed; CI fails when it is stale. To put
+# another SDK surface on the host, add its module here and regenerate.
+[tool.atlan-api]
+seeds = [
+    "application_sdk.handler.asgi",
+    "application_sdk.handler.base",
+    "application_sdk.handler.contracts",
+    "application_sdk.handler.manifest",
+    "application_sdk.handler.service_errors",
+    "application_sdk.errors",
+    "application_sdk.credentials.errors",
+    "application_sdk.credentials.spec",
+    "application_sdk.credentials.ingress",
+    "application_sdk.credentials.utils",
+    "application_sdk.observability.logger_adaptor",
+    "application_sdk.clients.sql",
+    "application_sdk.common.aws_utils",
+    "application_sdk.common.concurrency",
+]

@@ -12,7 +12,10 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
 
 ## How it is built
 
-- `packages/api/api-files.txt` is the one list of files the api wheel ships.
+- `[tool.atlan-api].seeds` in `packages/api/pyproject.toml` names the modules
+  the host needs. `packages/api/api-files.txt`, the files the api wheel ships,
+  is **generated** from them by `.github/scripts/gen_api_files.py` (their import
+  closure) and committed; CI fails when it is stale.
 - `packages/api/hatch_build.py` copies those files into the sdist and the wheel.
   An editable build copies nothing, so the SDK's dev env keeps importing the
   source tree.
@@ -53,18 +56,35 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
   unlisted, and serves auth, check, metadata and an `AppError` path without
   leaking a DSN.
 
-## Adding a file
+## Adding a surface
 
-Add the path to `api-files.txt` and run
-`python3 .github/scripts/check_api_surface.py`. It names every import that
-needs to become listed, declared, or guarded.
+Add its module to `[tool.atlan-api].seeds`, then run
+`python3 .github/scripts/gen_api_files.py` and
+`python3 .github/scripts/check_api_surface.py`. The second names every import
+that needs a declared dependency or a guarded fallback.
 
 ## App side
 
-An app with a handler keeps it in a uv workspace member (`api/`). The member
-depends on `atlan-application-sdk-api` (plus any extras) and declares
-`[project.entry-points."atlan.app_api"]`. The worker depends on
-`atlan-application-sdk` and imports the handler from the member. The
-tests-reusable `api-member` job installs the member alone and mounts it with
-`application_sdk.handler.asgi.build_asgi_app`, exactly as the host does. See
-the `api-server-consolidation-migration` skill.
+The handler stays in `app/`. The app declares it in its root `pyproject.toml`:
+
+```toml
+[tool.atlan-app-api]
+handler = "app.handler:MySQLAppHandler"
+data = ["app/sql/test_authentication.sql"]
+dependencies = ["aiomysql>=0.3.0"]
+extras = ["sql", "aws"]
+```
+
+`.github/scripts/gen_app_api.py --fix` then does the whole migration:
+
+- It makes imports between the handler's files relative.
+- It moves `run_in_thread` off the Temporal path.
+- It generates `api/`: the file list, `pyproject.toml` with the `atlan.app_api`
+  entry point, a build hook, and `__init__.py`. The build hook ships the listed
+  `app/` files as `<app>_api/*`.
+
+The tests-reusable `api-member` job runs `gen_app_api.py --check`. It then
+installs the generated package alone and mounts it with
+`application_sdk.handler.asgi.build_asgi_app`, exactly as the host does. The
+reference is atlan-mysql-app#778; see the `api-server-consolidation-migration`
+skill.
