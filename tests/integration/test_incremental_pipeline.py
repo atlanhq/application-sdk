@@ -500,3 +500,136 @@ async def test_transformed_recovery_from_store_feeds_current_state(
 
     assert result.total_files > 0
     assert (result.current_state_dir / "table" / "chunk-0.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# Characterization: stale-key accumulation in current-state (FND-3061 #1)
+# ---------------------------------------------------------------------------
+#
+# Pinned bug, not desired behaviour. ``xfail(strict=True)`` keeps CI green while
+# the bug exists and XPASSes — failing the run — once FND-3064's
+# CurrentStateStore commits a snapshot instead of layering uploads over the
+# previous one. The unit-tier siblings live in
+# tests/unit/common/incremental/test_state_lifecycle_characterization.py.
+
+_STALE_CONN = "default/example/1700000000"
+_STALE_APP = "example-app"
+_STALE_S3 = f"persistent-artifacts/apps/{_STALE_APP}/connection/1700000000"
+
+
+async def _run_two_snapshots(tmp_path, monkeypatch) -> Path:
+    """Commit run 1 (two column files), then run 2 (one); return the local state dir.
+
+    Run 1 is a full extraction: t1's and t2's columns land in two files. Run 2
+    is incremental with only t2 UPDATED, so its extraction is one smaller
+    column file that reuses run 1's first file name for t2's columns.
+    """
+    from application_sdk.common.incremental import helpers
+    from application_sdk.common.incremental.state.state_writer import (
+        create_current_state_snapshot,
+        prepare_previous_state,
+    )
+
+    monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
+    state_dir = helpers.get_persistent_artifacts_path(
+        _STALE_CONN, "current-state", _STALE_APP
+    )
+
+    run1 = tmp_path / "run-1" / "transformed"
+    _write_jsonl(
+        run1 / "table" / "chunk-0.json",
+        [_table_entity("db/s/t1"), _table_entity("db/s/t2")],
+    )
+    _write_jsonl(
+        run1 / "column" / "chunk-0.json", [_column_entity("db/s/t1/a", "db/s/t1")]
+    )
+    _write_jsonl(
+        run1 / "column" / "chunk-1.json", [_column_entity("db/s/t2/b", "db/s/t2")]
+    )
+    await create_current_state_snapshot(
+        connection_qualified_name=_STALE_CONN,
+        transformed_dir=run1,
+        previous_state_dir=None,
+        current_state_dir=state_dir,
+        s3_prefix=_STALE_S3,
+        run_id="run-1",
+        application_name=_STALE_APP,
+    )
+
+    run2 = tmp_path / "run-2" / "transformed"
+    _write_jsonl(
+        run2 / "table" / "chunk-0.json",
+        [_table_entity("db/s/t1", "NO CHANGE"), _table_entity("db/s/t2", "UPDATED")],
+    )
+    _write_jsonl(
+        run2 / "column" / "chunk-0.json", [_column_entity("db/s/t2/b", "db/s/t2")]
+    )
+    previous = await prepare_previous_state(_STALE_CONN, True, state_dir, _STALE_APP)
+    await create_current_state_snapshot(
+        connection_qualified_name=_STALE_CONN,
+        transformed_dir=run2,
+        previous_state_dir=previous,
+        current_state_dir=state_dir,
+        s3_prefix=_STALE_S3,
+        run_id="run-2",
+        application_name=_STALE_APP,
+    )
+    return state_dir
+
+
+@pytest.mark.integration
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "FND-3064: upload_prefix only adds and replaces keys, so current-state "
+        "keeps every key an earlier, larger run wrote"
+    ),
+)
+async def test_current_state_holds_only_the_latest_runs_keys(
+    tmp_path, monkeypatch, store, infra
+):
+    from application_sdk.storage.batch import list_data_keys
+
+    state_dir = await _run_two_snapshots(tmp_path, monkeypatch)
+
+    committed = {p.relative_to(state_dir).as_posix() for p in state_dir.rglob("*.json")}
+    in_store = {
+        k.removeprefix(f"{_STALE_S3}/current-state/")
+        for k in await list_data_keys(f"{_STALE_S3}/current-state", store)
+    }
+    assert (
+        in_store == committed
+    ), f"stale keys from run 1 survive in current-state: {sorted(in_store - committed)}"
+
+
+@pytest.mark.integration
+@pytest.mark.xfail(
+    strict=True,
+    raises=AssertionError,
+    reason=(
+        "FND-3064: stale current-state keys are downloaded by the next run "
+        "beside the fresh copy of the same columns, duplicating them"
+    ),
+)
+async def test_next_run_reads_each_column_once(tmp_path, monkeypatch, store, infra):
+    """The mechanism behind the duplicate-column hypothesis (FND-3061).
+
+    Run 2 wrote t2's column to ``column/chunk-0.json``; run 1's copy of it is
+    still at ``column/chunk-1.json``. Run 3's read gets both.
+    """
+    from application_sdk.common.incremental.state.state_reader import (
+        download_current_state,
+    )
+
+    await _run_two_snapshots(tmp_path, monkeypatch)
+    state_dir, _, exists, _ = await download_current_state(_STALE_CONN, _STALE_APP)
+    assert exists
+
+    column_qns = [
+        row["attributes"]["qualifiedName"]
+        for f in sorted((state_dir / "column").glob("*.json"))
+        for row in _read_jsonl(f)
+    ]
+    duplicated = sorted({qn for qn in column_qns if column_qns.count(qn) > 1})
+    assert not duplicated, f"run 3 reads duplicated columns: {duplicated}"
