@@ -455,6 +455,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             get_persistent_artifacts_path,
         )
         from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            JsonScanError,
             StateDownloadError,
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
@@ -502,11 +503,16 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             previous_current_state_dir.mkdir(parents=True, exist_ok=True)
 
             # Offloaded: the cached table directory holds one file per table
-            # chunk and scales with the connection (ADR-0010).
-            table_file_count = await run_in_thread(
-                count_json_files_recursive,
-                previous_current_state_dir.joinpath("table"),
-            )
+            # chunk and scales with the connection (ADR-0010). The walk now
+            # surfaces traversal errors; they leave as the incremental scan
+            # error for this directory, not as a bare OSError.
+            table_dir = previous_current_state_dir.joinpath("table")
+            try:
+                table_file_count = await run_in_thread(
+                    count_json_files_recursive, table_dir
+                )
+            except OSError as e:
+                raise JsonScanError(base_dir=str(table_dir), cause=e) from e
 
             if not table_file_count:
                 logger.info(

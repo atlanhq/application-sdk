@@ -11,6 +11,9 @@ all of them share one failure contract:
   gone, which a retry of the same operation then raced (a prior incident).
 * A failure made only of ``StorageError`` surfaces as the bare ``StorageError``,
   not an ``ExceptionGroup``.
+
+The offloads a primitive makes outside its fan-out go through
+:func:`_run_drained`, which gives a single call the same unwind.
 """
 
 from __future__ import annotations
@@ -93,3 +96,21 @@ async def _gather_with_semaphore(
             return await coro
 
     return await _run_bounded([_run(c) for c in coros], None)
+
+
+async def _run_drained(coro: Coroutine[Any, Any, T]) -> T:
+    """Await *coro*; on failure or cancellation, drain what it offloaded first.
+
+    The single-call counterpart of :func:`_run_bounded`, for the offloads a
+    primitive makes outside its fan-out (a sync's index write and prune). A
+    cancelled ``run_in_thread`` stops waiting while its thread runs on; this
+    waits for that thread, on the same no-progress terms as the fan-out, before
+    the failure propagates. The failure itself is re-raised unchanged -- no
+    group wrapping, since there is only one coroutine.
+    """
+    with tracking_offloads() as pending:
+        try:
+            return await coro
+        except BaseException:
+            await drain_offloads(pending)
+            raise

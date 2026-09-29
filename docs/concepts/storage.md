@@ -112,10 +112,22 @@ a fixed subpath such as `<out>/table` finds nothing.
 `download_prefix`, `upload_prefix` and `delete_prefix` transfer objects
 concurrently. If one transfer fails, or the caller is cancelled, the rest are
 cancelled and the call **waits for their in-flight file I/O to stop** before it
-propagates the error or cancellation. Once it has propagated, nothing is still
-writing under `local_dir` (or to the prefix), so a retry cannot race the
-previous attempt. The error is still a bare `StorageError`, not an
-`ExceptionGroup`.
+propagates the error or cancellation. That includes a sync's index write and
+prune. The error is still a bare `StorageError`, not an `ExceptionGroup`.
+
+The wait lasts only while that I/O is making progress:
+- **It finishes.** When the wait ends because the I/O stopped, nothing is still
+  writing under `local_dir` (or to the prefix) when the error arrives, so a
+  retry cannot race the previous attempt.
+- **It gives up.** If none of the in-flight calls finishes within the task's
+  no-progress allowance (`max_no_progress_seconds`, 900s by default), the call
+  stops waiting, logs a WARNING naming them, and propagates anyway. Those calls
+  are still running and **may still write**. A wedged local volume is the usual
+  cause; see the
+  [stalled-task runbook](../runbooks/stalled-task.md#a-storage-fan-out-that-stopped-waiting-for-its-threads).
+
+This limit is enforced whatever `ATLAN_PROGRESS_WATCHDOG` is set to, because
+the alternative is an unwind that never finishes.
 
 Both prefix transfers can mirror instead of adding:
 
@@ -127,11 +139,16 @@ await download_prefix("artifacts/run/state", "<out>", strip_prefix=True, sync=Tr
 await upload_prefix("<out>", "artifacts/run/state", prune=True)
 ```
 
-`sync=True` skips an object when its local file still has the size and etag it
-was downloaded at. Those values are recorded in a `.sdk-sync/` index inside the
-mirrored tree, which every walker and `upload_prefix` skip. Pruning happens
-only after every download succeeds, and only inside the tree the prefix maps
-to. `prune=True` deletes nothing if an upload fails, keeps each uploaded key's
+`sync=True` skips an object when the listing's size and etag match what it was
+downloaded at, and its local file still has the size and modification time it
+had right after that download. A local file replaced with different bytes of the
+same size is therefore downloaded again, unless the replacement also restored the
+original modification time (`cp -p`, `touch -r`). These values are recorded in a
+`.sdk-sync/` index inside the mirrored tree, which every walker and
+`upload_prefix` skip. A listing with an object keyed inside `.sdk-sync/` (or any
+other SDK working directory) is refused with `StorageConfigError`, since that
+object would collide with the SDK's own files. Pruning happens only after every
+download succeeds, and only inside the tree the prefix maps to. `prune=True` deletes nothing if an upload fails, keeps each uploaded key's
 `.sha256` sidecar, and refuses an empty prefix.
 
 ---

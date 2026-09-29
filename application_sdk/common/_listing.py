@@ -74,6 +74,18 @@ def is_internal_dirname(name: str) -> bool:
     return name in INTERNAL_DIRNAMES
 
 
+def has_internal_component(relpath: str) -> bool:
+    """Return ``True`` when a POSIX relative path passes through an SDK working directory.
+
+    The key-side counterpart of :func:`prune_internal_dirs`: a walker never
+    descends into these directories, so a mirrored object whose relative key
+    lands inside one -- ``.sdk-sync/index.json`` under a synced prefix, say --
+    would collide with the SDK's own files there and then be invisible to every
+    walk. Callers that map keys into a tree check with this and refuse.
+    """
+    return any(is_internal_dirname(part) for part in relpath.split("/")[:-1])
+
+
 def prune_internal_dirs(dirnames: list[str]) -> None:
     """Drop SDK working directories from ``os.walk``'s ``dirnames``, in place.
 

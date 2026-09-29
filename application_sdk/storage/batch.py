@@ -29,10 +29,14 @@ from typing import TYPE_CHECKING
 import obstore
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._listing import SYNC_INDEX_DIRNAME, prune_internal_dirs
+from application_sdk.common._listing import (
+    SYNC_INDEX_DIRNAME,
+    has_internal_component,
+    prune_internal_dirs,
+)
 from application_sdk.common.atomic import atomic_write
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage._concurrency import _run_bounded
+from application_sdk.storage._concurrency import _run_bounded, _run_drained
 
 # Sidecar naming is owned by ``storage.integrity`` — the module that also reads
 # and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
@@ -550,13 +554,19 @@ async def download_prefix(
             local,
             "" if strip_prefix else _normalize_listing_prefix(prefix, normalize),
         )
-        index = await run_in_thread(_read_sync_index, sync_root)
-        todo, current = await run_in_thread(_plan_sync, sync_root, todo, index)
+        _reject_internal_keys(sync_root, destinations)
+        # Every offload of a sync is drained on unwind, not only the fan-out's:
+        # a cancelled index write or prune whose thread ran on could rewrite the
+        # index, or unlink a file, after a retry had already downloaded it.
+        index = await _run_drained(run_in_thread(_read_sync_index, sync_root))
+        todo, current = await _run_drained(
+            run_in_thread(_plan_sync, sync_root, todo, index)
+        )
         # Drop the entries about to be re-downloaded *before* downloading: a
         # failed run must never leave the index vouching for an etag the file
         # on disk may no longer hold.
         if current != index:
-            await run_in_thread(_write_sync_index, sync_root, current)
+            await _run_drained(run_in_thread(_write_sync_index, sync_root, current))
 
     async def _download_one(obj: DataObject, dest: str) -> None:
         # Pass the listing's size + etag so a large object is fetched via
@@ -579,23 +589,40 @@ async def download_prefix(
     await _run_bounded([_download_one(obj, d) for obj, d in todo], max_concurrency)
 
     if sync:
-        await run_in_thread(
-            _write_sync_index,
-            sync_root,
-            _index_entries(sync_root, zip(objects, destinations)),
+        await _run_drained(
+            run_in_thread(
+                _write_downloaded_index, sync_root, list(zip(objects, destinations))
+            )
         )
-        await run_in_thread(_prune_unlisted, sync_root, set(destinations), suffix)
+        await _run_drained(
+            run_in_thread(_prune_unlisted, sync_root, set(destinations), suffix)
+        )
     return destinations
 
 
 #: The index a ``download_prefix(..., sync=True)`` keeps inside
 #: :data:`~application_sdk.common._listing.SYNC_INDEX_DIRNAME` of the tree it
 #: mirrors: relative POSIX path -> the ``(size, etag)`` that file was
-#: downloaded at.
-_SYNC_INDEX_FILENAME = "index.json"
-_SYNC_INDEX_VERSION = 1
+#: downloaded at, and the ``mtime_ns`` it had on disk right after.
+#:
+#: JSON Lines -- a version header, then one object per line -- so a large
+#: mirror is read a line at a time into the one mapping the plan needs, rather
+#: than as the whole text plus a decoded copy of it (version 1 was a single
+#: JSON document, and is read as empty: one full re-download, then version 2).
+_SYNC_INDEX_FILENAME = "index.jsonl"
+_SYNC_INDEX_VERSION = 2
 
-_SyncIndex = dict[str, tuple[int, str]]
+
+@dataclass(frozen=True)
+class _SyncEntry:
+    """What the index recorded for one mirrored file."""
+
+    size: int
+    etag: str
+    mtime_ns: int
+
+
+_SyncIndex = dict[str, _SyncEntry]
 
 
 def _sync_index_path(root: Path) -> Path:
@@ -606,11 +633,28 @@ def _read_sync_index(root: Path) -> _SyncIndex:
     """Load the sync index under *root*; empty when absent or unreadable.
 
     An unreadable index only costs a full re-download, never a wrong skip, so
-    it is reported and treated as empty rather than failing the download.
+    it is reported and treated as empty rather than failing the download. A
+    malformed line drops only that line's entry, for the same reason.
     """
     path = _sync_index_path(root)
+    index: _SyncIndex = {}
     try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
+        with path.open(encoding="utf-8") as fh:
+            header = json.loads(fh.readline() or "null")
+            if not isinstance(header, dict) or header.get("version") != _SYNC_INDEX_VERSION:
+                return {}
+            for line in fh:
+                row = json.loads(line)
+                if (
+                    isinstance(row, dict)
+                    and isinstance(row.get("path"), str)
+                    and isinstance(row.get("size"), int)
+                    and isinstance(row.get("etag"), str)
+                    and isinstance(row.get("mtime_ns"), int)
+                ):
+                    index[row["path"]] = _SyncEntry(
+                        row["size"], row["etag"], row["mtime_ns"]
+                    )
     except FileNotFoundError:
         return {}
     # conformance: ignore[E002] a corrupt index degrades to a full re-download; logged
@@ -622,34 +666,28 @@ def _read_sync_index(root: Path) -> _SyncIndex:
             exc_info=True,
         )
         return {}
-    if not isinstance(raw, dict) or raw.get("version") != _SYNC_INDEX_VERSION:
-        return {}
-    files = raw.get("files")
-    if not isinstance(files, dict):
-        return {}
-    index: _SyncIndex = {}
-    for rel, entry in files.items():
-        if (
-            isinstance(entry, dict)
-            and isinstance(entry.get("size"), int)
-            and isinstance(entry.get("etag"), str)
-        ):
-            index[rel] = (entry["size"], entry["etag"])
     return index
 
 
 def _write_sync_index(root: Path, index: _SyncIndex) -> None:
-    payload = {
-        "version": _SYNC_INDEX_VERSION,
-        "files": {
-            rel: {"size": size, "etag": etag}
-            for rel, (size, etag) in sorted(index.items())
-        },
-    }
     with atomic_write(
         _sync_index_path(root), operation="write sync index", mode="w", encoding="utf-8"
     ) as fh:
-        json.dump(payload, fh)
+        fh.write(json.dumps({"version": _SYNC_INDEX_VERSION}) + "\n")
+        for rel in sorted(index):
+            entry = index[rel]
+            row = {
+                "path": rel,
+                "size": entry.size,
+                "etag": entry.etag,
+                "mtime_ns": entry.mtime_ns,
+            }
+            fh.write(json.dumps(row) + "\n")
+
+
+def _write_downloaded_index(root: Path, pairs: list[tuple[DataObject, str]]) -> None:
+    """Record every file just downloaded, with the mtime it now has on disk."""
+    _write_sync_index(root, _index_entries(root, pairs))
 
 
 def _sync_relpath(root: Path, dest: str) -> str | None:
@@ -660,13 +698,37 @@ def _sync_relpath(root: Path, dest: str) -> str | None:
         return None
 
 
+def _reject_internal_keys(root: Path, destinations: list[str]) -> None:
+    """Refuse a sync whose listing maps an object into an SDK working directory.
+
+    The sync index lives at ``SYNC_INDEX_DIRNAME`` inside the mirrored tree, so
+    an object keyed there would be overwritten by the index write, and every
+    walker skips those directories, so it would then vanish from uploads and
+    reads too. Silently skipping it would be the same loss, so the sync fails.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
+
+    for dest in destinations:
+        rel = _sync_relpath(root, dest)
+        if rel is not None and has_internal_component(rel):
+            raise StorageConfigError(
+                "download_prefix(sync=True) cannot mirror an object into an SDK "
+                "working directory; its key collides with the sync's own files.",
+                key=rel,
+            )
+
+
 def _index_entries(root: Path, pairs: Iterable[tuple[DataObject, str]]) -> _SyncIndex:
     """Index entries for downloaded *pairs*; objects without an etag get none."""
     index: _SyncIndex = {}
     for obj, dest in pairs:
         rel = _sync_relpath(root, dest)
-        if rel is not None and obj.etag is not None:
-            index[rel] = (obj.size, obj.etag)
+        on_disk = _regular_file_stat(dest)
+        if rel is not None and obj.etag is not None and on_disk is not None:
+            size, mtime_ns = on_disk
+            index[rel] = _SyncEntry(size, obj.etag, mtime_ns)
     return index
 
 
@@ -677,10 +739,11 @@ def _plan_sync(
 ) -> tuple[list[tuple[DataObject, str]], _SyncIndex]:
     """Split *pairs* into those still to download and the index entries kept.
 
-    An object is current only when all three agree: the listing's etag and size
-    match what the index recorded, and the file on disk still has that size.
-    The size check on disk catches a file truncated or replaced since the last
-    sync without re-reading its content.
+    An object is current only when the listing's etag and size match what the
+    index recorded *and* the file on disk still has the size and ``mtime_ns``
+    it had right after that download. The mtime is what catches a same-size
+    local replacement without re-reading content; a replacement that also
+    restores the original mtime (``cp -p``, ``touch -r``) is not caught.
     """
     todo: list[tuple[DataObject, str]] = []
     current: _SyncIndex = {}
@@ -689,9 +752,10 @@ def _plan_sync(
         recorded = index.get(rel) if rel is not None else None
         if (
             rel is not None
+            and recorded is not None
             and obj.etag is not None
-            and recorded == (obj.size, obj.etag)
-            and _regular_file_size(dest) == obj.size
+            and (recorded.size, recorded.etag) == (obj.size, obj.etag)
+            and _regular_file_stat(dest) == (recorded.size, recorded.mtime_ns)
         ):
             current[rel] = recorded
         else:
@@ -699,12 +763,13 @@ def _plan_sync(
     return todo, current
 
 
-def _regular_file_size(path: str) -> int | None:
+def _regular_file_stat(path: str) -> tuple[int, int] | None:
+    """``(size, mtime_ns)`` of a regular file at *path*, ``None`` otherwise."""
     try:
         st = os.stat(path, follow_symlinks=False)
     except FileNotFoundError:
         return None
-    return st.st_size if stat.S_ISREG(st.st_mode) else None
+    return (st.st_size, st.st_mtime_ns) if stat.S_ISREG(st.st_mode) else None
 
 
 def _prune_unlisted(root: Path, keep: set[str], suffix: str) -> None:

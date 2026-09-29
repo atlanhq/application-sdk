@@ -598,6 +598,47 @@ class TestPrepareColumnExtractionQueriesInlineImports:
                 )
             )
 
+    async def test_unreadable_cached_table_dir_raises_the_scan_error(
+        self, tmp_path
+    ) -> None:
+        """A failed walk of the cached state leaves as JsonScanError, not OSError."""
+        from application_sdk.common.incremental.incremental_errors import (
+            JsonScanError,
+        )
+
+        extractor = _make_extractor()
+        with (
+            patch(
+                "application_sdk.execution.get_object_store_prefix",
+                return_value="s3://prefix/transformed",
+            ),
+            patch(
+                "application_sdk.storage.batch.download_prefix",
+                new=AsyncMock(return_value=None),
+            ),            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current-state",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.count_json_files_recursive",
+                side_effect=PermissionError("injected: unreadable table dir"),
+            ),
+            pytest.raises(JsonScanError) as exc_info,
+        ):
+            await extractor.prepare_column_extraction_queries(
+                PrepareColumnQueriesInput(
+                    output_path=str(tmp_path),
+                    column_batch_size=10,
+                    connection_qualified_name="c",
+                    application_name="app",
+                    current_state_available=True,
+                    current_state_s3_prefix="persistent/current-state",
+                )
+            )
+
+        assert exc_info.value.base_dir == str(tmp_path / "current-state" / "table")
+        assert isinstance(exc_info.value.__cause__, PermissionError)
+
     async def test_zero_tables_returns_empty_output(self, tmp_path) -> None:
         """When no tables need extraction, returns total_batches=0 and skips upload."""
         extractor = _make_extractor()

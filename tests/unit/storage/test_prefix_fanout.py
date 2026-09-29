@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import threading
 import time
 from collections.abc import Awaitable, Callable
@@ -39,6 +40,21 @@ from application_sdk.storage.ops import _get_bytes, _put
 #: suite fast.
 _THREAD_SECONDS = 0.3
 
+#: How long a test waits for an offloaded call to start before failing. The unit
+#: job has no per-test timeout, so every wait a regression could make endless is
+#: bounded by this instead.
+_START_TIMEOUT = 5.0
+
+
+async def _wait_started(event: threading.Event) -> None:
+    """Wait for an offloaded call's start event; fail instead of hanging.
+
+    The timeout goes to ``Event.wait`` itself, so a call that never starts
+    leaves no helper thread blocked behind the failed test.
+    """
+    if not await asyncio.to_thread(event.wait, _START_TIMEOUT):
+        raise AssertionError("offloaded call did not start")
+
 
 @pytest.fixture
 def store():
@@ -58,8 +74,7 @@ class _BlockingCall:
         self.finished.set()
 
     async def wait_started(self) -> None:
-        while not self.started.is_set():
-            await asyncio.sleep(0.005)
+        await _wait_started(self.started)
 
 
 async def _fail_once_started(call: _BlockingCall) -> None:
@@ -161,6 +176,11 @@ _BUDGET = 0.15
 _SAFETY_RELEASE = 3.0
 
 
+async def _until(condition: Callable[[], bool]) -> None:
+    while not condition():
+        await asyncio.sleep(0.005)
+
+
 def _wedged_volume_fsync(release: threading.Event) -> None:
     """Stands in for an fsync on a wedged volume: blocks until released."""
     release.wait()
@@ -177,8 +197,7 @@ class TestDrainGivesUpWithoutProgress:
             _wedged_volume_fsync(release)
 
         async def fail_once_started() -> None:
-            while not started.is_set():
-                await asyncio.sleep(0.005)
+            await _wait_started(started)
             raise StorageError("boom")
 
         began = time.monotonic()
@@ -231,10 +250,12 @@ class TestDrainGivesUpWithoutProgress:
         budget = 10.0
         now = [0.0]
         count = 4
+        started = [threading.Event() for _ in range(count)]
         releases = [threading.Event() for _ in range(count)]
         finished: list[int] = []
 
         def staggered(i: int) -> None:
+            started[i].set()
             releases[i].wait(_SAFETY_RELEASE)
             finished.append(i)
 
@@ -242,9 +263,10 @@ class TestDrainGivesUpWithoutProgress:
             tasks = [
                 asyncio.ensure_future(run_in_thread(staggered, i)) for i in range(count)
             ]
-            while len(pending) < count:
-                await asyncio.sleep(0.005)
-            await asyncio.sleep(0.02)  # let every thread pick its call up
+            # A start handshake, not a delay: a call still queued when its task
+            # is cancelled would be cancelled by the drain and never finish.
+            for event in started:
+                await _wait_started(event)
             for task in tasks:
                 task.cancel()
             drain = asyncio.ensure_future(
@@ -255,8 +277,7 @@ class TestDrainGivesUpWithoutProgress:
             for i in range(count):
                 now[0] += budget * 0.6
                 releases[i].set()
-                while len(finished) <= i:
-                    await asyncio.sleep(0.005)
+                await asyncio.wait_for(_until(lambda: len(finished) > i), _START_TIMEOUT)
                 await asyncio.sleep(0.01)  # let the drain observe the finish
                 assert not drain.done() or i == count - 1, f"gave up after {i + 1}"
             await asyncio.wait_for(drain, _SAFETY_RELEASE)
@@ -270,11 +291,15 @@ class TestDrainGivesUpWithoutProgress:
     async def test_an_explicit_allowance_overrides_the_attempts(self) -> None:
         release = threading.Event()
         threading.Timer(_SAFETY_RELEASE, release.set).start()
+        started = threading.Event()
+
+        def wedged() -> None:
+            started.set()
+            _wedged_volume_fsync(release)
+
         with tracking_offloads() as pending:
-            task = asyncio.ensure_future(run_in_thread(_wedged_volume_fsync, release))
-            while not pending:
-                await asyncio.sleep(0.005)
-            await asyncio.sleep(0.02)  # let the thread pick the call up
+            task = asyncio.ensure_future(run_in_thread(wedged))
+            await _wait_started(started)
             task.cancel()
             began = time.monotonic()
             try:
@@ -441,6 +466,92 @@ class TestDownloadPrefixSync:
         assert fetched == ["s/a.txt"]
         assert (tmp_path / "s" / "a.txt").read_bytes() == b"alpha"
 
+    async def test_same_size_local_replacement_is_downloaded_again(
+        self, store, tmp_path
+    ) -> None:
+        """Different bytes of the same length: the recorded mtime is what catches it."""
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        local = tmp_path / "s" / "a.txt"
+        before = local.stat().st_mtime_ns
+        local.write_bytes(b"ALPHA")
+        # Pin a distinct mtime: a coarse filesystem clock could otherwise land
+        # the rewrite on the same tick as the download.
+        os.utime(local, ns=(before + 1_000_000_000, before + 1_000_000_000))
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert fetched == ["s/a.txt"]
+        assert local.read_bytes() == b"alpha"
+
+    async def test_a_key_inside_the_sync_directory_is_refused(
+        self, store, tmp_path
+    ) -> None:
+        """An object keyed where the index lives would be overwritten by it."""
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await _put(f"s/{SYNC_INDEX_DIRNAME}/index.jsonl", b"theirs", store, normalize=False)
+
+        with pytest.raises(StorageConfigError, match="SDK working directory"):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        # Refused before anything was fetched or written.
+        assert not (tmp_path / "s" / "a.txt").exists()
+
+    async def test_without_sync_nothing_is_refused(self, store, tmp_path) -> None:
+        await _put(f"s/{SYNC_INDEX_DIRNAME}/x.txt", b"theirs", store, normalize=False)
+
+        await download_prefix("s/", tmp_path, store, normalize=False)
+
+        assert (tmp_path / "s" / SYNC_INDEX_DIRNAME / "x.txt").read_bytes() == b"theirs"
+
+    async def test_cancelled_prune_is_drained(self, store, tmp_path) -> None:
+        """A prune thread that outlives a cancel would unlink a retry's output."""
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        call = _BlockingCall()
+
+        def slow_prune(*_args, **_kwargs) -> None:
+            call()
+
+        with patch.object(batch_module, "_prune_unlisted", slow_prune):
+            await _cancel_once_started(
+                call,
+                lambda: download_prefix(
+                    "s/", tmp_path, store, normalize=False, sync=True
+                ),
+            )
+
+        assert call.finished.is_set(), "prune thread still running after cancel"
+
+    async def test_index_is_one_json_row_per_file(self, store, tmp_path) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await _put("s/sub/b.txt", b"beta", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        lines = batch_module._sync_index_path(tmp_path / "s").read_text().splitlines()
+
+        assert json.loads(lines[0]) == {"version": batch_module._SYNC_INDEX_VERSION}
+        assert sorted(json.loads(line)["path"] for line in lines[1:]) == [
+            "a.txt",
+            "sub/b.txt",
+        ]
+
+    async def test_a_version_1_index_means_one_full_download(
+        self, store, tmp_path
+    ) -> None:
+        await _put("s/a.txt", b"alpha", store, normalize=False)
+        await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+        batch_module._sync_index_path(tmp_path / "s").write_text(
+            json.dumps({"version": 1, "files": {"a.txt": {"size": 5, "etag": "x"}}})
+        )
+
+        fetched, spy = _downloaded_keys()
+        with patch.object(batch_module, "download_file_chunked", spy):
+            await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
+
+        assert fetched == ["s/a.txt"]
+
     async def test_unlisted_local_files_are_pruned(self, store, tmp_path) -> None:
         await _put("s/a.txt", b"alpha", store, normalize=False)
         stale = tmp_path / "s" / "old" / "gone.txt"
@@ -479,7 +590,7 @@ class TestDownloadPrefixSync:
 
         assert (tmp_path / "a.txt").read_bytes() == b"alpha"
         assert not stale.exists()
-        assert (tmp_path / SYNC_INDEX_DIRNAME / "index.json").exists()
+        assert batch_module._sync_index_path(tmp_path).exists()
 
     async def test_suffix_limits_what_is_pruned(self, store, tmp_path) -> None:
         await _put("s/a.parquet", b"p", store, normalize=False)
@@ -512,15 +623,13 @@ class TestDownloadPrefixSync:
         ):
             await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
 
-        index = json.loads(
-            (tmp_path / "s" / SYNC_INDEX_DIRNAME / "index.json").read_text()
-        )
-        assert "a.txt" not in index["files"]
+        index = batch_module._read_sync_index(tmp_path / "s")
+        assert "a.txt" not in index
 
     async def test_unreadable_index_means_full_download(self, store, tmp_path) -> None:
         await _put("s/a.txt", b"alpha", store, normalize=False)
         await download_prefix("s/", tmp_path, store, normalize=False, sync=True)
-        (tmp_path / "s" / SYNC_INDEX_DIRNAME / "index.json").write_text("{not json")
+        batch_module._sync_index_path(tmp_path / "s").write_text("{not json")
 
         fetched, spy = _downloaded_keys()
         with patch.object(batch_module, "download_file_chunked", spy):

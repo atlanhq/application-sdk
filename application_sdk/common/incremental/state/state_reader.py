@@ -26,7 +26,6 @@ from application_sdk.common.incremental.helpers import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
-from application_sdk.storage.errors import StorageNotFoundError
 
 logger = get_logger(__name__)
 
@@ -81,8 +80,10 @@ async def download_current_state(
             - json_count: Number of JSON files in the current state
 
     Raises:
-        StorageError: If the download fails for any reason other than the
-            state not existing.
+        StorageError: If the download fails. An absent state is not a failure
+            (it downloads nothing and returns ``exists=False``); an object that
+            vanishes between the listing and its fetch is, and raises
+            ``StorageNotFoundError``.
         OSError: If the downloaded tree cannot be walked.
 
     Example:
@@ -109,39 +110,31 @@ async def download_current_state(
 
     logger.info("Downloading current-state folder from S3: %s", current_state_s3_prefix)
 
-    exists = False
-    json_count = 0
+    # No handler for StorageNotFoundError. An absent prefix is not an error --
+    # its listing is empty, so nothing is downloaded and the count below is 0,
+    # which is the first-run answer. A not-found raised *here* means an object
+    # the listing named vanished before its fetch: a failed state read, which
+    # must propagate so the task retries rather than run a full extraction.
+    # strip_prefix: current_state_dir already *is* the current-state
+    # directory, so the store prefix must not be repeated inside it —
+    # readers key off <current_state_dir>/table etc. (FND-340).
+    await download_prefix(
+        prefix=current_state_s3_prefix,
+        local_dir=str(current_state_dir),
+        strip_prefix=True,
+    )
 
-    try:
-        # strip_prefix: current_state_dir already *is* the current-state
-        # directory, so the store prefix must not be repeated inside it —
-        # readers key off <current_state_dir>/table etc. (FND-340).
-        await download_prefix(
-            prefix=current_state_s3_prefix,
-            local_dir=str(current_state_dir),
-            strip_prefix=True,
-        )
+    # Offloaded: one JSON file per asset, so the walk scales with the
+    # connection and would stall the loop (and the heartbeat) inline.
+    json_count = await run_in_thread(count_json_files_recursive, current_state_dir)
+    exists = json_count > 0
 
-    except StorageNotFoundError:
-        # Missing state means "first run". Any other StorageError propagates:
-        # treating an outage as "no state" would silently turn this run into a
-        # full extraction instead of letting the task retry.
+    if exists:
+        logger.info("Current-state downloaded (%d JSON files)", json_count)
+    else:
         logger.info(
-            "Current-state not found in S3 (prefix=%s) — first run",
+            "Current-state not found or empty in S3 (prefix=%s) — first run",
             current_state_s3_prefix,
         )
-    else:
-        # Offloaded: one JSON file per asset, so the walk scales with the
-        # connection and would stall the loop (and the heartbeat) inline.
-        json_count = await run_in_thread(count_json_files_recursive, current_state_dir)
-        exists = json_count > 0
-
-        if exists:
-            logger.info("Current-state downloaded (%d JSON files)", json_count)
-        else:
-            logger.info("Current-state downloaded but empty (no JSON files)")
-
-    if not exists:
-        logger.info("Current-state not available (first run or empty)")
 
     return current_state_dir, current_state_s3_prefix, exists, json_count

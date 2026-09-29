@@ -22,17 +22,17 @@ class TestDownloadCurrentState:
     """Tests for download_current_state (S3 download with first-run handling)."""
 
     async def test_first_run_returns_not_exists(self):
-        """First run (store raises StorageNotFoundError) returns exists=False."""
+        """First run: the prefix lists empty, nothing downloads, exists=False."""
         with (
             patch(
-                "application_sdk.common.incremental.state.state_reader.download_prefix"
-            ) as mock_store,
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(return_value=[]),
+            ),
             patch(
                 "application_sdk.common.incremental.state.state_reader."
                 "get_persistent_artifacts_path"
             ) as mock_path,
         ):
-            mock_store.side_effect = StorageNotFoundError("not found")
             with tempfile.TemporaryDirectory() as temp_dir:
                 state_dir = Path(temp_dir) / "current-state"
                 state_dir.mkdir(parents=True)
@@ -45,6 +45,26 @@ class TestDownloadCurrentState:
 
         assert exists is False
         assert json_count == 0
+
+    async def test_an_object_vanishing_mid_download_propagates(self):
+        """A not-found from a listed download is a failed read, not a first run."""
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(side_effect=StorageNotFoundError("listed, then gone")),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path"
+            ) as mock_path,
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                mock_path.return_value = Path(temp_dir) / "current-state"
+                with pytest.raises(StorageNotFoundError):
+                    await download_current_state(
+                        connection_qualified_name="t/c/123",
+                        application_name="oracle",
+                    )
 
     async def test_storage_error_other_than_not_found_propagates(self):
         """A store outage raises so the task retries, rather than reading as
