@@ -394,6 +394,7 @@ def register_handler_routes(
     app_package: str = "app",
     secret_store: SecretStore | None = None,
     observer: PreflightObserver | None = None,
+    include_app_routers: bool = True,
 ) -> None:
     """Register the auth / check / metadata routes and the 422 contract handler on ``app``.
 
@@ -404,6 +405,9 @@ def register_handler_routes(
         app_package: Package holding per-entrypoint ``<segment>.handler`` modules.
         secret_store: Backs ``HandlerContext.get_secret``; ``None`` on the API host.
         observer: Receives ``/check`` verdicts and crashes; logs when ``None``.
+        include_app_routers: Also serve ``handler.routers()`` now. A caller that
+            registers more SDK routes afterwards passes ``False`` and calls
+            :func:`include_app_routers` last, so the collision check sees them.
     """
     _secret_store = secret_store
     observer = observer or LoggingPreflightObserver(app_name)
@@ -774,3 +778,35 @@ def register_handler_routes(
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
                 ) from None
+
+    if include_app_routers:
+        include_app_routers_on(app, handler, app_name)
+
+
+def include_app_routers_on(app: FastAPI, handler: Handler, app_name: str) -> None:
+    """Serve the routers ``handler.routers()`` returns, after the SDK's own routes.
+
+    This is how an app adds endpoints of its own. The worker's handler service
+    and the API host both come here, so an app route is served identically in
+    both places, and the host needs no knowledge of it. A router that redefines
+    a path and method the SDK already serves is refused at startup: it would
+    otherwise be shadowed on one surface and not the other.
+    """
+    routers = list(handler.routers())
+    if not routers:
+        return
+    taken = {
+        (getattr(r, "path", ""), method)
+        for r in app.routes
+        for method in (getattr(r, "methods", None) or ())
+    }
+    for router in routers:
+        for route in router.routes:
+            path = f"{router.prefix}{getattr(route, 'path', '')}"
+            for method in getattr(route, "methods", None) or ():
+                if (path, method) in taken:
+                    raise ValueError(
+                        f"{app_name}: handler router redefines {method} {path}, "
+                        "which the SDK already serves"
+                    )
+        app.include_router(router)

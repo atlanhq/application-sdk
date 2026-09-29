@@ -75,10 +75,11 @@ that needs a declared dependency or a guarded fallback.
 
   Measured at 60 MB with every extra installed.
 - The structured logger (loguru and OpenTelemetry) is **not** in the api
-  distribution. SDK files in the set log through `application_sdk._logging`,
-  and handler code logs through `application_sdk.handler.get_logger`. Either
-  gives the SDK's structured logger on the worker and a stdlib logger on the
-  host.
+  distribution. SDK files in the set log through `application_sdk._logging`:
+  the SDK's structured logger on the worker, stdlib logging on the host.
+- **Handler code does not log.** It reports through its return value or a typed
+  `AppError`, and the SDK's shared routes log every outcome with the request id.
+  Conformance rule **P054** blocks logging in a hosted app's handler code.
 
 ## App side
 
@@ -95,10 +96,11 @@ extras = ["sql", "aws"]
 
 `.github/scripts/gen_app_api.py` does the rest:
 
-- `fix` makes imports between the handler's `app/` files relative, and moves
-  the two worker-only imports handler code uses:
-  - `run_in_thread` → `application_sdk.common.concurrency`;
-  - `get_logger` → `application_sdk.handler`.
+- `fix` makes imports between the handler's `app/` files relative, moves
+  `run_in_thread` to `application_sdk.common.concurrency` (its usual path loads
+  Temporal), and deletes logging statements (P054). Review what it removed: a
+  log line was sometimes the only report of a failure the handler should raise
+  as a typed `AppError`.
 - `check` runs in CI and fails on an absolute `from app` import in those files.
 - `build --out DIR` stages the files as `<app>_api/*`, generates
   `pyproject.toml` (deps and the `atlan.app_api` entry point) and
@@ -108,3 +110,28 @@ The tests-reusable `api-member` job runs `check`, builds the wheel, installs it
 alone, and mounts it with `application_sdk.handler.asgi.build_asgi_app`, exactly
 as the host does. The reference is atlan-mysql-app#778; see the
 `api-server-consolidation-migration` skill.
+
+## App routes
+
+An app that serves endpoints of its own returns FastAPI routers from
+`Handler.routers()`. `register_handler_routes` serves them after the SDK's
+routes, on the worker and on the host alike, so the host needs no knowledge of
+any app. A router that redefines an SDK path is refused at startup. Keep router
+code in the handler's own files (imported relatively), so it ships with the
+handler.
+
+## Versions
+
+| Artifact | Version | Built and published by |
+|---|---|---|
+| `atlan-application-sdk` | the SDK release, N | `tag-and-publish` |
+| `atlan-application-sdk-api` | always N too (same commit) | `tag-and-publish`, published first |
+| `<app>_api` (for example `atlan_mysql_api`) | the app's release, Y (its root `pyproject.toml` version) | `gen_app_api.py build` in the app's release |
+
+- The SDK pins `atlan-application-sdk-api==N`, so the files the worker gets from
+  both packages are byte-identical.
+- An app's wheel requires `atlan-application-sdk-api[<extras>]` with the range
+  the app already declares for `atlan-application-sdk` (for example
+  `>=3.40,<4`). Before an SDK release it carries the app's git pin instead.
+- The host pins each hosted app's wheel version, resolves one api version that
+  satisfies every app's range, and fails its own lock in CI when it can't.

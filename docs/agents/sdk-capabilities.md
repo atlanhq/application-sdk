@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.40.0
-source-sha:    23198c532666033219b05aeebd5fb2ad92cea273
-source-date:   2026-09-29T13:47:49+05:30
+source-sha:    eb28caa357d53fcb7d444892fca03cb530ab7fc2
+source-date:   2026-09-29T14:41:10+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 24 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -2531,13 +2531,6 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Signature:** `create_app_handler_service(handler: Handler, *, ...)`
 - **Summary:** Create a FastAPI app for a single handler.
 - **Defined in:** `application_sdk/handler/service.py`
-
-#### `get_logger`
-
-- **Import:** `from application_sdk.handler import get_logger`
-- **Signature:** `get_logger(name: str | None = None)`
-- **Summary:** The SDK logger for ``name``, or a stdlib logger on an api-only install.
-- **Defined in:** `application_sdk/_logging.py`
 
 #### `run_app_handler_service`
 

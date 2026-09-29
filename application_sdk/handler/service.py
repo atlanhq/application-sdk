@@ -142,6 +142,7 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     _summarize_check,
     _validated_entrypoint,
     _wrap_response,
+    include_app_routers_on,
     register_handler_routes,
 )
 
@@ -2592,6 +2593,7 @@ def create_app_handler_service(
         app_name=app_name,
         secret_store=_secret_store,
         observer=_GatePreflightObserver(app_name),
+        include_app_routers=False,
     )
 
     _register_workflow_routes(
@@ -2698,6 +2700,10 @@ def create_app_handler_service(
             content="<html><body><h1>UI not available</h1></body></html>",
             status_code=404,
         )
+
+    # The app's own routers go after every SDK route (so a redefinition is
+    # refused) and before the static mount (which would shadow them).
+    include_app_routers_on(app, handler, app_name)
 
     static_dir = Path(frontend_assets_path)
     if static_dir.is_dir():

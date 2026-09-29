@@ -144,3 +144,98 @@ def test_no_secret_reaches_either_body() -> None:
         resp = client.post("/workflows/v1/auth", json=_creds("bad"))
         assert resp.status_code == 401
         assert "hunter2" not in resp.text
+
+
+# ── app-defined routes (Handler.routers) ─────────────────────────────────────
+
+
+def _projects_router():
+    from fastapi import APIRouter
+
+    router = APIRouter(prefix="/workflows/v1/metadata")
+
+    @router.post("/projects")
+    async def projects(body: dict[str, Any]) -> dict[str, Any]:
+        return {"projects": ["p1", "p2"], "echo": body.get("q")}
+
+    return router
+
+
+class _RoutedHandler(_ParityHandler):
+    def routers(self):
+        return [_projects_router()]
+
+
+def test_an_app_router_is_served_identically_by_worker_and_host() -> None:
+    from application_sdk.handler.service import create_app_handler_service
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        worker = TestClient(
+            create_app_handler_service(_RoutedHandler(), app_name="parity"),
+            raise_server_exceptions=False,
+        )
+    host = TestClient(
+        build_asgi_app(_RoutedHandler(), app_name="parity"),
+        raise_server_exceptions=False,
+    )
+    responses = [
+        c.post("/workflows/v1/metadata/projects", json={"q": "x"})
+        for c in (worker, host)
+    ]
+    assert [r.status_code for r in responses] == [200, 200]
+    assert (
+        responses[0].json()
+        == responses[1].json()
+        == {
+            "projects": ["p1", "p2"],
+            "echo": "x",
+        }
+    )
+
+
+def test_a_router_that_redefines_an_sdk_route_is_refused() -> None:
+    from fastapi import APIRouter
+
+    router = APIRouter()
+
+    @router.post("/workflows/v1/auth")
+    async def hijack() -> dict[str, str]:
+        return {}
+
+    class _Hijack(_ParityHandler):
+        def routers(self):
+            return [router]
+
+    with pytest.raises(ValueError, match="redefines POST /workflows/v1/auth"):
+        build_asgi_app(_Hijack(), app_name="parity")
+
+
+def test_a_handler_without_routers_adds_nothing() -> None:
+    paths = {
+        getattr(r, "path", "")
+        for r in build_asgi_app(_ParityHandler(), app_name="p").routes
+    }
+    assert "/workflows/v1/metadata/projects" not in paths
+
+
+def test_the_worker_refuses_a_router_that_redefines_a_workflow_route() -> None:
+    """The worker registers more SDK routes after the handler routes; the check sees them."""
+    from fastapi import APIRouter
+
+    from application_sdk.handler.service import create_app_handler_service
+
+    router = APIRouter()
+
+    @router.post("/workflows/v1/start")
+    async def start() -> dict[str, str]:
+        return {}
+
+    class _Hijack(_ParityHandler):
+        def routers(self):
+            return [router]
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        with pytest.raises(ValueError, match="redefines POST /workflows/v1/start"):
+            create_app_handler_service(_Hijack(), app_name="parity")

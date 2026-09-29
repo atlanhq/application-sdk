@@ -23,7 +23,7 @@ SQLClient``): the same file is ``app.handler`` in the worker and
 
 Usage, from the app repo root::
 
-    python3 <sdk>/.github/scripts/gen_app_api.py fix     # make those imports relative
+    python3 <sdk>/.github/scripts/gen_app_api.py fix     # relative imports, no logging
     python3 <sdk>/.github/scripts/gen_app_api.py check   # CI: config valid, imports relative
     python3 <sdk>/.github/scripts/gen_app_api.py build --out dist-api [--member api]
 
@@ -54,15 +54,6 @@ APP = "app"
 KNOWN_MOVES = {
     "from application_sdk.execution.heartbeat import run_in_thread": (
         "from application_sdk.common.concurrency import run_in_thread"
-    ),
-    # The structured logger (loguru + OpenTelemetry) is worker-only. Handler
-    # code logs through application_sdk.handler.get_logger: the same structured
-    # logger on the worker, a stdlib logger on the host.
-    "from application_sdk.observability.logger_adaptor import get_logger": (
-        "from application_sdk.handler import get_logger"
-    ),
-    "from application_sdk.observability import get_logger": (
-        "from application_sdk.handler import get_logger"
     ),
 }
 
@@ -230,6 +221,138 @@ def fix_absolute_imports(root: Path, files: list[str]) -> list[str]:
     return changed
 
 
+#: Method names that make a call a logging statement.
+_LOG_METHODS = frozenset(
+    {"debug", "info", "warning", "warn", "error", "exception", "critical", "log"}
+)
+_CONTEXT_LOG_METHODS = frozenset({"log_debug", "log_info", "log_warning", "log_error"})
+
+
+def _logger_names(tree: ast.Module) -> set[str]:
+    """Names bound to a logger: ``x = get_logger(...)`` / ``logging.getLogger(...)``."""
+    names = {"logger", "log", "_logger", "LOGGER"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            called = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", "")
+            )
+            if called in {"get_logger", "getLogger"}:
+                names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+    return names
+
+
+def logging_statements(tree: ast.Module) -> list[ast.stmt]:
+    """Every statement in handler code that only logs, binds a logger, or imports one."""
+    loggers = _logger_names(tree)
+    found: list[ast.stmt] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            if isinstance(func, ast.Attribute):
+                owner = func.value
+                if (
+                    func.attr in _LOG_METHODS
+                    and isinstance(owner, ast.Name)
+                    and owner.id in loggers | {"logging"}
+                ):
+                    found.append(node)
+                elif func.attr in _CONTEXT_LOG_METHODS:
+                    found.append(node)  # self.context.log_info(...)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Call):
+            func = node.value.func
+            called = (
+                func.attr
+                if isinstance(func, ast.Attribute)
+                else getattr(func, "id", "")
+            )
+            if called in {"get_logger", "getLogger"}:
+                found.append(node)
+        elif isinstance(node, ast.Import) and any(
+            a.name in {"logging", "loguru"} for a in node.names
+        ):
+            found.append(node)
+        elif isinstance(node, ast.ImportFrom) and (
+            (node.module or "").split(".")[0] in {"logging", "loguru"}
+            or any(a.name == "get_logger" for a in node.names)
+            or (node.module or "").startswith("application_sdk.observability")
+        ):
+            found.append(node)
+    return found
+
+
+def strip_logging(root: Path, files: list[str]) -> list[str]:
+    """Delete logging statements from the listed Python files; return those changed.
+
+    A block left empty gets ``pass``. Handler code reports through its return
+    value or a typed AppError, and the SDK's routes log the outcome.
+    """
+    changed = []
+    for rel in files:
+        if not rel.endswith(".py"):
+            continue
+        path = root / rel
+        text = path.read_text(encoding="utf-8")
+        tree = ast.parse(text, filename=rel)
+        doomed = logging_statements(tree)
+        if not doomed:
+            continue
+        doomed_ids = {id(n) for n in doomed}
+        lines = text.splitlines(keepends=True)
+        replace: dict[int, str] = {}  # first line index -> replacement ("" = delete)
+        spans: list[tuple[int, int]] = []
+        for parent in ast.walk(tree):
+            for field in ("body", "orelse", "finalbody", "handlers"):
+                block = getattr(parent, field, None)
+                if not isinstance(block, list) or not block:
+                    continue
+                stmts = [s for s in block if isinstance(s, ast.stmt)]
+                if not stmts:
+                    continue
+                gone = [s for s in stmts if id(s) in doomed_ids]
+                for s in gone:
+                    spans.append((s.lineno - 1, s.end_lineno or s.lineno))
+                if (
+                    gone
+                    and len(gone) == len(stmts)
+                    and not isinstance(parent, ast.Module)
+                ):
+                    first = gone[0]
+                    indent = lines[first.lineno - 1][: first.col_offset]
+                    replace[first.lineno - 1] = f"{indent}pass\n"
+        for start, end in sorted(set(spans), reverse=True):
+            new = [replace[start]] if start in replace else []
+            lines[start:end] = new
+        new_text = "".join(lines)
+        new_tree = ast.parse(
+            new_text, filename=rel
+        )  # never write a file that does not parse
+        bound = {
+            t.id
+            for n in doomed
+            if isinstance(n, ast.Assign)
+            for t in n.targets
+            if isinstance(t, ast.Name)
+        }
+        left = sorted(
+            {
+                n.lineno
+                for n in ast.walk(new_tree)
+                if isinstance(n, ast.Name) and n.id in bound
+            }
+        )
+        if left:
+            raise ValueError(
+                f"{rel}: a removed logger is still used on line(s) {left}; "
+                "remove those uses by hand, then rerun fix"
+            )
+        path.write_text(new_text, encoding="utf-8")
+        changed.append(rel)
+    return changed
+
+
 def _api_requirement(config: Config) -> str:
     extras = f"[{','.join(config.extras)}]" if config.extras else ""
     source = config.api_source
@@ -343,6 +466,8 @@ def main(argv: list[str] | None = None) -> int:
         files, _ = closure(args.root, config)
         for rel in fix_absolute_imports(args.root, files):
             print(f"gen_app_api: rewrote imports in {rel}")
+        for rel in strip_logging(args.root, files):
+            print(f"gen_app_api: removed logging statements from {rel}")
     problems = check(args.root, config)
     for problem in problems:
         print(f"::error::{problem}")

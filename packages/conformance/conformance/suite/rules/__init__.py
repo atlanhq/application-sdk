@@ -25,6 +25,7 @@ from conformance.suite.rules.entrypoint import RULES as _ENTRYPOINT_RULES
 from conformance.suite.rules.entrypoint_alignment import RULES as _EP_ALIGNMENT_RULES
 from conformance.suite.rules.error_handling import RULES as _E_RULES
 from conformance.suite.rules.error_seam import RULES as _ERROR_SEAM_RULES
+from conformance.suite.rules.hosted_handler import RULES as _HOSTED_HANDLER_RULES
 from conformance.suite.rules.logging import RULES as _L_RULES
 from conformance.suite.rules.optimizations import RULES as _O_RULES
 from conformance.suite.rules.orchestration import RULES as _ORCHESTRATION_RULES
@@ -70,6 +71,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _CLIENT_SEAM_RULES,
     _PERSISTENCE_SEAM_RULES,
     _CREDENTIAL_SEAM_RULES,
+    _HOSTED_HANDLER_RULES,
     _EP_ALIGNMENT_RULES,
     _APP_NAME_ALIGNMENT_RULES,
     _SDR_RULES,

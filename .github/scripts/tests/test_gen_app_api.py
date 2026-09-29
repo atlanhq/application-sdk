@@ -138,15 +138,49 @@ def test_fix_moves_run_in_thread_off_the_temporal_path(tmp_path: Path) -> None:
     )
 
 
-def test_fix_moves_handler_logging_off_the_worker_logger(tmp_path: Path) -> None:
+def test_fix_removes_logging_from_handler_code(tmp_path: Path) -> None:
     root = _app(
         tmp_path,
         "from application_sdk.observability.logger_adaptor import get_logger\n"
-        "from .client import C\n",
+        "from .client import C\n"
+        "\n"
+        "logger = get_logger(__name__)\n"
+        "\n"
+        "\n"
+        "def f(x):\n"
+        "    try:\n"
+        "        return x()\n"
+        "    except ValueError as e:\n"
+        "        logger.error(\n"
+        "            'failed: %s',\n"
+        "            e,\n"
+        "        )\n"
+        "    logger.info('done')\n"
+        "    return None\n",
     )
-    gen.main(["fix", "--root", str(root)])
-    assert (
-        (root / "app/handler.py")
-        .read_text()
-        .startswith("from application_sdk.handler import get_logger\n")
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/handler.py").read_text() == (
+        "from .client import C\n"
+        "\n"
+        "\n"
+        "\n"
+        "def f(x):\n"
+        "    try:\n"
+        "        return x()\n"
+        "    except ValueError as e:\n"
+        "        pass\n"
+        "    return None\n"
     )
+
+
+def test_fix_refuses_to_leave_a_dangling_logger(tmp_path: Path) -> None:
+    root = _app(
+        tmp_path,
+        "import logging\nlogger = logging.getLogger(__name__)\nhelper(logger)\nfrom .client import C\n",
+    )
+    try:
+        gen.main(["fix", "--root", str(root)])
+    except ValueError as exc:
+        assert "still used" in str(exc)
+    else:
+        raise AssertionError("fix left a reference to a removed logger")

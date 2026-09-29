@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**47 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -70,6 +70,7 @@ reassigned.
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
+| [P054](#p054) | `HostedHandlerLogs` | `block` | `app` | `hosted-handler` | — | 0.41.0 |
 
 ---
 
@@ -2677,5 +2678,56 @@ Land as `WARN`: every hit is a working copy awaiting migration.  A site the seam
 genuinely does not cover — `CredentialRef.resolve` over an object that is not the
 entry-point input — records that with a justified `# conformance: ignore[P053]
 <reason>`.
+
+---
+
+## P054 — `HostedHandlerLogs` {#p054}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `hosted-handler` · **Autofixable:** — · **Since:** 0.41.0
+
+> Hosted handler code logs; return the result or raise a typed AppError and let the SDK's routes log it
+
+**Rationale:** The consolidated API host serves every hosted app's handler from one process on
+atlan-application-sdk-api, which carries no structured logger. Handler log lines there
+would reach a stdlib logger with none of the worker's context, duplicate what the SDK's
+shared routes already log per request, and risk printing request credentials. The
+handler's result or typed AppError is the report; the routes log it once, the same way
+on both surfaces. Customer impact: a handler log line on the shared host can carry
+request credentials (a driver error embedding a DSN, a logged request body) into logs
+every hosted app's operators read, outside the redaction the SDK's routes apply.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/handler.py — the hosted handler returns an AuthOutput /
+  PreflightOutput or raises a typed AppError from app/failures.py and never logs; the
+  SDK's shared routes (application_sdk/handler/routes.py) log every outcome with the
+  request id on both the worker and the consolidated API host.
+- **Interacts with:** Evaluated only for an app that declares [tool.atlan-app-api]: that block is the app
+  opting into the consolidated API host, and complying is part of that migration.
+  application-sdk's gen_app_api.py `fix` removes the flagged statements.
+
+A file in a hosted app's handler code logs.  The handler code is the module
+`[tool.atlan-app-api].handler` names plus every `app/` module it imports, which is
+exactly what the consolidated API host installs.
+
+Fires on each of:
+
+* a call to `<logger>.debug / info / warning / warn / error /   exception / critical /
+log(...)` on a name bound to   `get_logger(...)` or `logging.getLogger(...)` (or named
+`logger` / `log`), or on the `logging` module itself; * `self.context.log_debug /
+log_info / log_warning / log_error(...)`; * binding a logger (`logger =
+get_logger(__name__)`); * importing `logging`, `loguru`, `get_logger`, or anything from
+`application_sdk.observability`.
+
+Report through the handler's return value (`AuthOutput`, `PreflightOutput` with its
+checks) or a typed `AppError`: the SDK's shared routes log every outcome, with the
+request id, on the worker and on the host alike.
+
+application-sdk's `.github/scripts/gen_app_api.py fix` deletes these statements (a block
+left empty gets `pass`); review what it removed, since a log line was sometimes the only
+report of a failure the handler should instead raise as a typed `AppError`.
+
+Silent for an app without `[tool.atlan-app-api]`: it is not hosted. Blocks for one that
+has it, because declaring the block is the app moving to the host.
 
 ---
