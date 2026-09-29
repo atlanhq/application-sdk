@@ -19,7 +19,13 @@ from unittest.mock import patch
 
 import pytest
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime import offload as offload_module
+from application_sdk._runtime.offload import (
+    drain_offloads,
+    run_in_thread,
+    tracking_offloads,
+)
+from application_sdk._runtime.progress import ProgressTracker, bind_progress_tracker
 from application_sdk.common._listing import INTERNAL_DIRNAMES, SYNC_INDEX_DIRNAME
 from application_sdk.storage import batch as batch_module
 from application_sdk.storage._concurrency import _gather_with_semaphore, _run_bounded
@@ -140,6 +146,132 @@ class TestRunBounded:
     async def test_offloads_outside_a_fanout_are_untracked(self) -> None:
         """A plain ``run_in_thread`` keeps its old behaviour: no scope, no marker."""
         assert await run_in_thread(lambda: 7) == 7
+
+
+# ---------------------------------------------------------------------------
+# The drain waits only while its threads are progressing
+# ---------------------------------------------------------------------------
+
+#: The no-progress allowance these tests bind. Small, so a stalled drain gives
+#: up quickly; the progressing case below spans several of it.
+_BUDGET = 0.15
+
+#: A wedged call is released after this, so on a drain that never gives up the
+#: test fails on elapsed time instead of hanging the suite.
+_SAFETY_RELEASE = 3.0
+
+
+def _wedged_volume_fsync(release: threading.Event) -> None:
+    """Stands in for an fsync on a wedged volume: blocks until released."""
+    release.wait()
+
+
+class TestDrainGivesUpWithoutProgress:
+    async def test_a_wedged_thread_does_not_hold_the_failure(self) -> None:
+        release = threading.Event()
+        threading.Timer(_SAFETY_RELEASE, release.set).start()
+        started = threading.Event()
+
+        def wedged() -> None:
+            started.set()
+            _wedged_volume_fsync(release)
+
+        async def fail_once_started() -> None:
+            while not started.is_set():
+                await asyncio.sleep(0.005)
+            raise StorageError("boom")
+
+        began = time.monotonic()
+        try:
+            with (
+                bind_progress_tracker(ProgressTracker(max_no_progress_seconds=_BUDGET)),
+                patch.object(offload_module.logger, "warning") as warning,
+                pytest.raises(StorageError, match="boom"),
+            ):
+                await _run_bounded([run_in_thread(wedged), fail_once_started()], 4)
+            elapsed = time.monotonic() - began
+        finally:
+            release.set()
+
+        assert elapsed < _SAFETY_RELEASE / 2, f"drain held the failure {elapsed:.2f}s"
+        assert warning.call_count == 1
+        assert "wedged" in warning.call_args.args[-1], "stuck call not named"
+
+    async def test_a_wedged_thread_does_not_swallow_the_cancellation(self) -> None:
+        release = threading.Event()
+        threading.Timer(_SAFETY_RELEASE, release.set).start()
+        call = _BlockingCall()
+
+        def wedged() -> None:
+            call.started.set()
+            _wedged_volume_fsync(release)
+
+        began = time.monotonic()
+        try:
+            with bind_progress_tracker(
+                ProgressTracker(max_no_progress_seconds=_BUDGET)
+            ):
+                await _cancel_once_started(
+                    call, lambda: _run_bounded([run_in_thread(wedged)], 4)
+                )
+            elapsed = time.monotonic() - began
+        finally:
+            release.set()
+
+        assert elapsed < _SAFETY_RELEASE / 2, f"cancel held {elapsed:.2f}s"
+
+    async def test_a_progressing_drain_outlives_the_allowance(self) -> None:
+        """Threads finishing one by one keep the drain waiting past the allowance."""
+        count = 4
+        gap = _BUDGET * 0.6  # each finish lands inside the allowance...
+        finished: list[int] = []
+        started = threading.Barrier(count + 1)
+
+        def staggered(i: int) -> None:
+            started.wait()
+            time.sleep(gap * (i + 1))
+            finished.append(i)
+
+        async def fail_once_started() -> None:
+            await asyncio.to_thread(started.wait)
+            raise StorageError("boom")
+
+        began = time.monotonic()
+        with (
+            bind_progress_tracker(ProgressTracker(max_no_progress_seconds=_BUDGET)),
+            pytest.raises(StorageError),
+        ):
+            await _run_bounded(
+                [run_in_thread(staggered, i) for i in range(count)]
+                + [fail_once_started()],
+                count + 1,
+            )
+
+        # ...while the whole unwind is well past it, and nothing was left behind.
+        assert time.monotonic() - began > 2 * _BUDGET
+        assert sorted(finished) == list(range(count))
+
+    async def test_an_explicit_allowance_overrides_the_attempts(self) -> None:
+        release = threading.Event()
+        threading.Timer(_SAFETY_RELEASE, release.set).start()
+        with tracking_offloads() as pending:
+            task = asyncio.ensure_future(run_in_thread(_wedged_volume_fsync, release))
+            while not pending:
+                await asyncio.sleep(0.005)
+            await asyncio.sleep(0.02)  # let the thread pick the call up
+            task.cancel()
+            began = time.monotonic()
+            try:
+                with bind_progress_tracker(
+                    ProgressTracker(max_no_progress_seconds=_SAFETY_RELEASE * 10)
+                ):
+                    await drain_offloads(pending, max_no_progress_seconds=_BUDGET)
+                elapsed = time.monotonic() - began
+            finally:
+                release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert elapsed < _SAFETY_RELEASE / 2
 
 
 # ---------------------------------------------------------------------------
