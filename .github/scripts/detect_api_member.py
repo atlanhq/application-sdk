@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Find an app's hosted api member: the package behind an ``atlan.app_api`` entry point.
 
-An app served by the consolidated API host keeps its one handler in a uv
-workspace member (``api/``) that declares::
+An app served by the consolidated API host either declares
+``[tool.atlan-app-api]`` in its root ``pyproject.toml`` (the handler stays in
+``app/``), or keeps its handler in a uv workspace member (``api/``) that
+declares::
 
     [project.entry-points."atlan.app_api"]
     mysql = "atlan_mysql_api:handler"
@@ -31,6 +33,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import gen_app_api  # noqa: E402
+
 GROUP = "atlan.app_api"
 _SKIP_DIRS = frozenset({".venv", "node_modules", ".git", "tests", "build", "dist"})
 
@@ -53,8 +59,20 @@ def _pyprojects(root: Path) -> list[Path]:
 
 
 def find_members(root: Path) -> list[ApiMember]:
-    """Every ``atlan.app_api`` entry point declared under ``root``."""
+    """Every ``atlan.app_api`` handler under ``root``.
+
+    Either a ``[tool.atlan-app-api]`` block in the root ``pyproject.toml`` (the
+    handler stays in ``app/``; ``gen_app_api.py build`` makes the wheel), or an
+    entry point in a hand-written workspace member's ``pyproject.toml``.
+    """
     members: list[ApiMember] = []
+    config = gen_app_api.load(root) if (root / "pyproject.toml").is_file() else None
+    if config is not None:
+        members.append(
+            ApiMember(
+                member=".", name=config.name, package=config.package, object="handler"
+            )
+        )
     for path in _pyprojects(root):
         data = tomllib.loads(path.read_text(encoding="utf-8"))
         eps = data.get("project", {}).get("entry-points", {}).get(GROUP, {})

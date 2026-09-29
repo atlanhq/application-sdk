@@ -16,7 +16,7 @@ def _tree(tmp_path: Path, files: dict[str, str], seeds: list[str]) -> Path:
     (tmp_path / "packages/api").mkdir(parents=True)
     (tmp_path / "packages/api/pyproject.toml").write_text(
         '[project]\nname = "x"\nversion = "0"\ndependencies = []\n\n'
-        "[tool.atlan-api]\nseeds = [" + ", ".join(f'"{s}"' for s in seeds) + "]\n"
+        "[tool.atlan-api.seeds]\ncore = [" + ", ".join(f'"{s}"' for s in seeds) + "]\n"
     )
     for rel, text in files.items():
         path = tmp_path / rel

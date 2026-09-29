@@ -8,6 +8,7 @@ creating FastAPI applications.
 import importlib
 from typing import TYPE_CHECKING, Any
 
+from application_sdk._logging import get_logger
 from application_sdk.handler.base import DefaultHandler, Handler, HandlerError
 from application_sdk.handler.context import HandlerContext
 from application_sdk.handler.contracts import (
@@ -72,6 +73,7 @@ __all__ = [
     "SqlMetadataObject",
     "SqlMetadataOutput",
     "create_app_handler_service",
+    "get_logger",
     "run_app_handler_service",
 ]
 

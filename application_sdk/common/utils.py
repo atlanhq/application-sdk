@@ -13,8 +13,8 @@ import orjson
 
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._install import worker_only_missing
+from application_sdk._logging import get_logger
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 
 logger = get_logger(__name__)

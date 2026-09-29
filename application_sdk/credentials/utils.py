@@ -7,12 +7,12 @@ import orjson
 
 from application_sdk._context_errors import ObjectStoreNotConfiguredError
 from application_sdk._install import worker_only_missing
+from application_sdk._logging import get_logger
 from application_sdk.common.utils import download_file_from_upload_response
 from application_sdk.constants import DEPLOYMENT_OBJECT_STORE_NAME, TEMPORARY_PATH
 from application_sdk.credentials.extra import (  # noqa: F401 — re-exported; ships in the api distribution
     parse_credentials_extra,
 )
-from application_sdk.observability import get_logger
 
 logger = get_logger(__name__)
 

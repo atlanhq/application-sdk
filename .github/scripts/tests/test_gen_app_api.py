@@ -50,26 +50,47 @@ def test_the_closure_follows_relative_imports_only_inside_app(tmp_path: Path) ->
 
 def test_an_absolute_app_import_is_reported_and_fixed(tmp_path: Path) -> None:
     root = _app(tmp_path, "from app.client import C\n")
-    assert gen.main(["--root", str(root), "--check"]) == 1
-    assert gen.main(["--root", str(root), "--fix"]) == 0
+    assert gen.main(["check", "--root", str(root)]) == 1
+    assert gen.main(["fix", "--root", str(root)]) == 0
     assert (root / "app/handler.py").read_text() == "from .client import C\n"
-    assert gen.main(["--root", str(root), "--check"]) == 0
+    assert gen.main(["check", "--root", str(root)]) == 0
 
 
-def test_generated_files_name_the_package_entry_point_and_deps(tmp_path: Path) -> None:
-    root = _app(tmp_path, "from .client import C\n")
-    assert gen.main(["--root", str(root)]) == 0
-    pyproject = (root / "api/pyproject.toml").read_text()
+def test_stage_ships_the_app_files_as_the_package(tmp_path: Path) -> None:
+    root = _app(tmp_path / "repo", "from .client import C\n")
+    out = tmp_path / "staged"
+    gen.stage(root, gen.load(root), out)
+    package = out / "atlan_demo_api"
+    assert sorted(
+        p.relative_to(package).as_posix() for p in package.rglob("*") if p.is_file()
+    ) == [
+        "__init__.py",
+        "client.py",
+        "failures.py",
+        "handler.py",
+        "sql/check.sql",
+    ]
+    assert (package / "handler.py").read_text() == (root / "app/handler.py").read_text()
+    init = (package / "__init__.py").read_text()
+    assert (
+        "from .handler import DemoHandler" in init and "handler = DemoHandler()" in init
+    )
+    pyproject = (out / "pyproject.toml").read_text()
     assert 'name = "atlan-demo-api"' in pyproject
     assert 'version = "1.4.0"' in pyproject
     assert '"atlan-application-sdk-api[sql]>=3.40.0,<4.0.0",' in pyproject
     assert '"pymysql>=1.1",' in pyproject
     assert 'demo = "atlan_demo_api:handler"' in pyproject
-    init = (root / "api/atlan_demo_api/__init__.py").read_text()
-    assert (
-        "from .handler import DemoHandler" in init and "handler = DemoHandler()" in init
-    )
-    assert "app/worker.py" not in (root / "api/api-files.txt").read_text()
+
+
+def test_stage_refuses_absolute_app_imports(tmp_path: Path) -> None:
+    root = _app(tmp_path / "repo", "from app.client import C\n")
+    try:
+        gen.stage(root, gen.load(root), tmp_path / "staged")
+    except ValueError as exc:
+        assert "absolute app imports" in str(exc)
+    else:
+        raise AssertionError("staged a handler that imports app absolutely")
 
 
 def test_a_git_pinned_sdk_becomes_a_direct_reference(tmp_path: Path) -> None:
@@ -79,8 +100,7 @@ def test_a_git_pinned_sdk_becomes_a_direct_reference(tmp_path: Path) -> None:
         'subdirectory = "packages/api" }\n'
     )
     root = _app(tmp_path, "from .client import C\n", pinned)
-    gen.main(["--root", str(root)])
-    pyproject = (root / "api/pyproject.toml").read_text()
+    pyproject = gen._pyproject(gen.load(root))  # noqa: SLF001
     assert (
         '"atlan-application-sdk-api[sql] @ git+https://github.com/atlanhq/'
         'application-sdk.git@abc123#subdirectory=packages/api",'
@@ -88,18 +108,11 @@ def test_a_git_pinned_sdk_becomes_a_direct_reference(tmp_path: Path) -> None:
     assert "allow-direct-references = true" in pyproject
 
 
-def test_a_hand_edit_is_stale(tmp_path: Path) -> None:
-    root = _app(tmp_path, "from .client import C\n")
-    gen.main(["--root", str(root)])
-    (root / "api/api-files.txt").write_text("app/handler.py\n")
-    assert gen.main(["--root", str(root), "--check"]) == 1
-
-
 def test_a_repo_without_the_config_is_not_using_this_layout(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "x-app"\nversion = "1"\n'
     )
-    assert gen.main(["--root", str(tmp_path), "--check"]) == 0
+    assert gen.main(["check", "--root", str(tmp_path)]) == 0
 
 
 def test_nested_modules_get_the_right_number_of_dots(tmp_path: Path) -> None:
@@ -107,7 +120,7 @@ def test_nested_modules_get_the_right_number_of_dots(tmp_path: Path) -> None:
     (root / "app/sub").mkdir()
     (root / "app/sub/__init__.py").write_text("")
     (root / "app/sub/helper.py").write_text("from app.failures import Boom\n")
-    gen.main(["--root", str(root), "--fix"])
+    gen.main(["fix", "--root", str(root)])
     assert (root / "app/sub/helper.py").read_text() == "from ..failures import Boom\n"
 
 
@@ -117,9 +130,23 @@ def test_fix_moves_run_in_thread_off_the_temporal_path(tmp_path: Path) -> None:
         "from application_sdk.execution.heartbeat import run_in_thread\n"
         "from .client import C\n",
     )
-    gen.main(["--root", str(root), "--fix"])
+    gen.main(["fix", "--root", str(root)])
     assert (
         (root / "app/handler.py")
         .read_text()
         .startswith("from application_sdk.common.concurrency import run_in_thread\n")
+    )
+
+
+def test_fix_moves_handler_logging_off_the_worker_logger(tmp_path: Path) -> None:
+    root = _app(
+        tmp_path,
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "from .client import C\n",
+    )
+    gen.main(["fix", "--root", str(root)])
+    assert (
+        (root / "app/handler.py")
+        .read_text()
+        .startswith("from application_sdk.handler import get_logger\n")
     )

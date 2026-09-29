@@ -154,3 +154,55 @@ def test_the_real_check_catches_a_worker_import(tmp_path: Path) -> None:
     assert any(
         "handler/base.py" in m and "application_sdk.execution" in m for m in messages
     ), messages
+
+
+_GROUPED = """
+[project]
+name = "atlan-application-sdk-api"
+version = "0.0.0"
+dependencies = ["pydantic>=2"]
+
+[project.optional-dependencies]
+sql = ["sqlalchemy>=2", "httpx>=0.27"]
+
+[tool.atlan-api.seeds]
+core = ["application_sdk.handler.base"]
+sql = ["application_sdk.clients.sql"]
+"""
+
+
+def _grouped(tmp_path: Path, handler_src: str, sql_src: str) -> list[str]:
+    root = _tree(
+        tmp_path,
+        {
+            "application_sdk/__init__.py": "",
+            "application_sdk/handler/__init__.py": "",
+            "application_sdk/handler/base.py": handler_src,
+            "application_sdk/clients/__init__.py": "",
+            "application_sdk/clients/sql.py": sql_src,
+        },
+        [
+            "application_sdk/__init__.py",
+            "application_sdk/clients/__init__.py",
+            "application_sdk/clients/sql.py",
+            "application_sdk/handler/__init__.py",
+            "application_sdk/handler/base.py",
+        ],
+    )
+    (root / "packages/api/pyproject.toml").write_text(_GROUPED)
+    return [p.message for p in surface.check(root)]
+
+
+def test_a_group_file_may_import_its_extras_deps_at_module_level(
+    tmp_path: Path,
+) -> None:
+    assert (
+        _grouped(tmp_path, "import pydantic\n", "import httpx\nimport pydantic\n") == []
+    )
+
+
+def test_a_core_file_may_not_import_an_extras_dep_at_module_level(
+    tmp_path: Path,
+) -> None:
+    (message,) = _grouped(tmp_path, "import httpx\n", "")
+    assert "does not declare" in message

@@ -31,12 +31,12 @@ from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, TypeVar
 
+from application_sdk._logging import get_logger
 from application_sdk._runtime.progress import (
     current_progress_tracker,
     declared_hold_active,
 )
 from application_sdk.errors import InvalidInputValueError
-from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
 
@@ -568,7 +568,7 @@ async def run_best_effort(
     func: Callable[..., T],
     *args: Any,
     label: str,
-    logger: AtlanLoggerAdapter,
+    logger: Any,
     timeout: float | None = None,
     max_workers: int | None = None,
     **kwargs: Any,
@@ -623,3 +623,25 @@ async def run_best_effort(
     except Exception:  # noqa: BLE001 — best-effort work must never break the caller
         logger.warning("%s skipped due to an unexpected error", label, exc_info=True)
     return None
+
+
+#: Names this module re-exported before it moved to the light logger; served on
+#: first access (the worker's structured logger class — absent on an api-only
+#: install, which never asks for it).
+_LAZY: dict[str, tuple[str, str]] = {
+    "AtlanLoggerAdapter": (
+        "application_sdk.observability.logger_adaptor",
+        "AtlanLoggerAdapter",
+    ),
+}
+
+
+def __getattr__(name: str) -> Any:
+    target = _LAZY.get(name)
+    if target is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    import importlib  # noqa: PLC0415 — only for the lazy names above
+
+    value = getattr(importlib.import_module(target[0]), target[1])
+    globals()[name] = value
+    return value

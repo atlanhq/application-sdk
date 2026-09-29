@@ -6,22 +6,25 @@ dependencies = [
     "fastapi>=0.141.1,<0.142.0",
     "pydantic>=2.10.6,<3.0.0",
     "orjson>=3.11.6,<4.0.0",
-    # application_sdk.observability.logger_adaptor.get_logger, so handler code
-    # logs exactly as it does on the worker (structured, OTLP-exported).
-    "loguru>=0.7.3,<0.8.0",
-    "opentelemetry-sdk>=1.41.1,<2.0.0",
-    "opentelemetry-exporter-otlp-proto-grpc>=1.41.1,<2.0.0",
-    # application_sdk.constants and the client base.
-    "httpx>=0.27.0,<0.29.0",
-    "python-dotenv>=1.1.0,<2.0.0",
 ]
 
 # Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL
 # client base or the AWS helpers declares the extra, exactly as the worker does.
 [project.optional-dependencies]
-sql = ["sqlalchemy[asyncio]>=2.0.36,<3.0.0"]
+# One extra per [tool.atlan-api.seeds] group beyond core, same pins as
+# atlan-application-sdk. A handler that uses the SQL client base or the AWS
+# helpers declares the extra, exactly as it does on the worker.
+sql = [
+    "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
+    "httpx>=0.27.0,<0.29.0",
+    "python-dotenv>=1.1.0,<2.0.0",
+]
 pandas = ["pandas>=2.2.3,<3.0.0"]
-aws = ["boto3>=1.38.6,<2.0.0"]
+aws = [
+    "boto3>=1.38.6,<2.0.0",
+    "httpx>=0.27.0,<0.29.0",
+    "python-dotenv>=1.1.0,<2.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,12 +39,15 @@ dev-mode-dirs = ["../.."]
 
 [tool.hatch.build.targets.sdist.hooks.custom]
 
-# What the api distribution is FOR: the modules the consolidated host needs.
-# api-files.txt is generated from these by .github/scripts/gen_api_files.py
-# (their import closure) and committed; CI fails when it is stale. To put
-# another SDK surface on the host, add its module here and regenerate.
-[tool.atlan-api]
-seeds = [
+# What the api distribution is FOR: the modules the consolidated host needs,
+# grouped by the extra that brings their third-party deps. api-files.txt is
+# generated from these by .github/scripts/gen_api_files.py (their import
+# closure) and committed; CI fails when it is stale. check_api_surface.py fails
+# when a core file imports anything beyond the core dependencies, or a group's
+# file imports beyond core + that extra. To put another SDK surface on the
+# host, add its module to a group and regenerate.
+[tool.atlan-api.seeds]
+core = [
     "application_sdk.handler.asgi",
     "application_sdk.handler.base",
     "application_sdk.handler.contracts",
@@ -51,9 +57,12 @@ seeds = [
     "application_sdk.credentials.errors",
     "application_sdk.credentials.spec",
     "application_sdk.credentials.ingress",
-    "application_sdk.credentials.utils",
-    "application_sdk.observability.logger_adaptor",
-    "application_sdk.clients.sql",
-    "application_sdk.common.aws_utils",
     "application_sdk.common.concurrency",
+]
+sql = [
+    "application_sdk.clients.sql",
+    "application_sdk.credentials.utils",
+]
+aws = [
+    "application_sdk.common.aws_utils",
 ]

@@ -63,9 +63,27 @@ Add its module to `[tool.atlan-api].seeds`, then run
 `python3 .github/scripts/check_api_surface.py`. The second names every import
 that needs a declared dependency or a guarded fallback.
 
+## Dependencies
+
+- **core** (always installed): fastapi, pydantic, orjson. It covers the handler
+  surface, errors, credential specs, the shared routes and `run_in_thread`.
+  Measured at 57 MB on an api-only install.
+- **extras**, one per seed group, with the same pins as `atlan-application-sdk`:
+  - `sql`: the SQL client base and credential utils;
+  - `aws`: the AWS helpers;
+  - `pandas`: for SQL result frames.
+
+  Measured at 60 MB with every extra installed.
+- The structured logger (loguru and OpenTelemetry) is **not** in the api
+  distribution. SDK files in the set log through `application_sdk._logging`,
+  and handler code logs through `application_sdk.handler.get_logger`. Either
+  gives the SDK's structured logger on the worker and a stdlib logger on the
+  host.
+
 ## App side
 
-The handler stays in `app/`. The app declares it in its root `pyproject.toml`:
+The handler stays in `app/`. The app commits one config block and no
+packaging:
 
 ```toml
 [tool.atlan-app-api]
@@ -75,16 +93,18 @@ dependencies = ["aiomysql>=0.3.0"]
 extras = ["sql", "aws"]
 ```
 
-`.github/scripts/gen_app_api.py --fix` then does the whole migration:
+`.github/scripts/gen_app_api.py` does the rest:
 
-- It makes imports between the handler's files relative.
-- It moves `run_in_thread` off the Temporal path.
-- It generates `api/`: the file list, `pyproject.toml` with the `atlan.app_api`
-  entry point, a build hook, and `__init__.py`. The build hook ships the listed
-  `app/` files as `<app>_api/*`.
+- `fix` makes imports between the handler's `app/` files relative, and moves
+  the two worker-only imports handler code uses:
+  - `run_in_thread` → `application_sdk.common.concurrency`;
+  - `get_logger` → `application_sdk.handler`.
+- `check` runs in CI and fails on an absolute `from app` import in those files.
+- `build --out DIR` stages the files as `<app>_api/*`, generates
+  `pyproject.toml` (deps and the `atlan.app_api` entry point) and
+  `__init__.py`, then builds the wheel the host installs.
 
-The tests-reusable `api-member` job runs `gen_app_api.py --check`. It then
-installs the generated package alone and mounts it with
-`application_sdk.handler.asgi.build_asgi_app`, exactly as the host does. The
-reference is atlan-mysql-app#778; see the `api-server-consolidation-migration`
-skill.
+The tests-reusable `api-member` job runs `check`, builds the wheel, installs it
+alone, and mounts it with `application_sdk.handler.asgi.build_asgi_app`, exactly
+as the host does. The reference is atlan-mysql-app#778; see the
+`api-server-consolidation-migration` skill.

@@ -809,11 +809,11 @@ jobs:
           sparse-checkout-cone-mode: false
           path: application-sdk-scripts
           persist-credentials: false
-      # An app on the in-place layout generates api/ from [tool.atlan-app-api];
-      # fail when the committed api/ is stale or a listed file imports app
-      # absolutely. No-op for an app without the config.
-      - name: Check a generated api/ is current
-        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py --check
+      # An app that declares [tool.atlan-app-api] keeps its handler in app/;
+      # fail when one of the handler's files imports app absolutely (it would
+      # break under the host's package name). No-op without the config.
+      - name: Check the handler's app/ imports are relative
+        run: python3 application-sdk-scripts/.github/scripts/gen_app_api.py check
 
       - name: Find an atlan.app_api entry point
         id: detect
@@ -855,8 +855,11 @@ jobs:
           OBJECT: ${{ needs.detect-api-member.outputs.object }}
         run: |
           set -euo pipefail
+          # Builds from [tool.atlan-app-api] (handler in app/), or the member dir.
+          python3 application-sdk-scripts/.github/scripts/gen_app_api.py build \
+            --member "$MEMBER" --out dist-api
           uv venv .venv-api
-          uv pip install --python .venv-api "./$MEMBER" httpx2
+          uv pip install --python .venv-api dist-api/*.whl httpx2
           .venv-api/bin/python application-sdk-scripts/.github/scripts/probe_app_api_member.py \
             --name "$APP_NAME" --package "$PACKAGE" --object "$OBJECT"
 

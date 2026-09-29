@@ -467,27 +467,21 @@ version = "3.40.0"
 source = { editable = "packages/api" }
 dependencies = [
     { name = "fastapi" },
-    { name = "httpx" },
-    { name = "loguru" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc" },
-    { name = "opentelemetry-sdk" },
     { name = "orjson" },
     { name = "pydantic" },
-    { name = "python-dotenv" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "boto3", marker = "extra == 'aws'", specifier = ">=1.38.6,<2.0.0" },
     { name = "fastapi", specifier = ">=0.141.1,<0.142.0" },
-    { name = "httpx", specifier = ">=0.27.0,<0.29.0" },
-    { name = "loguru", specifier = ">=0.7.3,<0.8.0" },
-    { name = "opentelemetry-exporter-otlp-proto-grpc", specifier = ">=1.41.1,<2.0.0" },
-    { name = "opentelemetry-sdk", specifier = ">=1.41.1,<2.0.0" },
+    { name = "httpx", marker = "extra == 'aws'", specifier = ">=0.27.0,<0.29.0" },
+    { name = "httpx", marker = "extra == 'sql'", specifier = ">=0.27.0,<0.29.0" },
     { name = "orjson", specifier = ">=3.11.6,<4.0.0" },
     { name = "pandas", marker = "extra == 'pandas'", specifier = ">=2.2.3,<3.0.0" },
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
-    { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
+    { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.1.0,<2.0.0" },
+    { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.1.0,<2.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
 ]
 provides-extras = ["sql", "pandas", "aws"]

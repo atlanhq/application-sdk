@@ -82,6 +82,12 @@ def declared_requirements(root: Path) -> set[str]:
     return _names(project.get("dependencies", []))
 
 
+def extra_requirements(root: Path) -> dict[str, set[str]]:
+    """``{extra: package names}`` from ``[project.optional-dependencies]``."""
+    project = tomllib.loads((root / API_DIR / "pyproject.toml").read_text())["project"]
+    return {k: _names(v) for k, v in project.get("optional-dependencies", {}).items()}
+
+
 def optional_requirements(root: Path) -> set[str]:
     """Packages behind an extra: importable lazily, never at module level."""
     project = tomllib.loads((root / API_DIR / "pyproject.toml").read_text())["project"]
@@ -176,6 +182,10 @@ def check(root: Path) -> list[Problem]:
     listed_set = set(listed)
     declared = declared_requirements(root)
     optional = optional_requirements(root)
+    extras = extra_requirements(root)
+    import gen_api_files  # noqa: PLC0415 — sibling; imports this module
+
+    groups = gen_api_files.file_groups(root)
     problems: list[Problem] = []
     for rel in listed:
         path = root / rel
@@ -244,6 +254,22 @@ def check(root: Path) -> list[Problem]:
                 continue
             if not top and provider in optional:
                 continue  # a lazy import of an extra, as on the worker
+            reached_by = groups.get(rel, {"core"})
+            if top and "core" not in reached_by:
+                allowed = set().union(*(extras.get(g, set()) for g in reached_by))
+                if provider in allowed:
+                    continue
+                problems.append(
+                    Problem(
+                        rel,
+                        node.lineno,
+                        f"imports {root_name} at module level; it is reached from seed "
+                        f"group(s) {', '.join(sorted(reached_by))}, whose extra does not "
+                        "declare it",
+                    )
+                )
+                reported.add(id(node))
+                continue
             if top or not guarded:
                 problems.append(
                     Problem(

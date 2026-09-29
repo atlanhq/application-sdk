@@ -14,9 +14,10 @@ clean venvs, because an editable or path install exposes the whole
    the new wheels and assert every listed file is still on disk. With disjoint
    wheels pip's uninstall of the old release deletes the files the api wheel has
    just written, and nothing reports it.
-3. **Api alone.** Install only the api wheel, import every listed module, and
-   fail if any unlisted ``application_sdk`` module loads or the process exceeds
-   ``--max-rss-mb``. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
+3. **Api alone.** Install only the api wheel (core dependencies), import every
+   core module, and fail if any unlisted ``application_sdk`` module loads or the
+   process exceeds ``--max-rss-mb``. Again with every extra installed, importing
+   every listed module. Then serve a ``DefaultHandler`` with ``build_asgi_app``:
    ``/health`` is 200 and a non-object body on ``/workflows/v1/auth`` is 422.
 
 Usage::
@@ -42,11 +43,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import check_api_surface  # noqa: E402
+import gen_api_files  # noqa: E402
 
 _ALONE = r"""
 import importlib, resource, sys
-listed = sys.argv[1].split(",")
-for m in listed:
+to_import = sys.argv[1].split(",")
+listed = sys.argv[3].split(",")
+for m in to_import:
     importlib.import_module(m)
 extra = sorted(
     m for m in sys.modules
@@ -90,7 +93,7 @@ extra = sorted(
 )
 if extra:
     sys.exit(f"serving requests loaded unlisted modules: {extra[:10]}")
-print(f"api alone: {len(listed)} modules, {rss_mb:.0f} MB, auth/check/metadata + AppError path OK")
+print(f"{sys.argv[4]}: {len(to_import)} modules, {rss_mb:.0f} MB, auth/check/metadata + AppError path OK")
 """
 
 _PRESENT = r"""
@@ -202,16 +205,36 @@ def main(argv: list[str] | None = None) -> int:
                 "missing, or the worker does not import)"
             )
 
-        py = _venv(Path(tmp) / "alone")
-        _pip(py, str(api), "httpx")
-        modules = ",".join(check_api_surface.module_of(f) for f in listed)
+        every = ",".join(check_api_surface.module_of(f) for f in listed)
+        groups = gen_api_files.file_groups(args.root)
+        core = ",".join(
+            check_api_surface.module_of(f)
+            for f in listed
+            if "core" in groups.get(f, {"core"})
+        )
+        extras = ",".join(
+            sorted(g for g in gen_api_files.seed_groups(args.root) if g != "core")
+        )
         # cwd outside the repo: ``python -c`` puts the cwd on sys.path, and the
         # source tree there would hide what the wheel is missing.
-        done = subprocess.run(
-            [str(py), "-c", _ALONE, modules, str(args.max_rss_mb)], cwd=tmp
-        )
-        if done.returncode:
-            failures.append("api-only install failed")
+        for leg, requirement, modules, budget in (
+            # The core install is what every hosted app pays: held to the budget.
+            ("api core", str(api), core, args.max_rss_mb),
+            # Every extra installed: every listed module must import and serve.
+            (
+                f"api [{extras}]",
+                f"atlan-application-sdk-api[{extras}] @ {api.resolve().as_uri()}",
+                every,
+                10_000,
+            ),
+        ):
+            py = _venv(Path(tmp) / leg.replace(" ", "-").strip("[]"))
+            _pip(py, requirement, "httpx")
+            done = subprocess.run(
+                [str(py), "-c", _ALONE, modules, str(budget), every, leg], cwd=tmp
+            )
+            if done.returncode:
+                failures.append(f"{leg} install failed")
 
     for failure in failures:
         print(f"::error::{failure}")
