@@ -316,7 +316,11 @@ def categorize(pr: RenovatePR) -> Category:
         return Category.LOCK_MAINTENANCE
     if "github-actions" in branch:
         return Category.GITHUB_ACTIONS
-    if "atlan-platform" in branch or "atlan platform" in title:
+    if (
+        "atlan-platform" in branch
+        or "atlan platform" in title
+        or "atlan framework dependencies" in title
+    ):
         return Category.ATLAN_PLATFORM
     if "app-contract-toolkit" in branch or "app-contract-toolkit" in title:
         return Category.CONTRACT_TOOLKIT
@@ -505,7 +509,7 @@ def auto_merge_expected(
     if repo_automerge_mode == "soft":
         # The soft template carves conformance minor/patch back out under
         # groupName "conformance package" with automerge on, so that one lane
-        # still auto-merges. Its majors stay in "atlan platform", which
+        # still auto-merges. Its majors stay in "atlan framework dependencies", which
         # classifies as ATLAN_PLATFORM and falls through to False here.
         return category == Category.CONFORMANCE_PACKAGE
     if category == Category.LOCK_MAINTENANCE:
