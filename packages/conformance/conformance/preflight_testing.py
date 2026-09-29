@@ -13,29 +13,16 @@ the conformance suite executes them.
 
 from __future__ import annotations
 
-import json
 import math
-import warnings
 from typing import Any
 
 from conformance.preflight_scenarios import SCENARIOS
 
 __all__ = [
     "SCENARIOS",
-    "assert_extraction_scheduled",
-    "assert_preflight_exit",
     "assert_preflight_result",
     "assert_probe_lifetime",
 ]
-
-
-def _deprecated(name: str, rule: str) -> None:
-    warnings.warn(
-        f"{name} served the retired conformance rule {rule} and is removed in "
-        "v0.40.0; assert gate behaviour in the SDK's own tests instead.",
-        DeprecationWarning,
-        stacklevel=3,
-    )
 
 
 def assert_preflight_result(
@@ -117,101 +104,8 @@ def assert_probe_lifetime(
     assert background_stopped, "Cancelled probe left background work running"
 
 
-def assert_preflight_exit(
-    payload: dict[str, Any],
-    *,
-    status: str | None,
-    synthetic_secrets: tuple[str, ...] = (),
-) -> None:
-    """Validate a decoded gate exit containing status, checks, and typed error.
-
-    Deprecated: served the retired F018 rule; removed in v0.40.0.
-    """
-    _deprecated("assert_preflight_exit", "F018")
-    from application_sdk.errors.wire import FailureDetails
-
-    assert payload.get("status", "missing") == status, "Exit lost its verdict state"
-    assert isinstance(payload.get("checks"), list), "Exit lost its check list"
-    if status in {None, "not_ready"}:
-        error = FailureDetails.model_validate(payload.get("error"))
-        assert error.code.strip() and error.message.strip()
-        assert (
-            error.suggested_action or ""
-        ).strip(), "Exit needs an audience-appropriate action"
-    wire = json.dumps(payload, default=str)
-    assert all(
-        secret not in wire for secret in synthetic_secrets if secret
-    ), "Synthetic secret exposed"
-
-
-def assert_extraction_scheduled(
-    history: Any,
-    activity_name: str,
-    *,
-    expected: int,
-    gate_activity_name: str,
-    expected_terminal: str,
-    expected_failure_type: str | None = None,
-) -> None:
-    """Inspect a Temporal WorkflowHistory, not a mocked execute_activity call.
-
-    Deprecated: served the retired F017 rule; removed in v0.40.0.
-    """
-    _deprecated("assert_extraction_scheduled", "F017")
-    from temporalio.client import WorkflowHistory
-
-    assert isinstance(
-        history, WorkflowHistory
-    ), "Provide fetched Temporal WorkflowHistory"
-    assert history.events, "Empty history is not workflow execution evidence"
-    count = sum(
-        event.HasField("activity_task_scheduled_event_attributes")
-        and event.activity_task_scheduled_event_attributes.activity_type.name
-        == activity_name
-        for event in history.events
-    )
-    assert count == expected, "Extraction scheduling count violates gate contract"
-    assert any(
-        event.HasField("activity_task_scheduled_event_attributes")
-        and event.activity_task_scheduled_event_attributes.activity_type.name
-        == gate_activity_name
-        for event in history.events
-    ), "History does not contain the preflight gate"
-    assert expected_terminal in {"failed", "completed", "canceled"}
-    field = f"workflow_execution_{expected_terminal}_event_attributes"
-    terminal = [event for event in history.events if event.HasField(field)]
-    assert len(terminal) == 1, "Workflow terminal outcome differs from the scenario"
-    if expected_terminal == "failed":
-        assert expected_failure_type, "Specify the expected typed workflow failure"
-        failure = terminal[0].workflow_execution_failed_event_attributes.failure
-        types = set()
-        while True:
-            if failure.HasField("application_failure_info"):
-                types.add(failure.application_failure_info.type)
-            if not failure.HasField("cause"):
-                break
-            failure = failure.cause
-        assert expected_failure_type in types, "Workflow failed for an unrelated reason"
-
-
-def pytest_addoption(parser: Any) -> None:
-    # Deprecated no-ops, kept for one release so a test command that still
-    # passes them keeps parsing. They produced a report the conformance suite
-    # graded; the suite no longer reads test results. Removed in v0.40.0.
-    parser.addoption("--preflight-report", help="Deprecated no-op; removed in v0.40.0.")
-    parser.addoption("--preflight-rules", help="Deprecated no-op; removed in v0.40.0.")
-
-
 def pytest_configure(config: Any) -> None:
     config.addinivalue_line(
         "markers",
         "preflight_conformance(rule, scenario, entrypoint): registered F016 preflight scenario",
     )
-    for option in ("--preflight-report", "--preflight-rules"):
-        if config.getoption(option):
-            warnings.warn(
-                f"{option} is a deprecated no-op and is removed in v0.40.0: "
-                "conformance F016 reads scenario registrations statically.",
-                DeprecationWarning,
-                stacklevel=1,
-            )

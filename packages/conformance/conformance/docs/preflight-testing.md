@@ -1,6 +1,6 @@
 # Preflight conformance
 
-Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules, all static, with 4 BLOCK and 16 WARN (F017 and F018 are retired and never fire); the generated [catalog page](rules/preflight.md) is the source of truth for tiers.
+Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 18 preflight rules, all static, with 4 BLOCK and 14 WARN (F017 and F018 were deleted in v0.40.0); the generated [catalog page](rules/preflight.md) is the source of truth for tiers.
 
 **Conformance and tests are separate measures.** Conformance checks that the required preflight scenarios are *defined*; whether they *pass* is the test gate's measure. No preflight rule executes tests, syncs an environment or reads test results, and a conformance run where every scenario is defined is a pass whatever state the tests are in.
 
@@ -12,7 +12,7 @@ Run the checks:
 uv run atlan-application-sdk-conformance detect --repo . --series F --output preflight.sarif
 ```
 
-`--with-tests`, `--preflight-report`, `--test-timeout` and `--test-python` are deprecated no-ops, removed in v0.40.0; so are the `with-tests` input of the reusable conformance workflow and the pytest plugin's `--preflight-report` / `--preflight-rules` options.
+`--with-tests`, `--preflight-report`, `--test-timeout` and `--test-python` were removed from the CLI in v0.40.0, as were the detect action's `with-tests` input and the pytest plugin's `--preflight-report` / `--preflight-rules` options. The reusable conformance workflow still accepts `with-tests` as a no-op, because a reusable rejects an undeclared input at startup.
 
 ## Defining a scenario
 
@@ -40,7 +40,7 @@ F016 tests invoke the real handler using an app-owned source adapter and call `a
 
 `hung_probe`, `cancellation_cleanup`, and `budget_retry` additionally require `assert_probe_lifetime` using measured elapsed time and independent evidence that background work stopped. Test recovered transients against extraction's actual retry or fallback under the same injected failure. Do not infer safe continuation solely from a retryable error.
 
-`assert_extraction_scheduled` and `assert_preflight_exit` served the retired F017 and F018 rules. They are deprecated and removed in v0.40.0; the gate behaviour they checked is asserted in the SDK's own tests.
+`assert_extraction_scheduled` and `assert_preflight_exit` served the retired F017 and F018 rules and were removed in v0.40.0; the gate behaviour they checked is asserted in the SDK's own tests.
 
 These assertions validate supplied observations. They cannot establish that a test actually called the production handler or measured a real timeout. Review the adapters alongside the tests. Scenario registration is a definition check, not an automatic implementation of source-specific tests.
 

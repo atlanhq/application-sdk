@@ -183,7 +183,7 @@ _SERIES_META: list[SeriesMeta] = [
             "its helpers and the entrypoint contracts; F015 also reads deployment "
             "manifests, and F016 reads the scenario registrations under `tests/unit/`). "
             "No rule executes tests: F016 checks the scenario matrix is defined, "
-            "and the test gate checks it passes. F017–F018 are retired"
+            "and the test gate checks it passes."
         ),
         suppression_example=(
             "# conformance: ignore[F005] intentional: progress log, not a failure"
@@ -192,7 +192,8 @@ _SERIES_META: list[SeriesMeta] = [
             _ID_STABILITY_NOTE
             + " F001–F005 were published as P032–P035 and P047 and moved to this "
             "series in PR #3710 before any fleet suppression referenced them; the "
-            "vacated P-ids are retired and never reused."
+            "vacated P-ids are retired and never reused. F017–F018 were retired "
+            "in 0.39.0 and deleted in 0.40.0; their ids are never reused."
         ),
     ),
     SeriesMeta(
