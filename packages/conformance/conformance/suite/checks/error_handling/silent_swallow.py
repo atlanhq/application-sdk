@@ -118,6 +118,7 @@ class SilentSwallowMixin:
             node,
             function=self._function_stack[-1] if self._function_stack else None,
             redaction=scope,
+            local_helpers=self._local_helpers,
         ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
@@ -192,7 +193,13 @@ class SilentSwallowMixin:
         # is the same predicate E004 uses for its typed-failure exemption, so
         # the two rules never disagree about one shape. It is applied per
         # return, because E007 judges each return on its own.
-        scope = typed_failure_scope(node)
+        scope = typed_failure_scope(
+            node,
+            local_helpers=self._local_helpers,
+            enclosing_function=self._function_stack[-1]
+            if self._function_stack
+            else None,
+        )
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
@@ -287,15 +294,16 @@ class SilentSwallowMixin:
                         and kw.value.value is True
                         for kw in val.keywords
                     )
-                    if has_re:
+                    if (
+                        has_re
+                        and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                    ):
                         # Only track single Name targets: chained assignments
                         # (a = b = ...) would emit one finding per target, and
                         # attribute targets (self.x = ...) produce false positives
                         # because the inspection-side check only matches ast.Name.
-                        if len(node.targets) == 1 and isinstance(
-                            node.targets[0], ast.Name
-                        ):
-                            gather_vars[node.targets[0].id] = node
+                        gather_vars[node.targets[0].id] = node
 
         cancelled = _cancelled_task_names(func_node)
 
@@ -320,11 +328,15 @@ class SilentSwallowMixin:
                 # isinstance(var, ...) direct check
                 if isinstance(node, ast.Call):
                     func = node.func
-                    if isinstance(func, ast.Name) and func.id == "isinstance":
-                        if node.args and isinstance(node.args[0], ast.Name):
-                            if node.args[0].id in names:
-                                inspected = True
-                                break
+                    if (
+                        isinstance(func, ast.Name)
+                        and func.id == "isinstance"
+                        and node.args
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id in names
+                    ):
+                        inspected = True
+                        break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -341,10 +353,13 @@ class SilentSwallowMixin:
                         break
                 # `x = var[i]` / `x = var[0]` — subscripting the result list to
                 # inspect elements one by one.
-                if isinstance(node, ast.Subscript):
-                    if isinstance(node.value, ast.Name) and node.value.id in names:
-                        inspected = True
-                        break
+                if (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in names
+                ):
+                    inspected = True
+                    break
             if not inspected:
                 self._add(
                     "E010",

@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 from conformance.suite.checks.error_handling import (
     BUILTIN_RAISES,
     LEAF_CLASSES,
@@ -38,9 +39,9 @@ def _single(src: str, rule_id: str) -> None:
 def _none(src: str) -> None:
     """Assert no active (non-suppressed) findings."""
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert (
-        not active
-    ), f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
+    assert not active, (
+        f"Expected no findings, got {[f.rule_id for f in active]!r}\nSource:\n{src}"
+    )
 
 
 def _suppressed(src: str, rule_id: str) -> None:
@@ -89,9 +90,9 @@ except:  # conformance: ignore[E001]
     pass
 """
     active = [f for f in scan_text(src, "fake.py") if not f.suppressed]
-    assert any(
-        f.rule_id == "E001" for f in active
-    ), "E001 should be active — bare directive without justification must not suppress"
+    assert any(f.rule_id == "E001" for f in active), (
+        "E001 should be active — bare directive without justification must not suppress"
+    )
 
 
 def test_parse_directive_case_insensitive() -> None:
@@ -971,6 +972,88 @@ def probe():
 """
     assert "E004" in _findings(helper)
     assert "E004" not in _findings(inline)
+
+
+def test_p004_no_finding_when_local_helper_returns_typed_failure() -> None:
+    # The helper's return is inspectable in this module: the caught value flows
+    # through classification into a typed check, whether returned directly or
+    # staged in a value handed to the enclosing function's return.
+    src = """\
+def _build_failed_outcome(error):
+    details = classify_failure(error)
+    return Outcome(checks=[Check(name="connection", passed=False, error=details)])
+
+
+def direct_probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+
+
+def staged_probe():
+    try:
+        connect()
+    except Exception as caught:
+        outcome = _build_failed_outcome(caught)
+        return ProbeOutput(checks=outcome.checks)
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_opaque_helper_handoff() -> None:
+    # Passing the binding to a lowercase helper is not proof that its returned
+    # value preserves the failure as typed data.
+    assert "E004" in _findings(
+        """\
+def _opaque_outcome(error):
+    return normalize(error)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _opaque_outcome(caught)
+"""
+    )
+
+
+def test_p004_still_flags_helper_with_a_dropping_return_path() -> None:
+    # A typed result on one branch is not enough when another branch returns a
+    # bare sentinel instead of carrying the caught failure.
+    assert "E004" in _findings(
+        """\
+def _sometimes_typed(error):
+    if should_report(error):
+        return Outcome(error=classify_failure(error))
+    return None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _sometimes_typed(caught)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_exception_continue() -> None:
+    # A broad handler with no binding cannot hand the caught exception to a
+    # typed-result helper; continuing silently loses it.
+    assert "E004" in _findings(
+        """\
+def probe(items):
+    for item in items:
+        try:
+            inspect(item)
+        except Exception:
+            continue
+"""
+    )
 
 
 def test_p004_still_flags_typed_row_appended_inside_a_loop() -> None:

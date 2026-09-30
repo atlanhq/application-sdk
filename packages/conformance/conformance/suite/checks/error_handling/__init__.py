@@ -96,11 +96,15 @@ def scan_text(text: str, file: str) -> list[Finding]:
     legacy_aliases = _collect_legacy_aliases(tree)
 
     directives = _parse_directives(text)
+    local_helpers = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
     checker = Checker(
         filename=file,
         directives=directives,
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
+        local_helpers=local_helpers,
     )
     checker.visit(tree)
     return checker._findings
