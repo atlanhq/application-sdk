@@ -119,19 +119,23 @@ def test_every_prescription_reference_names_the_rules_bullet() -> None:
 
 
 def test_every_command_reference_names_a_cli_command() -> None:
+    """``[uvx|uv run] atlan-application-sdk-conformance[==<version>] <command> ...``,
+    where ``<command>`` is a real subcommand.  A pin is allowed because a bare
+    command can resolve a stale locked version and leave the finding (FND-607)."""
     from conformance.cli import _COMMANDS
 
+    package = re.compile(r"^atlan-application-sdk-conformance(==\S+)?$")
     broken = []
     for r in CATALOG.values():
         ref = r.remediation_reference
         if ref is None or ref.kind is not RemediationKind.COMMAND:
             continue
         parts = ref.target.split()
-        if (
-            len(parts) < 2
-            or parts[0] != "atlan-application-sdk-conformance"
-            or parts[1] not in _COMMANDS
-        ):
+        if parts[:1] == ["uvx"]:
+            parts = parts[1:]
+        elif parts[:2] == ["uv", "run"]:
+            parts = parts[2:]
+        if len(parts) < 2 or not package.match(parts[0]) or parts[1] not in _COMMANDS:
             broken.append(f"{r.id}->{ref.target}")
     assert (
         not broken

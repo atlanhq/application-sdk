@@ -377,7 +377,7 @@ node does not fit.
 > that must reach a downstream Atlan system app (publish, lineage, quality), the
 > connector must call `App.upload()` explicitly from `run()` — the task-to-task
 > activity interceptor only writes to the customer-owned `objectstore`. See
-> [ADR-0014](../../../docs/adr/0014-two-store-storage-architecture.md).
+> [ADR-0014](https://github.com/atlanhq/application-sdk/blob/main/docs/adr/0014-two-store-storage-architecture.md).
 
 ## Value-Flow Rules
 

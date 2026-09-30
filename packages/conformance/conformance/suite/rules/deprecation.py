@@ -411,7 +411,8 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=f"{_HELP_BASE}#b006",
         remediation_reference=RemediationReference(
             kind=RemediationKind.COMMAND,
-            target="atlan-application-sdk-conformance gen-contract-ledger",
+            target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
+            note="run the pinned command from the finding message verbatim (FND-607)",
         ),
     ),
     RuleDefinition(
