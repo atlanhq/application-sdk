@@ -99,6 +99,21 @@ def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
     return False
 
 
+def expression_uses_sanitizer(expr: ast.expr) -> bool:
+    """True when *expr* contains a call to a recognised redaction helper.
+
+    This lets a caller follow a local value back to the expression that
+    produced it, using the same helper-name convention as direct log arguments.
+    """
+    for node in ast.walk(expr):
+        if not isinstance(node, ast.Call):
+            continue
+        target = _leaf_name(node.func)
+        if target is not None and _name_is_sanitizer(target):
+            return True
+    return False
+
+
 def call_uses_sanitizer(call: ast.Call) -> bool:
     """True when any argument of *call* flows through a recognised sanitizer.
 
@@ -118,11 +133,11 @@ def call_uses_sanitizer(call: ast.Call) -> bool:
     does not exempt an unrelated log call.
     """
     for arg in [*call.args, *[kw.value for kw in call.keywords]]:
-        for node in ast.walk(arg):
-            if isinstance(node, ast.Call):
-                target = _leaf_name(node.func)
-                if target is not None and _name_is_sanitizer(target):
-                    return True
-            elif isinstance(node, ast.Name) and _name_is_sanitized_value(node.id):
-                return True
+        if expression_uses_sanitizer(arg):
+            return True
+        if any(
+            isinstance(node, ast.Name) and _name_is_sanitized_value(node.id)
+            for node in ast.walk(arg)
+        ):
+            return True
     return False

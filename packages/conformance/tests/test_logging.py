@@ -1205,6 +1205,59 @@ def test_l004_silent_for_presanitized_variable_argument() -> None:
     assert "L004" not in _ids(src)
 
 
+def test_l004_silent_for_sanitized_traceback_in_generic_local() -> None:
+    # Follow the value, not its name: the local holds a redacted formatted trace.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_fires_for_timeout_warning_without_sanitized_traceback() -> None:
+    # A timeout warning with no sanitized traceback remains a missing-trace finding.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    wait_for_result()\nexcept TimeoutError:\n"
+        "    logger.warning('operation did not finish after %s seconds', seconds)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_for_unredacted_traceback_in_generic_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_not_the_logged_value() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    safe_details = redact_text(str(error))\n"
+        "    raw_details = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', raw_details)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_overwritten_before_logging() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    traceback_text = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     # Only the log call's own arguments count — a sanitizer on another
     # statement does not exempt an unrelated bare log call.
