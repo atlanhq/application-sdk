@@ -70,6 +70,29 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+# The post-listing passes below run through run_in_thread: each is one pass
+# (or a sort) over the whole listing with no await in between, which at 100k
+# keys holds the event loop, and with it the activity heartbeat.
+
+
+def _sorted_keys(items: list[tuple[str, int, str | None]], suffix: str) -> list[str]:
+    """Sort listed keys, keeping only those ending in *suffix* (case-insensitive)."""
+    lsuffix = suffix.lower()
+    return sorted(
+        path for path, _, _ in items if not lsuffix or path.lower().endswith(lsuffix)
+    )
+
+
+def _sorted_items(
+    items: list[tuple[str, int, str | None]], suffix: str
+) -> list[tuple[str, int, str | None]]:
+    """Sort listed ``(key, size, etag)`` items, filtered by *suffix* as above."""
+    lsuffix = suffix.lower()
+    return sorted(
+        item for item in items if not lsuffix or item[0].lower().endswith(lsuffix)
+    )
+
+
 async def list_keys(
     prefix: str = "",
     store: BoundStore | ObjectStore | None = None,
@@ -122,12 +145,7 @@ async def list_keys(
         items = await _list_items(
             resolved, prefix or None, include_markers=include_markers
         )
-        lsuffix = suffix.lower() if suffix else ""
-        return sorted(
-            path
-            for path, _, _ in items
-            if not lsuffix or path.lower().endswith(lsuffix)
-        )
+        return await run_in_thread(_sorted_keys, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         raise _storage_error_for(
@@ -161,12 +179,7 @@ async def list_keys_with_meta(
 
     try:
         items = await _list_items(resolved, prefix or None)
-        lsuffix = suffix.lower() if suffix else ""
-        return sorted(
-            (path, size, etag)
-            for path, size, etag in items
-            if not lsuffix or path.lower().endswith(lsuffix)
-        )
+        return await run_in_thread(_sorted_items, items, suffix)
     # conformance: ignore[E004] always re-raises as StorageError; no logging needed at this layer
     except Exception as exc:
         raise _storage_error_for(
@@ -207,6 +220,11 @@ async def list_data_objects(
         Sorted list of :class:`DataObject` for data objects only.
     """
     items = await list_keys_with_meta(prefix, store, normalize=normalize)
+    return await run_in_thread(_pair_sidecars, items)
+
+
+def _pair_sidecars(items: list[tuple[str, int, str | None]]) -> list[DataObject]:
+    """Build a :class:`DataObject` per data key, flagging its sidecar's presence."""
     all_keys = {k for k, _, _ in items}
     return [
         DataObject(
