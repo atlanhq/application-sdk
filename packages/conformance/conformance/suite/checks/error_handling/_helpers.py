@@ -695,31 +695,34 @@ def _iter_eager_expr(expr: ast.expr) -> Iterator[ast.AST]:
         pending.extend(ast.iter_child_nodes(node))
 
 
-def _expression_has_typed_constructor(
-    expr: ast.expr, carried_names: frozenset[str]
-) -> bool:
-    """True when an eager class-like call receives a value from *carried_names*."""
-    if not carried_names:
+def _class_like(target: str | None) -> bool:
+    """A capitalised leaf name, ignoring leading underscores (``_TargetOutcome`` counts)."""
+    return target is not None and target.lstrip("_")[:1].isupper()
+
+
+def _returns_typed_constructor(expr: ast.expr, carried_names: frozenset[str]) -> bool:
+    """True when *expr* itself is a class-like call built from *carried_names*.
+
+    The returned value must be the constructor: a constructor elsewhere in the
+    expression (``(Outcome(error=e), None)[1]``) says nothing about what the
+    caller receives.
+    """
+    if not carried_names or not isinstance(expr, ast.Call):
         return False
-    for node in _iter_eager_expr(expr):
-        if not isinstance(node, ast.Call):
-            continue
-        target = _get_name(node.func)
-        if target is None or not target[:1].isupper():
-            continue
-        args = [*node.args, *[kw.value for kw in node.keywords]]
-        if any(_references_any(arg, carried_names) for arg in args):
-            return True
-    return False
+    if not _class_like(_get_name(expr.func)):
+        return False
+    args = [*expr.args, *[kw.value for kw in expr.keywords]]
+    return any(_references_any(arg, carried_names) for arg in args)
 
 
 def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
     """Return parameters carried into a typed result by a simple local helper.
 
     Only an undecorated, synchronous, straight-line helper with one final return
-    is summarized. Its parameter must flow through assignments into an eager
-    class-like constructor in that returned value. Anything with branching,
-    multiple exits, varargs, or a deferred constructor remains opaque.
+    is summarized. Its parameter must flow through assignments into the eager
+    class-like constructor that *is* the returned value. Anything with branching,
+    multiple exits, varargs, a deferred constructor, or a return that merely
+    contains a constructor remains opaque.
     """
     simple_statements = (ast.Expr, ast.Assign, ast.AnnAssign, ast.Return)
     if (
@@ -760,7 +763,7 @@ def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
             carried_at,
             carries_input,
         )
-        if _expression_has_typed_constructor(
+        if _returns_typed_constructor(
             returned.value, carried_at.get(id(returned), frozenset())
         ):
             typed.add(parameter.arg)
@@ -794,12 +797,54 @@ def _function_binds_name(
             return True
         if isinstance(node, ast.ExceptHandler) and node.name == name:
             return True
+        # `nonlocal` points the name at an enclosing function's local; `global`
+        # lets this function rebind the module name. Neither is the proven helper.
+        if isinstance(node, (ast.Nonlocal, ast.Global)) and name in node.names:
+            return True
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             for alias in node.names:
                 bound = alias.asname or alias.name.split(".")[0]
                 if bound == name:
                     return True
     return False
+
+
+def module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef]:
+    """Top-level synchronous functions whose name nothing else in the module rebinds.
+
+    A helper reassigned at module level, or declared ``global`` by any function
+    (which may then rebind it), is not proven to be the function whose body was
+    summarized.
+    """
+    rebound: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for target in (
+                stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            ):
+                rebound |= _rebound_names(target)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            rebound |= set(node.names)
+    helpers: dict[str, ast.FunctionDef] = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef) and stmt.name not in rebound:
+            helpers[stmt.name] = stmt
+        elif isinstance(stmt, (ast.AsyncFunctionDef, ast.ClassDef)):
+            helpers.pop(stmt.name, None)
+    return helpers
+
+
+def visible_helpers(
+    helpers: Mapping[str, ast.FunctionDef],
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> dict[str, ast.FunctionDef]:
+    """The module helpers a call inside *functions* (outermost first) still resolves to."""
+    return {
+        name: helper
+        for name, helper in helpers.items()
+        if not any(_function_binds_name(function, name) for function in functions)
+    }
 
 
 def _call_argument_for_parameter(
@@ -824,6 +869,28 @@ def _call_argument_for_parameter(
     return supplied.get(parameter)
 
 
+def _calls_reaching_value(value: ast.expr) -> Iterator[ast.Call]:
+    """Calls whose result becomes (part of) *value* unchanged.
+
+    Descends only through class-like constructors, whose arguments become part
+    of the typed value they build, and literal containers. Any other call is
+    yielded but not entered: a lowercase wrapper may drop what it is given.
+    """
+    pending: list[ast.expr] = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Call):
+            yield node
+            if _class_like(_get_name(node.func)):
+                pending.extend([*node.args, *[kw.value for kw in node.keywords]])
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            pending.extend(node.elts)
+        elif isinstance(node, ast.Dict):
+            pending.extend(v for v in node.values if v is not None)
+        elif isinstance(node, ast.Starred):
+            pending.append(node.value)
+
+
 def _expression_uses_typed_helper(
     value: ast.expr,
     exc_name: str,
@@ -832,12 +899,17 @@ def _expression_uses_typed_helper(
     local_helpers: Mapping[str, ast.FunctionDef] | None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None,
 ) -> bool:
-    """True when *value* calls a proven same-module helper with the failure."""
+    """True when a proven same-module helper, called with the failure, produces *value*.
+
+    The helper's result must be the value itself or reach it through class-like
+    constructors (see :func:`_calls_reaching_value`); ``discard(helper(exc))``
+    stays opaque.
+    """
     if not local_helpers:
         return False
     carrying_names = frozenset({exc_name, *live})
-    for node in _iter_eager_expr(value):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+    for node in _calls_reaching_value(value):
+        if not isinstance(node.func, ast.Name):
             continue
         helper_name = node.func.id
         helper = local_helpers.get(helper_name)

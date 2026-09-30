@@ -23,6 +23,7 @@ from ._helpers import (
     _return_carries_typed_failure,
     redaction_scope,
     typed_failure_scope,
+    visible_helpers,
 )
 
 
@@ -118,7 +119,7 @@ class SilentSwallowMixin:
             node,
             function=self._function_stack[-1] if self._function_stack else None,
             redaction=scope,
-            local_helpers=self._local_helpers,
+            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
         ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
@@ -195,7 +196,7 @@ class SilentSwallowMixin:
         # return, because E007 judges each return on its own.
         scope = typed_failure_scope(
             node,
-            local_helpers=self._local_helpers,
+            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
             enclosing_function=self._function_stack[-1]
             if self._function_stack
             else None,

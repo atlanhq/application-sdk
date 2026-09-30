@@ -1002,6 +1002,180 @@ def staged_probe():
     assert "E007" not in findings
 
 
+def test_p004_still_flags_a_proven_helper_whose_result_an_opaque_call_consumes() -> (
+    None
+):
+    # A proven helper nested inside a lowercase call does not reach the return:
+    # ``discard`` may drop the typed result, so the handoff stays opaque.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(checks=[Check(name="connection", passed=False, error=classify_failure(error))])
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return discard(_build_failed_outcome(caught))
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_no_finding_when_a_typed_constructor_wraps_the_helper_result() -> None:
+    # A class-like constructor keeps its arguments as part of the typed value.
+    src = """\
+def _build_failed_check(error):
+    return Check(name="connection", passed=False, error=classify_failure(error))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return ProbeOutput(checks=[_build_failed_check(caught)])
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_still_flags_a_helper_whose_return_only_mentions_a_typed_constructor() -> (
+    None
+):
+    # The helper's actual result is None: a constructor elsewhere in the return
+    # expression proves nothing about what the caller receives.
+    src = """\
+def _build_failed_outcome(error):
+    return (Outcome(error=error), None)[1]
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_still_flags_a_helper_name_an_enclosing_function_rebinds() -> None:
+    # The call resolves to the outer local, not the module helper.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe(normalize):
+    _build_failed_outcome = normalize
+
+    def probe():
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_name_declared_nonlocal() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe():
+    _build_failed_outcome = None
+
+    def probe():
+        nonlocal _build_failed_outcome
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_another_function_rebinds_with_global() -> None:
+    # Any function in the module can swap the helper through ``global``, so its
+    # summary is not a proof of what the call returns.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def install(replacement):
+    global _build_failed_outcome
+    _build_failed_outcome = replacement
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_reassigned_at_module_level() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+_build_failed_outcome = normalize
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_no_finding_when_the_helper_returns_a_private_typed_class() -> None:
+    # The evidence app's helper returns a module-private result class
+    # (``_TargetOutcome``); a leading underscore does not make it less class-like.
+    src = """\
+def _connect_failed_outcome(flavor, label, e, *, operation="connect"):
+    connect_error = classify_failure(e, operation=operation).to_failure_details()
+    return _TargetOutcome(
+        reachable=False,
+        checks=[PreflightCheck(name="version", passed=False, error=connect_error)],
+        message=f"{flavor} connection failed",
+    )
+
+
+async def preflight(flavor):
+    try:
+        targets = await discover(flavor)
+    except Exception as e:
+        outcome = _connect_failed_outcome(flavor, "", e, operation="discover targets")
+        return PreflightOutput(checks=outcome.checks, message=outcome.message)
+    return targets
+
+
+async def probe(flavor, label):
+    try:
+        client = await build(flavor, label)
+    except Exception as e:
+        return _connect_failed_outcome(flavor, label, e)
+    return client
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
 def test_p004_still_flags_opaque_helper_handoff() -> None:
     # Passing the binding to a lowercase helper is not proof that its returned
     # value preserves the failure as typed data.
