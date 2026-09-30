@@ -3170,7 +3170,8 @@ def _dataforge_tests_yaml() -> str:
         "      # No hermetic Cosmos, so an unresolved source must fail fast:\n"
         '      # the "true" default would let a dataforge miss turn the\n'
         "      # INTEGRATION merge gate green against no source at all.\n"
-        '      dataforge-hermetic-fallback: "false"\n',
+        '      dataforge-hermetic-fallback: "false"\n'
+        "      dataforge-lifecycle: true\n",
     )
 
 
@@ -3195,6 +3196,31 @@ def test_resync_keeps_the_dataforge_inputs(
     assert 'dataforge-env-tier: "dev"' in after
     assert 'dataforge-output-prefix: "COSMOSNOSQL"' in after
     assert 'dataforge-hermetic-fallback: "false"' in after
+    assert "dataforge-lifecycle: true" in after
+
+
+def test_c002_accepts_a_dataforge_lifecycle_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``dataforge-lifecycle: true`` is a per-repo value, not drift (FND-2579).
+
+    Written unquoted, the way the connectors opting in to the FND-1992 wake
+    write it, since the reusable declares the input as a boolean.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="app").replace(
+            '      app-image-name: "atlan-app-app"\n',
+            '      app-image-name: "atlan-app-app"\n'
+            '      dataforge-datasource: "teradata"\n'
+            "      dataforge-lifecycle: true\n",
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
 
 
 def test_resync_of_a_dataforge_file_lands_the_structural_catch_up(

@@ -1255,6 +1255,7 @@ _FND1143_VALUES: dict[str, tuple[str, str]] = {
         '      dataforge-hermetic-fallback: "false"',
         "false",
     ),
+    "dataforge_lifecycle": ("      dataforge-lifecycle: true", "true"),
 }
 
 
