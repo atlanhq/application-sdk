@@ -74,7 +74,7 @@ class TracebackMixin(_MixinBase):
                 continue
             if has_exc_info_true(node, handler.name):
                 continue
-            if call_uses_sanitizer(node):
+            if call_uses_sanitizer(node, handler=handler):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
                 continue

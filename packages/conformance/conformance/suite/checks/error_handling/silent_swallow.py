@@ -145,7 +145,7 @@ class SilentSwallowMixin:
             # the failure IS logged; exc_info there would leak past the
             # sanitizer, so its absence must not flag the handler.
             if func.attr in ("warning", "error", "critical") and call_uses_sanitizer(
-                call
+                call, handler=node
             ):
                 return
         self._add(
@@ -172,7 +172,7 @@ class SilentSwallowMixin:
                 continue
             if func.attr == "exception":
                 continue  # logger.exception() implies exc_info — skip
-            if call_uses_sanitizer(call):
+            if call_uses_sanitizer(call, handler=node):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
                 continue

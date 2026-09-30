@@ -3517,6 +3517,52 @@ def test_e005_silent_for_presanitized_traceback_variable() -> None:
     assert "E005" not in _findings(src)
 
 
+def test_e005_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('connection failed:\\n%s', trace_text)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_contains_unrelated_value() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_is_overwritten() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    trace_text = str(caught)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "exception, message",
+    [
+        ("TimeoutError", "operation exceeded its time budget"),
+        ("RuntimeError", "cleanup was skipped after shutdown"),
+    ],
+)
+def test_e005_still_fires_for_unredacted_best_effort_warnings(
+    exception: str, message: str
+) -> None:
+    src = (
+        "try:\n    perform_operation()\n"
+        f"except {exception}:\n"
+        f"    logger.warning({message!r})\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
     src = (
         "try:\n    x()\nexcept Exception as e:\n"
