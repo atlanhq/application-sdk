@@ -738,11 +738,17 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         # No upload happened because there were no batches
         mock_upload.assert_not_awaited()
 
-    async def test_batches_tables_and_uploads(self, tmp_path) -> None:
-        """Happy path: tables exist → batched → JSON files written → uploaded."""
+    @pytest.mark.parametrize("plain_tuple", [False, True], ids=["named", "plain"])
+    async def test_batches_tables_and_uploads(self, tmp_path, plain_tuple) -> None:
+        """Happy path: tables exist → batched → JSON files written → uploaded.
+
+        Also with the analysis mocked as the plain 4-tuple it used to return,
+        as a consumer's test may still do.
+        """
         extractor = _make_extractor()
 
         fake_rows: list[dict[str, object]] = [{"table_id": f"t{i}"} for i in range(5)]
+        analysis = ColumnExtractionAnalysis(fake_rows, 4, 1, 0)
 
         with (
             patch(
@@ -763,7 +769,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=ColumnExtractionAnalysis(fake_rows, 4, 1, 0),
+                return_value=tuple(analysis) if plain_tuple else analysis,
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(
