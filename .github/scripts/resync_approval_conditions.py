@@ -21,6 +21,10 @@ here and requiring a byte-identical result:
   b. the body carries the lane's marker, naming the suite version it rendered
   c. exactly one commit on the PR, authored by the lane, with one parent
   d. that parent is in the base branch's history (the render base is real main)
+  e0. ``renovate.json`` at that parent is in auto-merge mode
+     (``discover_org_consumers.automerge_mode`` == ``auto``); soft, unknown,
+     missing and unreadable withhold the approval, so a person reviews resync
+     PRs in soft-mode repos
   e. re-render: check out the parent, read the conformance version its
      ``uv.lock`` resolves (must equal the marker), run ``bootstrap --resync
      --json`` at exactly that version with the marker's ``resolved-at``
@@ -56,6 +60,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
+
+import discover_org_consumers as discover
 
 # Constants the resync lane (conformance_resync.py) shares with this gate.
 RESYNC_AUTHOR = "atlan-conformance-sync[bot]"
@@ -383,6 +389,31 @@ def stage_like_the_lane(
     return lost
 
 
+def parent_automerge_mode(repo: str, parent_sha: str, runner: Runner) -> str:
+    """Condition (e0): the repo's renovate.json at the render base, classified
+    by the fleet's shared rule. ``auto`` is the only approvable answer; soft,
+    unknown, missing and unreadable all withhold the approval."""
+    result = runner(
+        [
+            "gh",
+            "api",
+            f"repos/{repo}/contents/renovate.json?ref={parent_sha}",
+            "-q",
+            ".content",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        return "missing"
+    try:
+        text = base64.b64decode(result.stdout).decode("utf-8")
+    except (ValueError, UnicodeDecodeError):
+        return "unreadable"
+    return discover.automerge_mode(text)
+
+
 def render_and_compare(
     repo: str,
     parent_sha: str,
@@ -515,6 +546,14 @@ def process_resync_pr(
         "ahead",
     }:
         print(f"PR #{pr}: its parent commit is not in {base_ref}'s history — skipping.")
+        return False
+
+    mode = parent_automerge_mode(repo, parent_sha, runner)
+    if mode != "auto":
+        print(
+            f"PR #{pr}: renovate.json at the parent is {mode}, not auto-merge — "
+            "a person reviews resync PRs in this repo — skipping."
+        )
         return False
 
     print(

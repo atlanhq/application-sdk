@@ -577,7 +577,8 @@ def process_repo(
     resolved_at = choose_resolved_at(keep, pinned, resolved_now)
     result["resolvedAt"] = resolved_at
 
-    automerge, automerge_reason = automerge_allowed(renovate_json)
+    repo_automerge = automerge_allowed(renovate_json)
+    automerge, automerge_reason = repo_automerge
     if automerge and not automerge_enabled:
         automerge, automerge_reason = False, "auto-merge is switched off for this lane"
 
@@ -828,6 +829,7 @@ def process_repo(
         runner,
         result,
         skip_if_pushed=pushed_this_run,
+        repo_automerge=repo_automerge,
     )
     return result
 
@@ -840,9 +842,18 @@ def _maybe_dispatch(
     result: dict,
     *,
     skip_if_pushed: bool = False,
+    repo_automerge: tuple[bool, str] = (False, "repo auto-merge mode not evaluated"),
 ) -> None:
-    """Approval-dispatch pass: only for a PR this run left untouched."""
+    """Approval-dispatch pass: only for a PR this run left untouched, in a repo
+    whose renovate.json auto-merges. Elsewhere a person reviews the PR."""
     if skip_if_pushed or not pr or pr.get("state") != "open":
+        return
+    allowed, reason = repo_automerge
+    if not allowed:
+        result["trace"].append(
+            f"no approval dispatch: {reason}; a person reviews this PR."
+        )
+        result["approvalSkipped"] = reason
         return
     number = pr.get("number")
     if not number:

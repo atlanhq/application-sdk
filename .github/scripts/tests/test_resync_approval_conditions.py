@@ -9,6 +9,7 @@ hold before ``gh pr review --approve`` is ever invoked.
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -25,6 +26,18 @@ REPO = "atlanhq/atlan-example-app"
 HEAD = "h" * 40
 PARENT = "p" * 40
 RESOLVED_AT = "2026-09-28T12:00:00Z"
+AUTO_RENOVATE_JSON = json.dumps(
+    {"extends": ["github>atlanhq/application-sdk//renovate-config/default.json"]}
+)
+SOFT_RENOVATE_JSON = json.dumps(
+    {
+        "extends": ["github>atlanhq/application-sdk//renovate-config/default.json"],
+        "lockFileMaintenance": {"automerge": False, "platformAutomerge": False},
+        "packageRules": [
+            {"matchPackageNames": ["*"], "automerge": False, "platformAutomerge": False}
+        ],
+    }
+)
 MARKER = (
     f"<!-- conformance-resync-lane suite=0.39.0 resolved-at={RESOLVED_AT} -->\nbody"
 )
@@ -64,9 +77,16 @@ class FakeRunner:
         checks_rc=0,
         reviews=None,
         live_head=HEAD,
+        renovate_json=None,
+        renovate_json_missing=False,
     ):
         self.commits = [commit()] if commits is None else commits
         self.live_head = live_head
+        self.renovate_json = (
+            None
+            if renovate_json_missing
+            else (AUTO_RENOVATE_JSON if renovate_json is None else renovate_json)
+        )
         self.compare = compare
         self.checks_rc = checks_rc
         self.reviews = reviews or []
@@ -87,6 +107,13 @@ class FakeRunner:
             return subprocess.CompletedProcess(cmd, self.checks_rc, "", "")
         if "/commits" in joined and "pulls" in joined:
             return subprocess.CompletedProcess(cmd, 0, json.dumps([self.commits]), "")
+        if "/contents/renovate.json" in joined:
+            if f"ref={PARENT}" not in joined:
+                raise AssertionError(f"renovate.json must be read at the parent: {cmd}")
+            if self.renovate_json is None:
+                return subprocess.CompletedProcess(cmd, 1, "", "Not Found")
+            encoded = base64.b64encode(self.renovate_json.encode()).decode()
+            return subprocess.CompletedProcess(cmd, 0, encoded + "\n", "")
         if "/compare/" in joined:
             return subprocess.CompletedProcess(
                 cmd, 0, json.dumps({"status": self.compare}), ""
@@ -413,3 +440,30 @@ def test_accepted_drops_mirror_the_lane():
             {"container-health-timeout-seconds", "e2e-clouds"}
         )
     }
+
+
+@pytest.mark.parametrize(
+    "runner_kwargs",
+    [
+        {"renovate_json": SOFT_RENOVATE_JSON},
+        {"renovate_json": "{not json"},
+        {"renovate_json_missing": True},
+    ],
+    ids=["soft-mode", "invalid-json", "missing"],
+)
+def test_no_approval_unless_the_repo_auto_merges(runner_kwargs):
+    approved, runner, render = run(runner=FakeRunner(**runner_kwargs))
+    assert not approved and not runner.approved and render.calls == []
+
+
+def test_scoped_per_package_opt_out_still_approves():
+    scoped = json.dumps(
+        {
+            "extends": ["github>atlanhq/application-sdk//renovate-config/default.json"],
+            "packageRules": [
+                {"matchPackageNames": ["atlan-application-sdk"], "automerge": False}
+            ],
+        }
+    )
+    approved, runner, _ = run(runner=FakeRunner(renovate_json=scoped))
+    assert approved and runner.approved

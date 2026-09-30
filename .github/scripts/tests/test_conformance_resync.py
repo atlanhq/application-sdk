@@ -387,3 +387,21 @@ def test_pr_matches_render_when_both_sides_delete_the_path():
 def test_pr_matches_render_detects_a_delete_on_one_side_only():
     runner = _files_runner(["retired.sh"], {"retired.sh": ("", "b1")})
     assert lane.pr_matches_render(REPO, 7, ["retired.sh"], "/w", runner) is False
+
+
+def test_no_dispatch_when_the_repo_does_not_auto_merge():
+    runner = FakeRunner()
+    result: dict = {"trace": []}
+    lane._maybe_dispatch(
+        REPO,
+        _pr(7, gate.RESYNC_BRANCH),
+        False,
+        runner,
+        result,
+        repo_automerge=(False, "renovate.json is in soft mode (auto-merge disabled)"),
+    )
+    assert not any("workflow" in c for c in runner.calls)
+    assert (
+        result["approvalSkipped"]
+        == "renovate.json is in soft mode (auto-merge disabled)"
+    )
