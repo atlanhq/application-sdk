@@ -10,7 +10,7 @@ from __future__ import annotations
 import dataclasses
 import re
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_serializer, field_validator
 
 from application_sdk.contracts.base import Input, Output, SerializableEnum
 from application_sdk.templates.contracts.sql_metadata import (
@@ -421,8 +421,8 @@ class ExecuteColumnBatchOutput(Output):
     # Pre-dates BLDX-1244's standard Output.status (``OutputStatus`` enum)
     # and uses domain-specific values ("not_found", "success") that aren't
     # part of that vocabulary, hence its own enum; the ignore acknowledges
-    # the deliberate field-type narrowing. ``None`` is "not set" — what the
-    # old ``""`` default meant.
+    # the deliberate field-type narrowing. ``None`` is "not set" in Python;
+    # on the wire it stays ``""``, the old default, in both directions.
     status: ColumnBatchStatus | None = None  # type: ignore[assignment]
 
     @field_validator("status", mode="before")
@@ -431,6 +431,12 @@ class ExecuteColumnBatchOutput(Output):
         # A payload recorded before the field was typed carries "" for "not
         # set"; it must still deserialize on replay.
         return None if v == "" else v
+
+    @field_serializer("status")
+    def _unset_status_as_empty_string(self, v: ColumnBatchStatus | None) -> str:
+        # The field was a plain str defaulting to "": a consumer reading the
+        # payload expects a string, never null.
+        return "" if v is None else v.value
 
 
 # =============================================================================
