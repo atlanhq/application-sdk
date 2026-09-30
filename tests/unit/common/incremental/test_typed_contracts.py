@@ -103,6 +103,36 @@ def test_column_batch_output_reads_a_legacy_unset_status_as_none() -> None:
     assert ExecuteColumnBatchOutput().status is None
 
 
+def test_column_batch_output_writes_an_unset_status_as_empty_string() -> None:
+    """Unset is ``None`` in Python but ``""`` on the wire, exactly as before."""
+    out = ExecuteColumnBatchOutput()
+    assert out.status is None
+    assert orjson.loads(out.model_dump_json())["status"] == ""
+    assert out.model_dump()["status"] == ""
+    assert out.model_dump(mode="json")["status"] == ""
+    # And a set status still writes its plain string, in every mode.
+    done = ExecuteColumnBatchOutput(status=ColumnBatchStatus.SUCCESS)
+    assert (
+        out.model_validate_json(done.model_dump_json()).status
+        is ColumnBatchStatus.SUCCESS
+    )
+    assert type(done.model_dump()["status"]) is str
+
+
+async def test_column_batch_status_round_trips_through_the_temporal_converter() -> None:
+    """The payload Temporal records carries ``""`` / the plain string, and reads back."""
+    from temporalio.contrib.pydantic import pydantic_data_converter as converter
+
+    for out, wire in (
+        (ExecuteColumnBatchOutput(), ""),
+        (ExecuteColumnBatchOutput(status=ColumnBatchStatus.NOT_FOUND), "not_found"),
+    ):
+        [payload] = await converter.encode([out])
+        assert orjson.loads(payload.data)["status"] == wire
+        [back] = await converter.decode([payload], [ExecuteColumnBatchOutput])
+        assert back.status == out.status
+
+
 def test_column_batch_output_rejects_an_unknown_status() -> None:
     with pytest.raises(ValueError):
         ExecuteColumnBatchOutput(status="done")  # type: ignore[arg-type]
