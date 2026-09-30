@@ -1,14 +1,15 @@
 """Characterization tests for the known incremental-state lifecycle bugs.
 
-Each test here pins one latent bug in today's incremental state handling. They
-are ``xfail(strict=True)`` so the suite stays green while the bug exists and
+Each test here pins one latent bug in today's incremental state handling. While
+a bug exists its test is ``xfail(strict=True)``, so the suite stays green and
 turns red — XPASS — the moment a fix lands, forcing whoever lands it to delete
 the marker. The ``reason`` names the issue that owns the flip:
 
-* FND-3063 — correctness fixes (not-found handling, backfill wiring, blocking
-  walks).
 * FND-3064 — ``CurrentStateStore``: manifest commit and run-scoped state
   directories.
+
+Tests without a marker (#5, #6, #8) were flipped by FND-3063 (not-found
+handling, backfill wiring, blocking walks) and now guard those fixes.
 
 ``raises=AssertionError`` on every marker is deliberate: each test converts its
 bug into an assertion, so an incidental error (a fixture typo, an import
@@ -70,7 +71,6 @@ SCHEMA = f"{DB}/EXAMPLE_SCHEMA"
 T1 = f"{SCHEMA}/TABLE_ONE"
 T2 = f"{SCHEMA}/TABLE_TWO"
 
-M2_CORRECTNESS = "FND-3063"
 M3_STORE = "FND-3064"
 
 
@@ -402,15 +402,6 @@ async def test_concurrent_runs_of_one_connection_use_distinct_directories(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M2_CORRECTNESS}: download_file raises StorageNotFoundError, which is "
-        "not a FileNotFoundError, so a first run falls into the broad handler "
-        "and logs WARNING with a traceback"
-    ),
-)
 async def test_first_run_marker_read_is_not_a_warning(
     store: LocalStore, staging: Path, loguru_capture: list[dict]
 ) -> None:
@@ -425,15 +416,6 @@ async def test_first_run_marker_read_is_not_a_warning(
     assert not tracebacks, f"first run logged a warning traceback: {tracebacks}"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M2_CORRECTNESS}: any marker download error is swallowed and "
-        "returned as 'no marker', silently turning a store outage into a full "
-        "extraction"
-    ),
-)
 async def test_marker_read_failure_other_than_not_found_propagates(
     store: LocalStore, staging: Path
 ) -> None:
@@ -454,15 +436,6 @@ async def test_marker_read_failure_other_than_not_found_propagates(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M2_CORRECTNESS}: write_current_state never passes "
-        "get_backfill_tables_fn to create_current_state_snapshot, so the diff "
-        "has no backfill tables"
-    ),
-)
 async def test_write_current_state_diff_includes_backfill_tables(
     tmp_path: Path, store: LocalStore, staging: Path
 ) -> None:
@@ -612,15 +585,6 @@ def loop_thread_walks(
     return calls
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M2_CORRECTNESS}: download_current_state counts the downloaded tree "
-        "and prepare_column_extraction_queries globs the cached tree inline on "
-        "the event loop, starving the auto-heartbeat on large connections"
-    ),
-)
 async def test_state_tree_walks_run_off_the_event_loop(
     tmp_path: Path,
     store: LocalStore,
