@@ -25,22 +25,61 @@ Example:
 
 from __future__ import annotations
 
+import warnings
 from datetime import UTC, datetime
 from typing import Any
 
-from application_sdk.common.atomic import atomic_write, disk_full_guard
 from application_sdk.common.incremental.helpers import (
     download_marker_from_s3,
-    get_persistent_artifacts_path,
     get_persistent_s3_prefix,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
 )
 from application_sdk.constants import MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
-from application_sdk.storage.ops import upload_file
+from application_sdk.storage.batch import upload_file_from_bytes
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). The marker is no longer written to a local file, so
+#: these stopped being imported here; they are served once more for callers
+#: that imported (or patched) them via this module.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "atomic_write": (
+        "application_sdk.common.atomic.atomic_write",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "disk_full_guard": (
+        "application_sdk.common.atomic.disk_full_guard",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "get_persistent_artifacts_path": (
+        "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "upload_file": (
+        "application_sdk.storage.ops.upload_file",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
+
+    return getattr(import_module(module_name), attr)
 
 
 def create_next_marker() -> str:
@@ -168,9 +207,9 @@ async def persist_marker_to_storage(
 ) -> dict[str, Any]:
     """Persist marker timestamp to S3 storage.
 
-    Writes the marker to both local storage and S3 for persistence
-    across workflow runs. This marker will be used as the starting
-    point for the next incremental extraction.
+    Uploads the marker from memory for persistence across workflow runs.
+    This marker will be used as the starting point for the next incremental
+    extraction.
 
     Args:
         connection_qualified_name: The connection qualified name.
@@ -181,14 +220,11 @@ async def persist_marker_to_storage(
         Dictionary with marker write details:
         - marker_written: True if successful
         - marker_timestamp: The persisted value
-        - local_path: Path to local marker file
+        - local_path: Always ``""`` (no local copy is written)
         - s3_key: S3 key where marker was uploaded
 
     Raises:
-        DiskFullError: If the local marker write runs out of disk. No marker
-            file is left behind — the next run reads the previous marker and
-            re-extracts rather than skipping the window this one covered.
-        Exception: If upload to S3 fails
+        MarkerUploadError: If the upload to S3 fails.
 
     Example:
         >>> result = await persist_marker_to_storage(
@@ -199,34 +235,14 @@ async def persist_marker_to_storage(
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
-    local_marker_path = get_persistent_artifacts_path(
-        connection_qualified_name, "marker.txt", application_name
-    )
 
-    # Ensure local directory exists. Inside the guard: the mkdir is itself a
-    # write, and on a full filesystem it fails with the same ENOSPC the marker
-    # write below would have — classified identically rather than escaping the
-    # typed handling the atomic_write provides.
-    with disk_full_guard(local_marker_path, operation="marker write"):
-        local_marker_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Write marker to local file. Atomic because a truncated marker is its own
-    # incident: it is the timestamp the *next* run starts from, it is uploaded
-    # and retained, and a half-written one is still a parseable-looking string
-    # — so the damage is a silently wrong extraction window rather than a
-    # failure anyone sees (FND-318).
-    logger.info("Writing marker to local file: %s", local_marker_path)
-    with atomic_write(local_marker_path, operation="marker write") as marker_file:
-        marker_file.write(marker_value.encode("utf-8"))
-
-    # Upload marker to S3
+    # Straight from memory: no per-connection local marker.txt for two runs
+    # on one worker to share. upload_file_from_bytes stages through a private
+    # temp file and writes the integrity sidecar, as the file upload did, so
+    # a reader verifying against the sidecar never sees a stale digest.
     logger.info("Uploading marker to S3: %s", marker_s3_key)
     try:
-        await upload_file(
-            local_path=str(local_marker_path),
-            key=marker_s3_key,
-            retain_local_copy=True,
-        )
+        await upload_file_from_bytes(marker_s3_key, marker_value.encode("utf-8"))
         logger.info(
             "Marker uploaded to S3: key=%s value=%s", marker_s3_key, marker_value
         )
@@ -241,6 +257,7 @@ async def persist_marker_to_storage(
     return {
         "marker_written": True,
         "marker_timestamp": marker_value,
-        "local_path": str(local_marker_path),
+        # Kept for callers that read the key; there is no local copy.
+        "local_path": "",
         "s3_key": marker_s3_key,
     }

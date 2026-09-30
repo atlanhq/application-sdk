@@ -531,6 +531,39 @@ async def download_prefix(
     if suffix:
         lsuffix = suffix.lower()
         objects = [o for o in objects if o.key.lower().endswith(lsuffix)]
+    return await _download_listed(
+        objects,
+        prefix,
+        local_dir,
+        store,
+        suffix=suffix,
+        normalize=normalize,
+        strip_prefix=strip_prefix,
+        max_concurrency=max_concurrency,
+        sync=sync,
+    )
+
+
+async def _download_listed(
+    objects: list[DataObject],
+    prefix: str,
+    local_dir: str | Path,
+    store: ObjectStore | None,
+    *,
+    suffix: str,
+    normalize: bool,
+    strip_prefix: bool,
+    max_concurrency: int,
+    sync: bool,
+) -> list[str]:
+    """Download an already-listed set of *objects* under *prefix*.
+
+    The body of :func:`download_prefix` after its listing, split out for a
+    caller that must download a *chosen subset* of a prefix — the keys a
+    current-state manifest names, not every key a failed commit left beside
+    them — with the same layout, integrity and *sync* semantics. With *sync*
+    the subset is the mirror: local files outside it are pruned.
+    """
     local = Path(local_dir)
     # Strip against the *normalised* listing prefix rather than the caller's raw
     # argument: normalisation is what the listing matched on, so a v2-style
