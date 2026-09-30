@@ -1316,6 +1316,16 @@ def test_l004_fires_when_log_call_walrus_rebinds_sanitized_local() -> None:
     assert "L004" in _ids(src)
 
 
+def test_l004_fires_when_sanitized_local_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    logger.error('operation failed: %s\\n%s', error, traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     # Only the log call's own arguments count — a sanitizer on another
     # statement does not exempt an unrelated bare log call.

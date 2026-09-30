@@ -126,10 +126,19 @@ def _sanitized_assignment_name(stmt: ast.stmt, exception_name: str) -> str | Non
         return None
 
     # The sanitizer must wrap data from this handler's caught exception, not an
-    # unrelated value which happens to be sanitized in the same assignment.
+    # unrelated value which happens to be sanitized in the same assignment.  A
+    # conditional input (``str(e) if verbose else endpoint``) proves nothing
+    # about the runtime value, so any branch in the arguments disqualifies it.
+    args = [*value.args, *[kw.value for kw in value.keywords]]
+    if any(
+        isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+        for arg in args
+        for node in ast.walk(arg)
+    ):
+        return None
     if not any(
         isinstance(node, ast.Name) and node.id == exception_name
-        for arg in [*value.args, *[kw.value for kw in value.keywords]]
+        for arg in args
         for node in ast.walk(arg)
     ):
         return None
@@ -152,6 +161,47 @@ def _statement_writes_name_before(
             return True
         if isinstance(node, ast.ExceptHandler) and node.name == name:
             return True
+        # ``case trace_text:`` / ``case [*trace_text]`` / ``case {**trace_text}``
+        # bind through the pattern node, not through an ``ast.Name`` store.
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == name for alias in node.names
+        ):
+            return True
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == name
+        ):
+            return True
+    return False
+
+
+def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
+    """True when *call* also reads the caught exception outside a sanitizer.
+
+    A sanitized alias only marks a redaction boundary when it is the sole route
+    by which the exception reaches the log: ``logger.error("%s %s", safe, e)``
+    still formats the raw exception, so there is no boundary to protect.
+    Reads nested inside a recognised sanitizer call (``redact(e)``) are fine.
+    """
+    exception_name = handler.name
+    if exception_name is None:
+        return False
+    pending: list[ast.AST] = [*call.args, *[kw.value for kw in call.keywords]]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Call) and is_sanitizer_call(node):
+            continue
+        if (
+            isinstance(node, ast.Name)
+            and node.id == exception_name
+            and isinstance(node.ctx, ast.Load)
+        ):
+            return True
+        pending.extend(ast.iter_child_nodes(node))
     return False
 
 
@@ -162,6 +212,8 @@ def _call_uses_sanitized_local_alias(
     exception_name = handler.name
     call_position = _source_position(call)
     if exception_name is None or call_position is None:
+        return False
+    if call_logs_raw_exception(call, handler):
         return False
 
     logged_names = {

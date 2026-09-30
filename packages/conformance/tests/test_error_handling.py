@@ -3535,6 +3535,37 @@ def test_e005_still_fires_when_sanitized_alias_contains_unrelated_value() -> Non
     assert "E005" in _findings(src)
 
 
+def test_e005_still_fires_when_log_also_passes_raw_exception() -> None:
+    # The alias is not the only route: the raw exception is formatted too.
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    logger.error('connection failed: %s %s', trace_text, caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught) if include_trace else endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_match_capture_rebinds_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    match caught:\n"
+        "        case trace_text:\n"
+        "            pass\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_when_sanitized_alias_is_overwritten() -> None:
     src = (
         "try:\n    connect()\nexcept ConnectionError as caught:\n"
