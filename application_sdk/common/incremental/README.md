@@ -109,9 +109,17 @@ application_sdk/common/incremental/
 
 ### Marker (`marker.py`)
 
-- `fetch_marker_from_storage()` — read and process the stored marker; returns
-  `(marker, next_marker)`.
-- `persist_marker_to_storage()` — write the marker after a successful run.
+- `fetch_marker()` — read and process the stored marker; returns a
+  `MarkerPair(marker, next_marker)`, with `marker=None` on the first run.
+- `persist_marker()` — write the marker after a successful run; returns a
+  `MarkerPersistResult(marker_timestamp, s3_key)`.
+- `fetch_marker_from_storage()` / `persist_marker_to_storage()` — deprecated
+  (removal in v4.0.0); the same calls returning the old `(marker, next_marker)`
+  tuple and `{"marker_written", "marker_timestamp", "local_path", "s3_key"}`
+  dict.
+- "No marker" is `None` in Python and `""` on the task contracts;
+  `marker_to_wire()` / `marker_from_wire()` in
+  `application_sdk.templates.contracts.incremental_sql` convert between them.
 - `create_next_marker()` — the timestamp for the current run.
 - `process_marker_timestamp()` — normalize and optionally prepone a marker.
 
@@ -135,6 +143,8 @@ Each still works and emits a `DeprecationWarning`.
 | `state_writer.prepare_current_state_directory()` | Nothing: `create_current_state_snapshot` resets its own build directory |
 | `state_writer.cleanup_previous_state()` | Nothing: run-scoped directories need no cleanup |
 | Overriding `read_current_state` on the template | Override `after_current_state_read(snapshot, local_dir)` |
+| `marker.fetch_marker_from_storage()` (tuple) | `marker.fetch_marker()` (`MarkerPair`) |
+| `marker.persist_marker_to_storage()` (dict) | `marker.persist_marker()` (`MarkerPersistResult`) |
 | `IncrementalSqlMetadataExtractor` (the template itself) | `application_sdk.templates.SqlApp` with a custom `run()` |
 
 ## Key Concepts

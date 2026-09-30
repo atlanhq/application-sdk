@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.40.0
-source-sha:    e6cef11dffbcd938654a66bc619ccaf135d39b16
-source-date:   2026-09-30T12:03:40+01:00
+source-sha:    ecb40bf82760d8160347dda34b374dde32e8db51
+source-date:   2026-09-30T13:13:42+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 46 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 51 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -34,7 +34,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
 
@@ -486,6 +486,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ### Classes
 
+#### `ColumnExtractionAnalysis`
+
+- **Import:** `from application_sdk.common.incremental.column_extraction import ColumnExtractionAnalysis`
+- **Signature:** `class ColumnExtractionAnalysis`
+- **Summary:** What :func:`get_tables_needing_column_extraction` found.
+- **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
+
 #### `DataframeType`
 
 - **Import:** `from application_sdk.common import DataframeType`
@@ -535,6 +542,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class LastSyncStampable`
 - **Summary:** Any asset object that declares the three run-identity fields.
 - **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `MarkerPair`
+
+- **Import:** `from application_sdk.common.incremental import MarkerPair`
+- **Signature:** `class MarkerPair(marker: str | None, next_marker: str)`
+- **Summary:** The markers a run starts with: :func:`fetch_marker`'s result.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `MarkerPersistResult`
+
+- **Import:** `from application_sdk.common.incremental import MarkerPersistResult`
+- **Signature:** `class MarkerPersistResult(marker_timestamp: str, s3_key: str)`
+- **Summary:** Where :func:`persist_marker` wrote the marker.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `ModelDumpAsset`
 
@@ -650,11 +671,18 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Extract the connection ID (epoch) from a connection qualified name.
 - **Defined in:** `application_sdk/common/incremental/helpers.py`
 
+#### `fetch_marker`
+
+- **Import:** `from application_sdk.common.incremental import fetch_marker`
+- **Signature:** `fetch_marker(connection_qualified_name: str, ...)`
+- **Summary:** Fetch and process the incremental marker from storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `fetch_marker_from_storage`
 
 - **Import:** `from application_sdk.common.incremental import fetch_marker_from_storage`
 - **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
-- **Summary:** Fetch and process the incremental marker from storage.
+- **Summary:** Fetch the marker as a ``(marker, next_marker)`` tuple.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `filter_matches`
@@ -735,11 +763,18 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `persist_marker`
+
+- **Import:** `from application_sdk.common.incremental import persist_marker`
+- **Signature:** `persist_marker(connection_qualified_name: str, marker_value: str, application_name: str = '')`
+- **Summary:** Persist marker timestamp to S3 storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `persist_marker_to_storage`
 
 - **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
 - **Signature:** `persist_marker_to_storage(connection_qualified_name: str, marker_value: str, application_name: str = '')`
-- **Summary:** Persist marker timestamp to S3 storage.
+- **Summary:** Persist the marker and describe the write as a dict.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `prepare_filters`
@@ -3465,6 +3500,13 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base App for all metadata extraction connectors.
 - **Defined in:** `application_sdk/templates/base_metadata_extractor.py`
 
+#### `ColumnBatchStatus`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import ColumnBatchStatus`
+- **Signature:** `class ColumnBatchStatus`
+- **Summary:** Outcome of one ``execute_single_column_batch`` task.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
 #### `IncrementalRunContext`
 
 - **Import:** `from application_sdk.templates.contracts import IncrementalRunContext`
@@ -3500,6 +3542,22 @@ SQL metadata extractor templates and their contracts
 - **Signature:** `class SqlQueryExtractor`
 - **Summary:** Abstract base class for SQL query extraction apps.
 - **Defined in:** `application_sdk/templates/sql_query_extractor.py`
+
+### Functions
+
+#### `marker_from_wire`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import marker_from_wire`
+- **Signature:** `marker_from_wire(value: str) -> str | None`
+- **Summary:** Decode a task contract's marker field: ``""`` becomes ``None``.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
+#### `marker_to_wire`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import marker_to_wire`
+- **Signature:** `marker_to_wire(marker: str | None) -> str`
+- **Summary:** Encode a Python marker for a task contract: ``None`` becomes ``""``.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 ### Constants and Enums
 
@@ -7548,7 +7606,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `batch_index: int` `= 0`
   - `records: int` `= 0`
-  - `status: str` `= ''`
+  - `status: ColumnBatchStatus | None`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `ExtractionInput`

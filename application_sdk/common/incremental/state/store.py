@@ -60,6 +60,7 @@ from application_sdk.common.incremental.helpers import get_persistent_s3_prefix
 from application_sdk.common.incremental.incremental_errors import (
     CurrentStateManifestError,
 )
+from application_sdk.constants import CURRENT_STATE_SUBPATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._concurrency import _run_drained
 from application_sdk.storage._locks import PathLockRegistry
@@ -191,7 +192,7 @@ class CurrentStateStore:
     ) -> CurrentStateStore:
         """The store for a connection's ``current-state/`` prefix."""
         prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
-        return cls(f"{prefix}/current-state", store)
+        return cls(f"{prefix}/{CURRENT_STATE_SUBPATH}", store)
 
     # ------------------------------------------------------------------
     # probe

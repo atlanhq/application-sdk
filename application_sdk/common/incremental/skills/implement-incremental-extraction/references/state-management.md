@@ -65,7 +65,7 @@ Content: "2024-06-15T00:00:00Z" (single line, UTC ISO 8601)
 ### Marker Flow
 
 ```python
-# fetch_marker_from_storage() in marker.py
+# fetch_marker() in marker.py
 
 1. Download marker.txt from S3 (via ObjectStore)
 2. If not found → first run, marker = None

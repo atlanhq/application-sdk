@@ -22,6 +22,7 @@ from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix as _get_persistent_s3_prefix,
 )
 from application_sdk.common.incremental.state.store import CurrentStateStore
+from application_sdk.constants import CURRENT_STATE_SUBPATH
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix as _download_prefix
 
@@ -176,7 +177,7 @@ async def download_current_state(
         connection_qualified_name, application_name
     )
     current_state_dir = get_persistent_artifacts_path(
-        connection_qualified_name, "current-state", application_name
+        connection_qualified_name, CURRENT_STATE_SUBPATH, application_name
     )
     snapshot = await store.probe()
     await store.materialize(snapshot, current_state_dir)

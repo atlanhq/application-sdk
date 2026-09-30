@@ -102,11 +102,29 @@
     {
       "kind": "function",
       "marker_via": "decorator",
+      "message": "fetch_marker_from_storage is deprecated; use fetch_marker, which returns a MarkerPair (marker, next_marker) instead of a positional tuple \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "fetch_marker_from_storage"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
       "message": "get_persistent_artifacts_path is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_artifacts_path, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
       "symbol": "get_persistent_artifacts_path"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "persist_marker_to_storage is deprecated; use persist_marker, which returns a MarkerPersistResult (marker_timestamp, s3_key) instead of a dict \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "persist_marker_to_storage"
     },
     {
       "kind": "function",

@@ -12,7 +12,6 @@ import hashlib
 import os
 import re
 import warnings
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,6 +26,7 @@ from application_sdk.common.atomic import (
 )
 from application_sdk.constants import (
     APPLICATION_NAME,
+    MARKER_FILENAME,
     MARKER_TIMESTAMP_FORMAT,
     MAX_CONCURRENT_STORAGE_TRANSFERS,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
@@ -328,7 +328,7 @@ async def download_marker_from_s3(
             sidecar (only when transfer verification is on).
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
-    marker_s3_key = f"{s3_prefix}/marker.txt"
+    marker_s3_key = f"{s3_prefix}/{MARKER_FILENAME}"
 
     logger.info("Reading marker from S3: %s", marker_s3_key)
     raw = await _get_bytes(marker_s3_key)
@@ -437,13 +437,19 @@ def copy_directory_parallel(
     pattern: str = "*.json",
     max_workers: int = 3,
 ) -> int:
-    """Copy files from source to destination directory in parallel.
+    """Copy files from source to destination directory.
+
+    Copies one file at a time on the calling thread. Every caller already runs
+    this inside ``run_in_thread``, and a thread pool opened from an offloaded
+    thread is the nesting ``_runtime/offload.py`` warns against: it multiplies
+    the process's thread count without the offload layer seeing it.
 
     Args:
         src_dir: Source directory containing files to copy
         dest_dir: Destination directory (will be created if needed)
         pattern: Glob pattern for files to copy (default: ``*.json``)
-        max_workers: Maximum number of parallel workers (default: 3)
+        max_workers: Ignored; the copy is sequential. Kept so existing callers
+            that pass it keep working.
 
     Returns:
         Number of files copied
@@ -496,11 +502,7 @@ def copy_directory_parallel(
             continue
     ensure_free_space(dest_dir, total_bytes, operation="carry-forward copy")
 
-    def copy_single_file(src_file: Path) -> None:
-        """Copy a single file to dest_dir, atomically. Raises on failure."""
+    for src_file in files:
         atomic_copy(src_file, dest_dir / src_file.name, operation="carry-forward copy")
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(executor.map(copy_single_file, files))
 
     return len(files)

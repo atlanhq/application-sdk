@@ -54,16 +54,22 @@ import os
 import warnings
 from abc import abstractmethod
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.task import task
+from application_sdk.constants import (
+    COLUMN_BATCHES_SUBPATH,
+    CURRENT_STATE_SUBPATH,
+    TRANSFORMED_SUBDIR,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
     SqlOutputPathMissingError,
 )
 from application_sdk.templates.contracts.incremental_sql import (
+    ColumnBatchStatus,
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
     FetchColumnsIncrementalInput,
@@ -81,6 +87,8 @@ from application_sdk.templates.contracts.incremental_sql import (
     UpdateMarkerOutput,
     WriteCurrentStateInput,
     WriteCurrentStateOutput,
+    marker_from_wire,
+    marker_to_wire,
 )
 from application_sdk.templates.contracts.sql_metadata import (
     FetchColumnsOutput,
@@ -102,6 +110,13 @@ logger = get_logger(__name__)
 # Maximum number of column batch tasks to fan-out in parallel.
 # Matches v2 behaviour exactly (default Temporal fan-out limit).
 MAX_CONCURRENT_COLUMN_BATCHES: int = 10
+
+
+class _BatchWriteCounts(NamedTuple):
+    """What ``prepare_column_extraction_queries`` wrote: batch files and tables."""
+
+    batches: int
+    tables: int
 
 
 class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
@@ -414,10 +429,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         and a freshly generated ``next_marker_timestamp``.
         """
         from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            fetch_marker_from_storage,
+            fetch_marker,
         )
 
-        marker, next_marker = await fetch_marker_from_storage(
+        markers = await fetch_marker(
             connection_qualified_name=input.connection_qualified_name,
             application_name=input.application_name,
             existing_marker=input.existing_marker,
@@ -425,8 +440,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             prepone_hours=input.prepone_hours,
         )
         return FetchIncrementalMarkerOutput(
-            marker_timestamp=marker or "",
-            next_marker_timestamp=next_marker,
+            marker_timestamp=marker_to_wire(markers.marker),
+            next_marker_timestamp=markers.next_marker,
         )
 
     @task(timeout_seconds=300)
@@ -477,7 +492,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 # directory the read used before run-scoped state.
                 else get_persistent_artifacts_path(
                     input.connection_qualified_name,
-                    "current-state",
+                    CURRENT_STATE_SUBPATH,
                     input.application_name,
                 )
             )
@@ -549,7 +564,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             )
 
         # Step 1: Download transformed files from S3
-        transformed_local_path = os.path.join(input.output_path, "transformed")
+        transformed_local_path = os.path.join(input.output_path, TRANSFORMED_SUBDIR)
         transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
         import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
@@ -599,14 +614,12 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using DuckDB
-        (
-            filtered_rows,
-            changed_count,
-            backfill_count,
-            _no_change_count,
-        ) = await run_in_thread(
+        analysis = await run_in_thread(
             get_tables_needing_column_extraction, transformed_dir, backfill_qns
         )
+        filtered_rows = analysis.rows
+        changed_count = analysis.changed_count
+        backfill_count = analysis.backfill_count
 
         total_tables = changed_count + backfill_count
         if total_tables == 0:
@@ -621,12 +634,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Batching %d tables into groups of %d", total_tables, batch_size)
 
         # Step 5: Batch table_ids into JSON files
-        batches_dir = pathlib.Path(input.output_path).joinpath(
-            "batches", "column-table-ids"
-        )
+        batches_dir = pathlib.Path(input.output_path).joinpath(COLUMN_BATCHES_SUBPATH)
         batches_dir.mkdir(parents=True, exist_ok=True)
 
-        def _write_batches() -> tuple[int, int]:
+        def _write_batches() -> _BatchWriteCounts:
             written_batches = 0
             batched = 0
             current_batch: list[str] = []
@@ -646,16 +657,16 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 batch_file.write_bytes(orjson.dumps(current_batch))
                 written_batches += 1
                 batched += len(current_batch)
-            return written_batches, batched
+            return _BatchWriteCounts(batches=written_batches, tables=batched)
 
         # Offloaded: one pass over every table needing extraction, writing a
         # file per batch, with no await in the loop (ADR-0010).
-        batch_idx, total_tables_batched = await run_in_thread(_write_batches)
+        written = await run_in_thread(_write_batches)
 
         logger.info(
             "Created %d batch files for %d tables at %s",
-            batch_idx,
-            total_tables_batched,
+            written.batches,
+            written.tables,
             batches_dir,
         )
 
@@ -669,7 +680,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         return PrepareColumnQueriesOutput(
-            total_batches=batch_idx,
+            total_batches=written.batches,
             changed_tables=changed_count,
             backfill_tables=backfill_count,
             total_tables=total_tables,
@@ -709,15 +720,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             workflow_id=input.workflow_id,
             output_prefix=input.output_prefix,
             output_path=input.output_path,
-            marker_timestamp=input.marker_timestamp or None,
+            marker_timestamp=marker_from_wire(input.marker_timestamp),
             current_state_available=input.current_state_available,
             column_chunk_size=input.column_chunk_size,
             application_name=input.application_name,
         )
 
-        batches_dir = pathlib.Path(input.output_path).joinpath(
-            "batches", "column-table-ids"
-        )
+        batches_dir = pathlib.Path(input.output_path).joinpath(COLUMN_BATCHES_SUBPATH)
         batches_dir.mkdir(parents=True, exist_ok=True)
 
         batch_filename = f"batch-{input.batch_index}.json"
@@ -739,7 +748,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             return ExecuteColumnBatchOutput(
                 batch_index=input.batch_index,
                 records=0,
-                status="not_found",
+                status=ColumnBatchStatus.NOT_FOUND,
             )
 
         table_ids = orjson.loads(batch_file.read_bytes())
@@ -764,7 +773,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         return ExecuteColumnBatchOutput(
             batch_index=input.batch_index,
             records=batch_records,
-            status="success",
+            status=ColumnBatchStatus.SUCCESS,
         )
 
     async def execute_column_sql(
@@ -853,7 +862,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         try:
             dirs = RunStateDirs.for_output_path(input.output_path)
             s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
-            store = CurrentStateStore(f"{s3_prefix}/current-state")
+            store = CurrentStateStore(f"{s3_prefix}/{CURRENT_STATE_SUBPATH}")
             diff_s3_prefix = (
                 f"{s3_prefix}/"
                 f"{INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)}"
@@ -947,18 +956,18 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             return UpdateMarkerOutput(marker_written=False)
 
         from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            persist_marker_to_storage,
+            persist_marker,
         )
 
-        result = await persist_marker_to_storage(
+        result = await persist_marker(
             connection_qualified_name=input.connection_qualified_name,
             marker_value=input.next_marker_timestamp,
             application_name=input.application_name,
         )
         return UpdateMarkerOutput(
-            marker_written=result.get("marker_written", False),
-            marker_timestamp=result.get("marker_timestamp", ""),
-            s3_key=result.get("s3_key", ""),
+            marker_written=True,
+            marker_timestamp=result.marker_timestamp,
+            s3_key=result.s3_key,
         )
 
     # ------------------------------------------------------------------
@@ -1018,7 +1027,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 prepone_hours=float(ctx.prepone_marker_hours),
             )
         )
-        ctx.marker_timestamp = marker_result.marker_timestamp or None
+        ctx.marker_timestamp = marker_from_wire(marker_result.marker_timestamp)
         ctx.next_marker_timestamp = marker_result.next_marker_timestamp
 
         state_result = await self.read_current_state(
@@ -1082,7 +1091,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
             )
@@ -1102,7 +1111,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
             )
@@ -1128,7 +1137,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                     temp_table_regex=input.temp_table_regex,
                     source_tag_prefix=input.source_tag_prefix,
                     incremental_extraction=ctx.incremental_extraction,
-                    marker_timestamp=ctx.marker_timestamp or "",
+                    marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                     current_state_available=ctx.current_state_available,
                     column_chunk_size=ctx.column_chunk_size,
                     connection_qualified_name=ctx.connection_qualified_name,
@@ -1166,7 +1175,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                                     temp_table_regex=input.temp_table_regex,
                                     source_tag_prefix=input.source_tag_prefix,
                                     incremental_extraction=ctx.incremental_extraction,
-                                    marker_timestamp=ctx.marker_timestamp or "",
+                                    marker_timestamp=marker_to_wire(
+                                        ctx.marker_timestamp
+                                    ),
                                     current_state_available=ctx.current_state_available,
                                     column_chunk_size=ctx.column_chunk_size,
                                     batch_index=i,
@@ -1198,7 +1209,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
                 workflow_run_id=run_id,
