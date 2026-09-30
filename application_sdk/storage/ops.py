@@ -740,7 +740,15 @@ async def _list_items(
 
     if include_markers:
         return all_items
+    # Offloaded: two passes over the whole listing with no await in between,
+    # which at 100k keys holds the event loop (and the activity heartbeat).
+    return await run_in_thread(_drop_directory_markers, all_items)
 
+
+def _drop_directory_markers(
+    all_items: list[tuple[str, int, str | None]],
+) -> list[tuple[str, int, str | None]]:
+    """Drop zero-byte objects whose path is an ancestor of another listed key."""
     parent_dirs: set[str] = set()
     for path, _, _ in all_items:
         parts = path.split("/")
