@@ -123,7 +123,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("batch_index", "int", "active"),
         SdkField("metrics", "dict[str, Any] | None", "active"),
         SdkField("records", "int", "active"),
-        SdkField("status", "ColumnBatchStatus | None", "active"),
+        SdkField("status", "str", "active"),
     ),
     "ExtractionInput": (
         SdkField("agent_json", "AgentCredentialSpec | None", "active"),
@@ -565,7 +565,6 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("application_name", "str", "active"),
         SdkField("connection_qualified_name", "str", "active"),
         SdkField("correlation_id", "str", "active"),
-        SdkField("output_path", "str", "active"),
         SdkField("workflow_id", "str", "active"),
         SdkField("workflow_slug", "str", "active"),
     ),
