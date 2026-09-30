@@ -179,13 +179,39 @@ def _statement_writes_name_before(
     return False
 
 
+def _is_type_projection(node: ast.AST, exception_name: str) -> bool:
+    """True for a read of the exception that yields only its type or a bool.
+
+    ``type(e)`` / ``e.__class__`` (and anything off them, e.g. ``.__name__``)
+    and ``isinstance(e, ...)`` never format the message, so they cannot leak
+    what a sanitizer would have redacted.
+    """
+
+    def is_exc(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id == exception_name
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id == "type" and len(node.args) == 1 and not node.keywords:
+            return is_exc(node.args[0])
+        if node.func.id == "isinstance" and len(node.args) == 2:
+            return is_exc(node.args[0]) and not any(
+                is_exc(inner) for inner in ast.walk(node.args[1])
+            )
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "__class__"
+        and is_exc(node.value)
+    )
+
+
 def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
     """True when *call* also reads the caught exception outside a sanitizer.
 
     A sanitized alias only marks a redaction boundary when it is the sole route
     by which the exception reaches the log: ``logger.error("%s %s", safe, e)``
     still formats the raw exception, so there is no boundary to protect.
-    Reads nested inside a recognised sanitizer call (``redact(e)``) are fine.
+    Reads nested inside a recognised sanitizer call (``redact(e)``) and
+    type-only projections (``type(e).__name__``) are fine.
     """
     exception_name = handler.name
     if exception_name is None:
@@ -194,6 +220,8 @@ def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
     while pending:
         node = pending.pop()
         if isinstance(node, ast.Call) and is_sanitizer_call(node):
+            continue
+        if _is_type_projection(node, exception_name):
             continue
         if (
             isinstance(node, ast.Name)

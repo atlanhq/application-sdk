@@ -3553,6 +3553,26 @@ def test_e005_still_fires_when_direct_sanitizer_is_logged_with_raw_exception() -
     assert "E005" in _findings(src)
 
 
+def test_e005_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    # type(e).__name__ / e.__class__ carry no message text, so they do not
+    # undo the redaction boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s (%s %s)', safe_traceback(caught),\n"
+        "                 type(caught).__name__, caught.__class__.__qualname__)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_type_projection_hides_raw_exception() -> None:
+    # type(...) of something other than the bare binding is not a projection.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s %s', safe_traceback(caught), type(caught, str(caught)))\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
     src = (
         "try:\n    connect()\nexcept ConnectionError as caught:\n"
