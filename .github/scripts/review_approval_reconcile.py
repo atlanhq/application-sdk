@@ -156,6 +156,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 # All of these need the sys.path bootstrap above.
 import sdk_review_approve as approve  # noqa: E402
+from approver_identity import approver_logins  # noqa: E402
 from lens import approve as lens_approve  # noqa: E402
 from lens.findings import PRState  # noqa: E402
 from lens.github import GitHub as LensGitHub  # noqa: E402
@@ -780,7 +781,8 @@ class LensSource:
         on_head = [
             r
             for r in reviews
-            if (r.get("user") or {}).get("login") == lens_approve.APPROVER_LOGIN
+            if (r.get("user") or {}).get("login")
+            in approver_logins({"APPROVER_LOGIN": lens_approve.APPROVER_LOGIN})
             and r.get("commit_id") == head
             and (r.get("body") or "").startswith(lens_approve.SIGNATURE)
         ]

@@ -9,7 +9,8 @@ two — and only two — shapes of PR, each labelled ``vuln-auto-merge``:
   * **bump PR**      — touches ONLY a subset of ``pyproject.toml``,
                        ``uv.lock``
 
-A PR is approved (as ``atlan-ci``, satisfying code-owner review) and put on
+A PR is approved (as the code-owner approver, ``atlan-ci`` unless
+``APPROVER_LOGIN`` names a dedicated account) and put on
 GitHub auto-merge (``gh pr merge --auto`` — no method flag; the merge queue on
 ``main`` owns the merge strategy) iff ALL hold:
 
@@ -30,13 +31,19 @@ Loop / conditional logic lives here (a tested script) rather than inlined in
 the workflow YAML, per docs/standards/ci.md.
 
 Environment:
-    GH_TOKEN                 PAT owned by atlan-ci (repo read + PR write).
+    GH_TOKEN                 approver PAT (repo read + PR write): every read
+                             and the APPROVE.
     REPO                     owner/name (github.repository).
     EVENT_NAME               'workflow_run' or 'workflow_dispatch'.
     RUN_SHA                  workflow_run head_sha (empty for dispatch).
     DISPATCH_PR              PR number (workflow_dispatch manual testing).
 
 Optional:
+    APPROVER_LOGIN           the account GH_TOKEN acts as; default 'atlan-ci'
+                             (VULN_AUTOMERGE_APPROVER, if set, wins).
+    MERGE_TOKEN              token for ``gh pr merge --auto`` only (the fleet
+                             App). Keeps the approver PAT at PR write + contents
+                             read; unset, GH_TOKEN enables auto-merge too.
     VULN_AUTOMERGE_LABEL     default 'vuln-auto-merge'.
     VULN_AUTOMERGE_AUTHORS   comma-separated trusted PR authors;
                              default 'atlan-ci,atlan-app-fleet[bot]'.
@@ -50,6 +57,8 @@ import subprocess
 import sys
 from collections.abc import Callable
 from typing import Any
+
+from approver_identity import LEGACY_APPROVER_LOGIN, approver_login
 
 ALLOWLIST_FILE = ".security/base-allowlist.json"
 # Root-level dependency manifests for the SDK. Matched exactly (no subpaths) so
@@ -76,9 +85,9 @@ DEFAULT_LABEL = "vuln-auto-merge"
 #     still handled; such a PR cannot be self-approved and so cannot be queued
 #     hands-off — it needs a human approval. New PRs should never use it.
 DEFAULT_AUTHORS = "atlan-ci,atlan-app-fleet[bot]"
-# The login the gate's GH_TOKEN (ORG_PAT_GITHUB) acts as. GitHub rejects
-# self-approval, so a PR authored by this identity is skipped for approval.
-DEFAULT_APPROVER = "atlan-ci"
+# The login the gate's GH_TOKEN acts as when nothing names another. GitHub
+# rejects self-approval, so a PR authored by this identity is skipped for approval.
+DEFAULT_APPROVER = LEGACY_APPROVER_LOGIN
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -184,14 +193,20 @@ def resolve_pr_numbers(
     return nums.split(), run_sha
 
 
-def already_approved(repo: str, pr: str, runner: Runner) -> bool:
+def already_approved(
+    repo: str, pr: str, runner: Runner, approver_login: str = DEFAULT_APPROVER
+) -> bool:
+    # The legacy `atlan-ci` counts too: its approvals from before the approver
+    # moved to a dedicated account are still live on open PRs.
+    logins = json.dumps(sorted({approver_login, DEFAULT_APPROVER}))
     n = _gh_text(
         [
             "api",
             f"repos/{repo}/pulls/{pr}/reviews",
             "--paginate",
             "--jq",
-            '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" '
+            f"[.[] | select((.user.login | IN({logins}[])) and .state == "
+            '"APPROVED" '
             f'and ((.body // "") | startswith("{APPROVAL_SIGNATURE}")))] | length',
         ],
         runner,
@@ -202,10 +217,16 @@ def already_approved(repo: str, pr: str, runner: Runner) -> bool:
         return False
 
 
-def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
+def approve(
+    repo: str,
+    pr: str,
+    shape: str,
+    runner: Runner,
+    approver_login: str = DEFAULT_APPROVER,
+) -> None:
     body = (
         f"{APPROVAL_SIGNATURE} {shape} PR from the vuln triage.\n\n"
-        "Automated code-owner approval by `atlan-ci`. The PR is on GitHub "
+        f"Automated code-owner approval by `{approver_login}`. The PR is on GitHub "
         "auto-merge and enters the `main` merge queue only once all required "
         "checks pass; the queue sets the merge strategy. "
         "Dismissed on any new push (`dismiss_stale_reviews_on_push`)."
@@ -216,7 +237,9 @@ def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
     )
 
 
-def enable_automerge(repo: str, pr: str, runner: Runner, *, check: bool = True) -> None:
+def enable_automerge(
+    repo: str, pr: str, runner: Runner, *, check: bool = True, merge_token: str = ""
+) -> None:
     """Enable GitHub auto-merge, which queues the PR once its gates are satisfied.
 
     Deliberately passes NO merge-method flag. `main` has a merge queue, and the
@@ -224,11 +247,15 @@ def enable_automerge(repo: str, pr: str, runner: Runner, *, check: bool = True) 
     "The merge strategy for main is set by the merge queue", which is exactly how
     this silently stopped queueing anything (the PR got approved, then sat with
     autoMergeRequest: null and never merged).
+
+    `merge_token` (the fleet App) is used when given, so the approver PAT never
+    needs the contents: write that enabling auto-merge takes.
     """
-    runner(
-        ["gh", "pr", "merge", pr, "--repo", repo, "--auto"],
-        check=check,
-    )
+    cmd = ["gh", "pr", "merge", pr, "--repo", repo, "--auto"]
+    if merge_token:
+        runner(cmd, check=check, env={**os.environ, "GH_TOKEN": merge_token})
+    else:
+        runner(cmd, check=check)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +271,7 @@ def process_pr(
     trusted_authors: set[str],
     approver_login: str,
     runner: Runner,
+    merge_token: str = "",
 ) -> bool:
     """Evaluate one PR; approve (if needed) + auto-merge if it passes.
 
@@ -285,7 +313,7 @@ def process_pr(
         print(f"PR #{pr}: skip — {reason}.")
         return False
 
-    # A PR authored by the approver identity (atlan-ci) cannot be self-approved
+    # A PR authored by the approver identity cannot be self-approved
     # (GitHub 422), so the best we can do is arm auto-merge and let a human supply
     # the approval. Bypass-actor status does NOT substitute for that approval —
     # auto-merge and merge-queue entry still require it. New reconcile PRs are
@@ -295,18 +323,20 @@ def process_pr(
             f"PR #{pr}: authored by the approver identity {author} — cannot "
             "self-approve; auto-merge armed but a human approval is still needed."
         )
-        enable_automerge(repo, pr, runner, check=False)
+        enable_automerge(repo, pr, runner, check=False, merge_token=merge_token)
         return False
 
-    if already_approved(repo, pr, runner):
-        print(f"PR #{pr}: already approved by atlan-ci — ensuring auto-merge only.")
-        enable_automerge(repo, pr, runner, check=False)
+    if already_approved(repo, pr, runner, approver_login):
+        print(f"PR #{pr}: already approved by the approver — ensuring auto-merge only.")
+        enable_automerge(repo, pr, runner, check=False, merge_token=merge_token)
         return False
 
     print(f"PR #{pr}: {reason} — approving + enabling auto-merge.")
-    approve(repo, pr, shape or "", runner)
-    enable_automerge(repo, pr, runner)
-    print(f"✅ PR #{pr}: approved as atlan-ci and queued for auto-merge ({shape}).")
+    approve(repo, pr, shape or "", runner, approver_login)
+    enable_automerge(repo, pr, runner, merge_token=merge_token)
+    print(
+        f"✅ PR #{pr}: approved as {approver_login} and queued for auto-merge ({shape})."
+    )
     return True
 
 
@@ -316,7 +346,8 @@ def main(runner: Runner = subprocess.run) -> int:
     run_sha = os.environ.get("RUN_SHA", "")
     dispatch_pr = os.environ.get("DISPATCH_PR", "")
     label_name = os.environ.get("VULN_AUTOMERGE_LABEL", DEFAULT_LABEL)
-    approver_login = os.environ.get("VULN_AUTOMERGE_APPROVER", DEFAULT_APPROVER)
+    approver_login_ = os.environ.get("VULN_AUTOMERGE_APPROVER") or approver_login()
+    merge_token = os.environ.get("MERGE_TOKEN", "")
     trusted_authors = {
         a.strip()
         for a in os.environ.get("VULN_AUTOMERGE_AUTHORS", DEFAULT_AUTHORS).split(",")
@@ -333,7 +364,14 @@ def main(runner: Runner = subprocess.run) -> int:
     for pr in pr_numbers:
         print(f"--- Evaluating PR #{pr} ---")
         process_pr(
-            repo, pr, eval_sha, label_name, trusted_authors, approver_login, runner
+            repo,
+            pr,
+            eval_sha,
+            label_name,
+            trusted_authors,
+            approver_login_,
+            runner,
+            merge_token,
         )
     return 0
 

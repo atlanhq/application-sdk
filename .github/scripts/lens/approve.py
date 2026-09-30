@@ -2,11 +2,13 @@
 
 Modelled on sdk-review's stamp (`.github/scripts/sdk_review_approve.py`):
 
-- Two tokens, deliberately. `atlan-ci` is a CODEOWNER, so the APPROVE review
-  must carry that identity; GitHub Apps cannot be code owners. Nothing else
-  needs it. The fleet App token does every read and the dismissals, and the
-  `atlan-ci` PAT is spent on exactly one request, the APPROVE, because it shares
-  one hourly quota with every other `atlan-ci` workflow.
+- Two tokens, deliberately. The approver (`APPROVER_LOGIN`, `atlan-ci` unless
+  the workflow names a dedicated account; see `approver_identity.py`) is a
+  CODEOWNER, so the APPROVE review must carry that identity; GitHub Apps cannot
+  be code owners. Nothing else needs it. The fleet App token does every read and
+  the dismissals, and the approver PAT is spent on exactly one request, the
+  APPROVE, because it shares one hourly quota with every other workflow on that
+  account.
 - A signature marks lens's approvals, so lens only ever finds and withdraws
   its own, never a person's or sdk-review's.
 - Idempotent: an approval already on this head with the signature is not
@@ -42,10 +44,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from approver_identity import approver_login, approver_logins
+
 from .github import GitHub, GitHubError
 
 SIGNATURE = "**lens: ready to merge**"
-APPROVER_LOGIN = "atlan-ci"  # the CODEOWNERS user whose PAT is APPROVER_TOKEN
+APPROVER_LOGIN = approver_login()  # the CODEOWNERS user whose PAT is APPROVER_TOKEN
 
 
 def decision_for(res: Any) -> dict[str, Any]:
@@ -77,11 +81,16 @@ def write_decision(path: str | None, pr: int, decision: dict[str, Any]) -> None:
 def _signed(
     reviews: list[dict[str, Any]], login: str, state: str
 ) -> list[dict[str, Any]]:
-    """lens's own reviews in `state`: posted as `login` and carrying the signature."""
+    """lens's own reviews in `state`: posted as `login` and carrying the signature.
+
+    Reviews signed by the legacy approver count too, so an approval posted before
+    the approver moved off `atlan-ci` is still found, deduplicated and withdrawn.
+    """
+    logins = approver_logins({"APPROVER_LOGIN": login})
     return [
         r
         for r in reviews
-        if (r.get("user") or {}).get("login") == login
+        if (r.get("user") or {}).get("login") in logins
         and r.get("state") == state
         and (r.get("body") or "").startswith(SIGNATURE)
     ]

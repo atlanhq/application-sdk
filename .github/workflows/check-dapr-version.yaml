@@ -256,14 +256,28 @@ jobs:
       #
       # Nothing is merged early: the queue still enforces every required check.
       # Scoped by construction to the chore/sync-daprd-* PR this run produced.
-      - name: Approve as atlan-ci and add to merge queue
+      #
+      # The two parts also use different TOKENS: the approver PAT posts only the
+      # APPROVE (PR write + contents read), and the fleet App — which already
+      # holds contents: write — enables auto-merge.
+      - name: Approve as the code-owner approver
         if: steps.open-pr.outputs.pr_number != ''
         env:
-          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # A dedicated application-sdk-only credential once provisioned,
+          # atlan-ci's ORG_PAT_GITHUB until then (.github/scripts/approver_identity.py).
+          GH_TOKEN: ${{ secrets.SDK_APPROVER_TOKEN || secrets.ORG_PAT_GITHUB }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           PR_NUMBER: ${{ steps.open-pr.outputs.pr_number }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           gh pr review "$PR_NUMBER" --repo "$REPO" --approve \
-            --body "**Dapr sync:** approved automatically as \`atlan-ci\`. This PR is a single-line \`__dapr_version\` bump generated and verified by [\`check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml) against the daprd shipped in the runtime base image. Required checks and the merge queue still gate the merge."
-          gh pr merge "$PR_NUMBER" --repo "$REPO" --auto
+            --body "**Dapr sync:** approved automatically as \`${APPROVER_LOGIN}\`. This PR is a single-line \`__dapr_version\` bump generated and verified by [\`check-dapr-version.yaml\`](.github/workflows/check-dapr-version.yaml) against the daprd shipped in the runtime base image. Required checks and the merge queue still gate the merge."
+
+      - name: Add to merge queue
+        if: steps.open-pr.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ steps.fleet-token.outputs.token }}
+          PR_NUMBER: ${{ steps.open-pr.outputs.pr_number }}
+          REPO: ${{ github.repository }}
+        run: gh pr merge "$PR_NUMBER" --repo "$REPO" --auto

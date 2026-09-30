@@ -68,6 +68,9 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
           SUITE_SHA: ${{ github.event.check_suite.head_sha }}
+          # The approver whose signed approval is dismissed (atlan-ci is
+          # always matched too — see approver_identity.py).
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           SUITE_CONCLUSION: ${{ github.event.check_suite.conclusion }}
         run: |
           set -euo pipefail
@@ -129,7 +132,7 @@ jobs:
 
             # 2. Dismiss the active atlan-ci approval bearing our signature.
             REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" --paginate \
-              --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
+              --jq '[.[] | select((.user.login == "atlan-ci" or .user.login == env.APPROVER_LOGIN) and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
             for rid in $REVIEW_IDS; do
               gh api "repos/${REPO}/pulls/${PR_NUM}/reviews/${rid}/dismissals" \
                 -X PUT \

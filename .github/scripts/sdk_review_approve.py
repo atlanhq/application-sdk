@@ -98,7 +98,9 @@ Environment:
                                 unless `sdk-review-approved` was already on the
                                 PR when this run started
     GH_TOKEN                    App installation token — every call but APPROVE
-    APPROVER_TOKEN              `atlan-ci` PAT — the APPROVE call, and the
+    APPROVER_LOGIN              the account APPROVER_TOKEN authenticates as
+                                (default `atlan-ci`; see approver_identity.py)
+    APPROVER_TOKEN              approver PAT — the APPROVE call, and the
                                 `@sdk-review` re-review request on a stale head
                                 (the reviewer's `if:` admits no other identity
                                 we hold). Absent, both are skipped.
@@ -130,6 +132,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 # re-deriving it keeps one definition of "a run has claimed this sha and has
 # not finished" — the two would otherwise drift, and a drifted copy either
 # double-dispatches or never dispatches.
+from approver_identity import approver_logins  # noqa: E402
 from sdk_review_gate import (  # noqa: E402  (needs the sys.path bootstrap)
     inflight_sibling_run,
 )
@@ -287,13 +290,15 @@ def retrigger_body(stale_head: str, head_sha: str) -> str:
     )
 
 
-# The re-review trigger is posted as `atlan-ci` (see `request_rereview`), so a
+# The re-review trigger is posted as the approver (see `request_rereview`), so a
 # marker from any other author is not a request this loop made. Trusting one
 # would let a forged marker for the current head — anyone can comment on a
 # public-repo PR — read as `already-requested` and silently suppress the fresh
 # review the stale-head refusal exists to ask for. Same fail-closed authorship
 # rule `reviewed_at()` applies to verdicts.
-RETRIGGER_AUTHOR = "atlan-ci"
+# The legacy `atlan-ci` still counts, so a request posted before the approver
+# moved to a dedicated account is not asked for again.
+RETRIGGER_AUTHORS = approver_logins()
 
 
 def retrigger_posted_for(comments: list[dict], head_sha: str) -> bool:
@@ -303,12 +308,12 @@ def retrigger_posted_for(comments: list[dict], head_sha: str) -> bool:
     gets one request per distinct head and cannot feed itself: a second request
     for a sha that already has one is the loop, and this is where it stops.
 
-    Only an `atlan-ci` marker counts: the request is only ever posted under
+    Only an approver marker counts: the request is only ever posted under
     that identity, so any other author's marker is either a human quoting one
     or a forgery, and neither proves the loop already asked.
     """
     for comment in comments:
-        if (comment.get("user") or {}).get("login") != RETRIGGER_AUTHOR:
+        if (comment.get("user") or {}).get("login") not in RETRIGGER_AUTHORS:
             continue
         body = comment.get("body") or ""
         if RETRIGGER_MARKER not in body:
@@ -603,7 +608,7 @@ class Client:
             print(f"Set sdk-review status: {state} ({description})")
 
     def bot_approval_ids(self) -> list[int] | None:
-        """Ids of live atlan-ci approvals bearing our signature, or None.
+        """Ids of live approver approvals bearing our signature, or None.
 
         None means the review listing could not be read, which every caller must
         treat as "cannot prove there is no approval" rather than "there is no
@@ -618,7 +623,7 @@ class Client:
             review.get("id")
             for review in reviews
             if review.get("state") == "APPROVED"
-            and (review.get("user") or {}).get("login") == "atlan-ci"
+            and (review.get("user") or {}).get("login") in approver_logins()
             and (review.get("body") or "").startswith(APPROVAL_SIGNATURE)
         ]
 

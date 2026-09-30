@@ -106,7 +106,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # The APPROVE call only — atlan-ci is the CODEOWNER whose approval
           # satisfies branch protection.
-          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # The approver account and its PAT: a dedicated application-sdk-only
+          # credential once provisioned, atlan-ci's ORG_PAT_GITHUB until then
+          # (.github/scripts/approver_identity.py).
+          APPROVER_TOKEN: ${{ secrets.SDK_APPROVER_TOKEN || secrets.ORG_PAT_GITHUB }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_BODY: ${{ github.event.comment.body }}

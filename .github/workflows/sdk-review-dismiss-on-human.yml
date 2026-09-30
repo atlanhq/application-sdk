@@ -69,6 +69,7 @@ jobs:
       )
       && !endsWith(github.actor, '[bot]')
       && github.actor != 'atlan-ci'
+      && github.actor != vars.SDK_APPROVER_LOGIN
       && !(
         github.event_name == 'pull_request_review'
         && github.event.action == 'submitted'
@@ -92,7 +93,7 @@ jobs:
           owner: atlanhq
           repositories: application-sdk
 
-      - name: Dismiss @sdk-review atlan-ci approval(s)
+      - name: Dismiss @sdk-review approver approval(s)
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           REPO: ${{ github.repository }}
@@ -102,6 +103,9 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
           TRIGGER_ACTOR: ${{ github.actor }}
           TRIGGER_EVENT: ${{ github.event_name }}
+          # The approver whose signed approvals are dismissed (atlan-ci
+          # is always matched too — see approver_identity.py).
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
         run: |
           set -euo pipefail
 
@@ -112,7 +116,7 @@ jobs:
           # happen to quote that string.
           REVIEW_IDS=$(gh api "repos/${REPO}/pulls/${PR_NUMBER}/reviews" \
             --paginate \
-            --jq '[.[] | select(.user.login == "atlan-ci" and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
+            --jq '[.[] | select((.user.login == "atlan-ci" or .user.login == env.APPROVER_LOGIN) and .state == "APPROVED" and ((.body // "") | startswith("**SDK reviewer'"'"'s verdict:**")))] | .[].id')
 
           if [ -z "$REVIEW_IDS" ]; then
             echo "No @sdk-review atlan-ci approval found on PR #${PR_NUMBER} — nothing to dismiss."
