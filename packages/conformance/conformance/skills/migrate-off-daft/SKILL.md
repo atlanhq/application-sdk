@@ -56,6 +56,13 @@ outputs:
 
 # Migrate off daft (the SDK 3.20.0 cliff)
 
+## Conformance rules this skill clears
+
+B007. These rules name this skill as their `remediation_reference`, and
+`/remediate` hands their findings here. When the skill is done, run
+`atlan-application-sdk-conformance detect --series B` and confirm none of
+these rule ids is still reported.
+
 ## The cliff, precisely
 
 One commit, one release: `41f32e1d` — *remove daft entirely, replace with

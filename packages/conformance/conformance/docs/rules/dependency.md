@@ -344,6 +344,7 @@ tests pass, the first thing that reveals it is the customer's own failed run.
 - **Compliant example:** atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, which is
   what resolves duckdb. An app importing the SDK query transformer without one of
   [sql]/[incremental], or a direct duckdb pin, imports a module whose engine is absent.
+- **Migrate with:** `programs/areas/dependency.prose.md`
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /

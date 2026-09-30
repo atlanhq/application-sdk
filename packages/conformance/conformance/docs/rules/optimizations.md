@@ -113,6 +113,7 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 - **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
   `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than through `.dict()`, then
   decodes that output to merge in the custom attributes pyatlan_v9 does not model.
+- **Migrate with:** `programs/areas/optimizations.prose.md`
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
 asset-mapper pattern writes assets through
@@ -152,6 +153,7 @@ WARN/recommendation because adding the annotation is a safe, mechanical nudge.
   MetabaseCollection`, the pyatlan_v9 type it constructs and returns (`map_dashboard`
   and `map_bi_process` likewise), so a wrong asset type is a type error rather than a
   runtime surprise in the payload.
+- **Migrate with:** `programs/areas/optimizations.prose.md`
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
@@ -186,6 +188,7 @@ needs human judgement — never a blind name swap.
 - **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
   Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears nowhere
   under the three reference apps' app/ directories.
+- **Migrate with:** `programs/areas/optimizations.prose.md`
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
@@ -298,6 +301,7 @@ outside str/int/float/bool/bytes) that needs a human glance before migrating.
 - **Compliant example:** No reference app imports rocksdict. The SDK seam is
   application_sdk/common/spillable_dict.py — `SpillableDict`, which pickles values so a
   caller needs no hand-rolled serialize/deserialize step around the store.
+- **Migrate with:** `programs/areas/optimizations.prose.md`
 
 Flags app code that imports the `rocksdict` package directly, in either import form:
 `from rocksdict import Rdict` or `import rocksdict`.  Detection is import-anchored (a

@@ -306,6 +306,25 @@ human audit):
   choice for the symbol's owner; record in residue with the suggestion the
   finding message already carries.
 
+- **B008 PrivateModuleImport** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app imports or uses an underscore-prefixed
+  module or name it does not own: a private segment in the module path, a
+  private name from a public module, a third-party private (`pandas._libs`),
+  or a reach-through on a module alias (`sdk.execution._temporal.x`).  The
+  app's own privates (relative imports, or imports rooted at a package inside
+  the repo) and dunders are never flagged.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: every foreign import names a public
+  module (`application_sdk.app`, `.contracts`, `.credentials`, `.errors`,
+  `.observability`, `.outputs`).  The brief names, per site, the public
+  equivalent to import, or — when the site is a test asserting on an SDK
+  private — the public behaviour to test instead.  When no public equivalent
+  exists, the brief says so and proposes
+  `# conformance: ignore[B008] no public equivalent — tracked in <id>`.  An
+  error class from `application_sdk.storage.formats` is also a P045 finding;
+  follow that prescription.  Pointer: `.claude/skills/upgrade-v3` Phase 2d
+  (positive-idiom check 1).
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when
 the site is a legitimate exception (e.g. a B001 usage in a compatibility shim

@@ -67,6 +67,7 @@ a name collision no test exercises and no build gate sees.
   `preflight_check` method. No @task in the three reference apps registers the activity
   name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
   gate itself.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
@@ -98,6 +99,7 @@ app-owned activity is redundant — the exact anti-pattern the SDK-native gate e
 - **Compliant example:** atlan-metabase-app app/handler.py — `preflight_check` is the single implementation and
   app/connector.py declares no preflight-named @task beside it. Two implementations
   drift, and only one of them is the one the gate actually runs.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 When an app declares a `Handler.preflight_check` and also registers its own
 preflight-named `@task` (any `@task` whose effective name contains `preflight` as a
@@ -132,6 +134,7 @@ impact: failed workflows lose actionable typed failure details.
   (app/failures.py) is an AuthError subclass that declares message and suggested_action
   as class defaults. A `passed=False` with no typed error gives the customer a red row
   and no reason for it.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -169,6 +172,7 @@ only guard.
   `cfg.get("spec_url")`), so there is no metadata read for the gate path to drop. A
   metadata key the entrypoint's Input contract does not carry is one the orchestrator
   has no way to send, so the check silently evaluates an absent value.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -212,6 +216,7 @@ wrong level and a duplicate record.
   instead. The comment there states why: the gate levels the verdict row itself, and a
   handler-authored WARNING is both a duplicate and invisible under the customer's
   default ERROR filter.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 - **Interacts with:** Meets E004 on a broad catch inside the gate's reach. A best-effort cleanup helper called
   from preflight_check (close a client, release a session) that catches Exception cannot
   log at WARNING (this rule), and DEBUG does not clear E004 even through a redaction
@@ -253,6 +258,7 @@ both UI and workflow consumers.
   PreflightInput) -> PreflightOutput`, both types imported from
   application_sdk.handler.contracts. The gate and the setup UI both read the result
   through those types, so a legacy dict return drifts from both at once.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Declare SDK PreflightInput and PreflightOutput on every supported handler.
 
@@ -277,6 +283,7 @@ usable next step.
   suggested_action='Set spec_url to the OpenAPI spec's HTTPS URL
   ...').to_failure_details()`, so the blocked customer reads a next step, not only a
   reason.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Provide nonblank failure messages and audience-appropriate suggested actions.
 
@@ -300,6 +307,7 @@ no longer a fail-open request.
   failed row with `exc.to_failure_details()`; only the gate-transient categories are
   re-raised, on purpose, so the gate fails open on a blip instead of the handler
   crashing on an expected failure.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Return expected typed preflight failures rather than letting them escape.
 
@@ -324,6 +332,7 @@ failed checks.
   (`checks=[auth_check]`), and READY carries the passed `auth` row plus the advisory
   connectivity row, which may fail without flipping the status. Status and rows are
   spelled together, so they cannot contradict each other.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
 
@@ -348,6 +357,7 @@ while the gate sees different inputs.
   path the gate's input (the selected entrypoint plus resolved credentials) is the only
   PreflightInput the handler receives. None of the three reference apps builds a
   PreflightInput inside an @entrypoint.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Preserve the selected entrypoint and supply routable credentials before the gate.
 
@@ -371,6 +381,7 @@ activities.
   `OpenAPIApiClient(timeout=...)`, an async client constructed with a deadline sized
   from `input.timeout_seconds`; no synchronous driver call runs on the event loop and no
   executor wait is left without a deadline.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 - **Interacts with:** Applied together with P031. P031 moves asyncio.to_thread / run_in_executor(None, ...)
   onto the SDK's run_in_thread; on a preflight path that is the module-level
   application_sdk.execution.heartbeat.run_in_thread, because Handler has no
@@ -405,6 +416,7 @@ timeout races.
   gate hands in (no deadline when the gate supplies none). No floor or margin is added
   on top of `input.timeout_seconds`, so the probe gives up before the gate cancels it;
   that timeout argument is the site F012 grades.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep probe and retry deadlines inside the remaining gate budget.
 
@@ -427,6 +439,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   under `asyncio.wait_for`) closes its SQLClient in a `finally: await client.close()`,
   so cleanup is awaited and runs on every exit path, including the typed-failure early
   return.
+- **Migrate with:** `docs/preflight-guide.md`
 
 Release owned preflight resources without blocking the event loop.
 
@@ -450,6 +463,7 @@ can escape.
   `str(exc)` or a traceback, so the redacted and capped `cause_repr` is all that leaves
   the handler; tests/unit/test_handler.py pins that a presigned URL's signature does not
   reach the check row.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep raw exception and credential values out of preflight outputs and logs.
 
@@ -478,6 +492,7 @@ BLOCK.
   aliases that warn and are removed in v3.40.0, so an import of one is working code on a
   deadline rather than an incompatibility. Correct looks like the posture declared on
   App.preflight_gate_mode and the replacement each deprecation notice names.
+- **Migrate with:** `docs/preflight-guide.md`
 
 Migrate the inert mode override and the renamed gate-classification helpers.
 
@@ -505,6 +520,7 @@ runs. A missing scenario is a behaviour nothing verifies.
   scenario=...)`. The marker, not the file's presence, is what counts as a defined
   scenario. atlan-metabase-app registers the same matrix once per `@entrypoint` through
   a module-level `entrypoint_matrix(scenario)` parametrize helper.
+- **Migrate with:** `docs/preflight-guide.md`
 
 Every scenario in the F016 matrix must be defined, for each `@entrypoint` the app
 declares, as a pytest-collected test under `tests/unit/` (the tier the test gate always
@@ -540,6 +556,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   (`_check_connectivity`), never an accumulator, so static analysis resolves every row
   and its mandatory/advisory role. The comment above the NOT_READY return cites F019 as
   the reason.
+- **Migrate with:** `docs/preflight-guide.md`
 
 Report unresolved preflight dispatch and contracts instead of a clean result. Two kinds
 of gap are reported, and only one of them is clearable by executing tests. A
@@ -573,6 +590,7 @@ directive is the cause.
 - **Compliant example:** atlan-metabase-app app/qualified_names.py — its inline conformance directives name a
   live rule id (P028) and carry a written justification. A directive that cited P034 now
   cites F003 the same way, justification kept; the id is the only part that changes.
+- **Migrate with:** `docs/preflight-guide.md`
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
 and P047 became F005. F017 and F018 were retired with no replacement. The suppression

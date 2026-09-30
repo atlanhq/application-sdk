@@ -59,6 +59,7 @@ and aligns every app with the one supported workflow for contract evolution (BLD
   header comment recording that toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl.
   All three reference apps amend App.pkl; none of their contracts amends NativeApp.pkl
   or NativeAppBundle.pkl.
+- **Migrate with:** the `make-contract` skill (`skills-dir`)
 
 The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
 pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
@@ -119,6 +120,7 @@ fails, blocking CI (BLDX-1479).
   scanner excludes that module by design (App.pkl imports it internally and types
   `connector` as `Connectors.Type` without re-exporting the constants, so every current
   toolkit example still imports it).
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 - **Already correct when:** `Connectors.pkl` is a detector-level exemption — no directive is needed or licensed. A
   justified inline `// conformance: ignore[K002] <reason>` IS the correct end state only
   for a match the scanner actually emits: an import of `Config.pkl`, `Credential.pkl`,
@@ -320,6 +322,7 @@ suppressed per file rather than ever graduating to BLOCK (BLDX-1414).
   from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The repo-root atlan.yaml
   carries the same banner. A stripped banner is the fingerprint of a hand edit that the
   next regeneration will erase.
+- **Migrate with:** the `make-contract` skill (`skills-dir`)
 
 A file the contract toolkit is expected to generate (`atlan.yaml`, `app.yaml`, or a
 `.py` file under `app/generated/` other than `__init__.py`) does not carry the
@@ -506,6 +509,7 @@ customer's install or crawl fails on identity plumbing they can neither see nor 
   `{{credential}}`-style tokens in args are Automation Engine runtime substitutions and
   are legitimate too. Anything else ({app_name}, {name}) is a placeholder the toolkit
   was meant to fill and did not, usually because the pin predates the template.
+- **Migrate with:** the `make-contract` skill (`skills-dir`)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -710,6 +714,7 @@ neither guesses.
   node names the app that owns its queue, never the connector doing the routing; K013
   grades only such system-app and toolkit-owned nodes, not the connector's own extract
   node.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 
 A node in a committed generated `manifest.json` declares an `app_name` that disagrees
 with the app actually running it. Two independent signals are checked, each against a
@@ -856,6 +861,7 @@ fleet is blocked by adopting it at this tier.
   app/connector.py declares none either. Agreement between the two is the invariant;
   absence on both sides is the ordinary compliant state, and an app that needs the block
   has to declare it in both places.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -943,6 +949,7 @@ deprecation window, which the SDK's matching registration-time warning provides.
 - **Compliant example:** atlan-metabase-app app/generated/artifact_schemas.json — one entry per FileReference
   field the entrypoint contracts declare. An undescribed FileReference is an artefact
   the platform cannot validate or render.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 
 An entry point's `input`/`return` contract declares a `FileReference` field -- directly
 or inherited from a base or SDK mixin -- and the entry point's committed
@@ -1026,6 +1033,7 @@ app either way.
   line per entity into openapi_metadata.json, returned as
   `FileReference(local_path=str(output_file))`. The Python and the schema are two
   statements about one file, and only one of them is checked at runtime.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 
 An `artifactSchemas` entry in the committed `artifact_schemas.json` contradicts the
 app's own writer for the same `FileReference` contract field.
@@ -1247,6 +1255,8 @@ workflows checked, instead of as a side effect of someone's unrelated regenerate
   top-level keys, not wrapped in the legacy `args.metadata{}` envelope. Toolkit 0.9.0
   flattened them, and an app still emitting the envelope loses every key the SDK's input
   model does not name.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md` — Check published workflows before flipping
+  nested->flat args
 
 The `extract` node of a committed `app/generated/**/manifest.json` carries an
 `args.metadata{}` block instead of flat top-level args.

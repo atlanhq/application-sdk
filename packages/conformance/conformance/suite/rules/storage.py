@@ -34,7 +34,11 @@ on the orchestration-seam series.  P-ids are a permanent public contract (see
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -117,6 +121,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P009",
@@ -160,6 +168,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P010",
@@ -205,6 +217,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P011",
@@ -245,6 +261,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` records any unavoidable exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P012",
@@ -292,6 +312,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P012] <reason>``, which stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P044",
@@ -386,5 +410,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "so the two shapes cannot share a tier.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p044",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

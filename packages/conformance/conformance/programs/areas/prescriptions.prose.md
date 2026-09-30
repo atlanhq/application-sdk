@@ -551,6 +551,82 @@ around `finding.line` before drafting any proposal.
   prefix call to a different module — the finding is about the level of the
   abstraction, not its location.
 
+**Typed-boundary / contract-modeling rules (P013–P015)** — migration rules
+(`autofixable = false`), scope=app; `classification` is always `"judgment"`.
+The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.prescriptions`.
+
+- **P013 UntypedEntrypointBoundary** (BLOCK) — an `@entrypoint` method, or an
+  `async def run()` on an `App` subclass (the implicit entrypoint), has an
+  input parameter or return annotation that is missing, a primitive/container
+  (`dict`, `list`, `str`, `Any`, `dict[str, str]`, …), or an in-tree class that
+  does not reach `Input` / `Output` (a plain `pydantic.BaseModel`, a
+  dataclass).  A class the checker cannot find in the scanned tree is not
+  flagged.  Target shape, from `atlan-metabase-app` `app/connector.py`:
+  `async def extract_metadata(self, input: MetabaseInput) -> MetabaseOutput`,
+  both sides SDK contract subclasses.  The brief names the new (or re-based)
+  `Input` / `Output` classes and every caller that builds the old payload.  The
+  runtime decorator already rejects these at import, so a shipped violation
+  crash-loops the worker.  Pointers: `.claude/skills/upgrade-v3` Phase 2b;
+  `docs/concepts/contracts.md` (Input and Output).
+
+- **P014 UntypedTaskBoundary** (BLOCK) — the same check on a `@task` method's
+  input parameter and return annotation.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: each task has its own pair, e.g.
+  `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`.  The brief
+  names the per-task `Input` / `Output` pair and the call sites in `run()` /
+  the entrypoint that pass the old dict or string.  Same import-time rejection
+  and pointers as P013.
+
+- **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
+  `Output` contract is a container of primitives or `Any`, bare or bounded
+  (`Annotated[dict[str, str], MaxItems(N)]`).  The bound satisfies P001 but the
+  keys and values still have no schema.  Containers of a typed class
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  `atlan-metabase-app` `app/contracts.py`:
+  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
+  where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
+  model (its fields read off how the app uses the container) and every reader
+  and writer of the field.  Keep the `MaxItems` bound: P001 still needs it.
+  When the key set is genuinely open, propose
+  `# conformance: ignore[P015] <reason>` instead.  Pointer:
+  `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+**Entrypoint-conformance rules (P017–P018)** — migration rules
+(`autofixable = false`), scope=app, WARN-tier; `classification` is always
+`"judgment"`.  The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.entrypoint`, which scans test files
+too.
+
+- **P017 ManualWorkerBootstrap** (WARN) — the app calls `create_worker(...)`,
+  `create_temporal_client(...)` or `AppWorker(...)` from
+  `application_sdk.execution`; imports removed v2 boot surface
+  (`application_sdk.worker`, `application_sdk.application`,
+  `application_sdk.clients.temporal`); or calls `setup_workflow` /
+  `start_workflow` / `start_worker` on `self`, `app` or an SDK-imported name.
+  Target shape, from `atlan-mysql-app` `app/run_dev.py`: `main()` is one
+  `await run_dev_combined(MySQLApp, ...)`, and nothing under `app/` builds a
+  worker or client; production boots through the base-image CLI
+  (`application-sdk --mode worker|combined --app module:ClassName`).  The brief
+  names the boot file to delete or collapse onto `run_dev_combined` and the
+  `ATLAN_APP_MODULE` / CLI wiring it needs.  Exemption: files under
+  `tests/integration/` are exempt from the construction and lifecycle calls
+  (the harness needs a worker handle), but not from the v2 imports.  Pointers:
+  `.claude/skills/upgrade-v3` Phase 2b step 3; `docs/concepts/entry-points.md`
+  (`run_dev_combined()`, Worker Auto-Discovery).
+
+- **P018 ManualServerBootstrap** (WARN) — the app constructs `FastAPI(...)`,
+  `uvicorn.Server(...)` / `uvicorn.Config(...)`, calls `uvicorn.run(...)`, or
+  calls `setup_server` / `start_server` / `include_router` on `self`, `app` or
+  an SDK-imported name.  Target shape, from `atlan-openapi-app`
+  `app/run_dev.py`: the HTTP surface comes from the same
+  `run_dev_combined(OpenAPIConnector, ...)` call as the worker; HTTP surface
+  is `@entrypoint` methods triggered by
+  `POST /workflows/v1/start?entrypoint=<name>`.  The brief lists each
+  hand-rolled route and which `@entrypoint` or SDK handler endpoint replaces
+  it.  No `tests/integration/` exemption for this rule.  Pointers:
+  `docs/concepts/server.md`, `docs/concepts/entry-points.md` (HTTP dispatch).
+
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
 around `finding.line` before drafting any proposal — the proposal is a
@@ -928,6 +1004,36 @@ which scans template YAML, not Python.
   parent, and every shipped template carries `typeName:` and `status:` as
   top-level leaf keys under `columns:`, emitted bare.  The alias-slot argument
   is the whole reason, and it stands on its own.
+
+**Error-seam rules (P043, P045)** — migration rules (`autofixable = false`),
+scope=app, WARN-tier; `classification` is always `"judgment"`.  The lane
+applies nothing: return `not_remediable = true` with a `migration_brief`.
+Backed by `suite.checks.error_seam`, which scans test files too.  Both cover
+only `Error`-suffixed classes under `application_sdk.storage.formats` today,
+bound with the `from X import Y` form.
+
+- **P043 NonPublicErrorControlFlow** (WARN) — `except X`, `except (X, Y)`,
+  `isinstance(e, X)`, `issubclass(t, X)` or `class Y(X)` depends on such a
+  class that `application_sdk.errors` does not export.  A class the public
+  surface does export is left to P045.  Target shape, from `atlan-mysql-app`
+  `app/handler.py` (`if isinstance(e, AppError): raise`) and
+  `app/failures.py` (subclasses of `AuthError`), both imported from
+  `application_sdk.errors`.  The brief replaces the branch with
+  `except AppError` plus a decision on `.code`, and names the codes the old
+  handler meant to match.  Read them off the SDK source, not the class name:
+  the old and new classes are usually siblings, so the brief must also say
+  which exception the boundary raises today.  Update test fixtures that
+  freeze the old class in the same brief.
+
+- **P045 PrivateErrorClassImport** (WARN) — the app imports an `Error`-suffixed
+  class from `application_sdk.storage.formats.*` (most often `format_errors`).
+  Target shape, from `atlan-metabase-app` `app/errors.py`: every SDK error class
+  comes from `from application_sdk.errors import (...)`.  When the class is
+  exported there (the finding message says "Import it from
+  'application_sdk.errors' instead"), the brief is the import-path change.
+  When it is not, the brief is the P043 shape — catch `AppError`, branch on
+  `.code` — and, if the app needs the typed class, a request to the SDK team
+  to promote it.  Helper functions in the same modules are not flagged.
 
 **Portability rule (P046)** — suggest-only, scope=sdk,
 `classification = "judgment"`; backed by `suite.checks.text_io_encoding`, which

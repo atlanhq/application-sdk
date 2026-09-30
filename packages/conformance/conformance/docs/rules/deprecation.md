@@ -55,6 +55,7 @@ a blind swap.
   (application_sdk.app, application_sdk.contracts, application_sdk.errors). What counts
   as deprecated is not a judgement call: it is the manifest this rule reads, regenerated
   from SDK source by `gen-deprecations`.
+- **Migrate with:** `programs/areas/deprecation.prose.md`
 
 Flags app consumption of any symbol recorded in the deprecated-symbol manifest the SDK
 ships with this conformance package (BLDX-1418).  Four surfaces are matched,
@@ -326,6 +327,7 @@ with pyarrow-receiver exemptions) and the pandas migration changes call shapes.
   this rule looks for (count_rows, to_pylist, .names) appear in no SDK-importing module
   of the three reference apps; daft was removed from the SDK in 3.20.0, so they are dead
   on any current runtime.
+- **Migrate with:** the `migrate-off-daft` skill (`skills-dir`)
 
 Flags daft-only DataFrame API usage in apps that consume the SDK (files importing
 `application_sdk`), where SDK >= 3.22 readers return **pandas** frames and the `[daft]`
@@ -393,6 +395,7 @@ prevent; revisit once the count nears zero.
   application_sdk.app, .contracts, .credentials, .errors, .observability and .outputs,
   plus msgspec and orjson. No module under the three reference apps' app/ directories
   imports an underscore-prefixed module or name it does not own.
+- **Migrate with:** `programs/areas/deprecation.prose.md`
 
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:

@@ -80,7 +80,7 @@ loop until violations is empty or attempts >= max_attempts:
         # design, carrying the migration brief remediate-finding wrote after
         # reading the reference app; keep it verbatim so the residue entry is
         # the starting point for the connector's per-rule sub-issue.
-        add finding to residue with note (result.migration_brief or "not remediable in this phase")
+        add finding to residue with note (result.migration_brief or "not remediable in this phase") and remediation_reference (result.remediation_reference)
         continue
 
       # Blind-gate areas (P, S) must not accept an uncited value.  Checked

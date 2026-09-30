@@ -5,6 +5,13 @@ description: Create, migrate, update, generate, or validate an Atlan native app 
 
 # make-contract
 
+## Conformance rules this skill clears
+
+K001, K005, K009. These rules name this skill as their `remediation_reference`, and
+`/remediate` hands their findings here. When the skill is done, run
+`atlan-application-sdk-conformance detect --series K` and confirm none of
+these rule ids is still reported.
+
 Use this skill when the user asks to create, migrate, update, generate, or
 validate an Atlan native app contract. The goal is a correct Pkl contract and
 regenerated SDK artifacts — never hand-edited generated JSON.

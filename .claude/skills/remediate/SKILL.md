@@ -215,6 +215,8 @@ nothing else changes:
   within your first few actions and fix each site as you inspect it.  Do NOT
   survey the whole repository before the first edit — headless sessions have
   a hard deadline, and analysis without edits is discarded at it.
+- **No migration hand-off.**  Skip *After the loop — migration hand-off*:
+  list each residue entry's `remediation_reference` and start nothing.
 - **Residue is a report, not a retry loop.**  A finding that genuinely cannot
   be fixed safely is skipped (last resort) and the caller accounts for it;
   do not burn the budget re-attempting it.
@@ -383,7 +385,30 @@ impact analysis and verification*):
 
 `autofixable = true` rules (the **auto-fixable** ruleset) are applied this way.
 `autofixable = false` rules (the **migration** ruleset) are never applied by
-the loop: steps 1–2 still run and the result is a `migration_brief` in residue.
+the loop: steps 1–2 still run and the result is a `migration_brief` in residue,
+with the rule's `remediation_reference`.
+
+### After the loop — migration hand-off
+
+Residue entries for migration rules carry `remediation_reference`
+(`kind`, `target`, `note`). Group them by reference, then:
+
+- `kind = skill` — interactive sessions only. Resolve the skills directory the
+  same way as the programs directory:
+  `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
+  connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
+  anywhere else. Tell the developer which rule ids and how many findings the
+  skill covers, and ask before starting it. Then read
+  `$SKILLS/<target>/SKILL.md` and follow it, stop points included. When it
+  ends, re-run detection for the rule ids it names: a cleared finding leaves
+  residue, a remaining one stays in residue with the skill named.
+- `kind = guide` — apply nothing. Report the rule ids with the guide path
+  `$(dirname "$PROGRAMS")/<target>`.
+- `kind = decision` — apply nothing. Report the rule ids, who decides
+  (`target`) and the choice (`note`).
+
+Headless or harness-driven runs skip the hand-off: the residue report lists
+each reference and nothing is started.
 
 ### Phase 1: Baseline
 

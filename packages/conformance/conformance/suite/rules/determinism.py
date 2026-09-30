@@ -24,7 +24,11 @@ in the SDK itself and in every consumer app.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -155,6 +159,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "only the flagged line leaves the non-determinism in place."
         ),
         help_uri=f"{_HELP_BASE}#p021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P022",
@@ -490,5 +498,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P036] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p036",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

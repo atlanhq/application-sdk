@@ -282,6 +282,7 @@ and bypasses that seam (BLDX-1417).
   application_sdk.app import App, entrypoint, task`, and the string temporalio appears
   nowhere under that repo's app/ or tests/. Everything a workflow needs, including
   `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -316,6 +317,7 @@ longer evolve the seam safely (BLDX-1417).
   `application_sdk.observability.logger_adaptor`. None reaches an underscore-prefixed
   path such as application_sdk.execution._temporal, which the SDK may move without a
   deprecation cycle.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
 under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
@@ -400,6 +402,7 @@ let the activity interceptor move the bytes (BLDX-1398).
   return, to deliver the FileReferences they declared. A @task hands its output back as
   a FileReference and lets the framework move it; the transfer is the App's business,
   not the task's.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
   of these transfers, P021 says move the block into a @task and this rule says the
   transfer must stay in run() — so relocating the block wholesale trades one finding for
@@ -452,6 +455,7 @@ extract→publish hand-off. The SDK's infrastructure context (get_infrastructure
 - **Compliant example:** atlan-openapi-app app/connector.py — object-store access goes through the SDK's
   `CloudStore` over `self.context.storage`. No reference app constructs a boto3/gcs/adls
   client of its own.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A consumer app builds its own storage backend directly: importing `boto3` (`import
 boto3` / `from boto3 ...`), constructing an obstore store (`S3Store`, `GCSStore`,
@@ -487,6 +491,7 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
   `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
   `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
 explicitly: `storage_path=`, `is_durable=`, or `file_count=`.  The SDK owns these fields
@@ -520,6 +525,7 @@ pass a FileReference, which crosses the task boundary as a small durable handle
 - **Compliant example:** atlan-openapi-app app/contracts.py — payloads that could be large travel as
   `FileReference` fields, never as bytes. A bytes field puts the whole artefact inside
   Temporal's 2MB envelope.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
 `memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
@@ -556,6 +562,7 @@ underlying file (BLDX-1398).
   remaining `str` fields are URLs, object-store keys and prefixes, identifiers (a legacy
   credential GUID, the workflow id and type) and qualified names; none is a path on a
   worker's disk.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -598,6 +605,7 @@ tenant, taking every workflow the customer runs on it down with the one bad meth
   input: MetabaseInput) -> MetabaseOutput`. Both sides of the boundary are SDK
   Input/Output subclasses, which is what makes the payload validatable and the schema
   evolvable.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** Resolution is by bare class name. Two files declaring the same name, or a class
   shadowing its own generated base (`class X(_X)` over `from generated import X as _X`),
   used to read as violations on correct code.
@@ -648,6 +656,7 @@ the customer discovers before anyone else does.
   `download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) ->
   TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare str across a
   task boundary has no schema to evolve.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A method decorated with `@task` must declare:
 
@@ -693,6 +702,7 @@ sanctioned; this is a modeling nudge toward a typed nested model.
   MaxItems(16)]`. The value type is what this rule grades: a bounded dict of str would
   still fire, because MaxItems keeps the payload small but gives the keys and values no
   schema.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A field on an `Input`/`Output` contract whose annotation is a container of primitives or
 `Any` — `dict[str, str]`, `list[str]`, `set[int]`, or the bounded equivalents
@@ -737,6 +747,7 @@ route around it.
   bespoke @entrypoint would be a route the DAG never dispatches. atlan-openapi-app
   app/connector.py is the single-entrypoint form: no @entrypoint at all, just the
   implicit `run()`.
+- **Migrate with:** `programs/areas/contract-toolkit.prose.md`
 - **Already correct when:** A temporary migration entrypoint is not a reason to widen the contract. Remove it once
   its job is done — and check the DAG node, the module, the ledger (sunset, never
   delete) and the docs together, since the entrypoint is only the visible end of it.
@@ -834,6 +845,7 @@ consistent, SDK-controlled way (BLDX-1411).
   temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
   is constructed anywhere under app/. The launcher is what wires interceptors, the
   activity registry and the task queue together.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -876,6 +888,7 @@ safely (BLDX-1411).
 - **Compliant example:** atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same
   `run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none of the
   SDK's platform endpoints (/workflows/v1/auth, /check, /metadata).
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
 `uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
@@ -1001,6 +1014,7 @@ whose result is durably recorded in workflow history.
   the object-store download live inside those tasks. The comment above the download call
   states the rule in the app's own words: cloud I/O must run in an activity, not
   workflow code.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
   self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
   this finding for P008 findings: those helpers are framework tasks and must be called
@@ -1214,6 +1228,8 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
   so the three sources this rule compares agree. The task queue and the artifact path
   are derived from that name, so any disagreement routes work to a queue no worker is
   listening on.
+- **Decision:** app owner decides — align the contract and .env.example to the code name, or rename
+  App.name with a legacy_workflow_types alias
 
 Three independent sources declare an app's name:
 
@@ -1287,6 +1303,7 @@ site and the type annotation stops being load-bearing.
   attribute and raises SpecUrlRequiredError when it is empty. The field is typed, so the
   right move is to read it and assert it is present, not to getattr past the type with a
   default that silently changes behaviour when the field is renamed.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
@@ -1318,6 +1335,7 @@ always falls through to its default, so the intended hand-off never happens.
 - **Compliant example:** No reference app uses app state as a cross-task channel; atlan-metabase-app
   app/connector.py mentions `get_app_state` only in a comment about the error it raises
   outside app context. Data between tasks travels as typed Output → Input.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 An `App.get_app_state(KEY)` read whose `KEY` is never written by a `set_app_state(KEY,
 <non-None value>)` anywhere in the app (a writer that only stores `None` — a placeholder
@@ -1353,6 +1371,7 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
   string and not the asset, atlan-metabase-app app/qualified_names.py carries a
   per-function ignore[P028] naming the creator whose grammar it mirrors.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
   end state in two cases, and the reason must say which. Either the caller needs the
   qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
@@ -1493,6 +1512,7 @@ them to look.
   residual/ separately with `self.upload(UploadInput(..., raise_on_empty=True))`. An SDR
   app with no self.upload() or self.upload_refs() call leaves the ENABLE_ATLAN_UPLOAD
   path unreachable, so the e2e leg greens without moving a byte to the tenant bucket.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` or `self.upload_refs(`
@@ -1658,6 +1678,7 @@ worker's process model — the class of bug behind the CNCT-85 worker crash.
   application_sdk/execution/heartbeat.py — `run_fault_isolated` and `run_best_effort`,
   re-exported there as the documented app-facing path, which own the pool lifecycle, the
   timeout and what a crashed child means for the activity.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 Code constructs a process-based execution primitive directly —
 `ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
@@ -1701,6 +1722,7 @@ for a table-format connector in fleet testing).
   `CredentialRef.resolve`, which covers direct (credential_guid) and agent (agent_json)
   modes from one call. Resolving by credential_guid alone works in direct mode and
   silently ignores agent_json in SDR mode.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, credential resolution
 must be able to consume `agent_json` — the agent-mode routing spec the platform forwards
@@ -1763,6 +1785,7 @@ because the publish step reads a prefix nothing was ever written to.
   prefix the SDK roots from the running app's registered name (APPLICATION_NAME is only
   the fallback). An input field named application_name defaults to empty, so rooting the
   prefix from it silently writes to the bucket root.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1833,6 +1856,7 @@ the customer asks where their metadata went.
   rule reads. (The hand-written MetabaseInput in app/contracts.py also types agent_json,
   but it is runtime context, not the checked site.) A bare Input subclass with no
   agent_json field drops the forwarded value before the credential resolver sees it.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -1906,6 +1930,7 @@ keyword after AS, so there is no runtime failure to report there.
   `QueryBasedTransformer` quotes a plain-column source_query (`_quote_bare_identifier` /
   `_is_quoted_identifier`), so a reserved keyword renders as valid SQL with no template
   change. Raising the SDK is the fix.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 In an app's transform templates (YAML consumed by `application_sdk.transformers.query`),
 a `source_query:` value that is a bare DuckDB **reserved keyword** must be SQL-quoted.
@@ -1993,6 +2018,7 @@ repo would otherwise get a B001 finding alongside P-series silence.
   `self.upload(UploadInput(...))` for residual/ and the lineage stage; there is no
   upload_to_atlan bridge. A hand-rolled bridge re-implements the routing to
   upstream_storage and then has to track it as the SDK changes.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, this rule fires when a
 custom `upload_to_atlan` method **does** perform a real storage/store transfer (in its
@@ -2063,6 +2089,7 @@ became a terminal workflow failure across 12 connections (CONNECT-970).
   app/failures.py subclasses `AuthError`; both come from `application_sdk.errors`.
   Branching on a class the package does not export binds the app to a name the SDK can
   move without a deprecation cycle.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A consumer app makes an SDK-internal error class load-bearing in one of five ways:
 `except X`, `except (X, Y)`, `isinstance(e, X)`, `issubclass(t, X)`, or `class Y(X)`.
@@ -2123,6 +2150,7 @@ customer who finds the gap, if anyone does.
   source_prefix=..., prefix=...))` over the transformed FileReferences the tasks
   declared, not a directory scan. storage.upload_prefix / download_prefix move bytes
   without producing a FileReference the next task can resolve.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 App source calls `upload_prefix` / `download_prefix` (or imports them from
 `application_sdk.storage`) to move artifacts itself, rather than declaring the data on
@@ -2184,6 +2212,7 @@ file just became false (CONNECT-970).
   application_sdk.errors import (...)`: leaves from the package root, nothing from
   application_sdk.errors.base or application_sdk.storage.formats. Reaching into a
   submodule for the same class forfeits the stability promise.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A consumer app imports a class whose name ends in `Error` from a module under
 `application_sdk.storage.formats` — most often
@@ -2292,6 +2321,7 @@ programmatically.
 - **Compliant example:** atlan-mysql-app app/mysql.py — `run()` reads `transformed_data_prefix`,
   `publish_state_prefix` and `current_state_prefix` off the SDK's own result rather than
   composing the connection-scoped layout by hand. The layout is the SDK's to change.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 App code assembles the connection-scoped layout
 `persistent-artifacts/apps/<app>/connection/…` itself rather than asking the SDK where a
@@ -2364,6 +2394,7 @@ takes someone to notice.
   `build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses it. The
   SDK warns and proceeds on a malformed value; an app that parses and raises turns a
   recoverable run into a failed one.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
 from it, and can `raise` out of its own body — while that function does not itself call
@@ -2479,6 +2510,7 @@ and publishes normally, it only lacks the interactive setup UX — so it lands a
   because the lower bound declared in pyproject.toml is itself above that floor. The
   rule reads the lock, not the specifier: a floor at or above 3.30.0 keeps every re-lock
   compliant.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, `uv.lock` must resolve
 `atlan-application-sdk` to `3.30.0` or newer — the floor at which the SDR interactive
@@ -2552,6 +2584,7 @@ copied, the bypass spreads.
 - **Compliant example:** atlan-openapi-app app/connector.py — `_transform_blocking` writes every connection,
   APISpec and APIPath line as `entity_bytes(asset, entity_type=...,
   envelope=ENTITY_ENVELOPE)`; no mapper result is serialized any other way.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
   where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
   from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.
@@ -2612,6 +2645,7 @@ never exercise (an agent-mode run, an inline pair with no value).
   template method to call; its seam is application_sdk/credentials/routing.py —
   `route_credentials(input)` returns `ResolvedCredentials(ref, inline)`, and
   `AppContext.resolve_credential_raw_or_inline(ref, inline)` reads it on the task side.
+- **Migrate with:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** P037 (SdrAgentJsonNotConsumed) predates this rule and names `CredentialRef.resolve` as
   its agent-aware fix, citing a hand-rolled `build_credential_ref` as its reference. On
   an SDK below 3.40.0 that is still the right fix and this rule is silent; from 3.40.0
