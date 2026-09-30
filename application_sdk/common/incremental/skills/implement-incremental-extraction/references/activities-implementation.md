@@ -1,6 +1,15 @@
-# Activities Implementation Guide
+# App Class Implementation Guide
 
-This reference covers the detailed implementation of the Activities class for incremental extraction.
+This reference covers the connector's App class for incremental extraction.
+In v3 there is no separate activities class and no workflow class: one class
+subclassing `IncrementalSqlMetadataExtractor` holds the `@task` methods and
+inherits the orchestrating `run()`. (The file keeps its old name so existing
+links still resolve.)
+
+> **Deprecation.** `IncrementalSqlMetadataExtractor` is deprecated and will be
+> removed in v4.0.0; the replacement is `application_sdk.templates.SqlApp`
+> with a custom `run()`. It is still the SDK's only built-in incremental
+> orchestration, and subclassing it emits a `DeprecationWarning`.
 
 > **SQL injection note (BLDX-518).** Any value substituted into a SQL
 > template via `str.replace` / f-string must pass through
@@ -15,198 +24,203 @@ This reference covers the detailed implementation of the Activities class for in
 ## Class Structure
 
 ```python
-from typing import Any, Dict, List, Optional
-
-from temporalio import activity
-
-from application_sdk.activities.metadata_extraction.incremental import (
-    IncrementalSQLMetadataExtractionActivities,
+from application_sdk.app import task
+from application_sdk.templates import IncrementalSqlMetadataExtractor
+from application_sdk.templates.contracts.incremental_sql import (
+    ExecuteColumnBatchInput,
+    FetchColumnsIncrementalInput,
+    FetchTablesIncrementalInput,
+    IncrementalRunContext,
 )
-from application_sdk.common.incremental.models import IncrementalWorkflowArgs
+from application_sdk.templates.contracts.sql_metadata import (
+    FetchColumnsOutput,
+    FetchDatabasesInput,
+    FetchDatabasesOutput,
+    FetchSchemasInput,
+    FetchSchemasOutput,
+    FetchTablesOutput,
+    TransformInput,
+    TransformOutput,
+)
 
-class YourDBActivities(IncrementalSQLMetadataExtractionActivities):
-    """Activities for YourDB incremental metadata extraction."""
+
+class YourDBExtractor(IncrementalSqlMetadataExtractor):
+    """Incremental metadata extraction for YourDB."""
 
     sql_client_class = YourDBClient
 
-    # All SQL queries are auto-loaded from app/sql/ by the SDK:
-    #   fetch_database_sql          ← extract_database.sql
-    #   fetch_schema_sql            ← extract_schema.sql
-    #   fetch_table_sql             ← extract_table.sql
-    #   fetch_column_sql            ← extract_column.sql
-    #   incremental_table_sql       ← extract_table_incremental.sql
-    #   incremental_column_sql      ← extract_column_incremental.sql
-    #
-    # No need to set these manually — just place the SQL files in app/sql/.
+    # Plain class attributes. The SDK does not load app/sql/ for you:
+    # read the files at import time (or inline the SQL) and assign them.
+    fetch_database_sql = _read_sql("extract_database.sql")
+    fetch_schema_sql = _read_sql("extract_schema.sql")
+    fetch_table_sql = _read_sql("extract_table.sql")
+    fetch_column_sql = _read_sql("extract_column.sql")
+    incremental_table_sql = _read_sql("extract_table_incremental.sql")
+    incremental_column_sql = _read_sql("extract_column_incremental.sql")
 ```
+
+## What You Implement
+
+| Member | Kind | Purpose |
+|--------|------|---------|
+| `fetch_databases` / `fetch_schemas` | `@task` | Full extraction, every run |
+| `fetch_tables(input: FetchTablesIncrementalInput)` | `@task` | Switch between full and incremental SQL |
+| `fetch_columns(input: FetchColumnsIncrementalInput)` | `@task` | Full-extraction columns; return `FetchColumnsOutput()` when incremental |
+| `transform_data(input: TransformInput)` | `@task` | Raw → transformed; handles the batch path via `input.file_names` |
+| `build_incremental_column_sql(table_ids, ctx)` | method (abstract) | The column SQL for one batch of table IDs |
+| `execute_column_sql(sql, input, ctx)` | async method | Run that SQL, write output, return the record count |
+| `resolve_database_placeholders(sql, input)` | method (optional) | Database-specific placeholders such as `{system_schema}` |
+
+## `fetch_tables()` — switching SQL
+
+Incremental mode is on when `input.marker_timestamp` is non-empty **and**
+`input.current_state_available` is true. The SDK does not substitute
+`{marker_timestamp}` for you here; resolve it into a local variable.
+
+```python
+@task(timeout_seconds=1800)
+async def fetch_tables(self, input: FetchTablesIncrementalInput) -> FetchTablesOutput:
+    is_incremental = bool(input.marker_timestamp) and input.current_state_available
+    if is_incremental and self.incremental_table_sql:
+        sql = self.incremental_table_sql.replace(
+            "{marker_timestamp}", input.marker_timestamp
+        )
+        sql = self.resolve_database_placeholders(sql, input)
+    else:
+        sql = self.fetch_table_sql
+    ...
+```
+
+Never assign the resolved SQL back to `self.incremental_table_sql` or
+`self.fetch_table_sql`: workers reuse App instances across runs, so a mutated
+class attribute leaks into the next run.
 
 ## Required Method: `build_incremental_column_sql()`
 
-This is the **only abstract method** you must implement. The SDK calls this method
-with a list of table_ids and expects back a fully rendered SQL query string.
+The SDK calls this once per batch with the batch's table IDs and the run's
+`IncrementalRunContext` (marker, connection, chunk size, …) and expects a
+fully rendered SQL string back.
 
 ### Oracle Pattern (FROM dual CTE)
 
-Oracle has a 1000-element IN clause limit, so we use a CTE with UNION ALL:
+Oracle has a 1000-element IN clause limit, so use a CTE with UNION ALL:
 
 ```python
 def build_incremental_column_sql(
-    self,
-    table_ids: List[str],
-    workflow_args: Dict[str, Any],
+    self, table_ids: list[str], ctx: IncrementalRunContext
 ) -> str:
     """Build column SQL using Oracle FROM dual CTE syntax."""
     if not table_ids:
         raise ValueError("No table IDs provided for column extraction")
 
-    args = IncrementalWorkflowArgs.model_validate(workflow_args)
-    system_schema = args.metadata.system_schema_name or "SYS"
-
-    # Build CTE: WITH table_filter AS (SELECT 'ID1' AS TABLE_ID FROM dual UNION ALL ...)
     first_id = table_ids[0].replace("'", "''")
     cte_lines = [f"SELECT '{first_id}' AS TABLE_ID FROM dual"]
     for tid in table_ids[1:]:
         safe_tid = tid.replace("'", "''")
         cte_lines.append(f"SELECT '{safe_tid}' FROM dual")
-
     cte_sql = "WITH table_filter AS (\n" + "\nUNION ALL ".join(cte_lines) + "\n)"
 
-    # Replace --TABLE_FILTER_CTE-- placeholder in template
-    sql = self.incremental_column_sql
-    sql = sql.replace("--TABLE_FILTER_CTE--", cte_sql)
-
-    # Replace database-specific placeholders
-    sql = sql.replace("{system_schema}", system_schema)
-    sql = sql.replace(":schema_name", f"'{system_schema}'")
-    sql = sql.replace(":marker_timestamp", f"'{args.metadata.marker_timestamp}'")
-
+    sql = self.incremental_column_sql.replace("--TABLE_FILTER_CTE--", cte_sql)
+    sql = sql.replace("{system_schema}", self.system_schema)
+    sql = sql.replace("{marker_timestamp}", ctx.marker_timestamp or "")
     return sql
 ```
 
-### ClickHouse Pattern (WHERE IN clause)
+`ctx` carries no connector-specific settings; keep values such as the system
+schema on the App (as `self.system_schema` above) or derive them from the
+connection.
 
-ClickHouse has no IN clause limit, so we use a simple WHERE IN:
+### ClickHouse Pattern (WHERE IN clause)
 
 ```python
 def build_incremental_column_sql(
-    self,
-    table_ids: List[str],
-    workflow_args: Dict[str, Any],
+    self, table_ids: list[str], ctx: IncrementalRunContext
 ) -> str:
-    """Build column SQL using WHERE IN clause."""
+    """Build column SQL using a WHERE IN clause."""
     if not table_ids:
         raise ValueError("No table IDs provided for column extraction")
 
-    # Build IN clause: ('id1', 'id2', 'id3')
-    safe_ids = [f"'{tid.replace(chr(39), chr(39)*2)}'" for tid in table_ids]
-    in_clause = ", ".join(safe_ids)
-
-    sql = self.incremental_column_sql
-    sql = sql.replace("{table_ids_in_clause}", in_clause)
-
-    return sql
+    safe_ids = [f"'{tid.replace(chr(39), chr(39) * 2)}'" for tid in table_ids]
+    return self.incremental_column_sql.replace(
+        "{table_ids_in_clause}", ", ".join(safe_ids)
+    )
 ```
 
 ### PostgreSQL Pattern (ANY(ARRAY[...]))
 
 ```python
 def build_incremental_column_sql(
-    self,
-    table_ids: List[str],
-    workflow_args: Dict[str, Any],
+    self, table_ids: list[str], ctx: IncrementalRunContext
 ) -> str:
     """Build column SQL using PostgreSQL ARRAY syntax."""
     if not table_ids:
         raise ValueError("No table IDs provided for column extraction")
 
-    safe_ids = [f"'{tid.replace(chr(39), chr(39)*2)}'" for tid in table_ids]
-    array_literal = "ARRAY[" + ", ".join(safe_ids) + "]"
+    safe_ids = [f"'{tid.replace(chr(39), chr(39) * 2)}'" for tid in table_ids]
+    return self.incremental_column_sql.replace(
+        "{table_ids_array}", "ARRAY[" + ", ".join(safe_ids) + "]"
+    )
+```
 
-    sql = self.incremental_column_sql
-    sql = sql.replace("{table_ids_array}", array_literal)
+## Required Method: `execute_column_sql()`
 
-    return sql
+`execute_single_column_batch` downloads the batch file, calls
+`build_incremental_column_sql`, then hands the SQL to `execute_column_sql`.
+The default raises; implement it to run the query and write the batch's raw
+output under `input.output_path`:
+
+```python
+async def execute_column_sql(
+    self, sql: str, input: ExecuteColumnBatchInput, ctx: IncrementalRunContext
+) -> int:
+    client = await self._load_sql_client(input)
+    ...  # execute, write raw column output, return the number of records
 ```
 
 ## Optional Override: `resolve_database_placeholders()`
 
-Override this only if your SQL templates have database-specific placeholders
-beyond `{marker_timestamp}` (which the SDK handles automatically).
-
 ```python
 def resolve_database_placeholders(
-    self, sql: str, workflow_args: Dict[str, Any]
+    self, sql: str, input: FetchTablesIncrementalInput
 ) -> str:
     """Replace Oracle-specific placeholders."""
-    args = IncrementalWorkflowArgs.model_validate(workflow_args)
-    metadata = args.metadata
-
-    # Replace system schema placeholder
-    system_schema = getattr(metadata, "system_schema_name", None) or "SYS"
-    sql = sql.replace("{system_schema}", system_schema)
-
-    return sql
+    return sql.replace("{system_schema}", self.system_schema)
 ```
 
-**Important**: Do NOT replace `{marker_timestamp}` here - the SDK does it automatically
-via `_resolve_common_placeholders()`.
+The default is a no-op. Your own `fetch_tables` calls it (see above); the SDK
+does not call it for you.
 
-## Optional Override: `fetch_databases()` / `fetch_schemas()`
+## Optional Hook: `after_current_state_read()`
 
-Override these only if your database needs special handling:
+`read_current_state` only probes the committed snapshot. If your connector
+needs the snapshot on disk at read time, override the hook — overriding it is
+what makes the read materialize:
 
 ```python
-# Oracle example: fetch_databases needs write_to_file=False, concatenate=True
-# because Oracle treats databases as catalogs with multidb mode
-
-@activity.defn
-@auto_heartbeater
-async def fetch_databases(self, workflow_args):
-    """Override to use multidb mode for Oracle's database-as-catalog pattern."""
-    workflow_args_copy = dict(workflow_args)
-    workflow_args_copy["write_to_file"] = False
-    workflow_args_copy["concatenate"] = True
-    return await super().fetch_databases(workflow_args_copy)
-
-
-# Oracle example: fetch_schemas needs {system_schema} resolution
-@activity.defn
-@auto_heartbeater
-async def fetch_schemas(self, workflow_args):
-    """Override to resolve {system_schema} placeholder in schema SQL."""
-    args = IncrementalWorkflowArgs.model_validate(workflow_args)
-    system_schema = getattr(args.metadata, "system_schema_name", None) or "SYS"
-
-    original_sql = self.fetch_schema_sql
-    self.fetch_schema_sql = original_sql.replace("{system_schema}", system_schema)
-
-    try:
-        return await super().fetch_schemas(workflow_args)
-    finally:
-        self.fetch_schema_sql = original_sql
+async def after_current_state_read(
+    self, snapshot: CurrentStateSnapshot, local_dir: Path
+) -> None:
+    ...  # local_dir is {output_path}/incremental/previous-state
 ```
 
 ## Do NOT Override
 
-The following methods are **concrete in the SDK** and should NOT be overridden:
+These tasks are concrete in the SDK:
 
 | Method | Why Not Override |
 |--------|-----------------|
-| `execute_column_batch()` | Concrete - calls `build_incremental_column_sql()` + `run_column_query()` |
-| `run_column_query()` | Handles SQL execution, chunking, output paths |
-| `fetch_tables()` | Handles incremental/full SQL switching + state mutation prevention |
-| `fetch_columns()` | Handles incremental skip logic + state mutation prevention |
-| `fetch_incremental_marker()` | Generic marker S3 management |
-| `update_incremental_marker()` | Generic marker S3 persistence |
-| `read_current_state()` | Generic current-state S3 download |
-| `write_current_state()` | Generic ancestral merge + S3 upload |
-| `prepare_column_extraction_queries()` | Generic DuckDB analysis + batching |
-| `execute_single_column_batch()` | Generic batch download + delegation |
+| `fetch_incremental_marker()` | Marker read and prepone |
+| `read_current_state()` | `CurrentStateStore.probe()`; overriding it is deprecated — use `after_current_state_read` |
+| `prepare_column_extraction_queries()` | Materialize previous state, DuckDB change + backfill analysis, batch files |
+| `execute_single_column_batch()` | Batch download, then `build_incremental_column_sql` + `execute_column_sql` |
+| `write_current_state()` | Build, diff, upload diff, `CurrentStateStore.commit()` |
+| `update_incremental_marker()` | Marker persistence, only after a successful commit |
+| `run()` | The five-phase orchestration (see `workflow-implementation.md`) |
 
 ## ClickHouse-Specific: Filter Transformation
 
-ClickHouse maps databases to schemas under a virtual "default" catalog, requiring
-filter transformation:
+ClickHouse maps databases to schemas under a virtual "default" catalog,
+requiring filter transformation before the filters reach SQL:
 
 ```python
 @staticmethod
@@ -222,41 +236,4 @@ def _transform_to_schema_only_filters(filters):
         else:
             transformed[key] = value
     return transformed
-```
-
-## Workflow Registration
-
-The workflow needs to register all incremental activities:
-
-```python
-@staticmethod
-def get_activities(activities):
-    return [
-        activities.preflight_check,
-        activities.get_workflow_args,
-        activities.fetch_incremental_marker,
-        activities.read_current_state,
-        activities.fetch_databases,
-        activities.fetch_schemas,
-        activities.fetch_tables,
-        activities.fetch_columns,
-        activities.fetch_procedures,
-        activities.transform_data,
-        activities.prepare_column_extraction_queries,
-        activities.execute_single_column_batch,
-        activities.write_current_state,
-        activities.upload_to_atlan,  # v2-native activity; v3 equivalent: self.upload(UploadInput(...))
-        activities.update_incremental_marker,
-        activities.save_workflow_state,
-    ]
-```
-
-If your database doesn't support certain entities, exclude them:
-
-```python
-# ClickHouse: no stored procedures
-@staticmethod
-def get_activities(activities):
-    base = IncrementalSQLMetadataExtractionWorkflow.get_activities(activities)
-    return [a for a in base if a != activities.fetch_procedures]
 ```
