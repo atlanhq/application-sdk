@@ -189,9 +189,22 @@ error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row staged 
 local that the enclosing function returns below the `try`. The failure leaves the frame
 in inspectable form, so no log level decides whether it is visible; demanding one is
 what makes E004 and F005 jointly unsatisfiable at the last-resort arm of a preflight
-probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, a
-raw hand-off of the binding (`failed_check(name, exc, start)` proves nothing about its
-type under a broad catch), and `except Exception:` with no `as` binding all still fire.
+probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, or
+an opaque raw hand-off (`failed_check(name, exc, start)`) proves nothing about the type
+under a broad catch.  A same-module straight-line helper also qualifies, within limits
+the checker can prove:
+
+- the helper is an undecorated, synchronous, top-level function with one   final
+`return`, no branching, and no `*args`/`**kwargs`; - its returned value *is* a
+class-like constructor built from the   parameter the binding is passed to (`return
+Outcome(error=err)`), not   an expression that merely contains one (`(Outcome(...),
+None)[1]`); - the handler returns the helper's result directly, stages it in a local
+that the return hands back, or passes it only into class-like   constructors or literal
+containers; a lowercase wrapper   (`discard(helper(exc))`) keeps it opaque; - the name
+still resolves to that helper: not rebound in any enclosing   function, not declared
+`nonlocal` or `global`, and not reassigned   at module level.
+
+`except Exception:` with no `as` binding still fires.
 
 The three exemptions are one principle: the exception must leave the frame in some
 inspectable form — re-raised with its trace, re-raised with a redacted cause, or
