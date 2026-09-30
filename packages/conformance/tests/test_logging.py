@@ -1205,6 +1205,16 @@ def test_l004_silent_for_presanitized_variable_argument() -> None:
     assert "L004" not in _ids(src)
 
 
+def test_l004_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('operation failed:\\n%s', trace_text)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
 def test_l004_silent_for_sanitized_traceback_in_generic_local() -> None:
     # Follow the value, not its name: the local holds a redacted formatted trace.
     src = (
@@ -1304,6 +1314,34 @@ def test_l004_fires_when_log_call_walrus_rebinds_sanitized_local() -> None:
         "    logger.error('operation failed:\\n%s', (traceback_text := raw_tb))\n"
     )
     assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    logger.error('operation failed: %s\\n%s', error, traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    logger.error('operation failed: %s %s', redact(error), error)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    logger.error('failed: %s (%s)', safe_traceback(error), type(error).__name__)\n"
+    )
+    assert "L004" not in _ids(src)
 
 
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:

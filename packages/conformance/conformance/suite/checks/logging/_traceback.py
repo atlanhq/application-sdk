@@ -5,7 +5,11 @@ from __future__ import annotations
 import ast
 from collections import deque
 
-from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
+from .._ast_common._sanitizers import (
+    call_logs_raw_exception,
+    call_uses_sanitizer,
+    is_sanitizer_call,
+)
 from ._base import _MixinBase
 from ._constants import LOG_METHODS_WITH_TRACEBACK
 from ._helpers import has_exc_info_true, is_logger_call
@@ -216,8 +220,11 @@ class TracebackMixin(_MixinBase):
                 continue
             if has_exc_info_true(node, handler.name):
                 continue
-            if call_uses_sanitizer(node) or _call_uses_sanitized_local(
-                node, _sanitized_locals_before(handler, node)
+            if call_uses_sanitizer(node, handler=handler) or (
+                not call_logs_raw_exception(node, handler)
+                and _call_uses_sanitized_local(
+                    node, _sanitized_locals_before(handler, node)
+                )
             ):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.

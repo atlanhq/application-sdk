@@ -99,6 +99,180 @@ def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
     return False
 
 
+def _source_position(node: ast.AST) -> tuple[int, int] | None:
+    """Return an AST node's source position when it came from parsed source."""
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    if isinstance(line, int) and isinstance(column, int):
+        return line, column
+    return None
+
+
+def _sanitized_assignment_name(stmt: ast.stmt, exception_name: str) -> str | None:
+    """Return a simple local assigned the caught exception through a sanitizer."""
+    if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+        target = stmt.targets[0]
+        value = stmt.value
+    elif isinstance(stmt, ast.AnnAssign):
+        target = stmt.target
+        value = stmt.value
+    else:
+        return None
+
+    if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
+        return None
+    sanitizer = _leaf_name(value.func)
+    if sanitizer is None or not _name_is_sanitizer(sanitizer):
+        return None
+
+    # The sanitizer must wrap data from this handler's caught exception, not an
+    # unrelated value which happens to be sanitized in the same assignment.  A
+    # conditional input (``str(e) if verbose else endpoint``) proves nothing
+    # about the runtime value, so any branch in the arguments disqualifies it.
+    args = [*value.args, *[kw.value for kw in value.keywords]]
+    if any(
+        isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+        for arg in args
+        for node in ast.walk(arg)
+    ):
+        return None
+    if not any(
+        isinstance(node, ast.Name) and node.id == exception_name
+        for arg in args
+        for node in ast.walk(arg)
+    ):
+        return None
+    return target.id
+
+
+def _statement_writes_name_before(
+    stmt: ast.stmt, name: str, position: tuple[int, int]
+) -> bool:
+    """True if *stmt* rebinds *name* before a later log call."""
+    for node in ast.walk(stmt):
+        node_position = _source_position(node)
+        if node_position is None or node_position >= position:
+            continue
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        # ``case trace_text:`` / ``case [*trace_text]`` / ``case {**trace_text}``
+        # bind through the pattern node, not through an ``ast.Name`` store.
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+            (alias.asname or alias.name.split(".")[0]) == name for alias in node.names
+        ):
+            return True
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.name == name
+        ):
+            return True
+    return False
+
+
+def _is_type_projection(node: ast.AST, exception_name: str) -> bool:
+    """True for a read of the exception that yields only its type or a bool.
+
+    ``type(e)`` / ``e.__class__`` (and anything off them, e.g. ``.__name__``)
+    and ``isinstance(e, ...)`` never format the message, so they cannot leak
+    what a sanitizer would have redacted.
+    """
+
+    def is_exc(expr: ast.AST) -> bool:
+        return isinstance(expr, ast.Name) and expr.id == exception_name
+
+    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+        if node.func.id == "type" and len(node.args) == 1 and not node.keywords:
+            return is_exc(node.args[0])
+        if node.func.id == "isinstance" and len(node.args) == 2:
+            return is_exc(node.args[0]) and not any(
+                is_exc(inner) for inner in ast.walk(node.args[1])
+            )
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == "__class__"
+        and is_exc(node.value)
+    )
+
+
+def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
+    """True when *call* also reads the caught exception outside a sanitizer.
+
+    A sanitized alias only marks a redaction boundary when it is the sole route
+    by which the exception reaches the log: ``logger.error("%s %s", safe, e)``
+    still formats the raw exception, so there is no boundary to protect.
+    Reads nested inside a recognised sanitizer call (``redact(e)``) and
+    type-only projections (``type(e).__name__``) are fine.
+    """
+    exception_name = handler.name
+    if exception_name is None:
+        return False
+    pending: list[ast.AST] = [*call.args, *[kw.value for kw in call.keywords]]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Call) and is_sanitizer_call(node):
+            continue
+        if _is_type_projection(node, exception_name):
+            continue
+        if (
+            isinstance(node, ast.Name)
+            and node.id == exception_name
+            and isinstance(node.ctx, ast.Load)
+        ):
+            return True
+        pending.extend(ast.iter_child_nodes(node))
+    return False
+
+
+def _call_uses_sanitized_local_alias(
+    call: ast.Call, handler: ast.ExceptHandler
+) -> bool:
+    """Recognize a simple sanitizer-derived local passed directly to a log."""
+    exception_name = handler.name
+    call_position = _source_position(call)
+    if exception_name is None or call_position is None:
+        return False
+
+    logged_names = {
+        arg.id
+        for arg in [*call.args, *[kw.value for kw in call.keywords]]
+        if isinstance(arg, ast.Name)
+    }
+    if not logged_names:
+        return False
+
+    for index, stmt in enumerate(handler.body):
+        stmt_position = _source_position(stmt)
+        if stmt_position is None or stmt_position >= call_position:
+            continue
+        alias = _sanitized_assignment_name(stmt, exception_name)
+        if alias is None or alias not in logged_names:
+            continue
+
+        # Reject an alias if any intervening statement can rebind it. The
+        # source-position check also handles semicolon-separated statements and
+        # writes inside a later conditional block without assuming that branch
+        # executes.
+        overwritten = any(
+            _statement_writes_name_before(later, alias, call_position)
+            for later in handler.body[index + 1 :]
+            if (later_position := _source_position(later)) is not None
+            and later_position < call_position
+        )
+        if not overwritten:
+            return True
+    return False
+
+
 def is_sanitizer_call(expr: ast.expr) -> bool:
     """True when *expr* itself is a call to a recognised redaction helper.
 
@@ -116,24 +290,35 @@ def is_sanitizer_call(expr: ast.expr) -> bool:
     return target is not None and _name_is_sanitizer(target)
 
 
-def call_uses_sanitizer(call: ast.Call) -> bool:
+def call_uses_sanitizer(
+    call: ast.Call, *, handler: ast.ExceptHandler | None = None
+) -> bool:
     """True when any argument of *call* flows through a recognised sanitizer.
 
-    Two shapes count:
+    Three shapes count:
 
     * a direct helper call among the arguments — ``redact(e)``,
       ``redact_secrets(str(e))``, ``errors.sanitize_cause_repr(e)``;
     * a variable argument whose *name* marks it as pre-sanitised text —
       ``safe_traceback`` in ``logger.error("…%s", safe_traceback)`` where the
-      redacted text was built on a previous line.  Bare names use the narrower
-      ``_SANITIZED_VALUE_WORDS`` (``redacted``/``sanitized``/``safe_traceback``/
-      …) so a flag or counter like ``redact_count``/``redaction_enabled`` does
-      not suppress the rule.
+      redacted text was built on a previous line; and
+    * when *handler* is supplied, a bare local assigned directly from a
+      recognised sanitizer applied to that handler's caught exception, provided
+      no intervening write replaces the value.
 
-    Only the log call's own arguments are inspected (positional and keyword,
-    including nested expressions) — a sanitizer used elsewhere in the handler
-    does not exempt an unrelated log call.
+    Bare names use the narrower ``_SANITIZED_VALUE_WORDS``
+    (``redacted``/``sanitized``/``safe_traceback``/…) so a flag or counter like
+    ``redact_count``/``redaction_enabled`` does not suppress the rule. Only the
+    log call's own arguments are inspected — a sanitizer used elsewhere in the
+    handler does not exempt an unrelated log call.
+
+    When *handler* is supplied, no shape counts if the call *also* reads the
+    caught exception outside a sanitizer (``logger.error("%s %s", redact(e),
+    e)``): the raw exception is formatted anyway, so there is no redaction
+    boundary to protect.
     """
+    if handler is not None and call_logs_raw_exception(call, handler):
+        return False
     for arg in [*call.args, *[kw.value for kw in call.keywords]]:
         for node in ast.walk(arg):
             if isinstance(node, ast.Call):
@@ -142,4 +327,4 @@ def call_uses_sanitizer(call: ast.Call) -> bool:
                     return True
             elif isinstance(node, ast.Name) and _name_is_sanitized_value(node.id):
                 return True
-    return False
+    return handler is not None and _call_uses_sanitized_local_alias(call, handler)
