@@ -352,7 +352,7 @@ and the next run retries cleanly.
 STEP  ACTIVITY                             INCREMENTAL?   NOTES
 ----  --------                             ------------   -----
 1.    get_workflow_args                     existing       Parse connection config
-1a.   read_marker                          << NEW >>      SDK fetch_marker_from_storage
+1a.   read_marker                          << NEW >>      SDK fetch_marker
 1b.   read_previous_entity_list            << NEW >>      Download filtered-*.json from S3
 2.    preflight_check                      existing       Validate credentials / permissions
 3.    extract_sites                        existing       FULL always (cheap, parent entity)

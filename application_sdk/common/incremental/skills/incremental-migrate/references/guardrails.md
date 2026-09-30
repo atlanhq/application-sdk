@@ -20,7 +20,7 @@ current-state store.
 **How to verify:**
 ```bash
 grep "atlan-application-sdk" pyproject.toml
-python -c "from application_sdk.common.incremental import fetch_marker_from_storage, persist_marker_to_storage; print('OK')"
+python -c "from application_sdk.common.incremental import fetch_marker, persist_marker; print('OK')"
 python -c "from application_sdk.common.incremental.state.store import CurrentStateStore, RunStateDirs; print('OK')"
 ```
 
@@ -267,8 +267,8 @@ except StorageNotFoundError:
     return None
 ```
 
-For the marker itself, `fetch_marker_from_storage()` already applies this
-rule (a missing marker returns `None`; anything else raises). For the SQL
+For the marker itself, `fetch_marker()` already applies this
+rule (a missing marker gives `MarkerPair.marker is None`; anything else raises). For the SQL
 current-state snapshot, `CurrentStateStore.probe()` reports
 `exists=False` rather than raising.
 

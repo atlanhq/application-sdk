@@ -4,11 +4,16 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from application_sdk.app.task import is_task, task
+from application_sdk.common.incremental.column_extraction import (
+    ColumnExtractionAnalysis,
+)
+from application_sdk.common.incremental.marker import MarkerPair, MarkerPersistResult
 from application_sdk.common.incremental.state.store import CurrentStateSnapshot
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
@@ -341,12 +346,15 @@ def _make_extractor() -> _MinimalIncremental:
 class TestFetchIncrementalMarkerInlineImport:
     """Exercises the inline import in fetch_incremental_marker (line 358)."""
 
-    async def test_calls_fetch_marker_from_storage_and_maps_output(self) -> None:
+    async def test_calls_fetch_marker_and_maps_output(self) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.fetch_marker_from_storage",
+            "application_sdk.common.incremental.marker.fetch_marker",
             new=AsyncMock(
-                return_value=("2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z")
+                return_value=MarkerPair(
+                    marker="2025-01-01T00:00:00Z",
+                    next_marker="2025-02-01T00:00:00Z",
+                )
             ),
         ) as mock_fn:
             out = await extractor.fetch_incremental_marker(
@@ -368,8 +376,10 @@ class TestFetchIncrementalMarkerInlineImport:
     ) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.fetch_marker_from_storage",
-            new=AsyncMock(return_value=(None, "2025-02-01T00:00:00Z")),
+            "application_sdk.common.incremental.marker.fetch_marker",
+            new=AsyncMock(
+                return_value=MarkerPair(marker=None, next_marker="2025-02-01T00:00:00Z")
+            ),
         ):
             out = await extractor.fetch_incremental_marker(
                 FetchIncrementalMarkerInput(
@@ -511,13 +521,12 @@ class TestUpdateIncrementalMarkerInlineImport:
     async def test_persists_marker_via_inline_import(self) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.persist_marker_to_storage",
+            "application_sdk.common.incremental.marker.persist_marker",
             new=AsyncMock(
-                return_value={
-                    "marker_written": True,
-                    "marker_timestamp": "2025-03-01T00:00:00Z",
-                    "s3_key": "s3://bucket/markers/m.json",
-                }
+                return_value=MarkerPersistResult(
+                    marker_timestamp="2025-03-01T00:00:00Z",
+                    s3_key="s3://bucket/markers/m.json",
+                )
             ),
         ) as mock_fn:
             out = await extractor.update_incremental_marker(
@@ -532,23 +541,38 @@ class TestUpdateIncrementalMarkerInlineImport:
         assert out.s3_key == "s3://bucket/markers/m.json"
         mock_fn.assert_awaited_once()
 
-    async def test_persist_returns_minimal_dict_uses_defaults(self) -> None:
-        """If helper returns dict missing keys, .get() defaults apply."""
+    async def test_marker_tasks_do_not_call_the_deprecated_shims(self) -> None:
+        """The template uses the typed API, so it emits no DeprecationWarning."""
         extractor = _make_extractor()
-        with patch(
-            "application_sdk.common.incremental.marker.persist_marker_to_storage",
-            new=AsyncMock(return_value={}),
+        with (
+            patch(
+                "application_sdk.common.incremental.marker.download_marker_from_s3",
+                new=AsyncMock(return_value="2025-01-01T00:00:00Z"),
+            ),
+            patch(
+                "application_sdk.common.incremental.marker.upload_file_from_bytes",
+                new=AsyncMock(),
+            ),
+            warnings.catch_warnings(),
         ):
-            out = await extractor.update_incremental_marker(
+            warnings.simplefilter("error", DeprecationWarning)
+            fetched = await extractor.fetch_incremental_marker(
+                FetchIncrementalMarkerInput(
+                    connection_qualified_name="default/test/1",
+                    application_name="app",
+                    prepone_enabled=False,
+                )
+            )
+            persisted = await extractor.update_incremental_marker(
                 UpdateMarkerInput(
-                    connection_qualified_name="c",
-                    next_marker_timestamp="2025-03-01T00:00:00Z",
+                    connection_qualified_name="default/test/1",
+                    next_marker_timestamp=fetched.next_marker_timestamp,
                     application_name="app",
                 )
             )
-        assert out.marker_written is False
-        assert out.marker_timestamp == ""
-        assert out.s3_key == ""
+        assert fetched.marker_timestamp == "2025-01-01T00:00:00Z"
+        assert persisted.marker_written is True
+        assert persisted.s3_key.endswith("/connection/1/marker.txt")
 
 
 class TestExecuteSingleColumnBatchInlineImports:
@@ -695,7 +719,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(MagicMock(), 0, 0, 0),
+                return_value=ColumnExtractionAnalysis([], 0, 0, 0),
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(
@@ -718,7 +742,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         """Happy path: tables exist → batched → JSON files written → uploaded."""
         extractor = _make_extractor()
 
-        fake_rows = [{"table_id": f"t{i}"} for i in range(5)]
+        fake_rows: list[dict[str, object]] = [{"table_id": f"t{i}"} for i in range(5)]
 
         with (
             patch(
@@ -739,7 +763,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(fake_rows, 4, 1, 0),
+                return_value=ColumnExtractionAnalysis(fake_rows, 4, 1, 0),
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(

@@ -129,13 +129,13 @@ def create_states_db(db_path=None):
 
 class TableScope(BaseModel):
     table_qualified_names: Set[str] = Field(default_factory=set)
-    table_states: Any = Field(  # Rdict type (RocksDB)
+    table_states: SkipValidation[StatesStore] = Field(  # Rdict (RocksDB) in production
         default_factory=create_states_db,
         exclude=True,
     )
 
 # Usage in table_scope.py:
-scope.table_states[qualified_name] = "CREATED"  # Write to RocksDB
+scope.table_states[qualified_name] = TableState.CREATED  # Write to RocksDB
 state = scope.table_states.get(qualified_name)    # Read from RocksDB
 ```
 

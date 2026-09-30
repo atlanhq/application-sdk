@@ -53,7 +53,11 @@ from application_sdk.common.incremental.state.table_scope import (
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnectionManager,
 )
-from application_sdk.constants import INCREMENTAL_DIFF_SUBPATH_TEMPLATE
+from application_sdk.constants import (
+    CURRENT_STATE_SUBPATH,
+    INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
+    TRANSFORMED_SUBDIR,
+)
 from application_sdk.execution import get_object_store_prefix
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage._concurrency import _run_drained
@@ -108,7 +112,7 @@ async def download_transformed_data(output_path: str) -> Path:
     if not output_path_str:
         raise FileNotFoundError("No output_path provided in workflow_args")
 
-    transformed_local_path = os.path.join(output_path_str, "transformed")
+    transformed_local_path = os.path.join(output_path_str, TRANSFORMED_SUBDIR)
     transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
 
     logger.info("Downloading transformed files from S3: %s", transformed_s3_prefix)
@@ -461,7 +465,7 @@ async def create_current_state_snapshot(
         ... )
         >>> print(f"Created {result.total_files} files")
     """
-    store = state_store or CurrentStateStore(f"{s3_prefix}/current-state")
+    store = state_store or CurrentStateStore(f"{s3_prefix}/{CURRENT_STATE_SUBPATH}")
     table_scope = None
     diff_result = None
     diff_dir: Path | None = None

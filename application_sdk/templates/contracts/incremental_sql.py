@@ -12,7 +12,7 @@ import re
 
 from pydantic import Field, field_validator
 
-from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.base import Input, Output, SerializableEnum
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionOutput,
@@ -65,6 +65,32 @@ def _validate_marker_timestamp(value: str | None) -> str | None:
             "templates that substitute the marker into a quoted literal."
         )
     return value
+
+
+def _validate_wire_marker(value: str) -> str:
+    """Validate a wire-form marker field (a ``str``, ``""`` for none)."""
+    _validate_marker_timestamp(value)
+    return value
+
+
+# =============================================================================
+# Marker sentinel boundary
+# =============================================================================
+#
+# "No marker" has one Python spelling, ``None`` (``IncrementalRunContext`` and
+# ``MarkerPair``), and one wire spelling, ``""`` (every task contract field, so
+# existing Temporal histories and app payloads keep their shape). These two
+# functions are the only place one becomes the other.
+
+
+def marker_to_wire(marker: str | None) -> str:
+    """Encode a Python marker for a task contract: ``None`` becomes ``""``."""
+    return "" if marker is None else marker
+
+
+def marker_from_wire(value: str) -> str | None:
+    """Decode a task contract's marker field: ``""`` becomes ``None``."""
+    return value or None
 
 
 # =============================================================================
@@ -216,7 +242,7 @@ class IncrementalTaskInput(ExtractionTaskInput):
     @field_validator("marker_timestamp", mode="after")
     @classmethod
     def _validate_marker(cls, v: str) -> str:
-        return _validate_marker_timestamp(v) or ""
+        return _validate_wire_marker(v)
 
 
 # =============================================================================
@@ -284,7 +310,7 @@ class FetchIncrementalMarkerOutput(Output):
     @field_validator("marker_timestamp", "next_marker_timestamp", mode="after")
     @classmethod
     def _validate_marker(cls, v: str) -> str:
-        return _validate_marker_timestamp(v) or ""
+        return _validate_wire_marker(v)
 
 
 # =============================================================================
@@ -372,6 +398,21 @@ class ExecuteColumnBatchInput(IncrementalTaskInput):
     application_name: str = ""
 
 
+class ColumnBatchStatus(SerializableEnum):
+    """Outcome of one ``execute_single_column_batch`` task.
+
+    A ``StrEnum``: members compare equal to, and serialize as, the plain
+    strings the field carried before it was typed.
+
+    Members:
+        SUCCESS: The batch file was found and its SQL ran.
+        NOT_FOUND: The batch file was missing, so nothing ran.
+    """
+
+    SUCCESS = "success"
+    NOT_FOUND = "not_found"
+
+
 class ExecuteColumnBatchOutput(Output):
     """Output from executing a single incremental column batch."""
 
@@ -379,9 +420,17 @@ class ExecuteColumnBatchOutput(Output):
     records: int = 0
     # Pre-dates BLDX-1244's standard Output.status (``OutputStatus`` enum)
     # and uses domain-specific values ("not_found", "success") that aren't
-    # part of the enum vocabulary. Keep the str override for backward-compat;
-    # the misc ignore acknowledges the deliberate field-type narrowing.
-    status: str = ""  # type: ignore[assignment]
+    # part of that vocabulary, hence its own enum; the ignore acknowledges
+    # the deliberate field-type narrowing. ``None`` is "not set" — what the
+    # old ``""`` default meant.
+    status: ColumnBatchStatus | None = None  # type: ignore[assignment]
+
+    @field_validator("status", mode="before")
+    @classmethod
+    def _legacy_unset_status(cls, v: object) -> object:
+        # A payload recorded before the field was typed carries "" for "not
+        # set"; it must still deserialize on replay.
+        return None if v == "" else v
 
 
 # =============================================================================
@@ -436,7 +485,7 @@ class UpdateMarkerInput(Input):
     @field_validator("next_marker_timestamp", mode="after")
     @classmethod
     def _validate_marker(cls, v: str) -> str:
-        return _validate_marker_timestamp(v) or ""
+        return _validate_wire_marker(v)
 
 
 class UpdateMarkerOutput(Output):
@@ -449,7 +498,7 @@ class UpdateMarkerOutput(Output):
     @field_validator("marker_timestamp", mode="after")
     @classmethod
     def _validate_marker(cls, v: str) -> str:
-        return _validate_marker_timestamp(v) or ""
+        return _validate_wire_marker(v)
 
 
 # =============================================================================
@@ -459,6 +508,9 @@ class UpdateMarkerOutput(Output):
 __all__ = [
     # Context (not a Temporal payload)
     "IncrementalRunContext",
+    # Marker sentinel boundary
+    "marker_from_wire",
+    "marker_to_wire",
     # Top-level run() contracts
     "IncrementalExtractionInput",
     "IncrementalExtractionOutput",
@@ -477,6 +529,7 @@ __all__ = [
     "PrepareColumnQueriesInput",
     "PrepareColumnQueriesOutput",
     # execute_single_column_batch
+    "ColumnBatchStatus",
     "ExecuteColumnBatchInput",
     "ExecuteColumnBatchOutput",
     # write_current_state

@@ -31,6 +31,7 @@ from application_sdk.templates.contracts.incremental_sql import (
     FetchColumnsIncrementalInput,
     FetchTablesIncrementalInput,
     IncrementalRunContext,
+    marker_to_wire,
 )
 from application_sdk.templates.contracts.sql_metadata import (
     FetchColumnsOutput,
@@ -122,7 +123,7 @@ def build_incremental_column_sql(
 
     sql = self.incremental_column_sql.replace("--TABLE_FILTER_CTE--", cte_sql)
     sql = sql.replace("{system_schema}", _sql_identifier(self.system_schema))
-    sql = sql.replace("{marker_timestamp}", ctx.marker_timestamp or "")
+    sql = sql.replace("{marker_timestamp}", marker_to_wire(ctx.marker_timestamp))
     return sql
 ```
 

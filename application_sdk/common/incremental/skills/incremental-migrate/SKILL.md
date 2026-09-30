@@ -287,7 +287,7 @@ Execute each brick fully before starting the next. Halt on failure and report.
 4. Spawn a sub-agent. Instructions: add new activities and model fields.
 
    **New activities** in `<app_path>/app/activities/metadata_extraction.py`:
-   - `read_marker` -- calls SDK `fetch_marker_from_storage` with configurable prepone
+   - `read_marker` -- calls SDK `fetch_marker` with configurable prepone
    - `read_previous_<entity>_list` -- downloads previous scope from S3 via ObjectStore
    - `persist_incremental_state` -- writes marker + entity lists + cache to S3
      (GUARD-IMPL-01: this MUST be the last activity, after App.upload())
