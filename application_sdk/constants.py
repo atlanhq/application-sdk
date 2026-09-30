@@ -1075,7 +1075,9 @@ PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE = (
 )
 
 #: Maximum number of column extraction batch activities to execute in parallel
-#: Controls concurrency during incremental column extraction
+#: Controls concurrency during incremental column extraction.
+#: Not read by IncrementalSqlMetadataExtractor, whose run() fans out its own
+#: module-level MAX_CONCURRENT_COLUMN_BATCHES (10).
 MAX_CONCURRENT_COLUMN_BATCHES = 3
 
 #: Subpath template for per-run incremental diff (under connection prefix)

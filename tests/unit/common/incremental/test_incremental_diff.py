@@ -340,6 +340,29 @@ class TestWriteMetadata:
             assert meta["columns_deleted"] == 10
             assert meta["total_changed_entities"] == result.total_changed_entities
 
+    def test_metadata_key_set_is_the_argo_routing_contract(self):
+        # Argo publish templates route on these keys (see the incremental-diff
+        # entry in docs/standards/cross-repo-contracts.md). Adding a key is
+        # safe; renaming or dropping one is a cross-repo change.
+        with tempfile.TemporaryDirectory() as tmp:
+            diff_dir = Path(tmp)
+            _write_metadata(diff_dir, IncrementalDiffResult(is_incremental=True))
+
+            meta = json.loads((diff_dir / "metadata.json").read_text())
+            assert set(meta) == {
+                "is_incremental",
+                "tables_created",
+                "tables_updated",
+                "tables_backfill",
+                "tables_deleted",
+                "columns_total",
+                "columns_deleted",
+                "schemas_total",
+                "databases_total",
+                "total_changed_entities",
+                "total_files",
+            }
+
     def test_metadata_total_changed_entities(self):
         # schemas_total and databases_total are file counts, not entity counts,
         # and are excluded from total_changed_entities.

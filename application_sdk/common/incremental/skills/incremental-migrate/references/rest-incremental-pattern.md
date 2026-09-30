@@ -143,11 +143,14 @@ persistent-artifacts/apps/{app_name}/connection/{connection_id}/
 READ (with prepone)        EXTRACT                   PERSIST (after publish)
        |                       |                            |
        v                       v                            v
-  fetch_marker()        run extraction            persist_marker(now_iso)
-  prepone by N min      using cutoff              only after App.upload()
-  to handle clock       from marker               succeeds
+  fetch_marker_from_     run extraction           persist_marker_to_
+  storage()              using cutoff             storage(next_marker)
+  prepone by N hours     from marker              only after App.upload()
+  to handle clock                                 succeeds
   skew / overlap
 ```
+
+Both helpers are importable from `application_sdk.common.incremental`.
 
 - **Prepone**: Subtract a safety window (e.g., 5 minutes) from the stored marker
   to handle clock skew between your system and the upstream API.

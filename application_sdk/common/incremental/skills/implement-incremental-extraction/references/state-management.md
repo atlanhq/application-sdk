@@ -91,16 +91,44 @@ Preponed by 3h: 2024-06-15T09:00:00Z  ← This is what SQL queries use
 ## Current State Structure
 
 ```
-current-state/
+persistent-artifacts/apps/{app}/connection/{conn_id}/current-state/
+├── .sdk-manifest            # names every key of the snapshot; written LAST
 ├── database/
-│   └── database_0.json, database_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 ├── schema/
-│   └── schema_0.json, schema_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 ├── table/
-│   └── table_0.json, table_1.json, ...
+│   └── {stamp}--chunk-0.json, ...
 └── column/
-    └── column_0.json, column_1.json, ...
+    └── {stamp}--chunk-0.json, ...
 ```
+
+`{stamp}` is 12 hex characters derived from the committing run ID, so a new
+commit never overwrites a key the previous manifest names. Read entity files
+with a `{entity}/*.json` glob — never by file name. This layout is a
+cross-repo contract (`docs/standards/cross-repo-contracts.md`).
+
+### Working with the snapshot in code
+
+```python
+from application_sdk.common.incremental.state.store import (
+    CurrentStateStore,
+    RunStateDirs,
+)
+
+store = CurrentStateStore.for_connection(connection_qualified_name, application_name)
+snapshot = await store.probe()          # one listing + manifest; downloads nothing
+if snapshot.exists:
+    dirs = RunStateDirs.for_output_path(output_path)
+    await store.materialize(snapshot, dirs.previous_state)   # exact mirror, synced
+# ... build this run's snapshot under dirs.current_state ...
+await store.commit(dirs.current_state, run_id)   # upload → manifest → prune
+```
+
+Inside `IncrementalSqlMetadataExtractor` you do not call these yourself: the
+template's `read_current_state`, `prepare_column_extraction_queries` and
+`write_current_state` tasks do. To run connector logic over the snapshot at
+read time, override the `after_current_state_read(snapshot, local_dir)` hook.
 
 Each JSON file contains Atlas-format entities:
 
@@ -125,21 +153,18 @@ across all runs.
 
 ### Algorithm
 
-```python
-# Simplified from state_writer.py
+`create_current_state_snapshot()` in `state_writer.py` builds the run's
+snapshot in `{output_path}/incremental/current-state/`:
 
-def _copy_columns_from_transformed(
-    transformed_dir,      # Current run's transformed output
-    current_state_dir,    # Output directory (current-state/column/)
-    copy_workers=4,
-):
-    column_dir = transformed_dir / "column"
-    if not column_dir.exists():
-        return 0
-    # Parallel copy of all column files from this run
-    return copy_directory_parallel(column_dir, current_state_dir / "column",
-                                   max_workers=copy_workers)
-```
+1. Reset that directory (a same-run retry reuses it).
+2. `copy_non_column_entities()` — copy `table/`, `schema/` and `database/`
+   from this run's transformed output.
+3. Copy `column/` from this run's transformed output — nothing else.
+4. Build the diff in `{output_path}/incremental/diff/` and upload it.
+5. `CurrentStateStore.commit()` — only after the diff is durable.
+
+Every step is offloaded with `run_in_thread`; do not call these helpers
+inline from connector code.
 
 ### Column Handling by Table State
 
@@ -194,26 +219,29 @@ persistent-artifacts/apps/{app}/connection/{conn_id}/runs/{run_id}/incremental-d
 
 ## Table Scope Detection
 
+`get_current_table_scope(transformed_dir, conn=None)` in `table_scope.py`
+scans `{transformed_dir}/table/*.json` with DuckDB and returns a `TableScope`:
+each table's qualified name and its `incremental_state` (defaulting to
+`INCREMENTAL_DEFAULT_STATE`, `NO CHANGE`). The states are kept in a
+disk-backed RocksDB store, so release it with `close_scope(scope)` when done.
+
 ```python
-# table_scope.py uses DuckDB to classify tables
+from application_sdk.common.incremental.state.table_scope import (
+    close_scope,
+    get_current_table_scope,
+    get_scope_length,
+    get_table_state,
+)
+from application_sdk.common.incremental.storage.duckdb_utils import (
+    DuckDBConnectionManager,
+)
 
-def get_current_table_scope(transformed_dir, column_chunk_size):
-    conn = get_duckdb_connection()
-
-    # Read all table JSONs and extract qualified names + states
-    result = conn.sql(f"""
-        SELECT
-            json_extract_string(attributes, '$.qualifiedName') AS qn,
-            json_extract_string(attributes, '$.incremental_state') AS state
-        FROM read_json_auto('{transformed_dir}/table/*.json')
-    """).fetchall()
-
-    scope = TableScope()
-    for qn, state in result:
-        scope.table_qualified_names.add(qn)
-        scope.table_states[qn] = state or "NO CHANGE"
-
-    return scope
+with DuckDBConnectionManager() as manager:
+    scope = get_current_table_scope(transformed_dir, conn=manager.connection)
+    try:
+        print(get_scope_length(scope), get_table_state(scope, some_table_qn))
+    finally:
+        close_scope(scope)
 ```
 
 ## Commit Safety and Local Directories
