@@ -1258,6 +1258,54 @@ def test_l004_fires_when_sanitized_local_is_overwritten_before_logging() -> None
     assert "L004" in _ids(src)
 
 
+def test_l004_fires_when_sanitizer_only_covers_part_of_the_local() -> None:
+    # The raw traceback is concatenated past the redaction; the local is not
+    # sanitizer output just because a sanitizer call appears in its value.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text('header') + raw_tb\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_silent_for_alias_of_sanitized_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    details = traceback_text\n"
+        "    logger.error('operation failed:\\n%s', details)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_fires_when_walrus_in_assignment_rebinds_sanitized_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text(raw_tb)\n"
+        "    holder = (traceback_text := raw_tb)\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_log_call_walrus_rebinds_sanitized_local() -> None:
+    # The walrus target is a store, and the logged value is the raw traceback.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text(raw_tb)\n"
+        "    logger.error('operation failed:\\n%s', (traceback_text := raw_tb))\n"
+    )
+    assert "L004" in _ids(src)
+
+
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     # Only the log call's own arguments count — a sanitizer on another
     # statement does not exempt an unrelated bare log call.

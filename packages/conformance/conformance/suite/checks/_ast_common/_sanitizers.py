@@ -99,19 +99,21 @@ def expr_sanitizes_name(expr: ast.expr, name: str) -> bool:
     return False
 
 
-def expression_uses_sanitizer(expr: ast.expr) -> bool:
-    """True when *expr* contains a call to a recognised redaction helper.
+def is_sanitizer_call(expr: ast.expr) -> bool:
+    """True when *expr* itself is a call to a recognised redaction helper.
 
-    This lets a caller follow a local value back to the expression that
-    produced it, using the same helper-name convention as direct log arguments.
+    Stricter than "a sanitizer appears somewhere in *expr*": the value must be
+    the helper's *output*.  ``redact(tb)`` and ``await utils.redact(tb)``
+    count; ``redact("header") + raw_tb`` does not, because the raw traceback
+    is concatenated past the redaction.  Used where a local is followed back
+    to the expression that produced it (L004's sanitized-local exemption).
     """
-    for node in ast.walk(expr):
-        if not isinstance(node, ast.Call):
-            continue
-        target = _leaf_name(node.func)
-        if target is not None and _name_is_sanitizer(target):
-            return True
-    return False
+    if isinstance(expr, ast.Await):
+        expr = expr.value
+    if not isinstance(expr, ast.Call):
+        return False
+    target = _leaf_name(expr.func)
+    return target is not None and _name_is_sanitizer(target)
 
 
 def call_uses_sanitizer(call: ast.Call) -> bool:
@@ -133,11 +135,11 @@ def call_uses_sanitizer(call: ast.Call) -> bool:
     does not exempt an unrelated log call.
     """
     for arg in [*call.args, *[kw.value for kw in call.keywords]]:
-        if expression_uses_sanitizer(arg):
-            return True
-        if any(
-            isinstance(node, ast.Name) and _name_is_sanitized_value(node.id)
-            for node in ast.walk(arg)
-        ):
-            return True
+        for node in ast.walk(arg):
+            if isinstance(node, ast.Call):
+                target = _leaf_name(node.func)
+                if target is not None and _name_is_sanitizer(target):
+                    return True
+            elif isinstance(node, ast.Name) and _name_is_sanitized_value(node.id):
+                return True
     return False

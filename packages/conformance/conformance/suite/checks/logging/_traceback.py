@@ -5,7 +5,7 @@ from __future__ import annotations
 import ast
 from collections import deque
 
-from .._ast_common._sanitizers import call_uses_sanitizer, expression_uses_sanitizer
+from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
 from ._base import _MixinBase
 from ._constants import LOG_METHODS_WITH_TRACEBACK
 from ._helpers import has_exc_info_true, is_logger_call
@@ -81,14 +81,25 @@ def _assigned_local_names(statement: ast.stmt) -> set[str]:
     return {name for target in targets for name in _target_names(target)}
 
 
+def _walrus_targets(node: ast.AST) -> set[str]:
+    """Return names bound by ``:=`` anywhere in *node* (same scope only)."""
+    return {
+        name
+        for child in [node, *_walk_no_scope(node)]
+        if isinstance(child, ast.NamedExpr)
+        for name in _target_names(child.target)
+    }
+
+
 def _sanitized_locals_before(
     handler: ast.ExceptHandler,
     call: ast.Call,
 ) -> set[str]:
     """Find direct local values in *handler* known sanitized before *call*.
 
-    Only straight-line, single-name assignments establish a fact.  Rebinding
-    invalidates it, and a compound statement or nested log position makes the
+    Only straight-line, single-name assignments whose value *is* a sanitizer
+    call (or an alias of a sanitized local) establish a fact.  Rebinding —
+    including a ``:=`` anywhere in a statement — invalidates it, and a compound statement or nested log position makes the
     order/path ambiguous, so existing facts are dropped rather than guessed.
     """
     sanitized: set[str] = set()
@@ -101,10 +112,14 @@ def _sanitized_locals_before(
             sanitized.clear()
             break
 
+        # A walrus binds before the enclosing assignment's own target, so drop
+        # its targets first; the assignment below may then re-establish one.
+        sanitized.difference_update(_walrus_targets(statement))
+
         assignment = _simple_local_assignment(statement)
         if assignment is not None:
             name, value = assignment
-            if (value is not None and expression_uses_sanitizer(value)) or (
+            if (value is not None and is_sanitizer_call(value)) or (
                 isinstance(value, ast.Name) and value.id in sanitized
             ):
                 sanitized.add(name)
@@ -146,20 +161,24 @@ def _sanitized_locals_before(
             statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
         ):
             sanitized.discard(statement.name)
-        else:
-            for child in _walk_no_scope(statement):
-                if isinstance(child, ast.NamedExpr):
-                    sanitized.difference_update(_target_names(child.target))
     return sanitized
 
 
 def _call_uses_sanitized_local(call: ast.Call, names: set[str]) -> bool:
-    """True if one of *call*'s arguments uses a tracked sanitized local."""
-    if not names:
+    """True if one of *call*'s arguments reads a tracked sanitized local.
+
+    Only loads count, and a name the call itself rebinds with ``:=`` is no
+    longer the sanitized value: ``logger.error("%s", (tb := raw))`` logs raw.
+    """
+    args = [*call.args, *[kw.value for kw in call.keywords]]
+    live = names - {name for arg in args for name in _walrus_targets(arg)}
+    if not live:
         return False
     return any(
-        isinstance(node, ast.Name) and node.id in names
-        for arg in [*call.args, *[kw.value for kw in call.keywords]]
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in live
+        for arg in args
         for node in ast.walk(arg)
     )
 
