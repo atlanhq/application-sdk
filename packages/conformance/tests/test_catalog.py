@@ -1549,11 +1549,6 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
     ),
-    "T025": (
-        "no reference app is in bundle mode (each emits a single generated "
-        "manifest), so T025 inspects none of them; the positive shape is the "
-        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
-    ),
 }
 
 #: A positive citation: a reference-app name immediately followed by a path in
