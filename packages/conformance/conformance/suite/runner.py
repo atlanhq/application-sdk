@@ -52,6 +52,7 @@ from conformance.suite.checks import (
     error_seam,
     generated_freshness,
     gitignore_entries,
+    hosted_handler,
     integration_deselect,
     integration_marking,
     legacy_contract,
@@ -124,6 +125,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=credential_seam.discover,
         scan_path=credential_seam.scan_path,
         scan_all=credential_seam.scan_all,
+    ),
+    CheckRegistration(
+        series=hosted_handler.SERIES,
+        discover=hosted_handler.discover,
+        scan_path=hosted_handler.scan_path,
+        scan_all=hosted_handler.scan_all,
     ),
     CheckRegistration(
         series=download_retry.SERIES,

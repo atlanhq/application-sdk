@@ -60,6 +60,7 @@ import hashlib
 import posixpath
 import re
 import warnings
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import (
     Annotated,
@@ -77,12 +78,28 @@ import orjson
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
-from application_sdk.contracts.types import MaxItems
+from application_sdk._install import worker_only_missing
+from application_sdk._logging import get_logger
 from application_sdk.errors import CONTRACT_VALIDATION, PAYLOAD_SAFETY, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
-from application_sdk.observability.logger_adaptor import get_logger
 
 _logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class MaxItems:
+    """Constraint marker indicating maximum collection size.
+
+    Use with Annotated to declare bounded collections in contracts:
+
+        class MyInput(Input):
+            settings: Annotated[dict[str, str], MaxItems(100)]
+            items: Annotated[list[Record], MaxItems(1000)]
+    """
+
+    limit: int
+    """Maximum number of items allowed in the collection."""
+
 
 # =============================================================================
 # Serializable Enum Base Class
@@ -881,7 +898,7 @@ class PublishInputMixin(BaseModel):
         # Auto-resolve output_path from Temporal context if not set
         if not self.output_path:
             try:
-                from temporalio import (  # noqa: PLC0415 — defensive: try/except wraps "not in Temporal context"
+                from temporalio import (  # noqa: PLC0415 — absent on an api-only install
                     workflow as _wf,
                 )
 
@@ -891,7 +908,14 @@ class PublishInputMixin(BaseModel):
                 from application_sdk.constants import (  # noqa: PLC0415 — co-located with temporalio import in same try block
                     WORKFLOW_OUTPUT_PATH_TEMPLATE,
                 )
-
+            except ModuleNotFoundError as exc:
+                # api-only install: no Temporal, so never a workflow context.
+                if not worker_only_missing(exc):
+                    raise
+                _wf = None
+            try:
+                if _wf is None:
+                    raise LookupError("no Temporal workflow context")
                 self.output_path = WORKFLOW_OUTPUT_PATH_TEMPLATE.format(
                     application_name=AppRegistry.resolve_running_app_name(),
                     workflow_id=_wf.info().workflow_id,

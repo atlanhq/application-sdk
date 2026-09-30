@@ -11,8 +11,10 @@ from __future__ import annotations
 
 import warnings
 from abc import ABC, abstractmethod
+from collections.abc import Sequence
 from typing import TYPE_CHECKING, ClassVar
 
+from application_sdk._context_errors import AppContextError
 from application_sdk.errors import HANDLER_ERROR, ErrorCode
 from application_sdk.errors.base import AppError
 from application_sdk.handler.context import get_handler_context
@@ -29,6 +31,8 @@ from application_sdk.handler.contracts import (
 )
 
 if TYPE_CHECKING:
+    from fastapi import APIRouter
+
     from application_sdk.handler.context import HandlerContext
 
 
@@ -116,15 +120,32 @@ class Handler(ABC):
         """
         ctx = get_handler_context()
         if ctx is None:
-            from application_sdk.app.base import (  # noqa: PLC0415 — circular: app.base imports handler.context transitively
-                AppContextError,
-            )
-
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside test_auth, preflight_check, or fetch_metadata."
             )
         return ctx
+
+    def routers(self) -> Sequence[APIRouter]:
+        """FastAPI routers with this app's own endpoints (none by default).
+
+        Override to serve endpoints beyond auth / check / metadata::
+
+            router = APIRouter(prefix="/workflows/v1/metadata")
+
+            @router.post("/projects")
+            async def projects(body: ProjectsRequest) -> JSONResponse: ...
+
+            class MyHandler(Handler):
+                def routers(self) -> Sequence[APIRouter]:
+                    return [router]
+
+        The worker's handler service and the consolidated API host both serve
+        them, after the SDK's routes; redefining an SDK path is refused at
+        startup. Keep router code in the handler's own files (imported
+        relatively) so it ships to the host with the handler.
+        """
+        return ()
 
     @abstractmethod
     async def test_auth(self, input: AuthInput) -> AuthOutput:

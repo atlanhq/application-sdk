@@ -1,0 +1,54 @@
+name: API package checks (reusable)
+
+# Reusable workflow: checks that atlan-application-sdk-api — a listed subset of
+# application_sdk/ published as its own wheel for the consolidated API host —
+# still installs and serves on its own.
+#
+#   * gen_api_files.py --check: api-files.txt is the import closure of the seed
+#     modules in packages/api/pyproject.toml, as committed.
+#   * check_api_surface.py reads every listed file's imports: nothing reaches an
+#     unlisted module or an undeclared package, and lazy worker-only imports have
+#     a stated fallback.
+#   * probe_api_wheels.py installs the BUILT wheels (never an editable tree):
+#     identical bytes in both wheels, a pip upgrade from the last release keeps
+#     every listed file, and an api-only venv imports the listed modules within
+#     the RSS budget and serves auth/check/metadata.
+#
+# The logic lives in tested scripts (docs/standards/ci.md). SDK-private: no
+# consumer app references this workflow.
+
+on:
+  workflow_call: {}
+
+permissions:
+  contents: read
+
+jobs:
+  api-package:
+    name: API package checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The upgrade probe starts from the last release tag.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: "0.12.17"
+
+      - name: Check the api file list is generated from the seeds
+        run: python3 .github/scripts/gen_api_files.py --check
+
+      - name: Check the api file set's imports
+        run: python3 .github/scripts/check_api_surface.py
+
+      - name: Build both wheels
+        run: |
+          set -euo pipefail
+          uv build --wheel --out-dir dist .
+          uv build --out-dir dist packages/api
+
+      - name: Probe the built wheels
+        run: python3 .github/scripts/probe_api_wheels.py --dist dist --from-release latest-tag --max-rss-mb 120

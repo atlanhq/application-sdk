@@ -13,9 +13,9 @@ from typing import Any, TypeAlias
 
 import orjson
 
+from application_sdk._logging import get_logger
 from application_sdk.common.sql_filters_errors import InvalidSqlFilterError
 from application_sdk.errors import AppError
-from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 

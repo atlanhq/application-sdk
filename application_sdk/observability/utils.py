@@ -3,6 +3,7 @@ import os
 
 from opentelemetry.sdk.resources import Resource
 
+from application_sdk._install import worker_only_missing
 from application_sdk.constants import (
     APP_SDK_VERSION,
     APP_TYPE,
@@ -128,9 +129,15 @@ def in_temporal_workflow() -> bool:
         worker process shutdown, tests and CLI tools.
     """
     # conformance: ignore[P006] safety guard, not orchestration. Relocating this behind execution/_temporal/ would invert the dependency (observability would import execution, which already imports observability). The ExecutionContext ContextVar alternative is a derived signal that reads False for any worker not built by create_worker, failing the guard open; temporalio's own in_workflow() is ground truth.
-    from temporalio import (  # noqa: PLC0415 — cold path: consulted only on flush/shutdown paths
-        workflow,
-    )
+    try:
+        from temporalio import (  # noqa: PLC0415 — cold path: consulted only on flush/shutdown paths
+            workflow,
+        )
+    except ModuleNotFoundError as exc:
+        if not worker_only_missing(exc):
+            raise
+        # api-only install (the API host): no Temporal, so never workflow code.
+        return False
 
     return workflow.in_workflow()
 

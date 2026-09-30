@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     import boto3
     from sqlalchemy.engine.url import URL
 
-from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk._logging import get_logger
 
 logger = get_logger(__name__)
 

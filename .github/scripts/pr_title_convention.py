@@ -72,6 +72,13 @@ CF_EXEMPT_GLOBS = (
     "packages/conformance/*/yarn.lock",
 )
 
+# packages/api is released in lockstep with the SDK, so its source is the "sdk"
+# zone; its tests and lock file are exempt like the other packages'.
+API_EXEMPT_GLOBS = (
+    "packages/api/tests/*",
+    "packages/api/uv.lock",
+)
+
 _VALIDATORS = {
     "deps": (CHORE_RE, "deps"),
     "docker-img": (DOCKER_RE, "docker-img"),
@@ -127,8 +134,8 @@ _ERROR_MESSAGES = {
     ),
     "chore-ci": (
         "Non-source changes must use 'chore:' or 'ci:' (feat:/fix: are reserved "
-        "for application_sdk/, Dockerfile/entrypoint.sh, contract-toolkit core, "
-        "and packages/conformance core)."
+        "for application_sdk/ and packages/api, Dockerfile/entrypoint.sh, contract-toolkit "
+        "core, and packages/conformance core)."
     ),
 }
 
@@ -231,6 +238,10 @@ def classify_files(files: list) -> str:
     sdk = docker_img = ct_core = cf_core = False
     for f in files:
         if f.startswith("application_sdk/"):
+            sdk = True
+        elif any(fnmatch.fnmatch(f, glob) for glob in API_EXEMPT_GLOBS):
+            continue
+        elif f.startswith("packages/api/"):
             sdk = True
         elif f in DOCKER_IMAGE_FILES:
             docker_img = True

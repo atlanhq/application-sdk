@@ -11,8 +11,10 @@ import os
 
 import orjson
 
+from application_sdk._context_errors import ObjectStoreNotConfiguredError
+from application_sdk._install import worker_only_missing
+from application_sdk._logging import get_logger
 from application_sdk.constants import TEMPORARY_PATH
-from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.server.fastapi.models import FileUploadResponse
 
 logger = get_logger(__name__)
@@ -65,9 +67,15 @@ async def download_file_from_upload_response(
 
     local_path = os.path.join(TEMPORARY_PATH, key)
 
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: storage.ops imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials → here); pinned by the preflight gate's import-hygiene test
-        download_file_chunked,
-    )
+    try:
+        from application_sdk.storage.ops import (  # noqa: PLC0415 — lazy: storage.ops imports obstore (heavy Rust ext) at module load, and this module sits on the workflow-sandbox import chain (credentials → here); pinned by the preflight gate's import-hygiene test
+            download_file_chunked,
+        )
+    except ModuleNotFoundError as exc:
+        if not worker_only_missing(exc):
+            raise
+        # api-only install (the API host): there is no object store to read from.
+        raise ObjectStoreNotConfiguredError() from exc
 
     # Chunk large uploads (user-supplied files are uncapped) so a big artifact
     # survives slow egress; small files still stream in a single GET. (BLDX-1513)
