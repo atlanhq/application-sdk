@@ -794,6 +794,186 @@ def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
 
 
 # ---------------------------------------------------------------------------
+# K018 — run() inherited unchanged from an SDK template (FND-3110)
+# ---------------------------------------------------------------------------
+
+# An app that writes no run() of its own gets the template's run(), and the
+# runtime validates the payload against THAT method's Input. A generated
+# AppInputContract beside it is never bound, so an arg it declares is dropped.
+_INHERITED_TEMPLATE_RUN_APP = """\
+from application_sdk.templates import {base}
+
+class MyApp({base}):
+    async def fetch_databases(self, input):
+        pass
+"""
+
+
+def _generated_extraction_input(fields: str = "    pass\n") -> str:
+    return (
+        "from application_sdk.templates.contracts import ExtractionInput\n"
+        "\n"
+        "class AppInputContract(ExtractionInput):\n"
+        f"{fields}"
+    )
+
+
+@pytest.mark.parametrize(
+    "base", ["SqlApp", "SqlMetadataExtractor", "IncrementalSqlMetadataExtractor"]
+)
+def test_k018_pairs_inherited_template_run_with_the_template_input(
+    tmp_path: Path, base: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base=base),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "include_filter": "{{include-filter}}",
+                    "fetch_partitions": "{{fetch-partitions}}",
+                }
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert all(f.file == "app/app.py" for f in findings)
+
+
+def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
+    tmp_path: Path,
+) -> None:
+    """The template's own Input decides, not the ExtractionInput anchor."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlQueryExtractor"),
+            "app/generated/_input.py": _generated_extraction_input(),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "include_filter": "{{include-filter}}",
+                    "lookback_days": "{{lookback-days}}",
+                }
+            )
+        },
+    )
+    assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
+        "include_filter"
+    }
+
+
+def test_k018_inherited_template_run_through_an_in_repo_base(tmp_path: Path) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/base.py": (
+                "from application_sdk.templates import SqlApp as _Sql\n"
+                "\n"
+                "class ConnectorBase(_Sql):\n"
+                "    pass\n"
+            ),
+            "app/app.py": (
+                "from app.base import ConnectorBase\n"
+                "\n"
+                "class MyApp(ConnectorBase):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert {f.file for f in findings} == {"app/app.py"}
+
+
+def test_k018_in_repo_run_on_a_base_is_not_the_template_run(tmp_path: Path) -> None:
+    """A run() on an in-repo base is not inherited from the template."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "\n"
+                "class Mixin:\n"
+                "    async def run(self, input):\n"
+                "        pass\n"
+                "\n"
+                "class MyApp(Mixin, SqlApp):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_local_class_named_like_a_template_keeps_the_fallback(
+    tmp_path: Path,
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "class SqlApp:\n"
+                "    pass\n"
+                "\n"
+                "class MyApp(SqlApp):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_inherited_template_run_suppressed_on_the_app_class(
+    tmp_path: Path,
+) -> None:
+    src = _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp").replace(
+        "class MyApp(", "# conformance: ignore[K018] tracked elsewhere\nclass MyApp("
+    )
+    paths = _write_py(tmp_path, {"app/app.py": src})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert findings and all(f.suppressed for f in findings)
+
+
+# ---------------------------------------------------------------------------
 # K019 — rule metadata
 # ---------------------------------------------------------------------------
 

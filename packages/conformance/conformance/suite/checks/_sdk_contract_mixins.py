@@ -659,6 +659,37 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
     ),
 }
 
+
+class TemplateRunContract(NamedTuple):
+    """The Input and Output type names of an SDK template's ``run()``."""
+
+    input: str
+    output: str
+
+
+# ── SDK template run() contracts ──────────────────────────────────────────────
+# An app that subclasses a template and writes no ``run()`` of its own inherits
+# the template's, and ``_collect_implicit_ep`` registers it with the input type
+# ``get_type_hints`` reports on that inherited method. The runtime validates the
+# payload against exactly that model, so K018 pairs such an app with it.
+#
+# ``BaseMetadataExtractor`` is absent on purpose: its ``run`` is still
+# ``App.run``, so a subclass without its own ``run()`` has no implicit
+# entrypoint at all.
+#
+# ``tests/test_sdk_contract_mixins.py`` rebuilds this table from the live
+# templates the same way the runtime does and fails on any drift.
+SDK_TEMPLATE_RUN_CONTRACTS: dict[str, TemplateRunContract] = {
+    "SqlApp": TemplateRunContract("ExtractionInput", "ExtractionOutput"),
+    "SqlMetadataExtractor": TemplateRunContract("ExtractionInput", "ExtractionOutput"),
+    "IncrementalSqlMetadataExtractor": TemplateRunContract(
+        "IncrementalExtractionInput", "IncrementalExtractionOutput"
+    ),
+    "SqlQueryExtractor": TemplateRunContract(
+        "QueryExtractionInput", "QueryExtractionOutput"
+    ),
+}
+
 # ── Model-declared artifact fields ────────────────────────────────────────────
 # A ``FileReference`` field can carry the SDK's ``AssetArtifact`` marker
 # (``application_sdk.contracts.types``), which says its declaration *is* an

@@ -18,6 +18,10 @@ A base counts as ``App``-family when it is
 The SDK templates live outside the scanned repo, so the last case relies on
 :attr:`ClassRecord.sdk_app_bases`, which records the import provenance of each
 base in the file that defines the class.
+
+:func:`inherited_run_base` answers the complementary question for a class
+with no ``run`` of its own: which SDK ``App``-family base its ``run`` comes
+from, which K018 maps to that template's ``run()`` input.
 """
 
 from __future__ import annotations
@@ -165,3 +169,54 @@ def reaches_app_family(
         return None
     cache[name] = result
     return result
+
+
+def inherited_run_base(name: str, by_name: Mapping[str, ClassRecord]) -> str | None:
+    """The SDK ``App``-family base whose ``run`` the in-repo class *name* inherits.
+
+    Mirrors the ``cls.run`` lookup ``_collect_implicit_ep`` does for a class
+    with no ``run`` of its own: bases are searched depth-first in declaration
+    order, and the first SDK ``App``-family base reached (per
+    :attr:`ClassRecord.sdk_app_bases`) is returned by its SDK name. ``None``
+    when *name* or an in-repo base on the way defines ``run`` itself, when a
+    base cannot be resolved (it might define ``run``), or when no base reaches
+    the SDK ``App`` family.
+    """
+    found = _run_owner(name, by_name, set())
+    return found if isinstance(found, str) else None
+
+
+def _run_owner(
+    name: str, by_name: Mapping[str, ClassRecord], visiting: set[str]
+) -> str | bool | None:
+    """SDK base name, ``False`` for a branch with no ``App`` base, ``None`` to stop."""
+    rec = by_name.get(name)
+    if rec is None or name in visiting or _defines_run(rec.node):
+        return None
+    visiting.add(name)
+    try:
+        for base in rec.bases:
+            if base in rec.sdk_app_bases:
+                return base
+            if base == name:
+                return None
+            found = _run_owner(base, by_name, visiting)
+            if found is not False:
+                return found
+        return False
+    finally:
+        visiting.discard(name)
+
+
+def _defines_run(class_node: ast.ClassDef) -> bool:
+    for item in class_node.body:
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if item.name == "run":
+                return True
+        elif isinstance(item, ast.Assign):
+            if any(isinstance(t, ast.Name) and t.id == "run" for t in item.targets):
+                return True
+        elif isinstance(item, ast.AnnAssign):
+            if isinstance(item.target, ast.Name) and item.target.id == "run":
+                return True
+    return False
