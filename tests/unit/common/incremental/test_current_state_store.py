@@ -330,6 +330,33 @@ class TestCommit:
             | {state.manifest_key}
         )
 
+    async def test_overlapping_attempts_of_one_run_keep_each_others_keys(
+        self, local, tmp_path
+    ) -> None:
+        """A timed-out attempt still running beside its retry: the attempt that
+        committed first prunes late, after the retry's manifest is live. It must
+        not delete the retry's keys, which carry the same stamp."""
+        state = CurrentStateStore(PREFIX)
+        first = await state.commit(_write(tmp_path / "a1", {"t/a.json": "a"}), "run-x")
+        await state.commit(_write(tmp_path / "a2", {"t/b.json": "b"}), "run-x")
+
+        # Attempt 1's prune, arriving after attempt 2's commit and prune.
+        await state._prune(set(first.keys), "run-x", tmp_path / "a1")
+
+        snapshot = await state.probe()  # would raise CurrentStateManifestError
+        dest = await state.materialize(snapshot, tmp_path / "out")
+        assert sorted(_files(dest).values()) == [b"b"]
+
+        # Attempt 1's leftover goes with the next run's commit.
+        committed = await state.commit(
+            _write(tmp_path / "next", {"t/c.json": "c"}), "run-next"
+        )
+        assert set(await list_keys(PREFIX)) == (
+            set(committed.keys)
+            | {f"{k}.sha256" for k in committed.keys}
+            | {state.manifest_key}
+        )
+
     async def test_a_committed_key_deleted_before_the_prune_is_re_uploaded(
         self, local, tmp_path
     ) -> None:

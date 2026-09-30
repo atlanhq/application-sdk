@@ -347,10 +347,11 @@ class CurrentStateStore:
            *local_dir* keeps mirroring what is committed).
         2. Upload the tree.
         3. Write the manifest — the commit point.
-        4. Prune every key the manifest does not name: this run's own
-           leftovers, the snapshot it replaced, a failed run's uploads, and
-           unstamped legacy keys. Pruning them at once keeps a failed run's
-           files out of the ``**/*.json`` glob that publish reads.
+        4. Prune every key the manifest does not name — the snapshot it
+           replaced, a failed run's uploads, and unstamped legacy keys — except
+           keys with this run's own stamp (see :meth:`_select_stale`). Pruning
+           them at once keeps a failed run's files out of the ``**/*.json``
+           glob that publish reads.
         5. Re-upload any key the manifest names that the prune's listing did
            not hold, from *local_dir*.
 
@@ -359,8 +360,8 @@ class CurrentStateStore:
         leftover. Step 5 is the safety net if that ever breaks. The run whose
         manifest is live repairs its own snapshot, so the connection is not
         left with a manifest naming deleted keys, which every later
-        :meth:`probe` would refuse. A same-run retry, even one overlapping an
-        earlier attempt, shares the run's stamp and is unaffected.
+        :meth:`probe` would refuse. Overlapping attempts of one run share a
+        stamp, so neither prunes the other's keys.
 
         A failure before step 3 leaves the previous snapshot committed and
         intact; a failure in step 4 happens after the commit point, so the new
@@ -429,7 +430,7 @@ class CurrentStateStore:
         listing: list[str] = []
         async for batch in obstore.list(resolved, prefix=self._key_prefix):
             listing.extend(str(o["path"]) for o in batch)
-        stale = await run_in_thread(self._select_stale, listing, committed)
+        stale = await run_in_thread(self._select_stale, listing, committed, run_id)
         if stale:
             await _delete_paths_individually(resolved, stale)
             logger.info(
@@ -438,15 +439,27 @@ class CurrentStateStore:
             )
         await self._repair(committed - set(listing), local_dir)
 
-    def _select_stale(self, listing: list[str], committed: set[str]) -> list[str]:
+    def _select_stale(
+        self, listing: list[str], committed: set[str], run_id: str
+    ) -> list[str]:
         """Pick the keys under the prefix this commit deletes. Blocking.
 
-        Everything the manifest does not name: this run's own leftovers, the
-        snapshot this commit replaced, a failed run's uploads, and unstamped
-        keys (a pre-manifest snapshot). A sidecar goes with its data key.
+        Everything the manifest does not name — the snapshot this commit
+        replaced, a failed run's uploads, and unstamped keys (a pre-manifest
+        snapshot) — except keys carrying this run's own stamp. Two attempts of
+        one run can overlap (a timed-out attempt still running beside its
+        retry), and their keys are indistinguishable: deleting the other
+        attempt's could leave its live manifest naming missing keys. An earlier
+        attempt's leftovers go with the next run's commit instead. A sidecar
+        goes with its data key, since it carries the same stamp.
         """
         keep = committed | {sidecar_key(k) for k in committed} | {self.manifest_key}
-        return [key for key in listing if key not in keep]
+        own = _run_stamp(run_id)
+        return [
+            key
+            for key in listing
+            if key not in keep and not key.rsplit("/", 1)[-1].startswith(own)
+        ]
 
     async def _repair(self, missing: set[str], local_dir: Path) -> None:
         """Re-upload committed keys the store no longer holds, from *local_dir*.
