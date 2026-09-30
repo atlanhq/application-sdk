@@ -78,13 +78,47 @@ def _absolute_source(module: str, is_package: bool, stmt: ast.ImportFrom) -> str
     return f"{package}.{stmt.module}" if stmt.module else package
 
 
+def _is_type_checking_guard(test: ast.expr) -> bool:
+    """``if TYPE_CHECKING:`` or ``if typing.TYPE_CHECKING:``."""
+    if isinstance(test, ast.Name):
+        return test.id == "TYPE_CHECKING"
+    return isinstance(test, ast.Attribute) and test.attr == "TYPE_CHECKING"
+
+
+def _module_level_imports(
+    tree: ast.Module, *, is_package: bool
+) -> list[ast.ImportFrom]:
+    """Module-level ``from ... import ...`` statements; in a package ``__init__``,
+    also the re-exports under ``if TYPE_CHECKING:``.
+
+    A package that exports names lazily — a module ``__getattr__`` to break an
+    import cycle — declares them for type checkers inside that guard. The names
+    are importable from the package at runtime all the same, so an app that
+    imports an alias from there must get it expanded like any static re-export.
+    In a plain module the same guard only holds imports for its own annotations,
+    which are not an import path the SDK offers.
+    """
+    imports: list[ast.ImportFrom] = []
+    for stmt in tree.body:
+        if isinstance(stmt, ast.ImportFrom):
+            imports.append(stmt)
+        elif (
+            is_package
+            and isinstance(stmt, ast.If)
+            and _is_type_checking_guard(stmt.test)
+        ):
+            imports.extend(s for s in stmt.body if isinstance(s, ast.ImportFrom))
+    return imports
+
+
 def build_sdk_type_aliases(sdk_root: Path) -> dict[str, TypeAliasDef]:
     """Map ``module.Name`` to the source of every public SDK type alias.
 
     Each alias is expanded through its own module's aliases first, so the stored
     expression never names another SDK alias.  Public re-exports
-    (``from .sql_metadata import FilterMap`` in a package ``__init__``) are added
-    under the re-exporting module's path too, since that is the path apps import.
+    (``from .sql_metadata import FilterMap`` in a package ``__init__``, including
+    one under ``if TYPE_CHECKING:`` for a lazily exported name) are added under
+    the re-exporting module's path too, since that is the path apps import.
     A generic alias keeps its type parameters so a subscripted use
     (``BoundedDict[str, int]``) can substitute its arguments.
     """
@@ -123,9 +157,7 @@ def build_sdk_type_aliases(sdk_root: Path) -> dict[str, TypeAliasDef]:
     for _ in range(_REEXPORT_PASSES):
         added = False
         for module, (tree, is_package) in modules.items():
-            for stmt in tree.body:
-                if not isinstance(stmt, ast.ImportFrom):
-                    continue
+            for stmt in _module_level_imports(tree, is_package=is_package):
                 source = _absolute_source(module, is_package, stmt)
                 if not source or not source.startswith(SDK_PACKAGE):
                     continue

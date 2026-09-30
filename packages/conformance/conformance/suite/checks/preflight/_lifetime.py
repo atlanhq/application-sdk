@@ -9,7 +9,7 @@ from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.schema.findings import Finding
 
 from ._common import Registry, Source, iter_function_nodes, reachable_preflight_sites
-from ._contracts import _qualified
+from ._contracts import _qualified, _sdk
 
 _BLOCKING = {
     "time.sleep",
@@ -132,7 +132,9 @@ def scan(reg: Registry) -> list[Finding]:
             is_executor = (
                 qualified == "asyncio.to_thread"
                 or isinstance(node.func, ast.Attribute)
-                and node.func.attr == "run_in_executor"
+                and node.func.attr in {"run_in_executor", "run_in_thread"}
+                or isinstance(node.func, ast.Name)
+                and _sdk(src, node.func, "run_in_thread")
             )
             if is_executor and not _deadline(node, parents, src):
                 emit(

@@ -15,9 +15,10 @@
       "platformAutomerge": false
     },
     {
-      "description": "Soft-mode exception: the conformance package's own dedicated PR (uv.lock-only, split out by the fleet preset's update-lockfile rule) stays auto-merged for minor/patch so check improvements keep flowing while everything else awaits human review. Must come after the '*' rule — later rules win.",
+      "description": "Soft-mode exception: the conformance package's own dedicated PR (uv.lock-only, split out by the fleet preset's update-lockfile rule) stays auto-merged for minor/patch so check improvements keep flowing while everything else awaits human review. groupName splits it out of the preset's 'atlan platform' group: Renovate auto-merges a group only when every member does. Must come after the '*' rule — later rules win.",
       "matchPackageNames": ["atlan-application-sdk-conformance"],
       "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "conformance package",
       "automerge": true,
       "platformAutomerge": true
     }

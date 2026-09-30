@@ -1508,6 +1508,16 @@ _SQLALCHEMY_DRIVERNAME_RE = re.compile(
     r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
 )
 _SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
+# SDK classes that create a SQLAlchemy engine on the repo's behalf. A connector
+# built on ``BaseSQLClient`` loads its dialect through SQLAlchemy without ever
+# importing ``sqlalchemy`` itself. Importing the module is not enough: the SDK
+# imports SQLAlchemy lazily, inside ``BaseSQLClient.load()``.
+_SQLALCHEMY_LOADER_CLASSES = frozenset({"BaseSQLClient", "AsyncBaseSQLClient"})
+# Modules those classes are importable from: the defining module and the
+# public package that re-exports them.
+_SQLALCHEMY_LOADER_MODULES = frozenset(
+    {"application_sdk.clients.sql", "application_sdk.clients"}
+)
 
 
 def _dialect_entry_point_name(dialect: str, driver: str | None) -> str:
@@ -1576,14 +1586,16 @@ def _collect_source_usage(
     matching (WARN-tier): a scheme only ever clears the finding for a
     dependency that registers a ``sqlalchemy.dialects`` entry point under that
     exact name. Two sound exclusions bound it: docstrings are not evidence, and
-    no name is credited unless the repo imports ``sqlalchemy`` somewhere —
-    without SQLAlchemy nothing loads a dialect entry point. The gate is
-    repo-wide because a URL constant often lives in a config module that never
-    imports SQLAlchemy itself.
+    no name is credited unless the repo imports ``sqlalchemy`` or references an
+    SDK SQL client class (``_SQLALCHEMY_LOADER_CLASSES``) somewhere — without
+    SQLAlchemy nothing loads a dialect entry point. The gate is repo-wide
+    because a URL constant often lives in a config module that never imports
+    SQLAlchemy itself.
     """
     modules: set[str] = set()
     drivers: set[str] = set()
     dialect_names: set[str] = set()
+    loads_sqlalchemy = False
     for path in py_files:
         try:
             raw = path.read_bytes()
@@ -1620,9 +1632,117 @@ def _collect_source_usage(
                     continue
                 for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
                     dialect_names.add(_dialect_entry_point_name(*match.groups()))
-    if "sqlalchemy" not in modules:
+        loads_sqlalchemy = loads_sqlalchemy or _references_sdk_sql_client(tree)
+    if "sqlalchemy" not in modules and not loads_sqlalchemy:
         dialect_names = set()
     return modules, drivers, dialect_names
+
+
+def _references_sdk_sql_client(tree: ast.AST) -> bool:
+    """Whether *tree* uses an SDK SQL client class, not merely imports it.
+
+    A use is ``BaseSQLClient``/``AsyncBaseSQLClient`` as a class base or as the
+    callee of a call — reached by a name ``from <loader module> import …``
+    bound, or by an attribute access such as ``sql.BaseSQLClient`` whose owner
+    resolves to a loader module through the file's imports. An import alone,
+    an import under ``if TYPE_CHECKING:``, and a type annotation never count,
+    because none of them runs ``BaseSQLClient.load()``, the only place the SDK
+    imports SQLAlchemy.
+    """
+    type_only = _type_checking_ids(tree)
+    class_names: set[str] = set()
+    bound_modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if id(node) in type_only:
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bound_modules[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    bound_modules[top] = top
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if (
+                    node.module in _SQLALCHEMY_LOADER_MODULES
+                    and alias.name in _SQLALCHEMY_LOADER_CLASSES
+                ):
+                    class_names.add(local)
+                else:
+                    bound_modules[local] = f"{node.module}.{alias.name}"
+    # A name the file also binds some other way may not be the SDK's class or
+    # module where it is used; the scan is file-wide, so drop it outright.
+    rebound = _non_import_bindings(tree)
+    class_names -= rebound | bound_modules.keys()
+    for name in rebound:
+        bound_modules.pop(name, None)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            runtime_refs: list[ast.expr] = node.bases
+        elif isinstance(node, ast.Call):
+            runtime_refs = [node.func]
+        else:
+            continue
+        for ref in runtime_refs:
+            if isinstance(ref, ast.Name) and ref.id in class_names:
+                return True
+            if (
+                isinstance(ref, ast.Attribute)
+                and ref.attr in _SQLALCHEMY_LOADER_CLASSES
+                and _resolve_dotted(ref.value, bound_modules)
+                in _SQLALCHEMY_LOADER_MODULES
+            ):
+                return True
+    return False
+
+
+def _non_import_bindings(tree: ast.AST) -> set[str]:
+    """Return every name *tree* binds other than by an import statement."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return names
+
+
+def _type_checking_ids(tree: ast.AST) -> set[int]:
+    """Return ``id()`` of every node inside an ``if TYPE_CHECKING:`` body."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        name = (
+            test.id
+            if isinstance(test, ast.Name)
+            else test.attr
+            if isinstance(test, ast.Attribute)
+            else None
+        )
+        if name != "TYPE_CHECKING":
+            continue
+        for stmt in node.body:
+            ids.update(id(child) for child in ast.walk(stmt))
+    return ids
+
+
+def _resolve_dotted(node: ast.expr, bound_modules: dict[str, str]) -> str | None:
+    """Resolve ``a.b.c`` to a dotted module path through the file's imports."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in bound_modules:
+        return None
+    return ".".join([bound_modules[node.id], *reversed(parts)])
 
 
 def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:

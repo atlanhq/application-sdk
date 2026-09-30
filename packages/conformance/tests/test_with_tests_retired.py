@@ -1,9 +1,11 @@
-"""`with-tests` is accepted for one release and reaches nothing.
+"""`with-tests` is still accepted by the reusable and reaches nothing.
 
 Conformance checks that the preflight scenarios are defined; whether they
 pass is the test gate's measure. So no conformance leg syncs an environment
-or runs pytest, and the `with-tests` switch that used to ask for that is a
-deprecated no-op until v0.40.0.
+or runs pytest. The `with-tests` switch that used to ask for that stays a
+no-op input on the reusable; the detect action's input and the CLI's
+`--with-tests` / `--preflight-report` / `--test-timeout` / `--test-python`
+flags were removed in v0.40.0.
 
 "Accepted" and "reaches nothing" are both load-bearing. Dropping the input
 from the reusable workflow would fail every caller that still passes it at
@@ -16,8 +18,6 @@ string search passes just as happily on a forwarded-but-ignored input.
 from __future__ import annotations
 
 import importlib.util
-import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -67,9 +67,9 @@ def test_no_conformance_leg_but_dependencies_syncs_an_environment() -> None:
     raise AssertionError("no matrix job with an `include` list in the suite")
 
 
-def test_the_detect_action_accepts_the_input_and_exports_nothing_for_it() -> None:
+def test_the_detect_action_no_longer_declares_the_input() -> None:
     action = yaml.safe_load(render("run-conformance-detect-action.yaml"))
-    assert _INPUT in action["inputs"]
+    assert _INPUT not in action["inputs"]
     for step in action["runs"]["steps"]:
         env = step.get("env") or {}
         assert "WITH_TESTS" not in env, step.get("name")
@@ -84,37 +84,19 @@ def test_the_arg_builder_never_emits_with_tests(
     assert "--with-tests" not in module.build_args("F", "preflight")
 
 
-def test_the_cli_flags_are_inert(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize(
+    "flag",
+    [
+        ["--with-tests"],
+        ["--test-timeout", "5"],
+        ["--test-python", "python"],
+        ["--preflight-report", "report.json"],
+    ],
+)
+def test_the_removed_cli_flags_are_rejected(
+    flag: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Same findings with and without the flags, a warning, and no child process."""
-
-    def _forbidden(*args: Any, **kwargs: Any) -> None:
-        raise AssertionError("conformance must not start a subprocess for tests")
-
-    monkeypatch.setattr(subprocess, "Popen", _forbidden)
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="x"\nversion="1"\n')
-    (tmp_path / "handler.py").write_text(
-        "from application_sdk.handler import Handler\n"
-        "class H(Handler):\n"
-        "    async def preflight_check(self, input): ...\n"
-    )
-    results = []
-    for extra in (
-        [],
-        ["--with-tests", "--test-timeout", "5", "--test-python", "python"],
-        ["--preflight-report", str(tmp_path / "missing.json")],
-    ):
-        output = tmp_path / "report.sarif"
-        main(
-            ["--repo", str(tmp_path), "--series", "F", "--output", str(output), *extra]
-        )
-        results.append(
-            sorted(
-                r["message"]["text"]
-                for r in json.loads(output.read_text())["runs"][0]["results"]
-            )
-        )
-        err = capsys.readouterr().err
-        assert ("deprecated no-op" in err) == bool(extra)
-    assert results[0] == results[1] == results[2]
+    with pytest.raises(SystemExit) as exc:
+        main(["--repo", str(tmp_path), "--series", "F", *flag])
+    assert exc.value.code == 2
+    assert flag[0] in capsys.readouterr().err

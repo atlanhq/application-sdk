@@ -99,11 +99,44 @@ two auto-fixable rules:
     non-ASCII as `\uXXXX` while orjson always writes UTF-8.  So only a call
     already passing `separators=(",", ":")` **and** `ensure_ascii=False`
     round-trips byte-identically.  For every other `dumps`, find what consumes
-    the string.  If anything hashes it, commits it, diffs it, signs it or
-    compares it byte-for-byte, prove the change on real input (for a
+    the string.  If the string is stored as one attribute value and a consumer
+    outside the app compares it as text, the next bullet applies instead: do
+    not swap.  If a consumer
+    inside the app hashes it, commits it, diffs it, signs it or compares it
+    byte-for-byte, prove the change on real input (for a
     committed file, dump its current content both ways and compare) and say
     in residue what will change.  Do not rewrite a committed file to match;
     the edit touches the call site only.
+  - **When the bytes leave the app, leave the site on stdlib `json`.**  No
+    orjson call reproduces stdlib's default output (no separators option, no
+    `ensure_ascii` option, and `orjson.dumps` cannot serialize integers above
+    64 bits), and rewriting orjson's
+    text corrupts values that contain `", "`.  So if the encoded string is
+    stored as one attribute or field value and a consumer outside the app
+    hashes or byte-compares that value as text, do not swap: any swap changes
+    every stored value once on every tenant, and moves any length limit
+    measured on the string.  This applies only where orjson cannot reproduce
+    the output: a call already passing `separators=(",", ":")` and
+    `ensure_ascii=False` on input with no integer above 64 bits is
+    byte-identical to `orjson.dumps(...).decode()` and makes the swap.
+    Prove the consumer before you stop: trace the string from the call to
+    the attribute key or field it is stored in, then to the code outside the
+    app that hashes or compares that value as text.  Then add
+    `# conformance: ignore[O001] <reason>` where the reason names the
+    attribute key or field and that location (repo and file:line), e.g.
+    `ignore[O001] rawDataTypeDefinition, hashed as text at <repo>/<path>:<line>`.
+    A reason that names neither, a consumer that only parses the JSON, or one
+    inside the app, is not a reason: make the swap.  A `dumps` that
+    serializes a whole entity or document never qualifies, even when that
+    document is hashed later: it has no single attribute key to cite, and
+    the publish app parses the whole document of an entity file before it
+    diffs it.  So the dumps that writes the file makes the swap, while a JSON
+    string stored as one attribute value inside that entity is hashed as text
+    and stays.  O001 is WARN-tier, so only a strict-mode run hands the lane
+    this finding: return `outcome = "suppress"` with
+    `suppression_reason = "site-exception"` and residue it.  A directive
+    already in place is the terminal state in any mode: do not strip it on a
+    later run.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
     and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`
@@ -306,4 +339,7 @@ When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.
 interop with a library that requires a `str` and the bytes-decode round-trip
 is wasteful, or a `json.JSONEncoder` subclass), the model may propose an
 inline `# conformance: ignore[O001] <justification>` instead of a fix.  Route
-every suppression to residue for human audit.
+every suppression to residue for human audit.  The byte-changing-defaults
+carve-out above is one such `site-exception`: like every O001 suppression the
+lane writes it only in strict mode, and once it is in place no mode strips
+it.

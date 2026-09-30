@@ -8,7 +8,7 @@ A static finding identifies a supported source pattern. Confirm its reachability
 
 Separate **violation found** from **not evaluated/unresolved** in reports. Conformance never executes tests: F016 checks that the required scenarios are *defined* (registered, collectable, not skipped, asserting the contract), and whether they *pass* is the test gate's measure. The two are reported by different gates and are not combined. Record the command, revision, SDK version, scenario, expected outcome and observed evidence. See [scenario registration](preflight-testing.md).
 
-F001, F003, F006 and F007 block (SARIF `error`); the other preflight rules warn. F016 warns while the fleet registers its scenarios and is promoted to block once it has. F017 and F018 are retired. The generated [catalog page](rules/preflight.md) is the source of truth for tiers. Under `--exit-zero` an exit code of zero can still include violations and undefined scenarios. A guide is not permission to change gate policy or suppress an unresolved result.
+F001, F003, F006 and F007 block (SARIF `error`); the other preflight rules warn. F016 warns while the fleet registers its scenarios and is promoted to block once it has. F017 and F018 were retired in 0.39.0 and deleted in 0.40.0. The generated [catalog page](rules/preflight.md) is the source of truth for tiers. Under `--exit-zero` an exit code of zero can still include violations and undefined scenarios. A guide is not permission to change gate policy or suppress an unresolved result.
 
 ## Shared preflight contract
 
@@ -80,7 +80,7 @@ Retryability alone does not justify returning `READY` after a failed probe. Demo
 
 **Contract:** probes remain awaitable and bounded across connection, authentication, query and fetch phases.
 
-**Investigate:** inspect the underlying driver, not just an async wrapper. Confirm whether a flagged call actually blocks. **Fix:** use supported async operations or bounded offloading with driver-level deadlines. **Verify:** hang each phase, confirm event-loop progress and bounded completion. Cancelling a thread await does not establish termination of the thread.
+**Investigate:** inspect the underlying driver, not just an async wrapper. Confirm whether a flagged call actually blocks. Every thread offload is an executor wait here: `asyncio.to_thread`, `run_in_executor`, and the SDK's `run_in_thread`, which moves the work to the SDK pool but adds no deadline. On a preflight path use the module-level `application_sdk.execution.heartbeat.run_in_thread`: preflight runs on `Handler`, which has no `run_in_thread`, and `App.run_in_thread` / `task_context.run_in_thread` raise `AppContextError` outside a `@task`. **Fix:** use supported async operations or bounded offloading with driver-level deadlines. When P031 moves an offload to `run_in_thread`, keep or add the enclosing `asyncio.wait_for(..., timeout=...)` or `async with asyncio.timeout(...)`. **Verify:** hang each phase, confirm event-loop progress and bounded completion. Cancelling a thread await does not establish termination of the thread.
 
 ## F012
 
@@ -113,18 +113,6 @@ Two different states share this rule. `ATLAN_PREFLIGHT_GATE_MODE` is **already i
 **Contract:** an app that defines its own `preflight_check` defines every scenario in the required matrix, for each `@entrypoint` it declares, as a pytest-collected test under `tests/unit/` — the tier the test gate's unit job always runs — that drives the real handler.
 
 **Investigate:** read the finding: it names the scenario and entrypoint that is missing, or the test whose registration does not count and why — it does not run (skip, a true `skipif`/`xfail` condition, no runnable parametrized case), its run state cannot be read (a non-literal condition or `pytestmark` element), it is declared unsupported, its case runs a different entrypoint than its marker claims, it does not call `assert_preflight_result` from `conformance.preflight_testing` (or `assert_probe_lifetime` for hung_probe, cancellation_cleanup and budget_retry) as a statement of the test body or of a top-level loop over a non-empty literal, it names a scenario or entrypoint outside the matrix, or its marker or a decorator is outside the shapes F016 reads (see [Defining a scenario](preflight-testing.md#defining-a-scenario)). Verify fixtures invoke production handlers, replace source I/O only at controlled boundaries and declare mandatory probes. **Fix:** add meaningful scenarios for healthy, mandatory/advisory failure, recovery/exhaustion, mixed resources, input shapes, no/hung probes, cancellation, budgets and safe typed output. Spell the marker's `rule`, `scenario` and `entrypoint` as literals, directly or through a module-level helper whose body is a single `return` (the `entrypoint_matrix` shape in atlan-metabase-app). **Verify:** `detect --series F` reports no F016, and the test job runs the scenarios; introduce a representative defect and show the scenario fails in the test job. A marker or hand-built expected output is not proof of handler behavior — defining the scenario is conformance, and the test gate is what proves it passes.
-
-## F017
-
-**Contract:** retired in 0.39.0, removed in 0.40.0; F017 no longer fires.
-
-**Investigate:** nothing to investigate for a finding: there are none. A `# conformance: ignore[F017]` directive suppresses nothing and is reported by F020. **Fix:** delete the directive. **Verify:** F020 no longer reports it. Gate enforcement through workflow histories is asserted in the SDK's own tests (`tests/unit/app/test_preflight_gate.py`); the rule was SDK-scoped and only restated them.
-
-## F018
-
-**Contract:** retired in 0.39.0, removed in 0.40.0; F018 no longer fires.
-
-**Investigate:** nothing to investigate for a finding: there are none. A `# conformance: ignore[F018]` directive suppresses nothing and is reported by F020. **Fix:** delete the directive. **Verify:** F020 no longer reports it. Exit-evidence behaviour is asserted in the SDK's own tests; the rule was SDK-scoped and only restated them.
 
 ## F019
 

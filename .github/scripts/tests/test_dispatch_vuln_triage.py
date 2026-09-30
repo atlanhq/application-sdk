@@ -90,3 +90,33 @@ def test_dispatch_uses_custom_workflow_name():
         runner=runner,
     )
     assert "custom.yml" in calls[0]
+
+
+def test_dispatch_defaults_to_the_deterministic_triage_and_passes_the_scan_run():
+    calls = []
+
+    def runner(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    dvt.dispatch(
+        [{"identifier": "FND-1", "severity": "HIGH"}],
+        ref="main",
+        runner=runner,
+        scan_run_id="123",
+    )
+    assert "vuln-triage.yml" in calls[0]
+    assert "scan_run_id=123" in calls[0]
+
+
+def test_dispatch_omits_scan_run_when_unknown():
+    calls = []
+
+    def runner(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    dvt.dispatch(
+        [{"identifier": "FND-1", "severity": "HIGH"}], ref="main", runner=runner
+    )
+    assert not any(a.startswith("scan_run_id=") for a in calls[0])

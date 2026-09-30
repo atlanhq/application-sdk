@@ -34,6 +34,7 @@ from conformance.suite.checks import (
     bootstrap_drift,
     client_seam,
     coverage_config,
+    credential_seam,
     dependency_conformance,
     deprecation,
     determinism,
@@ -117,6 +118,12 @@ _CHECKS: list[CheckRegistration] = [
         series=persistence_seam.SERIES,
         discover=persistence_seam.discover,
         scan_path=persistence_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=credential_seam.SERIES,
+        discover=credential_seam.discover,
+        scan_path=credential_seam.scan_path,
+        scan_all=credential_seam.scan_all,
     ),
     CheckRegistration(
         series=download_retry.SERIES,
@@ -552,19 +559,6 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Static analysis only. Always the case; accepted for compatibility.",
     )
-    # Deprecated no-ops, kept for one release so existing callers keep
-    # parsing. The suite used to execute (or read the results of) the
-    # preflight scenarios; conformance now checks only that they are defined,
-    # and the test gate owns whether they pass. Removed in v0.40.0.
-    for flag, kwargs in (
-        ("--with-tests", {"action": "store_true"}),
-        ("--preflight-report", {"metavar": "FILE"}),
-        ("--test-timeout", {"metavar": "SECONDS"}),
-        ("--test-python", {"metavar": "PATH"}),
-    ):
-        parser.add_argument(
-            flag, help="Deprecated no-op; removed in v0.40.0.", **kwargs
-        )
     parser.add_argument(
         "--series",
         metavar="LETTERS",
@@ -617,23 +611,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    deprecated = [
-        flag
-        for flag, value in (
-            ("--with-tests", args.with_tests),
-            ("--preflight-report", args.preflight_report),
-            ("--test-timeout", args.test_timeout),
-            ("--test-python", args.test_python),
-        )
-        if value
-    ]
-    if deprecated:
-        print(
-            f"warning: {', '.join(deprecated)} is a deprecated no-op and is removed "
-            "in v0.40.0. Conformance checks that the preflight scenarios are "
-            "defined; the test gate checks that they pass.",
-            file=sys.stderr,
-        )
 
     rule_ids: set[str] | None = None
     if args.rule:

@@ -27,12 +27,18 @@ Approve only when ALL hold:
 
 When a review is not ready, lens withdraws its earlier approvals (e.g. after
 `/lens force` on the same head finds a new problem).
+
+A failed APPROVE only warns here. `review_approval_reconcile.py` (on a cron)
+re-posts it later through `approve_ready_head`, with the same re-checks.
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -68,14 +74,30 @@ def write_decision(path: str | None, pr: int, decision: dict[str, Any]) -> None:
         Path(path).write_text(json.dumps({"pr": pr, **decision}), encoding="utf-8")
 
 
-def _lens_approvals(gh: GitHub, number: int, login: str) -> list[dict[str, Any]]:
+def _signed(
+    reviews: list[dict[str, Any]], login: str, state: str
+) -> list[dict[str, Any]]:
+    """lens's own reviews in `state`: posted as `login` and carrying the signature."""
     return [
         r
-        for r in gh.reviews(number)
+        for r in reviews
         if (r.get("user") or {}).get("login") == login
-        and r.get("state") == "APPROVED"
+        and r.get("state") == state
         and (r.get("body") or "").startswith(SIGNATURE)
     ]
+
+
+class VerdictUnreadable(GitHubError):
+    """A `still_ready` check could not read the verdict it guards."""
+
+
+@dataclass(frozen=True)
+class Approval:
+    """What an approve decision came to. `posted` is True only when this call
+    posted the APPROVE; otherwise `detail` says why it did not."""
+
+    posted: bool
+    detail: str
 
 
 def apply(
@@ -86,34 +108,122 @@ def apply(
     action, number = decision.get("action"), int(decision.get("pr") or 0)
     if action not in ("approve", "withdraw") or not number:
         return "nothing to do"
-    mine = _lens_approvals(gh, number, login)
-    if action == "withdraw":
-        for r in mine:
-            gh.dismiss_review(
-                number, int(r["id"]), "lens: the latest review is not ready to merge."
-            )
-        return (
-            f"withdrew {len(mine)} lens approval(s)"
-            if mine
-            else "no lens approval to withdraw"
+    if action == "approve":
+        return approve_ready_head(gh, approver, decision, login).detail
+    mine = _signed(gh.reviews(number), login, "APPROVED")
+    for r in mine:
+        gh.dismiss_review(
+            number, int(r["id"]), "lens: the latest review is not ready to merge."
         )
+    return (
+        f"withdrew {len(mine)} lens approval(s)"
+        if mine
+        else "no lens approval to withdraw"
+    )
+
+
+def approve_ready_head(
+    gh: GitHub,
+    approver: GitHub,
+    decision: dict[str, Any],
+    login: str = APPROVER_LOGIN,
+    *,
+    refuse_after_withdrawal: bool = False,
+    still_ready: Callable[[], str] | None = None,
+    confirm_delay: float = 0.0,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> Approval:
+    """Post the APPROVE for an `approve` decision, after re-checking the PR.
+
+    `refuse_after_withdrawal` is for a caller that replays a verdict instead of
+    acting on a fresh one (`review_approval_reconcile.py`). lens's own last step
+    may re-approve a head it withdrew from, because its decision is newer than
+    the withdrawal. A replayed verdict is not, so a dismissed lens approval on
+    the head (lens's withdraw, or a person dismissing it) stops it.
+
+    `still_ready` is that caller's check that the verdict still stands: "" if
+    it does, else why not; it raises VerdictUnreadable when it cannot tell. It
+    runs twice:
+
+    - last before the POST, after every other read, so nothing already
+      decided against the verdict is approved over;
+    - again `confirm_delay` seconds after the POST, because no read before it
+      can see a round that completes while the POST is in flight. If the
+      verdict no longer stands, the approval just posted is dismissed.
+
+    The delay is what makes the second read sufficient. GitHub's review and
+    status listings are read-after-write eventually consistent, so a round's
+    not-ready status published just before an immediate re-read can be
+    invisible to it, and that round's withdraw, seconds after the POST, can
+    miss the new approval the same way. After the delay, a round either
+    published early enough for the second read to see it, or it runs its
+    withdraw long enough after the POST to see the approval and dismiss it
+    itself. So every ordering ends without a stale approval, as long as
+    replication lag stays well under the delay.
+
+    If the second read is unreadable the approval stays, and the detail says
+    it could not be re-confirmed. Dismissing it would leave a withdrawn lens
+    approval on the head, which permanently blocks the replay it came from."""
+    number = int(decision.get("pr") or 0)
+    reviews = gh.reviews(number)
     pr = gh.pr(number)
     head = (pr.get("head") or {}).get("sha")
     if pr.get("state") != "open" or pr.get("draft"):
-        return "not approving: the PR is closed or a draft"
+        return Approval(False, "not approving: the PR is closed or a draft")
     if head != decision.get("head"):
-        return "not approving: the PR head moved since lens reviewed it"
+        return Approval(
+            False, "not approving: the PR head moved since lens reviewed it"
+        )
     if (pr.get("user") or {}).get("login") == login:
-        return "not approving: the approver authored this PR"
-    if any(r.get("commit_id") == head for r in mine):
-        return "already approved this head"
-    approver.approve(
+        return Approval(False, "not approving: the approver authored this PR")
+    if any(r.get("commit_id") == head for r in _signed(reviews, login, "APPROVED")):
+        return Approval(False, "already approved this head")
+    if refuse_after_withdrawal and any(
+        r.get("commit_id") == head for r in _signed(reviews, login, "DISMISSED")
+    ):
+        return Approval(
+            False, "not approving: a lens approval on this head was withdrawn"
+        )
+    if still_ready is not None:
+        # First of two reads; the second, after the POST, closes the race a
+        # read here cannot (see the docstring).
+        why_not = still_ready()
+        if why_not:
+            return Approval(False, f"not approving: {why_not}")
+    review_id = approver.approve(
         number,
         head,
         f"{SIGNATURE} — every finding at every level is resolved "
         f"(round {decision.get('round', '?')}).",
     )
-    return f"approved {head[:9]} as {login}"
+    approved = f"approved {head[:9]} as {login}"
+    if still_ready is None:
+        return Approval(True, approved)
+    sleeper(confirm_delay)
+    try:
+        why_not = still_ready()
+    except VerdictUnreadable as exc:
+        return Approval(
+            True, f"{approved}; could not re-confirm the verdict after posting: {exc}"
+        )
+    if not why_not:
+        return Approval(True, approved)
+    ids = (
+        [review_id]
+        if review_id
+        else [
+            int(r["id"])
+            for r in _signed(gh.reviews(number), login, "APPROVED")
+            if r.get("commit_id") == head
+        ]
+    )
+    for rid in ids:
+        gh.dismiss_review(
+            number, rid, "lens: the verdict changed while this approval was posted."
+        )
+    return Approval(
+        False, f"withdrew the approval just posted: the verdict changed ({why_not})"
+    )
 
 
 def run_step(repo: str, decision_path: str) -> int:

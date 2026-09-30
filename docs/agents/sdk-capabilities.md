@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.38.0
-source-sha:    c7db1d98458c5816fb6b4abfbc7887c5e51e6e26
-source-date:   2026-09-23T17:55:52+01:00
+sdk-version:   3.39.1
+source-sha:    5af6afb0e7c17e32c2f330c54fc34b823998a246
+source-date:   2026-09-28T15:47:54+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -22,7 +22,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 46 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
-| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 45 |
+| `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
@@ -1292,6 +1292,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Wrapper for raw dict credentials (legacy / unknown types).
 - **Defined in:** `application_sdk/credentials/types.py`
 
+#### `ResolvedCredentials`
+
+- **Import:** `from application_sdk.credentials import ResolvedCredentials`
+- **Signature:** `class ResolvedCredentials`
+- **Summary:** Where a run's credential comes from. At most one field is populated.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
 ### Functions
 
 #### `api_key_ref`
@@ -1364,6 +1371,20 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Expand dotted keys into nested dicts.
 - **Defined in:** `application_sdk/common/transforms.py`
 
+#### `find_prebuilt_credential_ref`
+
+- **Import:** `from application_sdk.credentials import find_prebuilt_credential_ref`
+- **Signature:** `find_prebuilt_credential_ref(source: object)`
+- **Summary:** Return the :class:`CredentialRef` an input already carries, if any.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `flatten_dotted_keys`
+
+- **Import:** `from application_sdk.credentials import flatten_dotted_keys`
+- **Signature:** `flatten_dotted_keys(nested: Mapping[str, object])`
+- **Summary:** Flatten nested dicts into dotted keys — the inverse of :func:`expand_dotted_keys`.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
 #### `get_registry`
 
 - **Import:** `from application_sdk.credentials import get_registry`
@@ -1413,6 +1434,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Canonicalise one ``agent_json`` value to a typed spec, or ``None``.
 - **Defined in:** `application_sdk/credentials/ingress.py`
 
+#### `normalize_inline_credentials`
+
+- **Import:** `from application_sdk.credentials import normalize_inline_credentials`
+- **Signature:** `normalize_inline_credentials(raw: Sequence[Mapping[str, object]] | Mapping[str, object] | None)`
+- **Summary:** Normalize inline credentials to one flat, dotted-key dict.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
 #### `oauth_client_ref`
 
 - **Import:** `from application_sdk.credentials import oauth_client_ref`
@@ -1434,6 +1462,13 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Summary:** Register a custom credential type in the global registry.
 - **Defined in:** `application_sdk/credentials/registry.py`
 
+#### `route_credentials`
+
+- **Import:** `from application_sdk.credentials import route_credentials`
+- **Signature:** `route_credentials(source: object, *, inline_field: str = 'credentials')`
+- **Summary:** Route an input's credential channels into one :class:`ResolvedCredentials`.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
 #### `transform_agent_credentials`
 
 - **Import:** `from application_sdk.credentials import transform_agent_credentials`
@@ -1449,6 +1484,27 @@ Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec
 - **Signature:** `AGENT_JSON_ALIASES: Final[tuple[str, ...]]`
 - **Summary:** Every spelling the field arrives under, in discovery order.
 - **Defined in:** `application_sdk/credentials/ingress.py`
+
+#### `CredentialMap`
+
+- **Import:** `from application_sdk.credentials import CredentialMap`
+- **Signature:** `CredentialMap`
+- **Summary:** Bounded, flat credential dict — the ``inline_credentials`` field of a ``@task`` input.
+- **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `CredentialValue`
+
+- **Import:** `from application_sdk.credentials import CredentialValue`
+- **Signature:** `CredentialValue`
+- **Summary:** One scalar credential value — ``host``, ``port``, ``extra.client_id``, …
+- **Defined in:** `application_sdk/credentials/routing.py`
+
+#### `InlineCredentials`
+
+- **Import:** `from application_sdk.credentials import InlineCredentials`
+- **Signature:** `InlineCredentials`
+- **Summary:** The ``credentials`` field of an entry-point input: v3 ``[{key, value}]`` pairs or a dict.
+- **Defined in:** `application_sdk/credentials/routing.py`
 
 ## `application_sdk.dev`
 

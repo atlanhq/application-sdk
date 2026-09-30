@@ -1020,6 +1020,7 @@ def test_renovate_json_soft_mode_conformance_package_carve_out() -> None:
     assert conf_rule["automerge"] is True
     assert conf_rule["platformAutomerge"] is True
     assert conf_rule["matchUpdateTypes"] == ["minor", "patch"]
+    assert conf_rule["groupName"] == "conformance package"
 
 
 def test_renovate_json_hard_mode_has_no_conformance_carve_out() -> None:

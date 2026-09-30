@@ -124,6 +124,31 @@ class GitHub:
                 return out
             page += 1
 
+    def newest_status(
+        self, sha: str, context: str, max_pages: int = 10
+    ) -> dict[str, Any] | None:
+        """The newest commit status on `sha` for `context`, whoever set it.
+
+        The listing is newest first but mixes every context, so a head busy
+        with other statuses can push `context` past the first page. Pages are
+        read until it appears or the listing ends, up to `max_pages` pages of
+        100. None when it is not found within them."""
+        for page in range(1, max_pages + 1):
+            batch = (
+                self._call(
+                    "GET",
+                    f"/repos/{self.repo}/commits/{sha}/statuses"
+                    f"?per_page=100&page={page}",
+                )
+                or []
+            )
+            for status in batch:
+                if status.get("context") == context:
+                    return status
+            if len(batch) < 100:
+                return None
+        return None
+
     def workflow_runs(self, workflow_file: str) -> list[dict[str, Any]]:
         """Recent runs of one workflow, newest first (one page is enough: a
         run this call must see is at most minutes old)."""
@@ -203,68 +228,18 @@ class GitHub:
                 return out
             page += 1
 
-    def approve(self, number: int, head: str, body: str) -> None:
-        self._call(
+    def approve(self, number: int, head: str, body: str) -> int:
+        """Posts an APPROVE review; returns its id (0 if GitHub did not say)."""
+        out = self._call(
             "POST",
             f"/repos/{self.repo}/pulls/{number}/reviews",
             {"commit_id": head, "event": "APPROVE", "body": body},
         )
+        return int((out or {}).get("id") or 0)
 
     def dismiss_review(self, number: int, review_id: int, message: str) -> None:
         self._call(
             "PUT",
             f"/repos/{self.repo}/pulls/{number}/reviews/{review_id}/dismissals",
             {"message": message, "event": "DISMISS"},
-        )
-
-    def _graphql(self, query: str, variables: dict[str, Any]) -> dict[str, Any]:
-        out = self._call("POST", "/graphql", {"query": query, "variables": variables})
-        if (out or {}).get("errors"):
-            raise GitHubError(f"graphql: {str(out['errors'])[:300]}")
-        return (out or {}).get("data") or {}
-
-    def review_threads(self, number: int) -> list[dict[str, Any]]:
-        """Each review thread: id, resolved, and its first comment's author and body."""
-        owner, name = self.repo.split("/", 1)
-        q = (
-            "query($o:String!,$n:String!,$pr:Int!,$after:String){repository(owner:$o,name:$n)"
-            "{pullRequest(number:$pr){reviewThreads(first:100,after:$after){pageInfo{hasNextPage endCursor}"
-            "nodes{id isResolved comments(first:1){nodes{author{login} body}}}}}}}"
-        )
-        out: list[dict[str, Any]] = []
-        after = None
-        while True:
-            data = self._graphql(
-                q, {"o": owner, "n": name, "pr": number, "after": after}
-            )
-            page = data["repository"]["pullRequest"]["reviewThreads"]
-            for t in page["nodes"]:
-                first = (t["comments"]["nodes"] or [{}])[0]
-                out.append(
-                    {
-                        "id": t["id"],
-                        "resolved": bool(t["isResolved"]),
-                        "author": str((first.get("author") or {}).get("login") or ""),
-                        "body": str(first.get("body") or ""),
-                    }
-                )
-            if not page["pageInfo"]["hasNextPage"]:
-                return out
-            after = page["pageInfo"]["endCursor"]
-
-    def resolve_thread(self, thread_id: str) -> None:
-        self._graphql(
-            "mutation($id:ID!){resolveReviewThread(input:{threadId:$id}){thread{id}}}",
-            {"id": thread_id},
-        )
-
-    def review(
-        self, number: int, head: str, body: str, comments: list[dict[str, Any]]
-    ) -> None:
-        if not comments:
-            return
-        self._call(
-            "POST",
-            f"/repos/{self.repo}/pulls/{number}/reviews",
-            {"commit_id": head, "event": "COMMENT", "body": body, "comments": comments},
         )

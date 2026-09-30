@@ -3,7 +3,7 @@
 
 One ticket is filed **per severity level** (Critical / High / Medium / Low)
 so each carries its own remediation SLA and priority and is triaged
-independently by the vuln-triage rover.
+independently by the vuln triage (vuln-triage.yml).
 
 Compared to a naive "create one ticket per run":
 - Every finding (all severities) is identified by a stable ID (Trivy CVE).
@@ -64,11 +64,11 @@ TRIVY_FILES = ["trivy-image-results.json", "trivy-fs-results.json"]
 # fix available. A fix, when one exists, is delivered either as a dependency
 # bump (Case 1, our dep) OR a base-image rebuild (Case 4, a package baked into
 # app-runtime-base, e.g. Dapr). No-fix CVEs (our-dep-no-fix and disputed/
-# won't-fix) now reach the rover too, so its allowlist/alternative branches
+# won't-fix) now reach the triage too, so its allowlist/alternative branches
 # (Cases 2/3) are fully reachable — those are exactly the findings that need an
 # operational mitigation or an explicit allowlist decision rather than a bump.
-# The rover classifies each finding from the ticket — see
-# .mothership/vuln-triage/ORCHESTRATION.md.
+# The triage classifies each finding on the ticket — see
+# .github/scripts/vuln_triage/classify.py.
 ACTIONABLE_SEVERITIES_TRIVY = {"CRITICAL", "HIGH", "MEDIUM", "LOW"}
 
 # Lower rank sorts first.

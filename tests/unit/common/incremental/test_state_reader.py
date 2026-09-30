@@ -10,7 +10,11 @@ import tempfile
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
+from application_sdk.common.incremental.state import state_reader
 from application_sdk.common.incremental.state.state_reader import download_current_state
+from application_sdk.storage.errors import StorageError, StorageNotFoundError
 from application_sdk.storage.ops import _put
 
 
@@ -18,17 +22,17 @@ class TestDownloadCurrentState:
     """Tests for download_current_state (S3 download with first-run handling)."""
 
     async def test_first_run_returns_not_exists(self):
-        """First run (S3 raises exception) returns exists=False."""
+        """First run: the prefix lists empty, nothing downloads, exists=False."""
         with (
             patch(
-                "application_sdk.common.incremental.state.state_reader.download_prefix"
-            ) as mock_store,
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(return_value=[]),
+            ),
             patch(
                 "application_sdk.common.incremental.state.state_reader."
                 "get_persistent_artifacts_path"
             ) as mock_path,
         ):
-            mock_store.side_effect = FileNotFoundError("not found")
             with tempfile.TemporaryDirectory() as temp_dir:
                 state_dir = Path(temp_dir) / "current-state"
                 state_dir.mkdir(parents=True)
@@ -41,6 +45,47 @@ class TestDownloadCurrentState:
 
         assert exists is False
         assert json_count == 0
+
+    async def test_an_object_vanishing_mid_download_propagates(self):
+        """A not-found from a listed download is a failed read, not a first run."""
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(side_effect=StorageNotFoundError("listed, then gone")),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path"
+            ) as mock_path,
+        ):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                mock_path.return_value = Path(temp_dir) / "current-state"
+                with pytest.raises(StorageNotFoundError):
+                    await download_current_state(
+                        connection_qualified_name="t/c/123",
+                        application_name="oracle",
+                    )
+
+    async def test_storage_error_other_than_not_found_propagates(self):
+        """A store outage raises so the task retries, rather than reading as
+        "no state" and turning the run into a full extraction."""
+        with (
+            patch(
+                "application_sdk.common.incremental.state.state_reader.download_prefix",
+                new=AsyncMock(side_effect=StorageError("injected: store unavailable")),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_reader."
+                "get_persistent_artifacts_path"
+            ) as mock_path,
+            tempfile.TemporaryDirectory() as temp_dir,
+        ):
+            mock_path.return_value = Path(temp_dir) / "current-state"
+            with pytest.raises(StorageError, match="store unavailable"):
+                await download_current_state(
+                    connection_qualified_name="t/c/123",
+                    application_name="oracle",
+                )
 
     async def test_existing_state_returns_exists(self):
         """Existing state with JSON files returns exists=True and file count."""
@@ -196,3 +241,29 @@ class TestDownloadCurrentState:
                 offloaded = mock_offload.await_args_list[0].args
                 assert offloaded[0] is shutil.rmtree
                 assert offloaded[1] == state_dir
+
+
+class TestDeprecatedStorageErrorReexport:
+    """``StorageError`` was importable from here only because this module used it.
+
+    It no longer does, so the name is served by ``__getattr__`` until v4.0.0,
+    with a warning pointing at ``application_sdk.storage.errors``.
+    """
+
+    def test_import_resolves_to_the_real_class_with_a_warning(self) -> None:
+        with pytest.warns(DeprecationWarning, match=r"v4\.0\.0") as record:
+            from application_sdk.common.incremental.state.state_reader import (
+                StorageError as reexported,
+            )
+
+        assert reexported is StorageError
+        assert "application_sdk.storage.errors.StorageError" in str(record[0].message)
+
+    def test_no_module_scope_binding_shadows_the_shim(self) -> None:
+        # A real binding would resolve before __getattr__ and the warning
+        # would never fire.
+        assert "StorageError" not in vars(state_reader)
+
+    def test_unknown_names_still_raise(self) -> None:
+        with pytest.raises(AttributeError, match="no attribute 'missing'"):
+            state_reader.missing  # noqa: B018

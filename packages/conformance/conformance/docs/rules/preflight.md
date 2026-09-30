@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**20 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes. F017–F018 are retired
+**18 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes.
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -21,6 +21,7 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned. F001–F005 were published as P032–P035 and P047 and moved to this series in
 PR #3710 before any fleet suppression referenced them; the vacated P-ids are retired and
+never reused. F017–F018 were retired in 0.39.0 and deleted in 0.40.0; their ids are
 never reused.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
@@ -41,8 +42,6 @@ never reused.
 | [F014](#f014) | `PreflightFailureExposure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F015](#f015) | `PreflightRemovedGateContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F016](#f016) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F017](#f017) | `PreflightWorkflowEnforcement` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
-| [F018](#f018) | `PreflightExitEvidence` | `warn` | `sdk` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
 
@@ -372,6 +371,15 @@ activities.
   `OpenAPIApiClient(timeout=...)`, an async client constructed with a deadline sized
   from `input.timeout_seconds`; no synchronous driver call runs on the event loop and no
   executor wait is left without a deadline.
+- **Interacts with:** Applied together with P031. P031 moves asyncio.to_thread / run_in_executor(None, ...)
+  onto the SDK's run_in_thread; on a preflight path that is the module-level
+  application_sdk.execution.heartbeat.run_in_thread, because Handler has no
+  run_in_thread and App.run_in_thread raises outside a @task. run_in_thread carries no
+  deadline of its own, so the swapped call is still an executor wait in F011's view. On
+  a preflight path, add the deadline when moving: wrap the run_in_thread await in
+  asyncio.wait_for(..., timeout=...) or async with asyncio.timeout(...) sized from the
+  remaining preflight budget. Swapping without the deadline leaves F011 firing on the
+  new line.
 
 Keep source probes awaitable and bounded across every connection phase.
 
@@ -514,48 +522,6 @@ registers its scenarios; promoted to BLOCK once it has.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f016).
-
----
-
-## F017 — `PreflightWorkflowEnforcement` {#f017}
-
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
-
-> Retired: SDK gate behaviour is covered by the SDK's own test suite.
-
-**Rationale:** Conformance checks that required things are defined; whether tests pass is the test
-gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not
-already.
-
-Retired in 0.39.0 and removed in 0.40.0; F017 no longer fires. It was SDK-scoped, and
-the SDK owns both the gate and its tests, so a conformance rule over the SDK's own
-behaviour only restated those tests. The behaviour is asserted in
-tests/unit/app/test_preflight_gate.py; a suppression that still cites this id suppresses
-nothing and is reported by F020.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f017).
-
----
-
-## F018 — `PreflightExitEvidence` {#f018}
-
-**Tier:** `warn` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
-
-> Retired: SDK gate behaviour is covered by the SDK's own test suite.
-
-**Rationale:** Conformance checks that required things are defined; whether tests pass is the test
-gate's measure. An SDK-scoped rule has nothing to define that the SDK's own tests do not
-already.
-
-Retired in 0.39.0 and removed in 0.40.0; F018 no longer fires. It was SDK-scoped, and
-the SDK owns both the gate and its tests, so a conformance rule over the SDK's own
-behaviour only restated those tests. The behaviour is asserted in
-tests/unit/app/test_preflight_gate.py; a suppression that still cites this id suppresses
-nothing and is reported by F020.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f018).
 
 ---
 
