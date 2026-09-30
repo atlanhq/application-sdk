@@ -564,6 +564,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "    `pytest.fail(...)` / `self.fail(...)`\n"
             "    an SDK integration-test scenario-helper call: `.equals` / `.contains` /\n"
             "        `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`\n"
+            "    a `# should not raise` / `# must not raise` comment anywhere in the body\n"
+            "        (case-insensitive): the call completing *is* the assertion\n"
             "\n"
             "This vocabulary is intentionally broad — the check is biased toward zero\n"
             "false positives at WARN tier rather than toward catching every possible\n"
@@ -581,11 +583,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "        result = extract_users(client)\n"
             "        assert result.record_count == 3\n"
             "\n"
-            "Suppress with ``# conformance: ignore[T005] <reason>`` only for a test\n"
-            "whose sole purpose is confirming the call doesn't raise (rare — usually\n"
-            "better expressed as ``pytest.raises``'s absence isn't a thing worth a\n"
-            "dedicated test on its own; prefer folding the no-raise expectation into a\n"
-            "test that also asserts on the return value).\n"
+            "A test whose sole purpose is confirming the call doesn't raise (a\n"
+            "best-effort or swallow-errors path) marks the call instead of\n"
+            "suppressing::\n"
+            "\n"
+            "    async def test_close_is_idempotent():\n"
+            "        await client.close()\n"
+            "        await client.close()  # should not raise\n"
+            "\n"
+            "Prefer folding the no-raise expectation into a test that also asserts on\n"
+            "the outcome (the resource is released, the state is reset) when there is\n"
+            "one to assert.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
@@ -1990,7 +1998,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=True,
+        autofixable=False,
         since="0.22.0",
         rationale=(
             "T012 asks only that tests/e2e/ hold one collectable test, on the agreed "
@@ -2013,6 +2021,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "A bundle (multi-entrypoint) contract entrypoint has no e2e suite"
         ),
         full_description=(
+            "A person has to close this, not the remediation lane: covering an\n"
+            "entrypoint means an e2e run against a real source for it (a reachable\n"
+            "system and CI credentials), which only its owners and the test\n"
+            "infrastructure can provide. A class that skips when the source is absent\n"
+            "satisfies the matcher and none of the rationale.\n"
+            "\n"
             "The app is in **bundle mode** — ``app/generated/`` holds one\n"
             "``<name>/manifest.json`` subdir per entrypoint — and at least one of\n"
             "those entrypoints is not exercised by any collectable test class under\n"

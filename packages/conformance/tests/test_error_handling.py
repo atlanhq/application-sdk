@@ -973,6 +973,262 @@ def probe():
     assert "E004" not in _findings(inline)
 
 
+def test_p004_no_finding_when_local_helper_returns_typed_failure() -> None:
+    # The helper's return is inspectable in this module: the caught value flows
+    # through classification into a typed check, whether returned directly or
+    # staged in a value handed to the enclosing function's return.
+    src = """\
+def _build_failed_outcome(error):
+    details = classify_failure(error)
+    return Outcome(checks=[Check(name="connection", passed=False, error=details)])
+
+
+def direct_probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+
+
+def staged_probe():
+    try:
+        connect()
+    except Exception as caught:
+        outcome = _build_failed_outcome(caught)
+        return ProbeOutput(checks=outcome.checks)
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_a_proven_helper_whose_result_an_opaque_call_consumes() -> (
+    None
+):
+    # A proven helper nested inside a lowercase call does not reach the return:
+    # ``discard`` may drop the typed result, so the handoff stays opaque.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(checks=[Check(name="connection", passed=False, error=classify_failure(error))])
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return discard(_build_failed_outcome(caught))
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_no_finding_when_a_typed_constructor_wraps_the_helper_result() -> None:
+    # A class-like constructor keeps its arguments as part of the typed value.
+    src = """\
+def _build_failed_check(error):
+    return Check(name="connection", passed=False, error=classify_failure(error))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return ProbeOutput(checks=[_build_failed_check(caught)])
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_still_flags_a_helper_whose_return_only_mentions_a_typed_constructor() -> (
+    None
+):
+    # The helper's actual result is None: a constructor elsewhere in the return
+    # expression proves nothing about what the caller receives.
+    src = """\
+def _build_failed_outcome(error):
+    return (Outcome(error=error), None)[1]
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_still_flags_a_helper_name_an_enclosing_function_rebinds() -> None:
+    # The call resolves to the outer local, not the module helper.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe(normalize):
+    _build_failed_outcome = normalize
+
+    def probe():
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_name_declared_nonlocal() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe():
+    _build_failed_outcome = None
+
+    def probe():
+        nonlocal _build_failed_outcome
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_another_function_rebinds_with_global() -> None:
+    # Any function in the module can swap the helper through ``global``, so its
+    # summary is not a proof of what the call returns.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def install(replacement):
+    global _build_failed_outcome
+    _build_failed_outcome = replacement
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_reassigned_at_module_level() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+_build_failed_outcome = normalize
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_no_finding_when_the_helper_returns_a_private_typed_class() -> None:
+    # The evidence app's helper returns a module-private result class
+    # (``_TargetOutcome``); a leading underscore does not make it less class-like.
+    src = """\
+def _connect_failed_outcome(flavor, label, e, *, operation="connect"):
+    connect_error = classify_failure(e, operation=operation).to_failure_details()
+    return _TargetOutcome(
+        reachable=False,
+        checks=[PreflightCheck(name="version", passed=False, error=connect_error)],
+        message=f"{flavor} connection failed",
+    )
+
+
+async def preflight(flavor):
+    try:
+        targets = await discover(flavor)
+    except Exception as e:
+        outcome = _connect_failed_outcome(flavor, "", e, operation="discover targets")
+        return PreflightOutput(checks=outcome.checks, message=outcome.message)
+    return targets
+
+
+async def probe(flavor, label):
+    try:
+        client = await build(flavor, label)
+    except Exception as e:
+        return _connect_failed_outcome(flavor, label, e)
+    return client
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_opaque_helper_handoff() -> None:
+    # Passing the binding to a lowercase helper is not proof that its returned
+    # value preserves the failure as typed data.
+    assert "E004" in _findings(
+        """\
+def _opaque_outcome(error):
+    return normalize(error)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _opaque_outcome(caught)
+"""
+    )
+
+
+def test_p004_still_flags_helper_with_a_dropping_return_path() -> None:
+    # A typed result on one branch is not enough when another branch returns a
+    # bare sentinel instead of carrying the caught failure.
+    assert "E004" in _findings(
+        """\
+def _sometimes_typed(error):
+    if should_report(error):
+        return Outcome(error=classify_failure(error))
+    return None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _sometimes_typed(caught)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_exception_continue() -> None:
+    # A broad handler with no binding cannot hand the caught exception to a
+    # typed-result helper; continuing silently loses it.
+    assert "E004" in _findings(
+        """\
+def probe(items):
+    for item in items:
+        try:
+            inspect(item)
+        except Exception:
+            continue
+"""
+    )
+
+
 def test_p004_still_flags_typed_row_appended_inside_a_loop() -> None:
     # A loop-body arm falls off its end into the next iteration, so the row
     # staged in `checks` is never provably returned from the handler; moving
@@ -3259,6 +3515,111 @@ def test_e005_silent_for_presanitized_traceback_variable() -> None:
         "    logger.error('prime failed:\\n%s', safe_traceback)\n"
     )
     assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('connection failed:\\n%s', trace_text)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_contains_unrelated_value() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_log_also_passes_raw_exception() -> None:
+    # The alias is not the only route: the raw exception is formatted too.
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    logger.error('connection failed: %s %s', trace_text, caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    logger.error('connection failed: %s %s', redact(caught), caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    # type(e).__name__ / e.__class__ carry no message text, so they do not
+    # undo the redaction boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s (%s %s)', safe_traceback(caught),\n"
+        "                 type(caught).__name__, caught.__class__.__qualname__)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_type_projection_hides_raw_exception() -> None:
+    # type(...) of something other than the bare binding is not a projection.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s %s', safe_traceback(caught), type(caught, str(caught)))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught) if include_trace else endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_match_capture_rebinds_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    match caught:\n"
+        "        case trace_text:\n"
+        "            pass\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_is_overwritten() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    trace_text = str(caught)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "exception, message",
+    [
+        ("TimeoutError", "operation exceeded its time budget"),
+        ("RuntimeError", "cleanup was skipped after shutdown"),
+    ],
+)
+def test_e005_still_fires_for_unredacted_best_effort_warnings(
+    exception: str, message: str
+) -> None:
+    src = (
+        "try:\n    perform_operation()\n"
+        f"except {exception}:\n"
+        f"    logger.warning({message!r})\n"
+    )
+    assert "E005" in _findings(src)
 
 
 def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
