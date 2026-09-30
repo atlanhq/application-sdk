@@ -1326,6 +1326,15 @@ def test_l004_fires_when_sanitized_local_is_logged_with_raw_exception() -> None:
     assert "L004" in _ids(src)
 
 
+def test_l004_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    logger.error('operation failed: %s %s', redact(error), error)\n"
+    )
+    assert "L004" in _ids(src)
+
+
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     # Only the log call's own arguments count — a sanitizer on another
     # statement does not exempt an unrelated bare log call.

@@ -3545,6 +3545,14 @@ def test_e005_still_fires_when_log_also_passes_raw_exception() -> None:
     assert "E005" in _findings(src)
 
 
+def test_e005_still_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    logger.error('connection failed: %s %s', redact(caught), caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
     src = (
         "try:\n    connect()\nexcept ConnectionError as caught:\n"

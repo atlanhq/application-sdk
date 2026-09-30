@@ -213,8 +213,6 @@ def _call_uses_sanitized_local_alias(
     call_position = _source_position(call)
     if exception_name is None or call_position is None:
         return False
-    if call_logs_raw_exception(call, handler):
-        return False
 
     logged_names = {
         arg.id
@@ -285,7 +283,14 @@ def call_uses_sanitizer(
     ``redact_count``/``redaction_enabled`` does not suppress the rule. Only the
     log call's own arguments are inspected — a sanitizer used elsewhere in the
     handler does not exempt an unrelated log call.
+
+    When *handler* is supplied, no shape counts if the call *also* reads the
+    caught exception outside a sanitizer (``logger.error("%s %s", redact(e),
+    e)``): the raw exception is formatted anyway, so there is no redaction
+    boundary to protect.
     """
+    if handler is not None and call_logs_raw_exception(call, handler):
+        return False
     for arg in [*call.args, *[kw.value for kw in call.keywords]]:
         for node in ast.walk(arg):
             if isinstance(node, ast.Call):
