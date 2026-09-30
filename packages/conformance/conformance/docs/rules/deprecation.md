@@ -55,7 +55,7 @@ a blind swap.
   (application_sdk.app, application_sdk.contracts, application_sdk.errors). What counts
   as deprecated is not a judgement call: it is the manifest this rule reads, regenerated
   from SDK source by `gen-deprecations`.
-- **Migrate with:** `programs/areas/deprecation.prose.md`
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 
 Flags app consumption of any symbol recorded in the deprecated-symbol manifest the SDK
 ships with this conformance package (BLDX-1418).  Four surfaces are matched,
@@ -178,7 +178,7 @@ they hit with zero changes on their side.
   contract field and its type. `atlan-application-sdk-conformance ledger-guard` enforces
   it append-only between the base ref and HEAD, so a removal or a retype is refused
   there rather than discovered by a customer.
-- **Fix by:** `programs/areas/deprecation.prose.md`
+- **Fix by:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 - **Interacts with:** ledger-guard is append-only: a recorded type cannot change and an entry cannot be
   deleted — only the status may move. That is why `sunset` is the retirement path rather
   than a retype or a delete. P001 also bears on this: it refuses `Any` on a contract
@@ -397,7 +397,7 @@ prevent; revisit once the count nears zero.
   application_sdk.app, .contracts, .credentials, .errors, .observability and .outputs,
   plus msgspec and orjson. No module under the three reference apps' app/ directories
   imports an underscore-prefixed module or name it does not own.
-- **Migrate with:** `programs/areas/deprecation.prose.md`
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:

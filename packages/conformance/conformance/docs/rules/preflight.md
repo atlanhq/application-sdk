@@ -439,7 +439,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   under `asyncio.wait_for`) closes its SQLClient in a `finally: await client.close()`,
   so cleanup is awaited and runs on every exit path, including the typed-failure early
   return.
-- **Migrate with:** `docs/preflight-guide.md`
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Release owned preflight resources without blocking the event loop.
 
@@ -492,7 +492,7 @@ BLOCK.
   aliases that warn and are removed in v3.40.0, so an import of one is working code on a
   deadline rather than an incompatibility. Correct looks like the posture declared on
   App.preflight_gate_mode and the replacement each deprecation notice names.
-- **Migrate with:** `docs/preflight-guide.md`
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Migrate the inert mode override and the renamed gate-classification helpers.
 
@@ -520,7 +520,7 @@ runs. A missing scenario is a behaviour nothing verifies.
   scenario=...)`. The marker, not the file's presence, is what counts as a defined
   scenario. atlan-metabase-app registers the same matrix once per `@entrypoint` through
   a module-level `entrypoint_matrix(scenario)` parametrize helper.
-- **Migrate with:** `docs/preflight-guide.md`
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Every scenario in the F016 matrix must be defined, for each `@entrypoint` the app
 declares, as a pytest-collected test under `tests/unit/` (the tier the test gate always
@@ -556,7 +556,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   (`_check_connectivity`), never an accumulator, so static analysis resolves every row
   and its mandatory/advisory role. The comment above the NOT_READY return cites F019 as
   the reason.
-- **Migrate with:** `docs/preflight-guide.md`
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Report unresolved preflight dispatch and contracts instead of a clean result. Two kinds
 of gap are reported, and only one of them is clearable by executing tests. A
@@ -590,7 +590,7 @@ directive is the cause.
 - **Compliant example:** atlan-metabase-app app/qualified_names.py — its inline conformance directives name a
   live rule id (P028) and carry a written justification. A directive that cited P034 now
   cites F003 the same way, justification kept; the id is the only part that changes.
-- **Migrate with:** `docs/preflight-guide.md`
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
 and P047 became F005. F017 and F018 were retired with no replacement. The suppression

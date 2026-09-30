@@ -43,7 +43,7 @@ customers run.
   the third-party action pins live in that SDK reusable, not in the app. Every `uses:`
   in the three reference apps is an atlanhq/ ref (exempt) or a local ./ action, so no
   mutable third-party pin is left to drift.
-- **Fix by:** `programs/areas/ci.prose.md`
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
@@ -137,7 +137,7 @@ carry.
   `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, plus the
   `.mothership/.cache/` line the bootstrap appends. A missing entry is usually the
   newest one, added centrally after the repo was scaffolded.
-- **Fix by:** `programs/areas/ci.prose.md`
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
 .gitignore when the file is absent. This rule flags any required entry that is missing
@@ -169,7 +169,7 @@ ejected PR that costs a full re-queue. The remediation is almost always a single
   `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`, whose
   `setup-deps` step owns the retry, instead of the workflow curling a binary of its own.
   No workflow or composite action in the three reference apps downloads a tool inline.
-- **Fix by:** `programs/areas/ci.prose.md`
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 Flags a `curl`/`wget` that installs something — it writes the response to a file or
 pipes it into a shell or `tar` — and carries no retry, plus `uv python install`, which

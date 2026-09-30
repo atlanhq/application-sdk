@@ -398,6 +398,8 @@ def _rule_anchor(rule: RuleDefinition) -> str:
     return rule.id.lower()
 
 
+_PACKAGE_BLOB = "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/"
+
 _REMEDIATION_LABEL = {
     RemediationKind.PRESCRIPTION: "Fix by",
     RemediationKind.COMMAND: "Fix by",
@@ -415,8 +417,10 @@ def _remediation_line(rule: RuleDefinition) -> tuple[str, str]:
         value = f"the ``{ref.target}`` skill (``skills-dir``)"
     elif ref.kind is RemediationKind.DECISION:
         value = f"{ref.target} decides"
-    else:
+    elif ref.kind is RemediationKind.COMMAND:
         value = f"``{ref.target}``"
+    else:
+        value = f"[`{ref.target}`]({_PACKAGE_BLOB}{ref.target})"
     if ref.note:
         value = f"{value} — {ref.note}"
     return (_REMEDIATION_LABEL[ref.kind], value)

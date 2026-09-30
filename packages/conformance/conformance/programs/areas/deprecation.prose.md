@@ -322,7 +322,7 @@ human audit):
   exists, the brief says so and proposes
   `# conformance: ignore[B008] no public equivalent — tracked in <id>`.  An
   error class from `application_sdk.storage.formats` is also a P045 finding;
-  follow that prescription.  Pointer: `.claude/skills/upgrade-v3` Phase 2d
+  follow that prescription.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2d
   (positive-idiom check 1).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may

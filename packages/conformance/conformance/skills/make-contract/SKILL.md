@@ -48,11 +48,12 @@ it as the source of truth; trust `README.md` + `CLAUDE.md` + `CHANGELOG.md` +
 
 ## Hard Rules
 
-- Treat `atlanhq/application-sdk` as the canonical source for this skill. The
-  repo-local copies live at `.agents/skills/make-contract/SKILL.md` and
-  `.claude/skills/make-contract/SKILL.md`; mirror any edit between them
-  byte-for-byte, and do not add nested `make-contract` copies under
-  `contract-toolkit/` or app repos.
+- The canonical copy of this skill ships in the conformance package
+  (`packages/conformance/conformance/skills/make-contract/SKILL.md`; resolve
+  it with `atlan-application-sdk-conformance skills-dir`).
+  `.agents/skills/make-contract` and `.claude/skills/make-contract` are
+  symlinks to it: edit the packaged file only, and do not add nested
+  `make-contract` copies under `contract-toolkit/` or app repos.
 - **`App.pkl` is the canonical template. `NativeApp.pkl` and
   `NativeAppBundle.pkl` are frozen legacy.** Author every new contract by
   amending `App.pkl`. Only touch the legacy modules when reading an app that

@@ -45,7 +45,7 @@ customer's tenant — a day-one install failure discovered by the customer, not 
   ${BASE_IMAGE}`. The committed default is the approved v3 tag, and the ARG is what lets
   SDK PRs rebuild the connector on a PR-scoped base with --build-arg without the default
   ever leaving the approved image.
-- **Fix by:** `programs/areas/dockerfile.prose.md`
+- **Fix by:** [`programs/areas/dockerfile.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dockerfile.prose.md)
 
 The final-stage `FROM` instruction must be exactly
 `registry.atlan.com/public/app-runtime-base:3` or its GHCR mirror
@@ -84,7 +84,7 @@ and requests are dropped mid-run with no handoff.
 - **Compliant example:** atlan-metabase-app Dockerfile — the file ends at its ENV block; no CMD and no ENTRYPOINT
   anywhere. The base image's entrypoint is what supervises daprd and the graceful drain,
   so replacing it silently removes both.
-- **Fix by:** `programs/areas/dockerfile.prose.md`
+- **Fix by:** [`programs/areas/dockerfile.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dockerfile.prose.md)
 
 Neither `CMD` nor `ENTRYPOINT` may appear in the app Dockerfile.  The base image
 (`app-runtime-base`) ships an entrypoint script that co-launches `daprd` alongside the
@@ -114,7 +114,7 @@ the customer sees first, on a release every pre-deploy gate passed.
 - **Compliant example:** atlan-metabase-app Dockerfile — `ENV ATLAN_APP_MODULE=app.connector:MetabaseApp`, the
   same value atlan.yaml declares under deploy.env and pools.default.env, so the image
   starts the right class on its own and agrees with its manifest.
-- **Fix by:** `programs/areas/dockerfile.prose.md`
+- **Fix by:** [`programs/areas/dockerfile.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dockerfile.prose.md)
 - **Interacts with:** The value must match atlan.yaml's deploy.env exactly; read it from there rather than
   inferring it from the App subclass, or the two drift and the container starts the
   wrong class.
@@ -149,7 +149,7 @@ pod as running and healthy.
   baked because they describe the image; ATLAN_APP_MODE is absent, because it describes
   the deployment, and the SDK reads it from the process environment the deployment
   supplies at runtime.
-- **Fix by:** `programs/areas/dockerfile.prose.md`
+- **Fix by:** [`programs/areas/dockerfile.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dockerfile.prose.md)
 
 `ENV ATLAN_APP_MODE` must not appear in the Dockerfile.  Runtime mode (`worker` /
 `server`) is deployment-specific: the same image may be deployed in different modes in
@@ -178,7 +178,7 @@ that customer's environment, a direct security exposure for them.
 - **Compliant example:** atlan-mysql-app Dockerfile — no USER directive at all. Ownership is handled by `COPY
   --chown=appuser:appuser` and the base image's non-root appuser stands, which is what
   the non-root execution policy requires.
-- **Fix by:** `programs/areas/dockerfile.prose.md`
+- **Fix by:** [`programs/areas/dockerfile.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dockerfile.prose.md)
 
 The effective `USER` of the final stage must not be root (`root` or `0`).  A temporary
 `USER root` is allowed when a later `USER` restores a non-root user.  The base image

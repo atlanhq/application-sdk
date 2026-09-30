@@ -567,7 +567,7 @@ The lane applies nothing: return `not_remediable = true` with a
   both sides SDK contract subclasses.  The brief names the new (or re-based)
   `Input` / `Output` classes and every caller that builds the old payload.  The
   runtime decorator already rejects these at import, so a shipped violation
-  crash-loops the worker.  Pointers: `.claude/skills/upgrade-v3` Phase 2b;
+  crash-loops the worker.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2b;
   `docs/concepts/contracts.md` (Input and Output).
 
 - **P014 UntypedTaskBoundary** (BLOCK) — the same check on a `@task` method's
@@ -589,7 +589,7 @@ The lane applies nothing: return `not_remediable = true` with a
   model (its fields read off how the app uses the container) and every reader
   and writer of the field.  Keep the `MaxItems` bound: P001 still needs it.
   When the key set is genuinely open, propose
-  `# conformance: ignore[P015] <reason>` instead.  Pointer:
+  `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
 
 **Entrypoint-conformance rules (P017–P018)** — migration rules
@@ -611,7 +611,7 @@ too.
   names the boot file to delete or collapse onto `run_dev_combined` and the
   `ATLAN_APP_MODULE` / CLI wiring it needs.  Exemption: files under
   `tests/integration/` are exempt from the construction and lifecycle calls
-  (the harness needs a worker handle), but not from the v2 imports.  Pointers:
+  (the harness needs a worker handle), but not from the v2 imports.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `.claude/skills/upgrade-v3` Phase 2b step 3; `docs/concepts/entry-points.md`
   (`run_dev_combined()`, Worker Auto-Discovery).
 
@@ -624,7 +624,7 @@ too.
   is `@entrypoint` methods triggered by
   `POST /workflows/v1/start?entrypoint=<name>`.  The brief lists each
   hand-rolled route and which `@entrypoint` or SDK handler endpoint replaces
-  it.  No `tests/integration/` exemption for this rule.  Pointers:
+  it.  No `tests/integration/` exemption for this rule.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/server.md`, `docs/concepts/entry-points.md` (HTTP dispatch).
 
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
