@@ -23,6 +23,7 @@ byte; the divergences are the two below.
 
 from __future__ import annotations
 
+import importlib
 import json
 import subprocess
 import sys
@@ -689,6 +690,57 @@ class TestArtifactState:
 # ---------------------------------------------------------------------------
 
 
+class TestApproverIdentity:
+    """APPROVER_LOGIN comes from the reusable workflow's env, read at import.
+
+    Each test reloads the module under the env it needs and the fixture reloads
+    it once more with the env restored, so no other test sees a changed login.
+    """
+
+    @pytest.fixture
+    def reload_gate(self, monkeypatch):
+        def _reload(login):
+            if login is None:
+                monkeypatch.delenv("APPROVER_LOGIN", raising=False)
+            else:
+                monkeypatch.setenv("APPROVER_LOGIN", login)
+            return importlib.reload(gate)
+
+        yield _reload
+        monkeypatch.undo()
+        importlib.reload(gate)
+
+    def test_defaults_to_atlan_ci_when_env_unset(self, reload_gate):
+        g = reload_gate(None)
+        assert g.APPROVER_LOGIN == "atlan-ci"
+        assert g.APPROVER_LOGINS == {"atlan-ci"}
+
+    def test_blank_env_falls_back_to_atlan_ci(self, reload_gate):
+        assert reload_gate("  ").APPROVER_LOGIN == "atlan-ci"
+
+    def test_app_login_is_recognised(self, reload_gate):
+        g = reload_gate("atlan-pr-approver[bot]")
+        review = {**APPROVED_REVIEW, "user": {"login": "atlan-pr-approver[bot]"}}
+        assert g.count_signature_approvals([review]) == 1
+
+    def test_legacy_atlan_ci_approval_still_counts_after_cutover(self, reload_gate):
+        # A PR atlan-ci approved before the switch must not collect a second
+        # approval from the new identity.
+        g = reload_gate("atlan-pr-approver[bot]")
+        assert g.count_signature_approvals([APPROVED_REVIEW]) == 1
+
+    def test_other_bot_with_our_signature_does_not_count(self, reload_gate):
+        g = reload_gate("atlan-pr-approver[bot]")
+        review = {**APPROVED_REVIEW, "user": {"login": "atlan-app-fleet[bot]"}}
+        assert g.count_signature_approvals([review]) == 0
+
+    def test_body_and_log_name_the_acting_identity(self, reload_gate):
+        g = reload_gate("atlan-pr-approver[bot]")
+        assert g.APPROVAL_BODY.startswith(g.APPROVAL_SIGNATURE)
+        assert "`atlan-pr-approver[bot]`" in g.APPROVAL_BODY
+        assert "atlan-ci" not in g.APPROVAL_BODY
+
+
 class TestSignatureApprovals:
     def test_matching_approval_counts(self):
         assert gate.count_signature_approvals([APPROVED_REVIEW]) == 1
@@ -1175,7 +1227,7 @@ class TestExtractionParity:
         assert gate.APPROVAL_BODY == (
             "**Renovate auto-approval:** all required CI checks passed.\n"
             "\n"
-            "This is an automated code-owner approval posted by `atlan-ci` for a\n"
+            "This is an automated approval posted by `atlan-ci` for a\n"
             "dependency-only Renovate PR. It is automatically dismissed on any new\n"
             "push (`dismiss_stale_reviews_on_push`) and re-posted once the new\n"
             "HEAD's required checks are green."
