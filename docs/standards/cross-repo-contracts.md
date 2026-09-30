@@ -171,6 +171,20 @@ Constraints that come from the readers:
 - **A key a reader rebuilds must still exist after the prune.** An app that
   constructs a current-state key by name rather than listing the prefix will
   miss run-stamped files; that app must list `{entity}/`, not guess a name.
+- **The snapshot is the manifest, not the listing.** A reader that lists or
+  globs `current-state/` — the Argo publish converter, atlan-oracle-app's
+  direct `download_prefix` reads — also sees stamped keys no manifest names: a
+  failed or overlapping commit's upload, until a later commit prunes it (see
+  **Shape**). New readers go through `CurrentStateStore.probe()` /
+  `materialize()`, which read only the manifest's keys. Existing glob readers
+  are no worse off than before the manifest: the pre-manifest layout never
+  pruned at all. The one exception is a run that fails for good and is
+  followed within two hours by the next run. The old layout left that failed
+  run's extra chunks behind permanently; this one leaves a whole stamped copy,
+  which a glob reader in the next run sees alongside the new snapshot, until
+  the first commit after the grace window prunes it. The fix for such readers
+  is to read through the manifest, not a shorter grace — a shorter grace lets a
+  slow overlapping commit's keys be pruned while its manifest still names them.
 - **`metadata.json` keys are routing inputs.** Adding a key is safe; renaming
   or dropping one — or writing it non-atomically — changes which publish mode
   Argo picks. It is written with `atomic_write` because a truncated counts
