@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -43,6 +47,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "should log at DEBUG.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E002",
@@ -83,6 +91,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "there is a comment explaining the reasoning.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E003",
@@ -113,6 +125,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "classifying.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E004",
@@ -201,6 +217,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "typed data. Found in a consumer app in FND-2569."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E005",
@@ -234,6 +254,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E006",
@@ -264,6 +288,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "and SystemExit.  Always specify at least ``except Exception:``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E007",
@@ -326,6 +354,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "is the same typed-failure predicate E004 uses.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E008",
@@ -358,6 +390,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "expected to be present (will fail later with a confusing AttributeError).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E009",
@@ -387,6 +423,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "before the assignment.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E010",
@@ -423,6 +463,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "are not checked; ``return_exceptions=True`` itself is acceptable.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E011",
@@ -460,6 +504,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Never acceptable — filter methods must never let exceptions propagate.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E012",
@@ -492,6 +540,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``TypeError``/``ValueError`` for stdlib interoperability.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E013",
@@ -525,6 +577,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E014",
@@ -557,6 +613,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "log at WARNING/ERROR with ``exc_info=True``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E015",
@@ -593,6 +653,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "stable human summary.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E016",
@@ -629,6 +693,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "chained), ``raise X() from None`` (intentional suppression).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E017",
@@ -667,6 +735,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e017",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E018",
@@ -708,6 +780,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "before suppressing.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E019",
@@ -764,6 +840,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "symmetric across E015/E019.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E020",
@@ -834,5 +914,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``if x is None: return None`` guards.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
 )

@@ -200,7 +200,11 @@ halves; ``atlan-mysql-app`` is the reference for each:
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -262,6 +266,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t001"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -334,6 +342,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t002"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -439,6 +451,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t003"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T004",
@@ -517,6 +533,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t004"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T005",
@@ -591,6 +611,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t005"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T006",
@@ -636,6 +660,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t006"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -695,6 +723,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t007"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T008",
@@ -750,6 +782,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t008"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -814,6 +850,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t009"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T010",
@@ -866,6 +906,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t010"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -930,6 +974,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t011"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T012",
@@ -990,6 +1038,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t012"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T013",
@@ -1044,6 +1096,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t013"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1119,6 +1175,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t014"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T015",
@@ -1184,6 +1244,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t015"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1257,6 +1321,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t016"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1344,6 +1412,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t017"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1447,6 +1519,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t018"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1563,6 +1639,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t019"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T020",
@@ -1646,6 +1726,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t020"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1731,6 +1815,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t021"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T022",
@@ -1806,6 +1894,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t022"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1897,6 +1989,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t023"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
+        ),
     ),
     RuleDefinition(
         id="T024",
@@ -1969,6 +2065,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t024"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
     RuleDefinition(
@@ -2098,6 +2198,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t025"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/tests.prose.md",
         ),
     ),
 )

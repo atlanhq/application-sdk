@@ -45,6 +45,7 @@ embedded in the code that ships them.
   `build_credential_ref`, or as an inline dict, and the typed `MetabaseCredential`
   defaults `password` to "". No string literal is assigned to a credential-named
   variable in any shipped app/ module of the three reference apps.
+- **Fix by:** `programs/areas/security.prose.md`
 
 A non-empty string literal is assigned to (or passed as) a target whose name marks it a
 credential value (`password`, `api_key`, `secret`, `access_key`, `client_secret`,
@@ -88,6 +89,7 @@ mechanism so credential handling stays uniform and auditable.
   `self.context.resolve_credential_raw` and parses it into the typed MetabaseCredential
   the API client consumes. No credential-named environment variable is read in either
   module — resolution through the seam is what correct looks like, not a justified read.
+- **Fix by:** `programs/areas/security.prose.md`
 - **Already correct when:** Zero findings, reached by resolving the secret through CredentialRef / the SecretStore
   protocol rather than reading it from the environment. S002 flags reads only — a
   credential-named `os.getenv` / `os.environ[...]` / `.get` / `.pop` — so only a read

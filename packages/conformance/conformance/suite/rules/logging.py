@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -53,6 +57,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "move values to kwargs.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L002",
@@ -117,6 +125,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "making its records unfindable on the tenant UI.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L003",
@@ -145,6 +157,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "classification; the checker must detect the active framework first.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L004",
@@ -184,6 +200,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L005",
@@ -217,6 +237,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "stdout is the user interface, not a logging bypass."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L006",
@@ -246,6 +270,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "flagging.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L007",
@@ -276,6 +304,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "through alerting rules on the observability platform.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L008",
@@ -317,6 +349,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "        logger.debug('snapshot: %s', json.dumps(big_dict))\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L009",
@@ -345,6 +381,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "when adding context not available to the caller.  Otherwise: just re-raise.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L010",
@@ -395,6 +435,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "fires; log a name beside it, or drop it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L011",
@@ -424,6 +468,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "string in a way that breaks log grouping.  Rewrite as %-style message body.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L012",
@@ -461,6 +509,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``process``, ``thread``.  Applies to stdlib only.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L013",
@@ -493,6 +545,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Applies to stdlib only.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L014",
@@ -521,6 +577,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "avoid collision.  Applies to structlog only.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L015",
@@ -553,6 +613,10 @@ RULES: tuple[RuleDefinition, ...] = (
             '``"disable_existing_loggers": False``.  Applies to stdlib only.\n'
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L016",
@@ -582,6 +646,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Applies to stdlib only.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l016",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L017",
@@ -618,6 +686,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "immediately delegates to ``self.error(..., exc_info=True)``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l017",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L018",
@@ -649,6 +721,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "using %-style formatting.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L019",
@@ -678,6 +754,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Assign the result: ``log = logger.bind(key=value)``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L020",
@@ -706,6 +786,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Rename every call site to ``logger.warning(...)``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
     RuleDefinition(
         id="L021",
@@ -774,5 +858,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "(the SDK's own tooling config is managed separately).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/logging.prose.md",
+        ),
     ),
 )

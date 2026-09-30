@@ -193,6 +193,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P030",

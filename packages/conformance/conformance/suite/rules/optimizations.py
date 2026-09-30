@@ -101,6 +101,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "app, is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O002",
@@ -423,5 +427,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "caller in a different file than the one being scanned.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
 )

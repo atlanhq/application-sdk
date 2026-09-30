@@ -162,6 +162,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "unremediated, not compliant.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P002",
@@ -213,6 +217,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "declaration site — see BLDX-1432.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P003",
@@ -276,6 +284,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "that is the log surface, and the wire code still collapses to the leaf.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P013",

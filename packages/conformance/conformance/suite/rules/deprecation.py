@@ -316,6 +316,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "commit the updated ledger in the same PR.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B006",
@@ -405,6 +409,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ledger will be regenerated before the first deploy.\n"
         ),
         help_uri=f"{_HELP_BASE}#b006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="atlan-application-sdk-conformance gen-contract-ledger",
+        ),
     ),
     RuleDefinition(
         id="B007",

@@ -93,6 +93,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P020] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P021",
@@ -211,6 +215,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "coroutine is deliberately discarded and that is provably harmless.\n"
         ),
         help_uri=f"{_HELP_BASE}#p022",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P023",
@@ -318,6 +326,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P023] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p023",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P024",
@@ -369,6 +381,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P024] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p024",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P031",
@@ -439,6 +455,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "must keep it around the new call."
         ),
         help_uri=f"{_HELP_BASE}#p031",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P036",

@@ -49,6 +49,7 @@ before migrating.
   `orjson.dumps` / `orjson.loads`, and the stdlib json module is imported nowhere under
   app/. orjson is a core SDK dependency, so there is no install cost to paying for the
   speed.
+- **Fix by:** `programs/areas/optimizations.prose.md`
 - **Already correct when:** A justified inline `# conformance: ignore[O001] <reason>` IS the correct end state for a
   `json.dumps` only when all three hold. (1) orjson cannot reproduce the call's output:
   the call does not already pass both `separators=(",", ":")` and `ensure_ascii=False`,
@@ -237,6 +238,7 @@ automatic fail.
   atlan.yaml carries `name: metabase`; even the upload prefix built in
   `extract_metadata` spells the name out. The name is resolved once, at declaration; a
   `{app_name}` left in a plain string is a substitution nothing will ever perform.
+- **Fix by:** `programs/areas/optimizations.prose.md`
 
 Flags a string `ast.Constant` containing the literal substring `{app_name}` when the
 token can actually **reach a value** — including the pieces of an escaped-brace

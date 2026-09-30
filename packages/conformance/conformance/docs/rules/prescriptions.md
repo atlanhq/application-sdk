@@ -93,6 +93,7 @@ mid-run with a serialization error nothing in their configuration explains.
   `AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at all: every
   field it adds is a concrete str or bool, and the include/exclude filters it inherits
   from ExtractionInput are already the bounded `FilterMap | str`.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** B005 + ledger-guard bound the fix, but less tightly than they look, and reading them as
   a wall is how a fixable site gets suppressed. ledger-guard refuses a change to a
   RECORDED type; gen-contract-ledger never deletes an entry and never rewrites a
@@ -193,6 +194,7 @@ reporting understates their outage and on-call responds late or not at all.
 - **Compliant example:** atlan-metabase-app app/errors.py — every subclass overrides `code` and never `category`.
   The category comes from the SDK leaf you chose to extend; redeclaring it detaches the
   class from the taxonomy the dashboards group by.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
@@ -236,6 +238,7 @@ gets a slower, less accurate answer to 'why did my crawl fail'.
   `AUTH_OPENAPI_SPEC_FETCH`), and none overrides to_failure_details, so that code is
   what dashboards read. The prefix table itself is application_sdk/errors/leaves.py: the
   categorical leaves and the prefix each one owns.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 - **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
   `code` is not what a dashboard reads and adding a prefixed one would be dead code
   beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
@@ -926,6 +929,7 @@ pyatlan already provides, and drifts from the contract every other app follows
   /api/service marker. Atlan itself is reached through the SDK — app/connector.py's
   `self.upload(...)` and the publish DAG node — never by raw HTTP, which would skip auth
   refresh, retry and the client's own request shaping.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 A raw HTTP call — `httpx`/`requests`/`aiohttp` request method or
 `urllib.request.urlopen`/`Request` — targets an Atlan service: its URL statically
@@ -974,6 +978,7 @@ replay is faithful.
   `extract_metadata` nor `extract_lineage` reads the clock, uuid or the RNG. Workflow
   code is replayed, so a non-deterministic call there produces a different history on
   every replay.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
 `@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
@@ -1065,6 +1070,7 @@ that explains the gap.
   `OpenAPIConnector.run` is awaited: `self.download_cloud_spec`, `self.extract_spec` and
   `self.transform`. A dropped coroutine does not run and does not raise; the workflow
   simply proceeds as if the step had succeeded.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -1110,6 +1116,7 @@ await an async equivalent, or offload blocking work via App.run_in_thread() insi
   tasks do. Where the blocking work is a sync generator, `build_lineage_records`
   offloads `_build_process_records` in one call, and that helper's docstring records why
   the loop has to be materialised first.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
@@ -1191,6 +1198,7 @@ HTTP) by requiring the async variant of that client.
   need a client, the shape is the SDK seam in
   application_sdk/credentials/atlan_client.py — `create_async_atlan_client` /
   `AtlanClientMixin.get_or_create_async_atlan_client`.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 
 App code constructs or invokes pyatlan's synchronous `AtlanClient` (or the vendored
 `pyatlan_v9` equivalent) — its constructor or a factory like
@@ -1424,6 +1432,7 @@ where their metadata went.
   for any app that does not model the widgets itself, so an app missing them is
   generating on a toolkit that predates that: bump `app-contract-toolkit` in
   contract/PklProject and regenerate.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** A toolkit-version gap, not a renderer gap: contract-toolkit emits `agent_json`
   unconditionally, and `extraction_method` alongside it since #3633. So the default fix
   is K007's — bump the `app-contract-toolkit` `@<version>` in contract/PklProject,
@@ -1627,6 +1636,7 @@ in review.
   run_in_executor(None, ...) land on the shared default executor, which Temporal's
   Python SDK also uses internally, so long blocking calls there can exhaust it and
   deadlock the worker.
+- **Fix by:** `programs/areas/prescriptions.prose.md`
 - **Interacts with:** Applied together with F011 on preflight paths. run_in_thread moves the work to the SDK's
   pool but carries no deadline, so F011 treats the swapped call exactly as it treated
   asyncio.to_thread: an executor wait that must sit under an enclosing deadline. When

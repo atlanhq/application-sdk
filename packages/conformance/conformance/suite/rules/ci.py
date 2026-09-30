@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -49,6 +53,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "`./` composite-action refs are exempt (no version to pin)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C002",
@@ -130,6 +138,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "`--use-ghcr-base false` to remove it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="atlan-application-sdk-conformance bootstrap --resync",
+        ),
     ),
     RuleDefinition(
         id="C003",
@@ -179,6 +191,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "autofixed, which is why this rule's `autofixable` is false overall."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C004",
@@ -236,5 +252,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "`atlanhq/application-sdk/.github/actions/setup-deps@main`."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
 )

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conformance.suite.rules import CATALOG, get_rule
+from conformance.suite.rules import CATALOG
 from conformance.suite.schema.catalog import (
     RemediationKind,
     RemediationReference,
@@ -63,6 +63,79 @@ def test_every_migration_rule_names_a_remediation_reference() -> None:
         "app-facing rules with autofixable=False and no remediation_reference — "
         f"name a skill, a guide or a decision: {missing}"
     )
+
+
+SERIES_AREA = {
+    "E": "error-handling",
+    "L": "logging",
+    "C": "ci",
+    "P": "prescriptions",
+    "F": "preflight",
+    "O": "optimizations",
+    "D": "dependency",
+    "B": "deprecation",
+    "I": "dockerfile",
+    "T": "tests",
+    "K": "contract-toolkit",
+    "S": "security",
+}
+
+
+def _autofixable_app_facing_rules() -> list[RuleDefinition]:
+    return [
+        r
+        for r in CATALOG.values()
+        if r.scope in (RuleScope.APP, RuleScope.BOTH) and r.autofixable
+    ]
+
+
+def test_every_autofixable_rule_names_a_remediation_reference() -> None:
+    missing = sorted(
+        r.id for r in _autofixable_app_facing_rules() if r.remediation_reference is None
+    )
+    assert not missing, (
+        "app-facing auto-fixable rules with no remediation_reference — name the "
+        f"area prescription or the fixer command: {missing}"
+    )
+
+
+def test_every_prescription_reference_names_the_rules_bullet() -> None:
+    """The reference must be the file the lane actually reads for the rule: its
+    series area, carrying the rule's ``**<ID> Name**`` bullet."""
+    broken = []
+    for r in CATALOG.values():
+        ref = r.remediation_reference
+        if ref is None or ref.kind is not RemediationKind.PRESCRIPTION:
+            continue
+        expected = f"programs/areas/{SERIES_AREA[r.id[0]]}.prose.md"
+        path = PACKAGE_ROOT / ref.target
+        if ref.target != expected or not re.search(
+            r"\*\*" + r.id + r"\b", path.read_text() if path.is_file() else ""
+        ):
+            broken.append(f"{r.id}->{ref.target}")
+    assert (
+        not broken
+    ), f"prescription references that miss the rule's bullet: {sorted(broken)}"
+
+
+def test_every_command_reference_names_a_cli_command() -> None:
+    from conformance.cli import _COMMANDS
+
+    broken = []
+    for r in CATALOG.values():
+        ref = r.remediation_reference
+        if ref is None or ref.kind is not RemediationKind.COMMAND:
+            continue
+        parts = ref.target.split()
+        if (
+            len(parts) < 2
+            or parts[0] != "atlan-application-sdk-conformance"
+            or parts[1] not in _COMMANDS
+        ):
+            broken.append(f"{r.id}->{ref.target}")
+    assert (
+        not broken
+    ), f"command references that are not a conformance CLI command: {sorted(broken)}"
 
 
 def test_migration_rule_rejects_a_mechanical_reference_kind() -> None:
@@ -148,6 +221,7 @@ def test_remediation_reference_rides_the_sarif_wire() -> None:
     rule = next(r for r in _migration_rules() if r.remediation_reference is not None)
     props = rule.to_reporting_descriptor().properties
     ref = rule.remediation_reference
+    assert ref is not None
     assert props["atlan/remediationReference"] == {
         "kind": ref.kind.value,
         "target": ref.target,
@@ -156,10 +230,8 @@ def test_remediation_reference_rides_the_sarif_wire() -> None:
 
 
 def test_rule_without_a_reference_omits_the_sarif_property() -> None:
-    assert (
-        "atlan/remediationReference"
-        not in get_rule("E001").to_reporting_descriptor().properties
-    )
+    rule = next(r for r in CATALOG.values() if r.remediation_reference is None)
+    assert "atlan/remediationReference" not in rule.to_reporting_descriptor().properties
 
 
 def test_rule_docs_print_the_remediation_reference(tmp_path: Path) -> None:
