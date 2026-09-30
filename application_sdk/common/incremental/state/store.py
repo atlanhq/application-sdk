@@ -452,6 +452,13 @@ class CurrentStateStore:
         attempt's could leave its live manifest naming missing keys. An earlier
         attempt's leftovers go with the next run's commit instead. A sidecar
         goes with its data key, since it carries the same stamp.
+
+        In practice attempts of one run leave no leftovers: they build from the
+        same ``transformed/`` prefix, so they produce the same names and
+        overwrite each other. If two attempts ever did produce different trees,
+        keeping the extra keys fails safe. Publish sees a stale file until the
+        next run's commit, where deleting them risks a manifest every later
+        :meth:`probe` refuses.
         """
         keep = committed | {sidecar_key(k) for k in committed} | {self.manifest_key}
         own = _run_stamp(run_id)

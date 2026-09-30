@@ -335,7 +335,14 @@ class TestCommit:
     ) -> None:
         """A timed-out attempt still running beside its retry: the attempt that
         committed first prunes late, after the retry's manifest is live. It must
-        not delete the retry's keys, which carry the same stamp."""
+        not delete the retry's keys, which carry the same stamp.
+
+        The two attempts get *different* trees here on purpose, as a stress
+        case. Real attempts of one run build from the same ``transformed/``
+        prefix and produce identical names, so each overwrites the other and
+        there is nothing to prune. With different trees, the earlier attempt's
+        file survives until the next run's commit (asserted below): a stale
+        file for one run, rather than a live manifest naming deleted keys."""
         state = CurrentStateStore(PREFIX)
         first = await state.commit(_write(tmp_path / "a1", {"t/a.json": "a"}), "run-x")
         await state.commit(_write(tmp_path / "a2", {"t/b.json": "b"}), "run-x")
