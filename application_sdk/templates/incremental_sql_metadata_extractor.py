@@ -614,12 +614,17 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using DuckDB
-        analysis = await run_in_thread(
+        # Unpacked by position, not read by field name: the result is a
+        # ColumnExtractionAnalysis NamedTuple, but a caller's test may still
+        # mock it with the plain 4-tuple it used to be.
+        (
+            filtered_rows,
+            changed_count,
+            backfill_count,
+            _no_change_count,
+        ) = await run_in_thread(
             get_tables_needing_column_extraction, transformed_dir, backfill_qns
         )
-        filtered_rows = analysis.rows
-        changed_count = analysis.changed_count
-        backfill_count = analysis.backfill_count
 
         total_tables = changed_count + backfill_count
         if total_tables == 0:
