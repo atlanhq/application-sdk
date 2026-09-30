@@ -1998,7 +1998,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="test-tier-coverage",
-        autofixable=True,
+        autofixable=False,
         since="0.22.0",
         rationale=(
             "T012 asks only that tests/e2e/ hold one collectable test, on the agreed "
@@ -2021,6 +2021,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "A bundle (multi-entrypoint) contract entrypoint has no e2e suite"
         ),
         full_description=(
+            "A person has to close this, not the remediation lane: covering an\n"
+            "entrypoint means an e2e run against a real source for it (a reachable\n"
+            "system and CI credentials), which only its owners and the test\n"
+            "infrastructure can provide. A class that skips when the source is absent\n"
+            "satisfies the matcher and none of the rationale.\n"
+            "\n"
             "The app is in **bundle mode** — ``app/generated/`` holds one\n"
             "``<name>/manifest.json`` subdir per entrypoint — and at least one of\n"
             "those entrypoints is not exercised by any collectable test class under\n"
