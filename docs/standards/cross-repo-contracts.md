@@ -149,7 +149,7 @@ Two consequences for changes here:
 |---|---|
 | **Produced by** | `CurrentStateStore.commit()` in `application_sdk/common/incremental/state/store.py`, called by `create_current_state_snapshot()` in `state/state_writer.py`; the diff by `create_incremental_diff()` / `_write_metadata()` in `state/incremental_diff.py`, uploaded by `create_current_state_snapshot()` before the commit |
 | **Layout** | Under the connection-scoped prefix (previous entry), `persistent-artifacts/apps/{app}/connection/{id}/`: **current state** at `current-state/{entity}/{stamp}--{file}.json` plus `current-state/.sdk-manifest`; **incremental diff** at `runs/{run_id}/incremental-diff/` (`INCREMENTAL_DIFF_SUBPATH_TEMPLATE`) with `table/`, `column/`, `schema/`, `database/`, `delete/table/`, `delete/column/` and `metadata.json` |
-| **Shape** | `.sdk-manifest` is JSON: `version`, `run_id`, `committed_at`, `keys` → size. `{stamp}` is 12 hex characters derived from the committing run ID. After the manifest is written, the commit prunes this run's leftovers, the snapshot it replaced, and unstamped legacy keys; a key stamped by any other run is pruned only once it is more than two hours old (twice `write_current_state`'s timeout), since until then it may be a concurrent commit's upload. So for up to that long a listing can hold stamped keys the manifest does not name — the manifest, not the listing, is the snapshot. `metadata.json` is JSON with `is_incremental`, `tables_created`, `tables_updated`, `tables_backfill`, `tables_deleted`, `columns_total`, `columns_deleted`, `schemas_total`, `databases_total`, `total_changed_entities`, `total_files` |
+| **Shape** | `.sdk-manifest` is JSON: `version`, `run_id`, `committed_at`, `keys` → size. `{stamp}` is 12 hex characters derived from the committing run ID. After the manifest is written, the commit prunes every key the manifest does not name: this run's leftovers, the snapshot it replaced, a failed run's uploads, and unstamped legacy keys. It then re-uploads any key the manifest names that the store no longer holds. Between a failed run and the next commit, a listing can hold stamped keys the manifest does not name — the manifest, not the listing, is the snapshot. This relies on one run per connection at a time, which scheduling guarantees. `metadata.json` is JSON with `is_incremental`, `tables_created`, `tables_updated`, `tables_backfill`, `tables_deleted`, `columns_total`, `columns_deleted`, `schemas_total`, `databases_total`, `total_changed_entities`, `total_files` |
 | **Read by** | **Argo publish templates** in marketplace-packages — the incremental connectors pass `current-state/` as `transformed-input-path` (marketplace-scripts' `convert_transformer_file_structure` globs it with `**/*.json` and takes the parent directory as the asset type), and `metadata.json` routes the publish (diff with entities → stream publish; no diff → batch publish; diff with zero entities → skip). **atlan-snowflake-app**, which duplicates the layout: it builds the `persistent-artifacts/apps/{app}/connection/{id}` prefix and the `current-state` subpath from its own constants rather than from this SDK. **atlan-oracle-app**, which rebuilds the object keys under that prefix itself. The SDK's own `probe()` on the next run |
 | **Pinned by** | `tests/unit/common/incremental/test_current_state_store.py` (`test_manifest_name_is_invisible_to_the_publish_glob`, the commit/prune tests, the two-run end-to-end test), the FND-3061 regressions in `test_state_lifecycle_characterization.py`, and `TestWriteMetadata` in `tests/unit/common/incremental/test_incremental_diff.py` (`test_metadata_key_set_is_the_argo_routing_contract` pins the exact `metadata.json` key set) |
 
@@ -174,17 +174,13 @@ Constraints that come from the readers:
 - **The snapshot is the manifest, not the listing.** A reader that lists or
   globs `current-state/` — the Argo publish converter, atlan-oracle-app's
   direct `download_prefix` reads — also sees stamped keys no manifest names: a
-  failed or overlapping commit's upload, until a later commit prunes it (see
-  **Shape**). New readers go through `CurrentStateStore.probe()` /
-  `materialize()`, which read only the manifest's keys. Existing glob readers
-  are no worse off than before the manifest: the pre-manifest layout never
-  pruned at all. The one exception is a run that fails for good and is
-  followed within two hours by the next run. The old layout left that failed
-  run's extra chunks behind permanently; this one leaves a whole stamped copy,
-  which a glob reader in the next run sees alongside the new snapshot, until
-  the first commit after the grace window prunes it. The fix for such readers
-  is to read through the manifest, not a shorter grace — a shorter grace lets a
-  slow overlapping commit's keys be pruned while its manifest still names them.
+  failed commit's upload, until the next commit prunes it (see **Shape**).
+  New readers go through `CurrentStateStore.probe()` / `materialize()`, which
+  read only the manifest's keys. Glob readers that run after a commit, such as
+  Argo publish, see only its snapshot. A glob reader that runs before the next
+  commit, such as atlan-oracle-app's carry-forward reads, still sees a failed
+  run's copy, and the fix for it is to read through the manifest. The old
+  layout was worse on both counts: it never pruned at all.
 - **`metadata.json` keys are routing inputs.** Adding a key is safe; renaming
   or dropping one — or writing it non-atomically — changes which publish mode
   Argo picks. It is written with `atomic_write` because a truncated counts

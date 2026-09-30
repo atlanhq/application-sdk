@@ -12,7 +12,6 @@ import json
 import time
 import warnings
 from collections.abc import Iterator
-from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -301,37 +300,15 @@ class TestCommit:
         await state.commit(_write(tmp_path / "b", {"t/b.json": "b"}), "run-b")
 
         # run-a's prune, arriving late: the manifest now names run-b.
-        await state._prune(set(first.keys), "run-a", None)
+        await state._prune(set(first.keys), "run-a", tmp_path / "a")
 
         assert (await state.probe()).committed_run_id == "run-b"
 
-    async def test_a_concurrent_commits_upload_is_never_pruned(
+    async def test_a_failed_runs_uploads_are_pruned_by_the_next_commit(
         self, local, tmp_path
     ) -> None:
-        """Run B has uploaded but not yet written its manifest when run A
-        commits: A's prune must leave B's keys, or B's manifest would name
-        keys that are gone."""
-        state = CurrentStateStore(PREFIX)
-        await state.commit(_write(tmp_path / "p", {"t/p.json": "p"}), "run-p")
-        with patch.object(
-            store_module, "_put", side_effect=StorageError("injected: B stalls")
-        ):
-            with pytest.raises(StorageError):
-                await state.commit(_write(tmp_path / "b", {"t/b.json": "b"}), "run-b")
-        b_keys = {k for k in await list_keys(PREFIX) if "b.json" in k}
-        assert b_keys
-
-        await state.commit(_write(tmp_path / "a", {"t/a.json": "a"}), "run-a")
-
-        remaining = set(await list_keys(PREFIX))
-        assert b_keys <= remaining
-        # The snapshot run A replaced is gone; only A, B and the manifest remain.
-        assert not any("p.json" in k for k in remaining)
-
-    async def test_another_runs_old_leftovers_are_pruned(
-        self, local, tmp_path, monkeypatch
-    ) -> None:
-        """A dead commit's keys, past the grace window, go with the next prune."""
+        """A run that uploads and dies before its manifest leaves stamped keys
+        the publish glob would read. The next commit prunes them at once."""
         state = CurrentStateStore(PREFIX)
         with patch.object(
             store_module, "_put", side_effect=StorageError("injected: dies")
@@ -340,7 +317,7 @@ class TestCommit:
                 await state.commit(
                     _write(tmp_path / "d", {"t/d.json": "d"}), "run-dead"
                 )
-        monkeypatch.setattr(store_module, "_FOREIGN_KEY_GRACE", timedelta(0))
+        assert any("d.json" in k for k in await list_keys(PREFIX))
 
         committed = await state.commit(
             _write(tmp_path / "a", {"t/a.json": "a"}), "run-a"
@@ -352,6 +329,31 @@ class TestCommit:
             | {f"{k}.sha256" for k in committed.keys}
             | {state.manifest_key}
         )
+
+    async def test_a_committed_key_deleted_before_the_prune_is_re_uploaded(
+        self, local, tmp_path
+    ) -> None:
+        """If an overlapping commit (which scheduling rules out) deleted one of
+        this run's keys, the run whose manifest is live restores it, so later
+        probes are not refused a manifest naming deleted keys."""
+        state = CurrentStateStore(PREFIX)
+        victim = f"{state._key_prefix}t/{store_module._run_stamp('run-b')}b.json"
+        real_put = store_module._put
+
+        async def put_then_lose_a_key(key, *args, **kwargs):
+            await real_put(key, *args, **kwargs)
+            if key == state.manifest_key:
+                await obstore.delete_async(store_module._resolve_store(None), victim)
+
+        with patch.object(store_module, "_put", side_effect=put_then_lose_a_key):
+            await state.commit(
+                _write(tmp_path / "b", {"t/b.json": "b", "t/c.json": "c"}), "run-b"
+            )
+
+        snapshot = await state.probe()  # would raise CurrentStateManifestError
+        assert victim in snapshot.keys
+        dest = await state.materialize(snapshot, tmp_path / "out")
+        assert sorted(_files(dest).values()) == [b"b", b"c"]
 
     async def test_committing_a_missing_directory_keeps_the_snapshot(
         self, local, tmp_path

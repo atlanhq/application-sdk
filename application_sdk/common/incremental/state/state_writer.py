@@ -330,7 +330,7 @@ async def upload_current_state(
     )
     # No run ID reaches this legacy signature. A fresh one per call is safe: a
     # retried call leaves its earlier attempt's keys stamped by a third run,
-    # which a later commit prunes once they are past the grace window.
+    # which the retry's own commit prunes.
     await store.commit(current_state_dir, f"legacy-upload-{uuid.uuid4().hex}")
     return store.s3_prefix
 
