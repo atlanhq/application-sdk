@@ -1419,7 +1419,9 @@ evidence about the miner's dispatch path. 'One representative run' therefore has
 one per entrypoint. The gap is also invisible: nothing in CI, conformance, or the
 scorecard distinguishes an app whose entrypoints are all covered from one where only the
 default is. Customer impact: a miner that regressed ships, because the only thing that
-would have run it in CI does not exist.
+would have run it in CI does not exist. Closing it takes external context — the source
+system, CI credentials for it, and what a correct run produces — that no automated fixer
+has, so the rule is not auto-fixable.
 
 ### What correct looks like
 
@@ -1432,10 +1434,15 @@ would have run it in CI does not exist.
   split), with extract-lineage run as a DAG node inside the single full-DAG e2e — is the
   multi-entrypoint shape T025 deliberately does not flag.
 
-A person has to close this, not the remediation lane: covering an entrypoint means an
-e2e run against a real source for it (a reachable system and CI credentials), which only
-its owners and the test infrastructure can provide. A class that skips when the source
-is absent satisfies the matcher and none of the rationale.
+**Not auto-fixable: a person has to close this.** Covering an entrypoint means an e2e
+run against a real source for it, and writing one needs context that is not in the
+repository: which system the entrypoint reads (a reachable tenant or database with
+representative data), the credentials CI uses to reach it, and what a correct run
+produces there (the assets and counts to assert). An automated fixer has none of these —
+no credentials, no access to the source, no knowledge of its data — so the only suites
+it can write are ones that skip when the source is absent or assert nothing about the
+output, which satisfy the matcher and none of the rationale. The entrypoint's owners and
+the test infrastructure supply that context.
 
 The app is in **bundle mode** — `app/generated/` holds one `<name>/manifest.json` subdir
 per entrypoint — and at least one of those entrypoints is not exercised by any
