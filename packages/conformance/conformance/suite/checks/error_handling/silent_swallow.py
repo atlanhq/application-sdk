@@ -223,6 +223,10 @@ class SilentSwallowMixin:
         exc_type = _get_name(node.type)
         if exc_type not in _OPTIONAL_IMPORT_TYPES:
             return
+        # An unconditional cause-preserving re-raise surfaces the missing
+        # dependency instead of hiding it behind a silent fallback.
+        if _body_always_raises(node.body) and not _body_has_bypassing_exit(node.body):
+            return
         if _any_logging_in(node.body):
             return
         self._add(

@@ -1774,6 +1774,61 @@ except ImportError:
     )
 
 
+def test_p008_no_finding_when_typed_error_is_chained() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable(
+            message="backend runtime is required",
+            cause=exc,
+        ) from exc
+    return optional_backend
+"""
+    )
+
+
+def test_p008_silent_return_still_fires() -> None:
+    findings = _findings(
+        """\
+def use_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        return
+"""
+    )
+    assert "E008" in findings
+
+
+def test_p008_dropping_cause_still_fires() -> None:
+    _single(
+        """\
+try:
+    import optional_backend
+except ImportError:
+    raise BackendUnavailable("backend runtime is required") from None
+""",
+        "E008",
+    )
+
+
+def test_p008_conditional_reraise_that_can_fall_through_still_fires() -> None:
+    _single(
+        """\
+def load_backend(should_reraise):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        if should_reraise:
+            raise BackendUnavailable("backend runtime is required") from exc
+""",
+        "E008",
+    )
+
+
 # ── P009 — ExceptBlockOnlyAssigns ────────────────────────────────────────────
 
 
