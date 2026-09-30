@@ -20,6 +20,7 @@ from the fixed per-connection directory layout; use
 
 import os
 import shutil
+import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,7 +32,9 @@ from application_sdk.common.incremental.helpers import (
     copy_directory_parallel,
     count_json_files_recursive,
     get_persistent_artifacts_path,
-    get_persistent_s3_prefix,
+)
+from application_sdk.common.incremental.helpers import (
+    get_persistent_s3_prefix as _get_persistent_s3_prefix,
 )
 from application_sdk.common.incremental.models import EntityType
 from application_sdk.common.incremental.state.incremental_diff import (
@@ -269,6 +272,23 @@ def _copy_columns_from_transformed(
 
 
 @deprecated(
+    "get_persistent_s3_prefix is deprecated here; use "
+    "application_sdk.common.incremental.helpers.get_persistent_s3_prefix, where it "
+    "lives — it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+def get_persistent_s3_prefix(
+    connection_qualified_name: str, application_name: str = ""
+) -> str:
+    """Deprecated alias of :func:`application_sdk.common.incremental.helpers.get_persistent_s3_prefix`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.common.incremental.helpers`. Will
+        be removed in v4.0.0.
+    """
+    return _get_persistent_s3_prefix(connection_qualified_name, application_name)
+
+
+@deprecated(
     "upload_current_state is deprecated; use CurrentStateStore.commit(), which "
     "writes a manifest and prunes stale keys — will be removed in v4.0.0."
 )
@@ -277,12 +297,14 @@ async def upload_current_state(
     connection_qualified_name: str,
     application_name: str = "",
 ) -> str:
-    """Upload a directory over the current-state prefix, key by key.
+    """Commit a directory as the connection's current-state snapshot.
 
     .. deprecated:: 3.x
-        Use :meth:`CurrentStateStore.commit`. This only adds and replaces
-        keys: it writes no manifest and prunes nothing, so it does not change
-        which snapshot is committed. Will be removed in v4.0.0.
+        Use :meth:`CurrentStateStore.commit`, which this now delegates to under
+        a fresh run ID per call, so the upload becomes the committed snapshot
+        (manifest written, stale keys pruned) rather than files the manifest
+        ignores. Like ``commit``, it renames the files in *current_state_dir*
+        to carry the run stamp. Will be removed in v4.0.0.
 
     Args:
         current_state_dir: Path to local current-state directory
@@ -299,16 +321,14 @@ async def upload_current_state(
         ... )
         >>> print(f"Uploaded to: {s3_prefix}")
     """
-    s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
-    current_state_s3_prefix = f"{s3_prefix}/current-state"
-
-    await upload_prefix(
-        local_dir=str(current_state_dir),
-        prefix=current_state_s3_prefix,
+    store = CurrentStateStore.for_connection(
+        connection_qualified_name, application_name
     )
-    logger.info("Current-state uploaded to S3: %s", current_state_s3_prefix)
-
-    return current_state_s3_prefix
+    # No run ID reaches this legacy signature. A fresh one per call is safe: a
+    # retried call leaves its earlier attempt's keys stamped by a third run,
+    # which a later commit prunes once they are past the grace window.
+    await store.commit(current_state_dir, f"legacy-upload-{uuid.uuid4().hex}")
+    return store.s3_prefix
 
 
 @deprecated(

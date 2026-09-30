@@ -90,7 +90,7 @@ application_sdk/common/incremental/
 | `CurrentStateStore.for_connection(connection_qualified_name, application_name="")` | The store for a connection, via `get_persistent_s3_prefix` |
 | `CurrentStateStore.probe()` | One listing plus the manifest read: returns a `CurrentStateSnapshot` (`exists`, `json_count`, `total_bytes`, `committed_run_id`, `keys`). Downloads nothing. |
 | `CurrentStateStore.materialize(snapshot, dest)` | Mirror exactly the snapshot's keys into `dest` with sync semantics (already-current files skipped, anything else in `dest` deleted), under a per-directory lock |
-| `CurrentStateStore.commit(local_dir, run_id)` | Stamp file names with the run, upload, write the manifest (the commit point), then prune every key the manifest does not name |
+| `CurrentStateStore.commit(local_dir, run_id)` | Stamp file names with the run, upload, write the manifest (the commit point), then prune the keys it made stale (a key another run stamped is pruned only once it is two hours old — it may belong to a concurrent commit) |
 | `RunStateDirs.for_output_path(output_path)` | `{output_path}/incremental/` with `.previous_state`, `.current_state` and `.diff` |
 
 ### State writer (`state/state_writer.py`)

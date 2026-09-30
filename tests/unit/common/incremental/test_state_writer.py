@@ -383,39 +383,35 @@ class TestCopyColumnsFromTransformed:
 
 
 class TestUploadCurrentState:
-    """Tests for upload_current_state: derives S3 prefix and calls upload."""
+    """upload_current_state (deprecated) commits through CurrentStateStore."""
 
-    async def test_uploads_to_derived_prefix(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            state_dir = Path(temp_dir) / "current-state"
-            state_dir.mkdir()
+    async def test_the_upload_becomes_the_committed_snapshot(
+        self, memory_store, tmp_path
+    ):
+        """Once a manifest exists, a plain upload would be invisible to every
+        reader; the deprecated helper must commit instead."""
+        store = CurrentStateStore.for_connection("default/oracle/123", "oracle")
+        first = tmp_path / "first"
+        (first / "table").mkdir(parents=True)
+        (first / "table" / "chunk-0.json").write_text("old")
+        await store.commit(first, "run-1")
 
-            with (
-                patch(
-                    "application_sdk.common.incremental.state.state_writer.get_persistent_s3_prefix",
-                    return_value="persistent-artifacts/apps/oracle/connection/123",
-                ) as mock_prefix,
-                patch(
-                    "application_sdk.common.incremental.state.state_writer.upload_prefix",
-                    new_callable=AsyncMock,
-                ) as mock_upload,
-            ):
-                result = await upload_current_state(
-                    state_dir,
-                    connection_qualified_name="default/oracle/123",
-                    application_name="oracle",
-                )
-
-            assert result == (
-                "persistent-artifacts/apps/oracle/connection/123/current-state"
+        state_dir = tmp_path / "current-state"
+        (state_dir / "table").mkdir(parents=True)
+        (state_dir / "table" / "chunk-0.json").write_text("new")
+        with pytest.warns(DeprecationWarning, match="upload_current_state"):
+            result = await upload_current_state(
+                state_dir,
+                connection_qualified_name="default/oracle/123",
+                application_name="oracle",
             )
-            mock_prefix.assert_called_once_with("default/oracle/123", "oracle")
-            mock_upload.assert_awaited_once_with(
-                local_dir=str(state_dir),
-                prefix=(
-                    "persistent-artifacts/apps/oracle/connection/123/current-state"
-                ),
-            )
+
+        assert result == store.s3_prefix
+        snapshot = await store.probe()
+        assert snapshot.committed_run_id is not None
+        assert snapshot.committed_run_id.startswith("legacy-upload-")
+        dest = await store.materialize(snapshot, tmp_path / "prev")
+        assert [p.read_text() for p in dest.rglob("*.json")] == ["new"]
 
 
 # ---------------------------------------------------------------------------

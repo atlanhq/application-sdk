@@ -118,8 +118,8 @@ from application_sdk.common.incremental.state.store import (
 
 store = CurrentStateStore.for_connection(connection_qualified_name, application_name)
 snapshot = await store.probe()          # one listing + manifest; downloads nothing
+dirs = RunStateDirs.for_output_path(output_path)
 if snapshot.exists:
-    dirs = RunStateDirs.for_output_path(output_path)
     await store.materialize(snapshot, dirs.previous_state)   # exact mirror, synced
 # ... build this run's snapshot under dirs.current_state ...
 await store.commit(dirs.current_state, run_id)   # upload → manifest → prune
@@ -260,13 +260,18 @@ directory with sync semantics: files already current are skipped, and anything
 else in the directory (a killed attempt's partial download, a stray file) is
 deleted. So a leftover tree is never mistaken for the previous state.
 
-### A failed commit changes nothing
+### A commit that fails before its manifest changes nothing
 
 `CurrentStateStore.commit` writes the manifest only after every file is
 uploaded, and file names carry a stamp of the committing run, so the upload
 never overwrites a key the previous manifest names. A commit that dies before
 its manifest leaves the previous snapshot committed and whole, and the marker
 is only advanced after `write_current_state` succeeds.
+
+The manifest write is the commit point. The prune runs after it, so a commit
+that fails *in the prune* has already committed: readers see the new snapshot,
+and the keys it did not get to delete are left for a later commit's prune.
+Every reader that goes through the manifest ignores them already.
 
 ## Configuration Parameters
 

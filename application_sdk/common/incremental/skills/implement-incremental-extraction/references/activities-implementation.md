@@ -121,7 +121,7 @@ def build_incremental_column_sql(
     cte_sql = "WITH table_filter AS (\n" + "\nUNION ALL ".join(cte_lines) + "\n)"
 
     sql = self.incremental_column_sql.replace("--TABLE_FILTER_CTE--", cte_sql)
-    sql = sql.replace("{system_schema}", self.system_schema)
+    sql = sql.replace("{system_schema}", _sql_identifier(self.system_schema))
     sql = sql.replace("{marker_timestamp}", ctx.marker_timestamp or "")
     return sql
 ```
@@ -129,6 +129,24 @@ def build_incremental_column_sql(
 `ctx` carries no connector-specific settings; keep values such as the system
 schema on the App (as `self.system_schema` above) or derive them from the
 connection.
+
+**Validate every identifier before it is substituted.** A schema name is
+spliced into the SQL text, so a value derived from the connection is
+untrusted input: `SYS.DBA_TABLES t WHERE 1=1 --` would comment out the rest
+of the query. Accept only a plain identifier, and fail otherwise:
+
+```python
+import re
+
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$#]*")
+
+
+def _sql_identifier(value: str) -> str:
+    """Return *value* if it is a plain, unquoted SQL identifier; else raise."""
+    if not _IDENTIFIER.fullmatch(value):
+        raise ValueError(f"not a plain SQL identifier: {value!r}")
+    return value
+```
 
 ### ClickHouse Pattern (WHERE IN clause)
 
@@ -184,11 +202,12 @@ def resolve_database_placeholders(
     self, sql: str, input: FetchTablesIncrementalInput
 ) -> str:
     """Replace Oracle-specific placeholders."""
-    return sql.replace("{system_schema}", self.system_schema)
+    return sql.replace("{system_schema}", _sql_identifier(self.system_schema))
 ```
 
 The default is a no-op. Your own `fetch_tables` calls it (see above); the SDK
-does not call it for you.
+does not call it for you. `_sql_identifier` is the validator shown under
+`build_incremental_column_sql()` above.
 
 ## Optional Hook: `after_current_state_read()`
 
