@@ -45,10 +45,9 @@ class CurrentStateManifestError(InternalError):
     """The committed current-state manifest is unreadable or names missing keys.
 
     A manifest is written only after every key it names has been uploaded, so
-    either condition means the snapshot was damaged after its commit (or a
-    concurrent commit of the same connection pruned it). Diffing against a
-    partial snapshot would report its missing assets as deleted, so the read
-    fails instead of guessing.
+    either condition means the snapshot was damaged after its commit. Diffing
+    against a partial snapshot would report its missing assets as deleted, so
+    the read fails instead of guessing.
     """
 
     code: ClassVar[str] = "INTERNAL_INCREMENTAL_CURRENT_STATE_MANIFEST"
