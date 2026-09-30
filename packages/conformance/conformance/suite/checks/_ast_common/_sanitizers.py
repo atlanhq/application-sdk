@@ -195,6 +195,23 @@ def _call_uses_sanitized_local_alias(
     return False
 
 
+def is_sanitizer_call(expr: ast.expr) -> bool:
+    """True when *expr* itself is a call to a recognised redaction helper.
+
+    Stricter than "a sanitizer appears somewhere in *expr*": the value must be
+    the helper's *output*.  ``redact(tb)`` and ``await utils.redact(tb)``
+    count; ``redact("header") + raw_tb`` does not, because the raw traceback
+    is concatenated past the redaction.  Used where a local is followed back
+    to the expression that produced it (L004's sanitized-local exemption).
+    """
+    if isinstance(expr, ast.Await):
+        expr = expr.value
+    if not isinstance(expr, ast.Call):
+        return False
+    target = _leaf_name(expr.func)
+    return target is not None and _name_is_sanitizer(target)
+
+
 def call_uses_sanitizer(
     call: ast.Call, *, handler: ast.ExceptHandler | None = None
 ) -> bool:
