@@ -251,8 +251,9 @@ on:
         type: boolean
       with-tests:
         description: >
-          Deprecated no-op, removed in conformance v0.40.0.  Accepted so a caller
-          that still passes it keeps working; nothing reads it.  Conformance
+          Deprecated no-op.  Kept so a caller that still passes it keeps
+          working: a reusable rejects an undeclared input at startup, with no
+          check run to say why.  Nothing reads it.  Conformance
           checks that the preflight scenarios are defined (F016 reads their
           registrations statically, and a fully defined matrix clears F019's
           value-level gaps); whether those tests pass is the test gate's measure,
@@ -440,7 +441,7 @@ jobs:
         if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.18"
+          version: "0.12.21"
 
       # Only the D-series leg materialises the caller's environment (the detect
       # action's needs-env `uv sync`); the other series run from an isolated
@@ -571,7 +572,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.18"
+          version: "0.12.21"
 
       - name: "Guard contract_schema.lock.json (published package)"
         if: inputs.conformance-ref == ''

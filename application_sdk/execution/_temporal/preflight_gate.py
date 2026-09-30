@@ -58,10 +58,14 @@ with workflow.unsafe.imports_passed_through():
         PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
     )
     from application_sdk.contracts.base import SerializableEnum
-    from application_sdk.credentials.errors import CredentialNotFoundError
+    from application_sdk.credentials.errors import (
+        CredentialNotFoundError,
+        CredentialRoutingError,
+    )
     from application_sdk.credentials.ingress import normalize_agent_json
     from application_sdk.credentials.ref import CredentialRef, CredentialResolvable
     from application_sdk.credentials.resolver import CredentialResolver
+    from application_sdk.credentials.routing import find_prebuilt_credential_ref
     from application_sdk.credentials.spec import AgentCredentialSpec
     from application_sdk.errors.base import (
         AppError,
@@ -475,6 +479,27 @@ def input_type_supports_gate(input_type: type) -> bool:
     return all(name in fields for name in CredentialResolvable.__annotations__)
 
 
+def _prebuilt_credential_ref(input_data: object) -> CredentialRef | None:
+    """The pre-built ref the extraction tasks will use, found the same way they find it.
+
+    Uses :func:`~application_sdk.credentials.routing.find_prebuilt_credential_ref`,
+    so an app's ``<app>_credential`` field reaches the gate too — before, the gate
+    read only ``credential_ref`` and could check a different credential from the
+    one the tasks then used. Never raises: when several refs make the choice
+    ambiguous, the gate keeps only the generic ``credential_ref``.
+    """
+    try:
+        return find_prebuilt_credential_ref(input_data)
+    except CredentialRoutingError:
+        logger.warning(
+            "Extraction input carries several credential refs; the gate checks "
+            "only credential_ref",
+            exc_info=True,
+        )
+        generic = getattr(input_data, "credential_ref", None)
+        return generic if isinstance(generic, CredentialRef) else None
+
+
 if TYPE_CHECKING:
     from application_sdk.execution.errors import ApplicationError
     from application_sdk.handler.base import Handler
@@ -579,7 +604,7 @@ class PreflightGateInput(BaseModel):
             # extraction_method and credential_guid too — degrading credential
             # resolution silently instead of just having no agent reference.
             agent_json=normalize_agent_json(getattr(input_data, "agent_json", None)),
-            credential_ref=getattr(input_data, "credential_ref", None),
+            credential_ref=_prebuilt_credential_ref(input_data),
             entrypoint=entrypoint,
             workflow_slug=getattr(input_data, "workflow_slug", "") or "",
             credential_ref_fields=credential_ref_fields,

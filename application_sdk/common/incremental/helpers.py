@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
     atomic_copy,
     disk_full_guard,
@@ -28,6 +29,7 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.errors import StorageNotFoundError
 from application_sdk.storage.ops import download_file
 
 logger = get_logger(__name__)
@@ -234,6 +236,12 @@ async def download_marker_from_s3(
 
     Returns:
         Marker timestamp string if found, None otherwise
+
+    Raises:
+        StorageError: If the download fails for any reason other than the
+            marker not existing. A missing marker means "first run"; any other
+            failure must not silently become a full extraction, so it
+            propagates and the task retries.
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
@@ -253,10 +261,8 @@ async def download_marker_from_s3(
             logger.info("Marker downloaded: %s", marker)
             return marker
         logger.info("Marker file downloaded but empty")
-    except FileNotFoundError:
+    except StorageNotFoundError:
         logger.info("Marker file not found in S3 (first incremental run)")
-    except Exception:
-        logger.warning("Failed to download marker from S3", exc_info=True)
     return None
 
 
@@ -301,17 +307,25 @@ async def download_s3_prefix_with_structure(
 
 
 def count_json_files_recursive(directory: Path) -> int:
-    """Recursively count JSON files without creating a list in memory.
+    """Recursively count JSON files under *directory*.
+
+    Walks with :func:`~application_sdk.common._listing.safe_list_directory`
+    rather than ``Path.rglob``, which silently swallows an ``OSError`` part-way
+    through a walk and so under-counts instead of failing. Blocking: async
+    callers must offload it with ``run_in_thread``.
 
     Args:
         directory: Directory to search recursively
 
     Returns:
-        Number of JSON files
+        Number of JSON files; 0 when *directory* does not exist.
+
+    Raises:
+        OSError: If the tree cannot be walked.
     """
     if not directory.exists():
         return 0
-    return sum(1 for _ in directory.rglob("*.json"))
+    return sum(1 for p in safe_list_directory(directory) if p.suffix == ".json")
 
 
 def copy_directory_parallel(

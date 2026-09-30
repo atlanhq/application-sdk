@@ -18,7 +18,10 @@ both follow this — the data source is always the first positional argument.
 
 from __future__ import annotations
 
+import json
 import os
+import stat
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
@@ -26,8 +29,14 @@ from typing import TYPE_CHECKING
 import obstore
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.common._listing import prune_internal_dirs
+from application_sdk.common._listing import (
+    SYNC_INDEX_DIRNAME,
+    has_internal_component,
+    prune_internal_dirs,
+)
+from application_sdk.common.atomic import atomic_write
 from application_sdk.observability.logger_adaptor import get_logger
+from application_sdk.storage._concurrency import _run_bounded, _run_drained
 
 # Sidecar naming is owned by ``storage.integrity`` — the module that also reads
 # and writes them. Re-exported here (``batch.SIDECAR_SUFFIX`` /
@@ -412,40 +421,12 @@ async def _delete_paths_individually(
         StorageError: If a delete fails for any reason other than not-found.
             The first failure also cancels the remaining per-key deletes and
             *waits* for that cancellation to finish before propagating, so no
-            sibling delete outlives the raised error.
+            sibling delete outlives the raised error (see :func:`_run_bounded`).
     """
-    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
-
-    sem = asyncio.Semaphore(max_concurrency)
-
-    async def _delete_one(path: str) -> bool:
-        async with sem:
-            return await _delete_object(path, store, normalize=False)
-
-    # A TaskGroup (vs gather) gives structured cancel-and-await semantics: on
-    # the first StorageError the group cancels the remaining per-key tasks and
-    # does not return until they have actually finished unwinding, so no delete
-    # is left in flight to complete after the caller has seen the failure.  The
-    # group wraps the failure in an ExceptionGroup; unwrap the StorageError so
-    # the caller sees the original contract (a bare StorageError), not a group.
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        StorageError,
+    deleted = await _run_bounded(
+        [_delete_object(p, store, normalize=False) for p in paths], max_concurrency
     )
-
-    try:
-        async with asyncio.TaskGroup() as tg:
-            tasks = [tg.create_task(_delete_one(p)) for p in paths]
-    except BaseExceptionGroup as group:
-        # Unwrap only a group that is *entirely* StorageError. Picking the first
-        # StorageError out of a mixed group would demote every other leaf to
-        # ``__cause__`` — reachable in a traceback, invisible to an
-        # ``except`` clause. ops.delete wraps every per-key failure, so the
-        # homogeneous case is the only one that happens in practice; a foreign
-        # leaf means something unforeseen and is better surfaced as the group.
-        if all(isinstance(leaf, StorageError) for leaf in group.exceptions):
-            raise group.exceptions[0] from group
-        raise
-    return sum(t.result() for t in tasks)
+    return sum(deleted)
 
 
 def _local_relative_key(key: str, strip: str) -> str:
@@ -479,6 +460,7 @@ async def download_prefix(
     normalize: bool = True,
     strip_prefix: bool = False,
     max_concurrency: int = 4,
+    sync: bool = False,
 ) -> list[str]:
     """Download all objects under *prefix* to a local directory.
 
@@ -499,7 +481,21 @@ async def download_prefix(
     :func:`upload_prefix` ``(local_dir, prefix)``, which writes each file's path
     *relative to* ``local_dir`` under ``prefix``.
 
-    Downloads run concurrently (up to *max_concurrency* at a time).
+    Downloads run concurrently (up to *max_concurrency* at a time). If one
+    fails, or the caller is cancelled, the rest are cancelled and this waits
+    for their in-flight file I/O to stop before propagating — nothing is still
+    writing under *local_dir* once the error (or cancellation) reaches the
+    caller, so a retry into the same directory cannot race a previous attempt.
+
+    With *sync* the download mirrors the prefix instead of adding to
+    *local_dir*: the tree the prefix maps to (``local_dir`` itself with
+    *strip_prefix*, else ``local_dir/<prefix>``) ends up holding exactly the
+    listed objects. An object whose local file already matches the listing's
+    size and etag — as recorded by the previous sync in that tree's
+    ``.sdk-sync/`` index — is not downloaded again; an object without an etag
+    always is. Local files the listing does not name are deleted, once every
+    download has succeeded; with *suffix*, only files carrying that suffix are
+    candidates, since the listing says nothing about the rest.
 
     ``{key}.sha256`` sidecars are not mirrored to disk: they are SDK
     bookkeeping, and a caller that hands the downloaded directory to a reader
@@ -517,17 +513,20 @@ async def download_prefix(
             tree below it is written under *local_dir*.  Defaults to ``False``
             (full store path preserved).
         max_concurrency: Maximum parallel downloads (default 4).
+        sync: When ``True``, skip objects already current locally and delete
+            local files the listing does not name (see above).  Defaults to
+            ``False``.
 
     Returns:
-        List of local file paths that were downloaded.
+        List of local file paths for every listed object.  With *sync* this
+        includes the files skipped as already current — the list is the
+        mirror's content, not only what crossed the wire.
 
     Raises:
         StorageError: If listing or downloading fails.
         StorageIntegrityError: If an object does not match its sidecar digest.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
     """
-    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
-
     objects = await list_data_objects(prefix, store, normalize=normalize)
     if suffix:
         lsuffix = suffix.lower()
@@ -546,31 +545,251 @@ async def download_prefix(
         for obj in objects
     ]
 
-    sem = asyncio.Semaphore(max_concurrency)
+    todo = list(zip(objects, destinations))
+    if sync:
+        # The tree this prefix maps to locally — and so the only tree a sync
+        # may prune: a sibling prefix downloaded into the same local_dir is
+        # not this listing's business.
+        sync_root = _safe_join_under(
+            local,
+            "" if strip_prefix else _normalize_listing_prefix(prefix, normalize),
+        )
+        _reject_internal_keys(sync_root, destinations)
+        # Every offload of a sync is drained on unwind, not only the fan-out's:
+        # a cancelled index write or prune whose thread ran on could rewrite the
+        # index, or unlink a file, after a retry had already downloaded it.
+        index = await _run_drained(run_in_thread(_read_sync_index, sync_root))
+        todo, current = await _run_drained(
+            run_in_thread(_plan_sync, sync_root, todo, index)
+        )
+        # Drop the entries about to be re-downloaded *before* downloading: a
+        # failed run must never leave the index vouching for an etag the file
+        # on disk may no longer hold.
+        if current != index:
+            await _run_drained(run_in_thread(_write_sync_index, sync_root, current))
 
     async def _download_one(obj: DataObject, dest: str) -> None:
-        async with sem:
-            # Pass the listing's size + etag so a large object is fetched via
-            # bounded parallel range GETs (each with its own timeout / retry
-            # budget, version-pinned via If-Match) while small objects still
-            # stream in a single GET — and no per-file HEAD is issued, since
-            # the metadata is already known. (BLDX-1513 / BLDX-1523)
-            # has_sidecar comes from the same listing, so verification costs at
-            # most the one GET that actually reads the digest.
-            await download_file_chunked(
-                obj.key,
-                dest,
-                store,
-                normalize=False,
-                file_size=obj.size,
-                etag=obj.etag,
-                sidecar_present=obj.has_sidecar,
+        # Pass the listing's size + etag so a large object is fetched via
+        # bounded parallel range GETs (each with its own timeout / retry
+        # budget, version-pinned via If-Match) while small objects still
+        # stream in a single GET — and no per-file HEAD is issued, since
+        # the metadata is already known. (BLDX-1513 / BLDX-1523)
+        # has_sidecar comes from the same listing, so verification costs at
+        # most the one GET that actually reads the digest.
+        await download_file_chunked(
+            obj.key,
+            dest,
+            store,
+            normalize=False,
+            file_size=obj.size,
+            etag=obj.etag,
+            sidecar_present=obj.has_sidecar,
+        )
+
+    await _run_bounded([_download_one(obj, d) for obj, d in todo], max_concurrency)
+
+    if sync:
+        await _run_drained(
+            run_in_thread(
+                _write_downloaded_index, sync_root, list(zip(objects, destinations))
+            )
+        )
+        await _run_drained(
+            run_in_thread(_prune_unlisted, sync_root, set(destinations), suffix)
+        )
+    return destinations
+
+
+#: The index a ``download_prefix(..., sync=True)`` keeps inside
+#: :data:`~application_sdk.common._listing.SYNC_INDEX_DIRNAME` of the tree it
+#: mirrors: relative POSIX path -> the ``(size, etag)`` that file was
+#: downloaded at, and the ``mtime_ns`` it had on disk right after.
+#:
+#: JSON Lines -- a version header, then one object per line -- so a large
+#: mirror is read a line at a time into the one mapping the plan needs, rather
+#: than as the whole text plus a decoded copy of it (version 1 was a single
+#: JSON document, and is read as empty: one full re-download, then version 2).
+_SYNC_INDEX_FILENAME = "index.jsonl"
+_SYNC_INDEX_VERSION = 2
+
+
+@dataclass(frozen=True)
+class _SyncEntry:
+    """What the index recorded for one mirrored file."""
+
+    size: int
+    etag: str
+    mtime_ns: int
+
+
+_SyncIndex = dict[str, _SyncEntry]
+
+
+def _sync_index_path(root: Path) -> Path:
+    return root / SYNC_INDEX_DIRNAME / _SYNC_INDEX_FILENAME
+
+
+def _read_sync_index(root: Path) -> _SyncIndex:
+    """Load the sync index under *root*; empty when absent or unreadable.
+
+    An unreadable index only costs a full re-download, never a wrong skip, so
+    it is reported and treated as empty rather than failing the download. A
+    malformed line drops only that line's entry, for the same reason.
+    """
+    path = _sync_index_path(root)
+    index: _SyncIndex = {}
+    try:
+        with path.open(encoding="utf-8") as fh:
+            header = json.loads(fh.readline() or "null")
+            if (
+                not isinstance(header, dict)
+                or header.get("version") != _SYNC_INDEX_VERSION
+            ):
+                return {}
+            for line in fh:
+                row = json.loads(line)
+                if (
+                    isinstance(row, dict)
+                    and isinstance(row.get("path"), str)
+                    and isinstance(row.get("size"), int)
+                    and isinstance(row.get("etag"), str)
+                    and isinstance(row.get("mtime_ns"), int)
+                ):
+                    index[row["path"]] = _SyncEntry(
+                        row["size"], row["etag"], row["mtime_ns"]
+                    )
+    except FileNotFoundError:
+        return {}
+    # conformance: ignore[E002] a corrupt index degrades to a full re-download; logged
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "Ignoring unreadable sync index %s; every object will be downloaded: %s",
+            path,
+            exc,
+            exc_info=True,
+        )
+        return {}
+    return index
+
+
+def _write_sync_index(root: Path, index: _SyncIndex) -> None:
+    with atomic_write(
+        _sync_index_path(root), operation="write sync index", mode="w", encoding="utf-8"
+    ) as fh:
+        fh.write(json.dumps({"version": _SYNC_INDEX_VERSION}) + "\n")
+        for rel in sorted(index):
+            entry = index[rel]
+            row = {
+                "path": rel,
+                "size": entry.size,
+                "etag": entry.etag,
+                "mtime_ns": entry.mtime_ns,
+            }
+            fh.write(json.dumps(row) + "\n")
+
+
+def _write_downloaded_index(root: Path, pairs: list[tuple[DataObject, str]]) -> None:
+    """Record every file just downloaded, with the mtime it now has on disk."""
+    _write_sync_index(root, _index_entries(root, pairs))
+
+
+def _sync_relpath(root: Path, dest: str) -> str | None:
+    """*dest* relative to *root* as an index key, or ``None`` if outside it."""
+    try:
+        return Path(dest).relative_to(root).as_posix()
+    except ValueError:
+        return None
+
+
+def _reject_internal_keys(root: Path, destinations: list[str]) -> None:
+    """Refuse a sync whose listing maps an object into an SDK working directory.
+
+    The sync index lives at ``SYNC_INDEX_DIRNAME`` inside the mirrored tree, so
+    an object keyed there would be overwritten by the index write, and every
+    walker skips those directories, so it would then vanish from uploads and
+    reads too. Silently skipping it would be the same loss, so the sync fails.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
+
+    for dest in destinations:
+        rel = _sync_relpath(root, dest)
+        if rel is not None and has_internal_component(rel):
+            raise StorageConfigError(
+                "download_prefix(sync=True) cannot mirror an object into an SDK "
+                "working directory; its key collides with the sync's own files.",
+                key=rel,
             )
 
-    await asyncio.gather(
-        *[_download_one(obj, d) for obj, d in zip(objects, destinations)]
-    )
-    return destinations
+
+def _index_entries(root: Path, pairs: Iterable[tuple[DataObject, str]]) -> _SyncIndex:
+    """Index entries for downloaded *pairs*; objects without an etag get none."""
+    index: _SyncIndex = {}
+    for obj, dest in pairs:
+        rel = _sync_relpath(root, dest)
+        on_disk = _regular_file_stat(dest)
+        if rel is not None and obj.etag is not None and on_disk is not None:
+            size, mtime_ns = on_disk
+            index[rel] = _SyncEntry(size, obj.etag, mtime_ns)
+    return index
+
+
+def _plan_sync(
+    root: Path,
+    pairs: list[tuple[DataObject, str]],
+    index: _SyncIndex,
+) -> tuple[list[tuple[DataObject, str]], _SyncIndex]:
+    """Split *pairs* into those still to download and the index entries kept.
+
+    An object is current only when the listing's etag and size match what the
+    index recorded *and* the file on disk still has the size and ``mtime_ns``
+    it had right after that download. The mtime is what catches a same-size
+    local replacement without re-reading content; a replacement that also
+    restores the original mtime (``cp -p``, ``touch -r``) is not caught.
+    """
+    todo: list[tuple[DataObject, str]] = []
+    current: _SyncIndex = {}
+    for obj, dest in pairs:
+        rel = _sync_relpath(root, dest)
+        recorded = index.get(rel) if rel is not None else None
+        if (
+            rel is not None
+            and recorded is not None
+            and obj.etag is not None
+            and (recorded.size, recorded.etag) == (obj.size, obj.etag)
+            and _regular_file_stat(dest) == (recorded.size, recorded.mtime_ns)
+        ):
+            current[rel] = recorded
+        else:
+            todo.append((obj, dest))
+    return todo, current
+
+
+def _regular_file_stat(path: str) -> tuple[int, int] | None:
+    """``(size, mtime_ns)`` of a regular file at *path*, ``None`` otherwise."""
+    try:
+        st = os.stat(path, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    return (st.st_size, st.st_mtime_ns) if stat.S_ISREG(st.st_mode) else None
+
+
+def _prune_unlisted(root: Path, keep: set[str], suffix: str) -> None:
+    """Delete files under *root* not in *keep*, skipping SDK working dirs.
+
+    With *suffix*, only files carrying it are candidates: a suffix-filtered
+    listing says nothing about the others, so they are not "not listed".
+    """
+    lsuffix = suffix.lower()
+    for dirpath, dirs, filenames in os.walk(root, followlinks=False):
+        prune_internal_dirs(dirs)
+        for fname in filenames:
+            path = os.path.join(dirpath, fname)
+            if path in keep or (lsuffix and not fname.lower().endswith(lsuffix)):
+                continue
+            logger.debug("Sync removing local file not in the listing: %s", path)
+            os.unlink(path)
 
 
 async def upload_prefix(
@@ -581,10 +800,18 @@ async def upload_prefix(
     normalize: bool = True,
     retain_local_copy: bool = True,
     max_concurrency: int = 4,
+    prune: bool = False,
 ) -> list[str]:
     """Upload all files under *local_dir* to the store under *prefix*.
 
-    Each file's relative path is preserved under *prefix*.
+    Each file's relative path is preserved under *prefix*. Uploads run
+    concurrently; the first failure cancels the rest and waits for their
+    in-flight work to stop before propagating.
+
+    With *prune*, once every upload has succeeded, keys under *prefix* that
+    this call did not upload are deleted — the prefix ends up holding exactly
+    this directory. An uploaded key's ``.sha256`` sidecar is kept. A failed
+    upload deletes nothing.
     Symlinks are skipped to prevent path-traversal, and SDK working
     directories (:data:`~application_sdk.common._listing.INTERNAL_DIRNAMES`) are
     not descended into — an artifact still being staged by an atomic write must
@@ -604,15 +831,30 @@ async def upload_prefix(
         normalize: When ``True`` (default), normalise *prefix* before use.
         retain_local_copy: When ``True`` (default), keep local files.
         max_concurrency: Maximum parallel uploads (default 4).
+        prune: When ``True``, delete keys under *prefix* not uploaded by this
+            call.  Defaults to ``False``.
 
     Returns:
         List of uploaded object keys.
-    """
-    import asyncio  # noqa: PLC0415 — stdlib asyncio; lazy use only
 
+    Raises:
+        StorageConfigError: If *prune* is set with an empty *prefix* — that
+            would prune the whole store.
+        StorageError: If an upload, or with *prune* the listing or a delete,
+            fails.
+    """
     local = Path(local_dir)
     if normalize and prefix:
         prefix = normalize_key(prefix)
+    if prune and not prefix.strip("/"):
+        from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+            StorageConfigError,
+        )
+
+        raise StorageConfigError(
+            "upload_prefix(prune=True) needs a non-empty prefix; an empty one "
+            "would delete every key in the store that this call did not upload."
+        )
 
     def _collect_files() -> list[tuple[str, Path]]:
         collected: list[tuple[str, Path]] = []
@@ -635,17 +877,26 @@ async def upload_prefix(
     # activity's auto-heartbeat — for the entire traversal (ADR-0010).
     files: list[tuple[str, Path]] = await run_in_thread(_collect_files)
 
-    sem = asyncio.Semaphore(max_concurrency)
     uploaded: list[str] = []
 
     async def _upload_one(key: str, path: Path) -> None:
-        async with sem:
-            await upload_file(
-                key, path, store, normalize=False, retain_local_copy=retain_local_copy
-            )
-            uploaded.append(key)
+        await upload_file(
+            key, path, store, normalize=False, retain_local_copy=retain_local_copy
+        )
+        uploaded.append(key)
 
-    await asyncio.gather(*[_upload_one(k, p) for k, p in files])
+    await _run_bounded([_upload_one(k, p) for k, p in files], max_concurrency)
+
+    if prune:
+        keep = set(uploaded) | {sidecar_key(k) for k in uploaded}
+        # Slash-terminated so the listing cannot bleed into a sibling prefix
+        # ("out" must not match "out_backup/...").
+        existing = await list_keys(
+            prefix.rstrip("/") + "/", store, normalize=False, include_markers=True
+        )
+        stale = [k for k in existing if k not in keep]
+        if stale:
+            await _delete_paths_individually(_resolve_store(store), stale)
     return uploaded
 
 

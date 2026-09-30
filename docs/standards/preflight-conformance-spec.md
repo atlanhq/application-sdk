@@ -79,7 +79,7 @@ Implementation references:
 
 ## Proposed rule allocation
 
-The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or the retired F017/F018). The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020.
+The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F016, F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or F017/F018, retired in 0.39.0 and deleted in 0.40.0). The vacated P-ids and F017/F018 stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020, excluding F017 and F018.
 
 Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006 and F007 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. F016 reports each required scenario that is not defined — missing, skipped, declared unsupported, not calling the contract assertion, or not statically resolvable. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 
@@ -96,8 +96,8 @@ Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level correspo
 | F014 PreflightFailureExposure | APP / STATIC | Raw exception interpolation into preflight wire fields or traceback diagnostics that can expose credential-bearing values on the preflight path. Reuse existing secret/error checks where applicable. | BLOCK for proven unsafe paths |
 | F015 PreflightRemovedGateContract | APP / STATIC | Executable/deployment references to the removed env override or private category-based gate helpers under the target SDK contract. Tests intentionally verifying removal are excluded. | BLOCK after SDK applicability is established |
 | F016 PreflightBehaviorContract | APP / STATIC | Every required real-handler scenario — verdicts, typing, actions, input parity, scope/fallback parity, truthful check rows, deadlines, and cleanup — is defined as a collected, unskipped test that calls the contract assertion. The test gate runs them. | WARN, then BLOCK once the fleet has registered its scenarios |
-| F017 PreflightWorkflowEnforcement | SDK / retired | Retired; the enforcement matrix below is asserted by the SDK's own tests. | — |
-| F018 PreflightExitEvidence | SDK / retired | Retired; the exit and evidence matrix below is asserted by the SDK's own tests. | — |
+| F017 PreflightWorkflowEnforcement | SDK / deleted | Deleted in 0.40.0; the enforcement matrix below is asserted by the SDK's own tests. | — |
+| F018 PreflightExitEvidence | SDK / deleted | Deleted in 0.40.0; the exit and evidence matrix below is asserted by the SDK's own tests. | — |
 | F019 PreflightAnalysisCoverage | APP / STATIC | Declared preflight entrypoints not analyzed, unresolved dispatch/contract shapes, and absent required scenario registration. Known no-preflight apps are explicitly not applicable, not healthy preflight implementations. | WARN for unresolved analysis; BLOCK for missing required registration after adoption |
 
 F016 can emit separately identified scenario failures under one rule. Do not create an independent rule for every spelling of the same error or every connector. Error-category correctness and preflight/extraction tolerance parity remain behavioral requirements; simple co-occurrence of two error subclasses does not prove misclassification.
@@ -175,7 +175,7 @@ Exercise log-buffer flush triggers from worker, workflow, and no-running-loop co
 
 ### Runner integration
 
-Conformance reads the scenario registrations statically and never executes them. A TEST execution stage (`--with-tests`) and a report-ingest path (`--preflight-report`) were built and are now deprecated no-ops: running the scenarios inside conformance duplicated the test job, and grading its report coupled two workflows' sequencing. The split is: F016 distinguishes a defined scenario from a missing, skipped, unsupported, unasserted or unresolvable one; the test gate distinguishes a passing scenario from a failing one. Neither derives a pass from the other. A fully defined F016 matrix clears F019's value-level gaps. Preserve existing suppression behavior; a suppressed F016 finding never counts as a defined scenario.
+Conformance reads the scenario registrations statically and never executes them. A TEST execution stage (`--with-tests`) and a report-ingest path (`--preflight-report`) were built, then deprecated and removed in 0.40.0: running the scenarios inside conformance duplicated the test job, and grading its report coupled two workflows' sequencing. The split is: F016 distinguishes a defined scenario from a missing, skipped, unsupported, unasserted or unresolvable one; the test gate distinguishes a passing scenario from a failing one. Neither derives a pass from the other. A fully defined F016 matrix clears F019's value-level gaps. Preserve existing suppression behavior; a suppressed F016 finding never counts as a defined scenario.
 
 ## Registry coverage ledger
 

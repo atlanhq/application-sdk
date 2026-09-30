@@ -1,5 +1,25 @@
 # Changelog
 
+## v3.40.0 (September 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.1...v3.40.0
+
+### Features
+
+- route workflow-input credentials centrally with route_credentials (#4029) (by @cmgrote in [5ef14b8](https://github.com/atlanhq/application-sdk/commit/5ef14b8))
+- correct UI clickthrough and workflow-id uniqueness guidance (#4033) (by @cmgrote in [b784ee8](https://github.com/atlanhq/application-sdk/commit/b784ee8))
+
+
+## v3.39.1 (September 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.0...v3.39.1
+
+### Bug Fixes
+
+- honour exclude_table_regex from the connector form in SqlApp (FND-2733) (#3955) (by @vaibhavatlan in [c6d47bd](https://github.com/atlanhq/application-sdk/commit/c6d47bd))
+- FND-2570 bind activity log context instead of passing it to loguru format (#3987) (by @sachi-atlan in [b677246](https://github.com/atlanhq/application-sdk/commit/b677246))
+
+
 ## v3.39.0 (September 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0

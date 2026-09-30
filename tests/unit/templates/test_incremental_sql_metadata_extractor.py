@@ -598,6 +598,46 @@ class TestPrepareColumnExtractionQueriesInlineImports:
                 )
             )
 
+    async def test_unreadable_cached_table_dir_raises_the_scan_error(
+        self, tmp_path
+    ) -> None:
+        """A failed walk of the cached state leaves as JsonScanError, not OSError."""
+        from application_sdk.common.incremental.incremental_errors import JsonScanError
+
+        extractor = _make_extractor()
+        with (
+            patch(
+                "application_sdk.execution.get_object_store_prefix",
+                return_value="s3://prefix/transformed",
+            ),
+            patch(
+                "application_sdk.storage.batch.download_prefix",
+                new=AsyncMock(return_value=None),
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
+                return_value=tmp_path / "current-state",
+            ),
+            patch(
+                "application_sdk.common.incremental.helpers.count_json_files_recursive",
+                side_effect=PermissionError("injected: unreadable table dir"),
+            ),
+            pytest.raises(JsonScanError) as exc_info,
+        ):
+            await extractor.prepare_column_extraction_queries(
+                PrepareColumnQueriesInput(
+                    output_path=str(tmp_path),
+                    column_batch_size=10,
+                    connection_qualified_name="c",
+                    application_name="app",
+                    current_state_available=True,
+                    current_state_s3_prefix="persistent/current-state",
+                )
+            )
+
+        assert exc_info.value.base_dir == str(tmp_path / "current-state" / "table")
+        assert isinstance(exc_info.value.__cause__, PermissionError)
+
     async def test_zero_tables_returns_empty_output(self, tmp_path) -> None:
         """When no tables need extraction, returns total_batches=0 and skips upload."""
         extractor = _make_extractor()
@@ -688,11 +728,16 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         files = sorted(batches_dir.glob("batch-*.json"))
         assert len(files) == 3
 
-    async def test_download_state_failure_swallowed_logs_warning(
+    async def test_download_state_failure_raises_state_download_error(
         self, tmp_path
     ) -> None:
-        """If state download for backfill comparison fails, code logs and continues
-        with previous_current_state_dir = None (lines 479-484)."""
+        """If state download for backfill comparison fails, the task fails with
+        StateDownloadError rather than skipping backfill — a skipped backfill
+        means tables newly entering the filter never get columns."""
+        from application_sdk.common.incremental.incremental_errors import (
+            StateDownloadError,
+        )
+
         extractor = _make_extractor()
 
         fake_rows: list[dict] = []
@@ -728,13 +773,14 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             patch(
                 "application_sdk.common.incremental.column_extraction.get_backfill_tables",
                 return_value=set(),
-            ),
+            ) as mock_backfill,
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
                 return_value=(fake_rows, 0, 0, 0),
             ),
+            pytest.raises(StateDownloadError) as excinfo,
         ):
-            out = await extractor.prepare_column_extraction_queries(
+            await extractor.prepare_column_extraction_queries(
                 PrepareColumnQueriesInput(
                     output_path=str(tmp_path),
                     column_batch_size=10,
@@ -744,9 +790,10 @@ class TestPrepareColumnExtractionQueriesInlineImports:
                     current_state_s3_prefix="s3://state",
                 )
             )
-        # Failure was swallowed; flow continued with no batches
-        assert out.total_batches == 0
+        assert isinstance(excinfo.value.__cause__, RuntimeError)
         assert state_downloads == 1
+        # Backfill detection never ran against a missing previous state.
+        mock_backfill.assert_not_called()
 
 
 class TestWriteCurrentStateInlineImports:

@@ -1819,6 +1819,32 @@ class Pipeline {
   publish: PublishStep? = new PublishStep {}
 }
 
+// ── E2E harness overrides ─────────────────────────────────────────────────────
+
+/// Optional overrides for the generated e2e test harness of one bundle entrypoint.
+///
+/// Affects only `app/generated/<entrypoint>/_e2e_base.py` — never `atlan.yaml`,
+/// the manifests, the marketplace card or any runtime artifact. Every field is
+/// optional; an unset field keeps exactly the value the generator derives today.
+///
+/// Use it when a bundle entrypoint's e2e identity cannot be derived: e.g. its
+/// name matches no `argoPackageNames` leaf and `packageId` cannot be set because
+/// it would re-key the marketplace card. Stating the values here keeps them in
+/// the contract instead of hand-pinned in the test module (conformance T023).
+class E2EOverrides {
+  /// `connector_short_name` for this entrypoint's harness (default: the bundle `name`).
+  connectorShortName: String?
+
+  /// `argo_package_name` (default: matched from `packageId` / `argoPackageNames`).
+  argoPackageName: String?
+
+  /// `argo_template_name` (default: derived from the matched package).
+  argoTemplateName: String?
+
+  /// `connector_config_name` (default: the bundle's `connectorConfigName`).
+  connectorConfigName: String?
+}
+
 // ── Entrypoint class ──────────────────────────────────────────────────────────
 
 /// One SDK routing endpoint and (optionally) marketplace UI card under the deployed app.
@@ -1855,6 +1881,9 @@ open class Entrypoint {
   /// Entrypoints without a `packageId` are always routable via `?entrypoint=` but
   /// do not appear as marketplace cards.
   packageId: String?
+
+  /// Optional e2e-harness-only overrides for this entrypoint. See [E2EOverrides].
+  e2eOverrides: E2EOverrides = new E2EOverrides {}
 
   /// Optional imported contract for this entrypoint.
   /// When set and `emitGeneratedArtifacts` is true, all files from
@@ -3749,10 +3778,12 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
   // `connector_config_name` (`atlan-connectors-<short-name>`) — which must
   // resolve to the bundle's shared credential configmap, not a per-entrypoint one
   // that was never generated.
-  local shortName = name
+  // An explicit `e2eOverrides` value wins for any of these four.
+  local shortName = ep.e2eOverrides.connectorShortName ?? name
   // Per-entrypoint marketplace package and template — see `epMatchedPackage`.
-  local pkgName = epPackageName(ep)
-  local tmplName = epTemplateName(ep)
+  local pkgName = ep.e2eOverrides.argoPackageName ?? epPackageName(ep)
+  local tmplName = ep.e2eOverrides.argoTemplateName ?? epTemplateName(ep)
+  local configName = ep.e2eOverrides.connectorConfigName ?? connectorConfigName
   local publishes = epPublishes(c)
   local expectsLineage = epProducesLineage(c)
   // `connection_type` is always emitted (never gated on `value != name`): the SDK
@@ -3771,7 +3802,7 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
     "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
     (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
     (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
-    "    connector_config_name = \"\(escapePyStr(connectorConfigName))\"\n" +
+    "    connector_config_name = \"\(escapePyStr(configName))\"\n" +
     "    # This entrypoint's own manifest. Without it the harness reads the\n" +
     "    # single-entrypoint default (app/generated/manifest.json), which a bundle\n" +
     "    # does not have, and fails with ManifestFileNotFoundError.\n" +

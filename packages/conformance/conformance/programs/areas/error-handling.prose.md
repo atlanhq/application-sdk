@@ -401,8 +401,11 @@ outcome mirroring the error-handling shape in the reference app named by
   or output contract (`AuthOutput`, `PreflightCheck`, …) is built with the
   exception interpolated into `message=`, a field a caller renders.  Classify
   the exception into the app's typed `AppError` (reuse the classifier the
-  preflight checks already use), then return `message=err.message` and
-  `error=err` on the contract.  The user keeps the reason, as authored text.
+  preflight checks already use), then return
+  `error=err.to_failure_details()` on the contract — the statically-typed form
+  of `AuthOutput.error` / `PreflightCheck.error`; a failed result renders the
+  error's message, so no separate `message=` is needed.  The user keeps the
+  reason, as authored text.
   Do not default to a fixed string like `"Authentication failed"`: it clears
   the rule and discards the reason.  If no class covers the failure (for
   example bad credentials), add one; do not fall back to a catch-all

@@ -22,10 +22,10 @@ directly.
 
 import asyncio
 import math
-import os
 import time
 from collections.abc import Callable
 from concurrent.futures.process import BrokenProcessPool
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from application_sdk._runtime.offload import (
@@ -43,10 +43,15 @@ from application_sdk.execution.progress import ProgressWatchdogMode
 from application_sdk.execution.progress_telemetry import record_no_progress_gap
 from application_sdk.execution.run_length import RunLengthWatch
 from application_sdk.observability import (
+    cgroup as _cgroup,  # module alias so tests can patch _cgroup.memory_limit_bytes()
+)
+from application_sdk.observability import (
     resource_sampler as _resource_sampler,  # module alias kept so tests can patch _resource_sampler.sample()
 )
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
-from application_sdk.observability.resource_sampler import parse_pod_memory_limit
+from application_sdk.observability.resource_sampler import (  # noqa: F401 — no longer used here, but importable from this module before; kept so the import never regresses
+    parse_pod_memory_limit,
+)
 
 logger = get_logger(__name__)
 
@@ -81,6 +86,111 @@ _MEMORY_WARN_THRESHOLD = 0.80
 _MEMORY_WARN_HYSTERESIS = (
     0.05  # re-arm only once ratio drops below threshold - hysteresis
 )
+# Above the threshold, warn again each time the ratio climbs another band
+# (85 / 90 / 95 %), so a fast climb to an OOM kill logs its rate in a few lines...
+_MEMORY_WARN_BAND_STEP = 0.05
+# ...and, while it stays within a band, repeat at most this often, so a slow leak
+# still leaves a reading close to the kill.
+_MEMORY_WARN_REPEAT_SECONDS = 300.0
+# How often the heartbeat re-reads the memory limit, to pick up a VPA resize.
+_MEMORY_LIMIT_REFRESH_SECONDS = 60.0
+
+
+@dataclass
+class _MemoryLimitCache:
+    """The memory limit the heartbeat compares RSS against. Process-wide, so
+    concurrent activities compare against the same limit and share one read."""
+
+    limit_bytes: int = 0
+    read_at: float | None = None
+
+
+_memory_limit_cache = _MemoryLimitCache()
+
+
+def _current_memory_limit(now: float) -> int:
+    """The container's memory limit, or 0 when none is known (warning off).
+
+    Enforced cgroup limit first (it tracks VPA resizes and needs no Downward API
+    wiring), then ``K8S_POD_MEMORY_LIMIT``. Re-read at most once per refresh
+    interval per process. The read stays synchronous, as in
+    ``cgroup.track_container_usage``'s poll: cgroupfs is an in-kernel
+    pseudo-filesystem, and ``run_in_thread`` would put a progress hold on the
+    activity and queue behind its offloaded work.
+    """
+    cache = _memory_limit_cache
+    if cache.read_at is None or now - cache.read_at >= _MEMORY_LIMIT_REFRESH_SECONDS:
+        cache.limit_bytes = _cgroup.memory_limit_bytes() or 0
+        cache.read_at = now
+    return cache.limit_bytes
+
+
+@dataclass
+class _MemoryWarnState:
+    """Last memory-pressure warning. Process-wide: RSS belongs to the process, so
+    concurrent activities share one throttle instead of each warning on its own
+    (and a new activity does not start with a fresh one)."""
+
+    warned_at: float | None = None
+    band: int = -1
+    rss_bytes: int = 0
+    limit_bytes: int = 0
+
+
+_memory_warn_state = _MemoryWarnState()
+
+
+def _check_memory_pressure(
+    task_name: str, rss_bytes: int, limit_bytes: int, now: float
+) -> None:
+    """Warn on crossing the threshold, on each band climbed, and every repeat
+    interval while above it. Re-arms once the ratio drops below the hysteresis."""
+    state = _memory_warn_state
+    ratio = rss_bytes / limit_bytes
+    # -1 just below the threshold, 0 from 80 %, 1 from 85 %, ... The epsilon keeps
+    # exactly 85 % in band 1 despite float division.
+    band = math.floor((ratio - _MEMORY_WARN_THRESHOLD) / _MEMORY_WARN_BAND_STEP + 1e-9)
+    if state.warned_at is not None:
+        if ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS:
+            state.warned_at, state.band, state.rss_bytes = None, -1, 0
+            return
+        # A warned band re-arms once the ratio falls a full band below it, so a
+        # fall-and-climb warns again while hovering on a boundary does not warn
+        # every tick. After a resize the stored band was measured against the old
+        # limit, so it re-arms down to the current band at once.
+        rearm_to = band if limit_bytes != state.limit_bytes else band + 1
+        state.band = min(state.band, rearm_to)
+        state.limit_bytes = limit_bytes
+    if ratio < _MEMORY_WARN_THRESHOLD:
+        return
+
+    if state.warned_at is not None and not (
+        band > state.band or now - state.warned_at >= _MEMORY_WARN_REPEAT_SECONDS
+    ):
+        return
+
+    msg = "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
+    args: list[object] = [
+        task_name,
+        ratio * 100,
+        rss_bytes / (1024**3),
+        limit_bytes / (1024**3),
+    ]
+    if state.warned_at is not None:
+        msg += "; %+.2f GiB in %.0fs"
+        args += [(rss_bytes - state.rss_bytes) / (1024**3), now - state.warned_at]
+    # What the OOM killer acts on: includes child processes (the offload pool)
+    # that parent RSS misses. Context only — it also counts reclaimable page
+    # cache, so it would raise false alarms as the trigger.
+    container = _cgroup.memory_usage_bytes()
+    if container is not None:
+        msg += "; container %.2f GiB"
+        args.append(container / (1024**3))
+    msg += " — OOM kill imminent if this continues rising"
+
+    logger.warning(msg, *args)
+    state.warned_at, state.band = now, band
+    state.rss_bytes, state.limit_bytes = rss_bytes, limit_bytes
 
 
 async def stop_heartbeat_task(
@@ -402,8 +512,6 @@ async def auto_heartbeat_loop(
             because only the activity layer knows when the *run* started.
     """
     warning_threshold = interval_seconds * 0.5
-    _limit_bytes = parse_pod_memory_limit(os.environ.get("K8S_POD_MEMORY_LIMIT", ""))
-    _memory_warn_active = False
 
     watchdog_budget: float | None = (
         max_no_progress_seconds
@@ -487,35 +595,26 @@ async def auto_heartbeat_loop(
             )
             raise
 
-        if _limit_bytes > 0:
-            try:
+        try:
+            # Looked up every tick, not only while a limit is known, so a limit
+            # that appears mid-activity (an in-place resize) enables the warning.
+            _now = time.monotonic()
+            _limit_bytes = _current_memory_limit(_now)
+            if _limit_bytes > 0:
                 _mem = _resource_sampler.sample()
                 if _mem is not None:
-                    _ratio = _mem.rss_bytes / _limit_bytes
-                    if not _memory_warn_active and _ratio >= _MEMORY_WARN_THRESHOLD:
-                        _memory_warn_active = True
-                        logger.warning(
-                            "Memory pressure on task '%s': %.0f%% of limit (%.2f GiB / %.2f GiB)"
-                            " — OOM kill imminent if this continues rising",
-                            task_name,
-                            _ratio * 100,
-                            _mem.rss_bytes / (1024**3),
-                            _limit_bytes / (1024**3),
-                        )
-                    elif (
-                        _memory_warn_active
-                        and _ratio < _MEMORY_WARN_THRESHOLD - _MEMORY_WARN_HYSTERESIS
-                    ):
-                        _memory_warn_active = False
-            # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
-            except Exception as e:
-                # Best-effort; must never interrupt the heartbeat loop.
-                logger.debug(
-                    "Memory sampling failed for task '%s': %s",
-                    task_name,
-                    e,
-                    exc_info=True,
-                )
+                    _check_memory_pressure(
+                        task_name, _mem.rss_bytes, _limit_bytes, _now
+                    )
+        # conformance: ignore[E004] best-effort memory sampling must never interrupt the heartbeat loop; logged at DEBUG (not warning/error) since transient sampling failures are expected and non-actionable
+        except Exception as e:
+            # Best-effort; must never interrupt the heartbeat loop.
+            logger.debug(
+                "Memory sampling failed for task '%s': %s",
+                task_name,
+                e,
+                exc_info=True,
+            )
 
         # Ahead of the watchdog for the same reason the memory sample is: an
         # enforced stall returns out of the loop, and the tick that kills a

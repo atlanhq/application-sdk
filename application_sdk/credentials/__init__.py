@@ -36,8 +36,15 @@ Public API::
         # agent_json ingress normalisation
         normalize_agent_json, lift_agent_json, declared_agent_spec_type,
         AGENT_JSON_ALIASES,
+
+        # Input routing — (ref, inline) from a workflow input
+        route_credentials, ResolvedCredentials, find_prebuilt_credential_ref,
+        normalize_inline_credentials, flatten_dotted_keys,
+        CredentialValue, CredentialMap, InlineCredentials,
     )
 """
+
+from typing import TYPE_CHECKING
 
 from application_sdk.common.transforms import (
     camel_to_kebab,
@@ -106,6 +113,15 @@ __all__ = [
     "lift_agent_json",
     "declared_agent_spec_type",
     "AGENT_JSON_ALIASES",
+    # Input routing: (ref, inline) from a workflow input
+    "route_credentials",
+    "ResolvedCredentials",
+    "find_prebuilt_credential_ref",
+    "normalize_inline_credentials",
+    "flatten_dotted_keys",
+    "CredentialValue",
+    "CredentialMap",
+    "InlineCredentials",
     # Factory functions
     "api_key_ref",
     "basic_ref",
@@ -156,3 +172,41 @@ __all__ = [
     # Utilities
     "parse_credentials_extra",
 ]
+
+# ``routing`` builds bounded contract types from ``contracts.types``, which itself
+# imports ``credentials.ref`` — loading it eagerly here would close that cycle
+# whenever ``contracts`` is imported first. Resolve its names on first access.
+_ROUTING_NAMES = frozenset(
+    {
+        "route_credentials",
+        "ResolvedCredentials",
+        "find_prebuilt_credential_ref",
+        "normalize_inline_credentials",
+        "flatten_dotted_keys",
+        "CredentialValue",
+        "CredentialMap",
+        "InlineCredentials",
+    }
+)
+
+if TYPE_CHECKING:
+    from application_sdk.credentials.routing import (
+        CredentialMap,
+        CredentialValue,
+        InlineCredentials,
+        ResolvedCredentials,
+        find_prebuilt_credential_ref,
+        flatten_dotted_keys,
+        normalize_inline_credentials,
+        route_credentials,
+    )
+
+
+def __getattr__(name: str) -> object:
+    if name in _ROUTING_NAMES:
+        from application_sdk.credentials import (  # noqa: PLC0415 — lazy: see _ROUTING_NAMES
+            routing,
+        )
+
+        return getattr(routing, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
