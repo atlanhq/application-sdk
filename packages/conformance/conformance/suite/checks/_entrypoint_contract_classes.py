@@ -36,30 +36,19 @@ from __future__ import annotations
 import ast
 from dataclasses import dataclass, field
 
-from conformance.suite.checks._ast_common import sdk_app_base_bindings
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
 )
-from conformance.suite.checks.prescriptions._error_code_prefix import (
-    ClassRecord,
-    resolve_ancestor,
-)
+from conformance.suite.checks.prescriptions._error_code_prefix import ClassRecord
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
     _get_non_self_params,
     _iter_class_body_methods,
 )
-
-
-def _base_name(base: ast.expr) -> str | None:
-    """Return the simple name of a base-class expression (``Name`` or ``Attribute``)."""
-    if isinstance(base, ast.Name):
-        return base.id
-    if isinstance(base, ast.Attribute):
-        return base.attr
-    return None
 
 
 def _method_name_to_kebab(name: str) -> str:
@@ -136,54 +125,23 @@ def scan_file_for_entrypoint_contracts(
 ) -> None:
     """Scan one parsed module, appending discovered entrypoints to *result*.
 
-    Mirrors the entrypoint-detection logic in
-    ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` (decorator
-    provenance + implicit ``run()`` on an ``App``-family base), but keeps the
-    wire name and Output class name paired per entrypoint instead of flattening
-    into a name set.
+    Entrypoints are detected by ``classify_boundary_method`` (the same
+    detection ``_entrypoint_contract_fields.collect_entrypoint_contract_names``
+    uses), but the wire name and Output class name stay paired per entrypoint
+    instead of being flattened into a name set.
     """
-    sdk_bases = sdk_app_base_bindings(tree)
+    scope = BoundaryScope.for_module(
+        tree, prov=prov, aliases=aliases, by_name=by_name, app_cache=app_cache
+    )
     for class_node in ast.walk(tree):
         if not isinstance(class_node, ast.ClassDef):
             continue
 
         for func in _iter_class_body_methods(class_node):
-            is_ep = False
-            ep_deco: ast.expr | None = None
-
-            for dec in func.decorator_list:
-                if is_entrypoint_decorator(dec, prov):
-                    is_ep = True
-                    ep_deco = dec
-                    break
-            if not is_ep and any(
-                is_task_decorator(dec, prov) for dec in func.decorator_list
-            ):
-                continue  # @task — skip entirely
-
-            if (
-                not is_ep
-                and func.name == "run"
-                and isinstance(func, ast.AsyncFunctionDef)
-            ):
-                for base in class_node.bases:
-                    bname = _base_name(base)
-                    if bname is None:
-                        continue
-                    if isinstance(base, ast.Name) and base.id in sdk_bases:
-                        is_ep = True
-                        break
-                    bname = aliases.get(bname, bname)
-                    if (
-                        bname == "App"
-                        or resolve_ancestor(bname, "App", by_name, app_cache, set())
-                        is True
-                    ):
-                        is_ep = True
-                        break
-
-            if not is_ep:
+            boundary = classify_boundary_method(class_node, func, scope)
+            if boundary is None or boundary.kind == "task":
                 continue
+            ep_deco = boundary.decorator
 
             wire_name: str | None = None
             if ep_deco is not None:

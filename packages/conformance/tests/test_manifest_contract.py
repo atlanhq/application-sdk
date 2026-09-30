@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import ast
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,7 @@ from conformance.suite.checks.preflight._common import (
     build_registry,
     collect_entrypoint_input_contract_names,
 )
+from conformance.suite.checks.prescriptions import scan_all as prescriptions_scan_all
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     collect_import_provenance,
 )
@@ -651,58 +653,221 @@ _NOT_RECOGNISED = {
 }
 
 
-def _entrypoint_inputs_by_scan(tmp_path: Path, src: str) -> dict[str, set[str]]:
-    """Resolve *src*'s entrypoint Input names through every shared scan."""
-    path = tmp_path / "app.py"
-    path.write_text(src, encoding="utf-8")
-    tree = ast.parse(src)
-    aliases = collect_import_aliases(tree)
-    by_name: dict[str, ClassRecord] = {
-        rec.name: rec for rec in collect_classes(tree, "app.py", aliases)
+_SQLAPP_BASE_MODULE = """\
+from application_sdk.templates import SqlApp
+
+class MyBase(SqlApp):
+    pass
+"""
+
+_RUN_ON_MYBASE = _template_run_app("MyBase", imports="from base import MyBase")
+
+_RECOGNISED_IN_REPO_BASES: dict[str, dict[str, str]] = {
+    "in-repo-base-same-file": {
+        "app.py": _template_run_app(
+            "MyBase",
+            imports="from application_sdk.templates import SqlApp",
+            prelude="class MyBase(SqlApp):\n    pass\n\n",
+        ),
+    },
+    "in-repo-base-other-file": {
+        "base.py": _SQLAPP_BASE_MODULE,
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-two-hops-across-files": {
+        "base.py": _SQLAPP_BASE_MODULE,
+        "mid.py": "from base import MyBase\n\nclass Mid(MyBase):\n    pass\n",
+        "app.py": _template_run_app("Mid", imports="from mid import Mid"),
+    },
+    "in-repo-base-aliased-sdk-import-other-file": {
+        "base.py": (
+            "from application_sdk.templates import SqlApp as _Sql\n\n"
+            "class MyBase(_Sql):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-template-named-subclass-of-sdk-import-other-file": {
+        "base.py": (
+            "from application_sdk.templates import SqlApp as _SqlApp\n\n"
+            "class SqlApp(_SqlApp):\n    pass\n"
+        ),
+        "app.py": _template_run_app("SqlApp", imports="from base import SqlApp"),
+    },
+    "in-repo-app-base-other-file": {
+        "base.py": (
+            "from application_sdk.app import App\n\nclass MyBase(App):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+}
+
+_NOT_RECOGNISED_IN_REPO_BASES: dict[str, dict[str, str]] = {
+    "in-repo-base-on-local-template-name-same-file": {
+        "app.py": _template_run_app(
+            "MyBase",
+            imports="",
+            prelude=("class SqlApp:\n    pass\n\nclass MyBase(SqlApp):\n    pass\n\n"),
+        ),
+    },
+    "in-repo-base-on-local-template-name-other-file": {
+        "base.py": "class SqlApp:\n    pass\n\nclass MyBase(SqlApp):\n    pass\n",
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "local-template-name-imported-from-other-file": {
+        "base.py": "class SqlApp:\n    pass\n",
+        "app.py": _template_run_app("SqlApp", imports="from base import SqlApp"),
+    },
+    "in-repo-base-on-shadowed-sdk-import-other-file": {
+        "base.py": (
+            "from application_sdk.templates import SqlApp\n\n"
+            "class SqlApp:\n    pass\n\n"
+            "class MyBase(SqlApp):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-on-never-imported-name-other-file": {
+        "base.py": "class MyBase(SqlApp):\n    pass\n",
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-on-non-sdk-module-other-file": {
+        "base.py": (
+            "from other_sdk.templates import SqlApp\n\n"
+            "class MyBase(SqlApp):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-on-relative-import-other-file": {
+        "base.py": (
+            "from .templates import SqlApp\n\nclass MyBase(SqlApp):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-on-other-module-attribute-other-file": {
+        "base.py": (
+            "import other_sdk\nfrom application_sdk.templates import SqlApp\n\n"
+            "class MyBase(other_sdk.SqlApp):\n    pass\n"
+        ),
+        "app.py": _RUN_ON_MYBASE,
+    },
+    "in-repo-base-sync-run-other-file": {
+        "base.py": _SQLAPP_BASE_MODULE,
+        "app.py": _template_run_app("MyBase", imports="from base import MyBase", kw=""),
+    },
+    "in-repo-base-task-decorated-run-other-file": {
+        "base.py": _SQLAPP_BASE_MODULE,
+        "app.py": _template_run_app(
+            "MyBase",
+            imports="from base import MyBase\nfrom application_sdk.app import task",
+            decorator="    @task\n",
+        ),
+    },
+}
+
+_P013_INPUT = re.compile(r"input annotation '(\w+)'")
+
+
+def _p013_entrypoint_inputs(root: Path, files: dict[str, str]) -> set[str]:
+    """Entrypoint Inputs P013 sees; it reports only violations, so MyInput is untyped."""
+    paths = _write_py(
+        root,
+        {
+            name: src.replace("class MyInput(Input):", "class MyInput:")
+            for name, src in files.items()
+        },
+    )
+    return {
+        m.group(1)
+        for f in prescriptions_scan_all(paths, root)
+        if f.rule_id == "P013" and (m := _P013_INPUT.search(f.message))
     }
 
+
+def _entrypoint_inputs_by_scan(
+    tmp_path: Path, src: str | dict[str, str]
+) -> dict[str, set[str]]:
+    """Resolve the entrypoint Input names of *src* through every shared scan."""
+    files = {"app.py": src} if isinstance(src, str) else src
+    scan_root = tmp_path / "scan"
+    paths = _write_py(scan_root, files)
+    trees: dict[Path, ast.Module] = {p: ast.parse(p.read_text()) for p in paths}
+    aliases = {p: collect_import_aliases(t) for p, t in trees.items()}
+    by_name: dict[str, ClassRecord] = {}
+    for p, tree in trees.items():
+        for rec in collect_classes(tree, p.name, aliases[p]):
+            by_name.setdefault(rec.name, rec)
+
     k_scan = CodeContractScan()
-    scan_file_for_entrypoint_contracts(
-        tree,
-        "app.py",
-        aliases,
-        collect_import_provenance(tree),
-        by_name,
-        {},
-        k_scan,
-    )
+    app_cache: dict[str, bool | None] = {}
+    for p, tree in trees.items():
+        scan_file_for_entrypoint_contracts(
+            tree,
+            p.name,
+            aliases[p],
+            collect_import_provenance(tree),
+            by_name,
+            app_cache,
+            k_scan,
+        )
     return {
         "k_series": {
             ep.input_class_name for ep in k_scan.entrypoints if ep.input_class_name
         },
-        "contract_names": set(collect_entrypoint_contract_names({path: tree}, by_name))
+        "contract_names": set(collect_entrypoint_contract_names(trees, by_name))
         - {"MyOutput"},
         "preflight_inputs": set(
-            collect_entrypoint_input_contract_names(build_registry([path], tmp_path))
+            collect_entrypoint_input_contract_names(build_registry(paths, scan_root))
         ),
+        "p013": _p013_entrypoint_inputs(tmp_path / "p013", files),
     }
+
+
+_ALL_SCANS_SEE_MY_INPUT = {
+    "k_series": {"MyInput"},
+    "contract_names": {"MyInput"},
+    "preflight_inputs": {"MyInput"},
+    "p013": {"MyInput"},
+}
+
+_NO_SCAN_SEES_AN_ENTRYPOINT: dict[str, set[str]] = {
+    "k_series": set(),
+    "contract_names": set(),
+    "preflight_inputs": set(),
+    "p013": set(),
+}
 
 
 @pytest.mark.parametrize("src", _RECOGNISED.values(), ids=_RECOGNISED.keys())
 def test_implicit_run_on_sdk_template_base_is_an_entrypoint(
     tmp_path: Path, src: str
 ) -> None:
-    resolved = _entrypoint_inputs_by_scan(tmp_path, src)
-    assert resolved == {
-        "k_series": {"MyInput"},
-        "contract_names": {"MyInput"},
-        "preflight_inputs": {"MyInput"},
-    }
+    assert _entrypoint_inputs_by_scan(tmp_path, src) == _ALL_SCANS_SEE_MY_INPUT
 
 
 @pytest.mark.parametrize("src", _NOT_RECOGNISED.values(), ids=_NOT_RECOGNISED.keys())
 def test_implicit_run_near_misses_are_not_entrypoints(tmp_path: Path, src: str) -> None:
-    resolved = _entrypoint_inputs_by_scan(tmp_path, src)
-    assert resolved == {
-        "k_series": set(),
-        "contract_names": set(),
-        "preflight_inputs": set(),
-    }
+    assert _entrypoint_inputs_by_scan(tmp_path, src) == _NO_SCAN_SEES_AN_ENTRYPOINT
+
+
+@pytest.mark.parametrize(
+    "files",
+    _RECOGNISED_IN_REPO_BASES.values(),
+    ids=_RECOGNISED_IN_REPO_BASES.keys(),
+)
+def test_implicit_run_on_in_repo_base_of_sdk_template_is_an_entrypoint(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _entrypoint_inputs_by_scan(tmp_path, files) == _ALL_SCANS_SEE_MY_INPUT
+
+
+@pytest.mark.parametrize(
+    "files",
+    _NOT_RECOGNISED_IN_REPO_BASES.values(),
+    ids=_NOT_RECOGNISED_IN_REPO_BASES.keys(),
+)
+def test_implicit_run_on_in_repo_base_near_misses_are_not_entrypoints(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    assert _entrypoint_inputs_by_scan(tmp_path, files) == _NO_SCAN_SEES_AN_ENTRYPOINT
 
 
 def test_k006_resolves_output_of_run_on_sdk_template_base(tmp_path: Path) -> None:

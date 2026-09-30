@@ -811,13 +811,12 @@ the depth it was sent at, and the `Input` class. Read the actual class at
 `finding.line` in `finding.file` before proposing an edit.
 
 The `Input` class is the entrypoint's first parameter annotation: an `@entrypoint`
-method, or an undecorated `async def run` on a class whose base is `App` or an SDK
-App template (`SqlApp`, `BaseMetadataExtractor`, ...) imported from
-`application_sdk`. Only an app that declares neither falls back to its sole live
+method, or an undecorated `async def run` on a class that subclasses, directly or
+through in-repo bases in any file, `App` or an SDK App template (`SqlApp`,
+`BaseMetadataExtractor`, ...) imported from `application_sdk`. Only an app that declares neither falls back to its sole live
 `ExtractionInput` descendant. If `finding.file` is still a generated
 `app/generated/_input.py` while the app overrides `run` with a hand-written
-`Input` (for example through a local intermediate base the scan cannot
-resolve), the pairing is wrong — route to residue instead of editing either
+`Input` (for example through a base the scan cannot resolve), the pairing is wrong — route to residue instead of editing either
 class.
 
 *Procedure:*

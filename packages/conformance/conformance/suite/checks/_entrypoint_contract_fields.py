@@ -13,9 +13,9 @@ annotated as ``OpenAPIConnectorInput`` where ``OpenAPIConnectorInput =
 AppInputContract`` resolves to the generated class it names, and a contract
 inheriting from an aliased base resolves that base's fields.
 
-The check uses the same cross-file class-registry machinery as P013/P014:
-``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
-``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
+Entrypoint detection is ``prescriptions._boundary_methods.classify_boundary_method``,
+the one detector P013/P014, the K-series and the preflight checks share, over the
+cross-file ``collect_classes`` registry.
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
@@ -37,24 +37,23 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from conformance.suite.checks._ast_common import sdk_app_base_bindings
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
     SDK_TEMPLATE_CONTRACT_FIELDS,
 )
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
+)
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
-    ImportProvenance,
     collect_import_provenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -488,8 +487,8 @@ def collect_entrypoint_contract_names(
 ) -> frozenset[str]:
     """Return the class names of all entrypoint Input/Output contracts.
 
-    Mirrors P013 boundary detection — collects contract class names instead of
-    emitting findings.  ``@task`` contract names are excluded.
+    Shares P013's boundary detection (``classify_boundary_method``) — collects
+    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
 
     Names are reported as the class that *declares* the contract.  When the
     caller has seeded *by_name* with module-level rebindings (see
@@ -500,43 +499,23 @@ def collect_entrypoint_contract_names(
     entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
 
-    for path, tree in file_trees.items():
-        prov: ImportProvenance = collect_import_provenance(tree)
+    for tree in file_trees.values():
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
-        sdk_bases = sdk_app_base_bindings(tree)
+        scope = BoundaryScope.for_module(
+            tree,
+            prov=collect_import_provenance(tree),
+            aliases=aliases,
+            by_name=by_name,
+            app_cache=app_cache,
+        )
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
 
             for func in _iter_class_body_methods(class_node):
-                is_ep = False
-
-                if any(
-                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
-                    continue  # @task — skip entirely
-
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in class_node.bases:
-                        bname = _base_name(base)
-                        if bname is None:
-                            continue
-                        if isinstance(base, ast.Name) and base.id in sdk_bases:
-                            is_ep = True
-                            break
-                        bname = aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(bname, "App", by_name, app_cache, set())
-                            is True
-                        ):
-                            is_ep = True
-                            break
-
-                if not is_ep:
+                boundary = classify_boundary_method(class_node, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
 
                 non_self = _get_non_self_params(func)
