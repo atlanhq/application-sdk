@@ -85,23 +85,27 @@ application_sdk/common/incremental/
 
 | File | Purpose |
 |------|---------|
-| `state_reader.py` | Download previous run's current-state snapshot from S3 |
-| `state_writer.py` | Create new current-state snapshot with lightweight column copy and upload to S3 |
+| `store.py` | `CurrentStateStore`: probe, materialize and commit the connection's current-state snapshot (manifest commit); `RunStateDirs`: the run-scoped local directories |
+| `state_reader.py` | Deprecated `download_current_state` shim over `CurrentStateStore` |
+| `state_writer.py` | Create new current-state snapshot with lightweight column copy, diff it, and commit it |
 | `table_scope.py` | Detect table incremental states (CREATED/UPDATED/NO CHANGE) via DuckDB queries |
 | `incremental_diff.py` | Generate diff with deletion detection for changed/removed assets |
 
 #### Key Functions
 
-**state_reader.py:**
-- `download_current_state()` - Download current-state folder from S3
+**store.py:**
+- `CurrentStateStore.probe()` - One listing (plus the manifest read): does a committed snapshot exist, how big is it, which run committed it. Downloads nothing.
+- `CurrentStateStore.materialize(snapshot, dest)` - Mirror exactly the snapshot's keys into `dest` (sync: already-current files are skipped, anything else in `dest` is deleted), under a per-directory lock.
+- `CurrentStateStore.commit(local_dir, run_id)` - Upload, then write the manifest (the commit point), then prune every key the manifest does not name.
+- `RunStateDirs.for_output_path(output_path)` - `{output_path}/incremental/{previous-state,current-state,diff}`.
 
 **state_writer.py:**
-- `create_current_state_snapshot()` - High-level orchestrator for state creation
+- `create_current_state_snapshot()` - High-level orchestrator for state creation (ends in `CurrentStateStore.commit`)
+- `materialize_previous_state()` - Probe + materialize, failures raised as `StateDownloadError`
 - `download_transformed_data()` - Download current run's transformed output
-- `prepare_previous_state()` - Download previous state for comparison
 - `copy_non_column_entities()` - Copy tables, schemas, databases
-- `upload_current_state()` - Upload final snapshot to S3
-- `cleanup_previous_state()` - Clean up temporary files
+
+**Deprecated (removed in v4.0.0):** `download_current_state()` → `CurrentStateStore.probe()` / `materialize()`; `prepare_previous_state()` → `materialize_previous_state()` into `RunStateDirs.previous_state`; `upload_current_state()` → `CurrentStateStore.commit()`; `prepare_current_state_directory()` and `cleanup_previous_state()` → nothing (the run-scoped directories need neither). Each still works and emits a `DeprecationWarning`.
 
 **table_scope.py:**
 - `get_current_table_scope()` - Extract table qualified names and incremental states
@@ -126,7 +130,7 @@ The marker timestamp tracks when the last successful extraction occurred. It's s
 persistent-artifacts/apps/{app}/connection/{connection_id}/marker.txt
 ```
 
-A missing marker (`StorageNotFoundError`) means a first run and triggers a full extraction. Any other storage error while reading the marker or the current state raises, so the task retries instead of silently running a full extraction.
+A missing marker means a first run and triggers a full extraction. Any other storage error while reading the marker or the current state raises, so the task retries instead of silently running a full extraction. The marker is read into memory and uploaded from memory; there is no local `marker.txt`.
 
 During extraction, queries use this timestamp to filter for changed assets:
 ```sql
@@ -139,11 +143,40 @@ LABEL: incremental_state = 'CREATED' OR 'UPDATED' OR 'BACKFILL'
 The current state is a snapshot of all extracted metadata, stored in S3 at:
 ```
 persistent-artifacts/apps/{app}/connection/{connection_id}/current-state/
+├── .sdk-manifest     # names every key of the committed snapshot; written last
 ├── database/
 ├── schema/
-├── table/
+├── table/            # {run-stamp}--chunk-0.json, ...
 └── column/
 ```
+
+The layout is public: Argo publish passes this prefix as `transformed-input-path`
+and globs it with `**/*.json`, and connector apps read `current-state/{entity}/`
+directly. So:
+
+- **The manifest is the commit.** `CurrentStateStore.commit` uploads the new
+  snapshot, then writes `.sdk-manifest`, then deletes every key it does not
+  name. A reader trusts the manifest over the listing, so a commit that dies
+  before its manifest leaves the previous snapshot committed and whole. The
+  name is dot-prefixed and has no `.json` suffix so the publish glob never
+  picks it up.
+- **File names carry a run stamp** (`{12 hex}--chunk-0.json`, derived from
+  the committing run ID). A new commit therefore never overwrites a key the
+  previous manifest names, which is what makes a partial upload harmless; a
+  retry of the same run derives the same stamp and overwrites only its own
+  keys. Readers glob `{entity}/*.json` and do not depend on file names.
+- **A pre-manifest snapshot** (written by an older SDK) is read from its
+  listing, ignoring any run-stamped key. Its stale keys are pruned by the first
+  commit after upgrade — so that run's publish may emit deletions for assets
+  already gone at source, which is correct.
+
+Locally, all state work is run-scoped under `{output_path}/incremental/`
+(`previous-state/`, `current-state/`, `diff/`), so two runs of a connection on
+one worker never share a directory, and a same-run retry resumes in its own.
+`read_current_state` only probes; `prepare_column_extraction_queries` and
+`write_current_state` materialize into `previous-state/` when they need the
+files. A connector that needs the snapshot on disk at read time overrides
+`after_current_state_read(snapshot, local_dir)`.
 
 ### Table Incremental States
 

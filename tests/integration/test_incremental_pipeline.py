@@ -499,17 +499,17 @@ async def test_transformed_recovery_from_store_feeds_current_state(
     )
 
     assert result.total_files > 0
-    assert (result.current_state_dir / "table" / "chunk-0.json").exists()
+    # The commit stamps each file name with its run, so match the base name.
+    assert list((result.current_state_dir / "table").glob("*chunk-0.json"))
 
 
 # ---------------------------------------------------------------------------
-# Characterization: stale-key accumulation in current-state (FND-3061 #1)
+# Regression: stale-key accumulation in current-state (FND-3061 #1)
 # ---------------------------------------------------------------------------
 #
-# Pinned bug, not desired behaviour. ``xfail(strict=True)`` keeps CI green while
-# the bug exists and XPASSes — failing the run — once FND-3064's
-# CurrentStateStore commits a snapshot instead of layering uploads over the
-# previous one. The unit-tier siblings live in
+# Pinned by FND-3061 as an xfail and fixed by FND-3064: CurrentStateStore
+# commits a snapshot (upload, manifest last, prune) instead of layering
+# uploads over the previous one. The unit-tier siblings live in
 # tests/unit/common/incremental/test_state_lifecycle_characterization.py.
 
 _STALE_CONN = "default/example/1700000000"
@@ -527,8 +527,9 @@ async def _run_two_snapshots(tmp_path, monkeypatch) -> Path:
     from application_sdk.common.incremental import helpers
     from application_sdk.common.incremental.state.state_writer import (
         create_current_state_snapshot,
-        prepare_previous_state,
+        materialize_previous_state,
     )
+    from application_sdk.common.incremental.state.store import CurrentStateStore
 
     monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
     state_dir = helpers.get_persistent_artifacts_path(
@@ -564,7 +565,10 @@ async def _run_two_snapshots(tmp_path, monkeypatch) -> Path:
     _write_jsonl(
         run2 / "column" / "chunk-0.json", [_column_entity("db/s/t2/b", "db/s/t2")]
     )
-    previous = await prepare_previous_state(_STALE_CONN, True, state_dir, _STALE_APP)
+    previous = await materialize_previous_state(
+        CurrentStateStore.for_connection(_STALE_CONN, _STALE_APP),
+        tmp_path / "run-2" / "incremental" / "previous-state",
+    )
     await create_current_state_snapshot(
         connection_qualified_name=_STALE_CONN,
         transformed_dir=run2,
@@ -578,14 +582,6 @@ async def _run_two_snapshots(tmp_path, monkeypatch) -> Path:
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "FND-3064: upload_prefix only adds and replaces keys, so current-state "
-        "keeps every key an earlier, larger run wrote"
-    ),
-)
 async def test_current_state_holds_only_the_latest_runs_keys(
     tmp_path, monkeypatch, store, infra
 ):
@@ -598,36 +594,26 @@ async def test_current_state_holds_only_the_latest_runs_keys(
         k.removeprefix(f"{_STALE_S3}/current-state/")
         for k in await list_data_keys(f"{_STALE_S3}/current-state", store)
     }
-    assert (
-        in_store == committed
-    ), f"stale keys from run 1 survive in current-state: {sorted(in_store - committed)}"
+    assert in_store == committed | {
+        ".sdk-manifest"
+    }, f"stale keys from run 1 survive in current-state: {sorted(in_store - committed)}"
 
 
 @pytest.mark.integration
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "FND-3064: stale current-state keys are downloaded by the next run "
-        "beside the fresh copy of the same columns, duplicating them"
-    ),
-)
 async def test_next_run_reads_each_column_once(tmp_path, monkeypatch, store, infra):
     """The mechanism behind the duplicate-column hypothesis (FND-3061).
 
     Run 2 wrote t2's column to ``column/chunk-0.json``; run 1's copy of it is
     still at ``column/chunk-1.json``. Run 3's read gets both.
     """
-    from application_sdk.common.incremental.state.state_reader import (
-        download_current_state,
-    )
+    from application_sdk.common.incremental.state.store import CurrentStateStore
 
     await _run_two_snapshots(tmp_path, monkeypatch)
-    state_dir, _, exists, _ = await download_current_state(_STALE_CONN, _STALE_APP)
-    if not exists:
-        # pytest.fail, not assert: the xfail accepts AssertionError, so a bare
-        # assert here would pass a broken setup off as the expected failure.
+    state = CurrentStateStore.for_connection(_STALE_CONN, _STALE_APP)
+    snapshot = await state.probe()
+    if not snapshot.exists:
         pytest.fail("precondition: snapshots must leave downloadable state")
+    state_dir = await state.materialize(snapshot, tmp_path / "run-3" / "previous")
 
     column_qns = [
         row["attributes"]["qualifiedName"]

@@ -143,6 +143,24 @@ Two consequences for changes here:
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
 
+## The committed `current-state/` snapshot
+
+| | |
+|---|---|
+| **Produced by** | `CurrentStateStore.commit()` in `application_sdk/common/incremental/state/store.py`, called by `create_current_state_snapshot()` |
+| **Shape** | `{persistent_prefix}/current-state/{entity}/{stamp}--{file}.json` plus `current-state/.sdk-manifest` (JSON: `version`, `run_id`, `committed_at`, `keys` → size). `{stamp}` is 12 hex characters derived from the committing run ID. Every key under the prefix that the manifest does not name is pruned after the manifest is written |
+| **Read by** | Argo publish in marketplace-packages (the incremental connectors pass this prefix as `transformed-input-path`; marketplace-scripts' `convert_transformer_file_structure` globs it with `**/*.json` and takes the parent directory as the asset type); connector apps that carry state forward themselves by downloading `current-state/{entity}/`; the SDK's own `probe()` on the next run |
+| **Pinned by** | `tests/unit/common/incremental/test_current_state_store.py` (`test_manifest_name_is_invisible_to_the_publish_glob`, the commit/prune tests, the two-run end-to-end test) and the FND-3061 regressions in `test_state_lifecycle_characterization.py` |
+
+Two constraints come from the readers:
+
+- **The manifest must never match `**/*.json`.** A root `_manifest.json` would
+  be parsed by the publish converter as asset records under an asset type
+  named `current-state`. Hence the dot-prefixed, suffix-less `.sdk-manifest`.
+- **Entity files must stay directly under `{entity}/`.** The converter reads
+  the asset type from the file's parent directory, so the run stamp goes in
+  the file name, never in a subdirectory.
+
 ## The preflight gate's Temporal failure payload
 
 | | |

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -29,10 +30,41 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
-from application_sdk.storage.errors import StorageNotFoundError
-from application_sdk.storage.ops import download_file
+from application_sdk.storage.ops import _get_bytes
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). The marker read no longer downloads to a local file, so
+#: these stopped being imported here; they are served once more for callers
+#: that imported (or patched) them via this module.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "StorageNotFoundError": (
+        "application_sdk.storage.errors.StorageNotFoundError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+    "download_file": (
+        "application_sdk.storage.ops.download_file",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
+
+    return getattr(import_module(module_name), attr)
 
 
 def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
@@ -228,7 +260,10 @@ async def download_marker_from_s3(
     connection_qualified_name: str,
     application_name: str = "",
 ) -> str | None:
-    """Download marker.txt from S3 and return its content, or None if not found.
+    """Read marker.txt from S3 into memory and return it, or None if not found.
+
+    Nothing is written locally: the marker is a few bytes, and a local copy at
+    a per-connection path is one more file two runs on a worker would share.
 
     Args:
         connection_qualified_name: The connection qualified name.
@@ -238,32 +273,25 @@ async def download_marker_from_s3(
         Marker timestamp string if found, None otherwise
 
     Raises:
-        StorageError: If the download fails for any reason other than the
-            marker not existing. A missing marker means "first run"; any other
+        StorageError: If the read fails for any reason other than the marker
+            not existing. A missing marker means "first run"; any other
             failure must not silently become a full extraction, so it
             propagates and the task retries.
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
-    local_marker_path = get_persistent_artifacts_path(
-        connection_qualified_name, "marker.txt", application_name
-    )
-    local_marker_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info("Downloading marker from S3: %s", marker_s3_key)
-    try:
-        await download_file(
-            key=marker_s3_key,
-            local_path=str(local_marker_path),
-        )
-        if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
-            marker = local_marker_path.read_text(encoding="utf-8").strip()
-            logger.info("Marker downloaded: %s", marker)
-            return marker
-        logger.info("Marker file downloaded but empty")
-    except StorageNotFoundError:
+    logger.info("Reading marker from S3: %s", marker_s3_key)
+    raw = await _get_bytes(marker_s3_key)
+    if raw is None:
         logger.info("Marker file not found in S3 (first incremental run)")
-    return None
+        return None
+    marker = raw.decode("utf-8").strip()
+    if not marker:
+        logger.info("Marker file found but empty")
+        return None
+    logger.info("Marker read: %s", marker)
+    return marker
 
 
 async def download_s3_prefix_with_structure(

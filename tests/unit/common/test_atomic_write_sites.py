@@ -137,39 +137,21 @@ class TestCarryForwardCopy:
 
 
 class TestMarkerWrite:
-    async def test_a_marker_that_runs_out_of_space_is_not_written_at_all(
+    async def test_the_marker_is_uploaded_from_memory(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """A half-written marker still parses — it is just the wrong window."""
+        """No per-connection local marker file: nothing half-written to trust.
+
+        The marker used to be staged at a fixed local path (atomically, so a
+        disk-full could not truncate it). It is now uploaded straight from
+        memory, so there is no local artifact for two runs on one worker to
+        share or for a full disk to damage.
+        """
         from application_sdk.common.incremental import helpers, marker  # noqa: PLC0415
 
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path))
         upload = AsyncMock()
-        monkeypatch.setattr(marker, "upload_file", upload)
-
-        marker_path = helpers.get_persistent_artifacts_path(
-            "default/oracle/1696528289", "marker.txt", "oracle"
-        )
-
-        with patch("os.fsync", _enospc):
-            with pytest.raises(DiskFullError) as caught:
-                await marker.persist_marker_to_storage(
-                    connection_qualified_name="default/oracle/1696528289",
-                    marker_value="2026-08-13T00:00:00Z",
-                    application_name="oracle",
-                )
-
-        assert caught.value.operation == "marker write"
-        assert not marker_path.exists()
-        upload.assert_not_awaited()
-
-    async def test_a_healthy_marker_write_is_unchanged(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from application_sdk.common.incremental import helpers, marker  # noqa: PLC0415
-
-        monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path))
-        monkeypatch.setattr(marker, "upload_file", AsyncMock())
+        monkeypatch.setattr(marker, "upload_file_from_bytes", upload)
 
         result = await marker.persist_marker_to_storage(
             connection_qualified_name="default/oracle/1696528289",
@@ -178,9 +160,12 @@ class TestMarkerWrite:
         )
 
         assert result["marker_written"] is True
-        assert Path(result["local_path"]).read_text(encoding="utf-8") == (
-            "2026-08-13T00:00:00Z"
+        assert result["local_path"] == ""
+        upload.assert_awaited_once_with(
+            "persistent-artifacts/apps/oracle/connection/1696528289/marker.txt",
+            b"2026-08-13T00:00:00Z",
         )
+        assert not any(tmp_path.rglob("marker.txt"))
 
 
 # ---------------------------------------------------------------------------

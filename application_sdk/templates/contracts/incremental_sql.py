@@ -297,13 +297,19 @@ class ReadCurrentStateInput(Input):
 
     connection_qualified_name: str = ""
     application_name: str = ""
+    output_path: str = ""
+    """The run's output path. Only read when the snapshot is materialized on
+    read (an ``after_current_state_read`` or legacy ``read_current_state``
+    override), which puts it under ``{output_path}/incremental/previous-state``."""
 
 
 class ReadCurrentStateOutput(Output):
     """Output from the read_current_state task."""
 
     current_state_path: str = ""
-    """Local filesystem path where the current state was downloaded."""
+    """Local path the snapshot was materialized into, or ``""`` when the read
+    only probed (the default: nothing is downloaded until a later task needs
+    the files)."""
 
     current_state_s3_prefix: str = ""
     """S3 prefix for the current-state folder."""
@@ -312,7 +318,7 @@ class ReadCurrentStateOutput(Output):
     """Whether a non-empty current-state snapshot was found."""
 
     current_state_json_count: int = 0
-    """Number of JSON files in the downloaded current state."""
+    """Number of JSON files in the committed current state."""
 
 
 # =============================================================================
