@@ -296,10 +296,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "end state where the sentinel genuinely IS the function's contract — the "
             "caller is documented to treat the empty/None return as a normal outcome "
             "rather than as success. The reason must say which contract, as "
-            "atlan-openapi-app `redact_url` does. Where the sentinel instead stands in "
-            "for a failure the caller cannot distinguish from success, the directive "
-            "is unremediated: either raise, or record the failure to a durable "
-            "evidence trail and declare the gap (see E020)."
+            "atlan-openapi-app `redact_url` does. A private `None` sentinel also clears "
+            "without suppression when every direct same-module caller assigns it, "
+            "checks it with `is None`, and logs that branch; this is only a statically "
+            "proven diagnostic path. Where a sentinel instead stands in for a failure "
+            "the caller cannot distinguish from success, the directive is "
+            "unremediated: either raise, or record the failure to a durable evidence "
+            "trail and declare the gap (see E020)."
         ),
         rule_interactions=(
             "E007 and E004 judge the same handler shape with one shared predicate "
@@ -313,8 +316,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "warning/error log trades the E007 for an F005. E007 applies the "
             "predicate per return and E004 applies it to every exit. Bare "
             "sentinels and stringified exceptions (`str(exc)`, `repr(exc)`, an "
-            "f-string or `.format(exc)`) still fire, because a string is the "
-            "failure laundered into a plain value. Found by a consumer app's "
+            "f-string or `.format(exc)`) do not clear the typed-failure predicate: "
+            "they still fire unless the caught value is separately logged, or a "
+            "private `None` sentinel is checked and logged by every direct local "
+            "caller. A string is not typed failure data. Found by a consumer app's "
             "preflight probe arms in FND-2493."
         ),
         scope=RuleScope.BOTH,
@@ -330,11 +335,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure point: the caller sees a plausible empty result and fails later, often "
             "somewhere unrelated, making the original failure invisible."
         ),
-        short_description="except block returns a value without logging — error hidden",
+        short_description="except block returns a value without a diagnostic — error hidden",
         full_description=(
-            "Exception is converted to a return value (None, {}, [], False) with no\n"
-            "trace.  Callers see a wrong result with no idea why.  At minimum log\n"
-            "before returning; prefer raising a domain-specific exception instead.\n"
+            "Exception is converted to a plausible return value (None, {}, [], False)\n"
+            "with no trace or other diagnostic.  Callers see a result with no idea why.\n"
+            "Log the caught failure before converting it, including through a helper\n"
+            "that receives and logs it; prefer raising a domain-specific exception.\n"
+            "A private None sentinel is also observable when every direct same-module\n"
+            "caller checks it explicitly and logs the fallback branch.\n"
             "\n"
             "A return that hands the caught exception back as typed data is not\n"
             "flagged: the failure leaves the frame for the caller to report. This\n"

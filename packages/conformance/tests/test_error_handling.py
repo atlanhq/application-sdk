@@ -1590,6 +1590,105 @@ def do_it():
     )
 
 
+def test_p007_no_finding_when_callers_log_a_private_sentinel_fallback() -> None:
+    # The return is an intentional format sentinel. Every local consumer checks
+    # it explicitly, logs the fallback, and preserves the original filters.
+    _none(
+        """\
+def _parse_tree(value):
+    try:
+        return decode(value)
+    except DecodeError:
+        return None
+
+
+def apply_filters(include, exclude):
+    include_tree = _parse_tree(include)
+    exclude_tree = _parse_tree(exclude)
+    if include_tree is None or exclude_tree is None:
+        logger.warning("using legacy filter format")
+        return include, exclude
+    return include_tree, exclude_tree
+"""
+    )
+
+
+def test_p007_no_finding_when_local_helper_logs_caught_value() -> None:
+    # Both direct and staged failure outcomes are observable through a helper
+    # that logs the caught value; the helper's plain return is not typed data.
+    src = """\
+def _report_failure(error):
+    logger.error("operation failed: %s", redact(str(error)))
+    return "unavailable"
+
+
+def direct_result():
+    try:
+        read_value()
+    except Exception as caught:
+        return _report_failure(caught)
+
+
+def staged_result():
+    try:
+        read_value()
+    except Exception as caught:
+        outcome = _report_failure(caught)
+        return ProbeResult(message=outcome)
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_an_unlogged_private_sentinel_fallback() -> None:
+    _single(
+        """\
+def _parse_value(value):
+    try:
+        return decode(value)
+    except DecodeError:
+        return None
+
+
+def read_value(value):
+    parsed = _parse_value(value)
+    if parsed is None:
+        return {}
+    return parsed
+
+
+class ValueReader:
+    def read(self, value):
+        parsed = _parse_value(value)
+        if parsed is None:
+            return {}
+        return parsed
+""",
+        "E007",
+    )
+
+
+def test_p007_still_flags_malformed_targets_converted_to_empty_list() -> None:
+    # Malformed structured input becomes a plausible empty result, and its
+    # consumer can choose a fallback without any diagnostic.
+    _single(
+        """\
+def _parse_targets(value):
+    try:
+        return decode(value)
+    except DecodeError:
+        return []
+
+
+def choose_targets(value):
+    targets = _parse_targets(value)
+    if targets:
+        return targets
+    return [legacy_target]
+""",
+        "E007",
+    )
+
+
 # E007 and E004 share one typed-failure predicate (typed_failure_scope): a
 # return that hands the caught exception back as typed data hides nothing.
 

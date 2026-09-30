@@ -46,6 +46,7 @@ class Checker(
         # _check_p017_call can skip the inline Call (already covered by
         # _check_p017_raise on the outer Raise).
         self._in_raise_call: bool = False
+        self._module_tree: ast.Module | None = None
 
     # ── Finding creation ──────────────────────────────────────────────────────
 
@@ -63,6 +64,10 @@ class Checker(
         )
 
     # ── Context management ────────────────────────────────────────────────────
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._module_tree = node
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not

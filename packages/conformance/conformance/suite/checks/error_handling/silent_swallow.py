@@ -19,12 +19,205 @@ from ._helpers import (
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
+    _is_log_call_stmt,
     _iter_shallow,
     _return_carries_typed_failure,
     redaction_scope,
     typed_failure_scope,
     visible_helpers,
 )
+
+
+def _iter_eager_shallow(root: ast.AST):
+    """Yield descendants without entering a deferred or nested scope."""
+    deferred = (
+        ast.FunctionDef,
+        ast.AsyncFunctionDef,
+        ast.ClassDef,
+        ast.Lambda,
+        ast.GeneratorExp,
+    )
+    pending = list(ast.iter_child_nodes(root))
+    while pending:
+        node = pending.pop()
+        if isinstance(node, deferred):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _logged_parameter(function: ast.FunctionDef, parameter: str) -> bool:
+    """True when a direct logger call in *function* reads *parameter*."""
+    return any(
+        _is_log_call_stmt(stmt)
+        and any(
+            isinstance(node, ast.Name) and node.id == parameter
+            for node in ast.walk(stmt)
+        )
+        for stmt in function.body
+    )
+
+
+def _call_passes_exception_to_logged_parameter(
+    call: ast.Call, exception_name: str, helper: ast.FunctionDef
+) -> bool:
+    """Whether a direct call passes the caught binding to a logged parameter."""
+    if (
+        helper.decorator_list
+        or helper.args.vararg is not None
+        or helper.args.kwarg is not None
+        or any(isinstance(arg, ast.Starred) for arg in call.args)
+        or any(keyword.arg is None for keyword in call.keywords)
+    ):
+        return False
+
+    positional = [*helper.args.posonlyargs, *helper.args.args]
+    parameters = [*positional, *helper.args.kwonlyargs]
+    parameter_names = {parameter.arg for parameter in parameters}
+    if len(call.args) > len(positional):
+        return False
+    supplied = {
+        parameter.arg: argument
+        for parameter, argument in zip(positional, call.args, strict=False)
+    }
+    for keyword in call.keywords:
+        assert keyword.arg is not None
+        if keyword.arg not in parameter_names or keyword.arg in supplied:
+            return False
+        supplied[keyword.arg] = keyword.value
+
+    return any(
+        isinstance(argument, ast.Name)
+        and argument.id == exception_name
+        and _logged_parameter(helper, parameter)
+        for parameter, argument in supplied.items()
+    )
+
+
+def _has_logged_local_helper_call(
+    statements: list[ast.stmt],
+    exception_name: str | None,
+    local_helpers: dict[str, ast.FunctionDef],
+) -> bool:
+    """Find a local helper call that logs the caught binding before returning."""
+    if exception_name is None:
+        return False
+    for stmt in statements:
+        for node in _iter_eager_shallow(stmt):
+            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+                continue
+            helper = local_helpers.get(node.func.id)
+            if helper is not None and _call_passes_exception_to_logged_parameter(
+                node, exception_name, helper
+            ):
+                return True
+    return False
+
+
+def _condition_guarantees_none(test: ast.expr, name: str) -> bool:
+    """True when a test is necessarily true whenever *name* is None."""
+    if isinstance(test, ast.BoolOp) and isinstance(test.op, ast.Or):
+        return any(_condition_guarantees_none(value, name) for value in test.values)
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return False
+    if not isinstance(test.ops[0], ast.Is):
+        return False
+    left, right = test.left, test.comparators[0]
+    return (
+        isinstance(left, ast.Name)
+        and left.id == name
+        and isinstance(right, ast.Constant)
+        and right.value is None
+    ) or (
+        isinstance(right, ast.Name)
+        and right.id == name
+        and isinstance(left, ast.Constant)
+        and left.value is None
+    )
+
+
+def _branch_logs_before_exit(body: list[ast.stmt]) -> bool:
+    """True when the branch directly logs before any return or raise."""
+    for stmt in body:
+        if _is_log_call_stmt(stmt):
+            return True
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            return False
+    return False
+
+
+def _sentinel_is_logged_by_local_callers(
+    returned: ast.Return,
+    function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    local_helpers: dict[str, ast.FunctionDef],
+    module_tree: ast.Module | None,
+) -> bool:
+    """Prove every direct module call of a private ``None`` sentinel logs it."""
+    if (
+        not isinstance(function, ast.FunctionDef)
+        or function.decorator_list
+        or not function.name.startswith("_")
+        or local_helpers.get(function.name) is not function
+        or module_tree is None
+        or not isinstance(returned.value, ast.Constant)
+        or returned.value.value is not None
+    ):
+        return False
+
+    allowed_calls: set[int] = set()
+    for caller in (
+        node
+        for node in ast.walk(module_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ):
+        if function.name not in visible_helpers(local_helpers, [caller]):
+            continue
+        for index, stmt in enumerate(caller.body):
+            calls = [
+                node
+                for node in _iter_eager_shallow(stmt)
+                if isinstance(node, ast.Call) and _get_name(node.func) == function.name
+            ]
+            if not calls:
+                continue
+            if (
+                len(calls) != 1
+                or not isinstance(calls[0].func, ast.Name)
+                or not isinstance(stmt, (ast.Assign, ast.AnnAssign))
+                or stmt.value is not calls[0]
+            ):
+                return False
+            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+                return False
+            result_name = targets[0].id
+            if not any(
+                isinstance(consumer, ast.If)
+                and _condition_guarantees_none(consumer.test, result_name)
+                and _branch_logs_before_exit(consumer.body)
+                for consumer in caller.body[index + 1 :]
+            ):
+                return False
+            allowed_calls.add(id(calls[0]))
+
+    direct_calls = {
+        id(node)
+        for node in ast.walk(module_tree)
+        if isinstance(node, ast.Call) and _get_name(node.func) == function.name
+    }
+    if not allowed_calls or direct_calls != allowed_calls:
+        return False
+
+    allowed_func_names = {
+        id(node.func)
+        for node in ast.walk(module_tree)
+        if isinstance(node, ast.Call) and id(node) in allowed_calls
+    }
+    return all(
+        id(node) in allowed_func_names
+        for node in ast.walk(module_tree)
+        if isinstance(node, ast.Name) and node.id == function.name
+    )
 
 
 class SilentSwallowMixin:
@@ -194,19 +387,30 @@ class SilentSwallowMixin:
         # is the same predicate E004 uses for its typed-failure exemption, so
         # the two rules never disagree about one shape. It is applied per
         # return, because E007 judges each return on its own.
+        enclosing_function = self._function_stack[-1] if self._function_stack else None
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
         scope = typed_failure_scope(
             node,
-            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
-            enclosing_function=self._function_stack[-1]
-            if self._function_stack
-            else None,
+            local_helpers=local_helpers,
+            enclosing_function=enclosing_function,
         )
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
             if _any_logging_in(node.body[:i]):
                 continue
+            if _has_logged_local_helper_call(
+                node.body[: i + 1], node.name, local_helpers
+            ):
+                continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
+                continue
+            if _sentinel_is_logged_by_local_callers(
+                stmt,
+                enclosing_function,
+                self._local_helpers,
+                self._module_tree,
+            ):
                 continue
             self._add(
                 "E007",
