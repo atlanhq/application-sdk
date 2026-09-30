@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.39.1
-source-sha:    5af6afb0e7c17e32c2f330c54fc34b823998a246
-source-date:   2026-09-28T15:47:54+01:00
+sdk-version:   3.40.0
+source-sha:    ed589bd2a96444639c8812ae0ce662f1d54b484d
+source-date:   2026-09-30T02:39:32+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7893,6 +7893,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `connection_qualified_name: str` `= ''`
   - `application_name: str` `= ''`
+  - `output_path: str` `= ''` — The run's output path. Only read when the snapshot is materialized on
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `ReadCurrentStateOutput`
@@ -7900,10 +7901,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ReadCurrentStateOutput`
 - **Summary:** Output from the read_current_state task.
 - **Fields:**
-  - `current_state_path: str` `= ''` — Local filesystem path where the current state was downloaded.
+  - `current_state_path: str` `= ''` — Local path the snapshot was materialized into, or ``""`` when the read
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the current-state folder.
   - `current_state_available: bool` `= False` — Whether a non-empty current-state snapshot was found.
-  - `current_state_json_count: int` `= 0` — Number of JSON files in the downloaded current state.
+  - `current_state_json_count: int` `= 0` — Number of JSON files in the committed current state.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `TransformInput`
