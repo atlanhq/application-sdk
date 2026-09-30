@@ -814,9 +814,11 @@ The `Input` class is the entrypoint's first parameter annotation: an `@entrypoin
 method, or an undecorated `async def run` on a class whose base is `App` or an SDK
 App template (`SqlApp`, `BaseMetadataExtractor`, ...) imported from
 `application_sdk`. Only an app that declares neither falls back to its sole live
-`ExtractionInput` descendant. If `finding.file` is a generated
+`ExtractionInput` descendant. If `finding.file` is still a generated
 `app/generated/_input.py` while the app overrides `run` with a hand-written
-`Input`, the pairing is wrong — route to residue instead of editing either class.
+`Input` (for example through a local intermediate base the scan cannot
+resolve), the pairing is wrong — route to residue instead of editing either
+class.
 
 *Procedure:*
 

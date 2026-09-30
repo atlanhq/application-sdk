@@ -624,6 +624,10 @@ _NOT_RECOGNISED = {
         imports="",
         prelude="class BaseMetadataExtractor:\n    pass\n\n",
     ),
+    "sdk-import-shadowed-by-local-class": _template_run_app(
+        "SqlApp",
+        prelude="class SqlApp:\n    pass\n\n",
+    ),
     "undefined-name-like-template": _template_run_app("SqlApp", imports=""),
     "non-sdk-module": _template_run_app(
         "SqlApp", imports="from other_sdk.templates import SqlApp"

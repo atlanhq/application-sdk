@@ -23,7 +23,8 @@ def sdk_app_base_bindings(tree: ast.AST) -> frozenset[str]:
 
     Only an absolute ``from application_sdk[.<sub>] import <Base> [as <alias>]``
     counts. A same-named class defined locally, or imported from any other
-    module, is not an SDK base.
+    module, is not an SDK base, and neither is an SDK name the module rebinds
+    at top level.
     """
     bound: set[str] = set()
     for node in ast.walk(tree):
@@ -36,4 +37,16 @@ def sdk_app_base_bindings(tree: ast.AST) -> frozenset[str]:
                 for alias in node.names
                 if alias.name in SDK_APP_BASE_NAMES
             )
-    return frozenset(bound)
+    return frozenset(bound - _module_level_definitions(tree))
+
+
+def _module_level_definitions(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+    for node in getattr(tree, "body", []):
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
