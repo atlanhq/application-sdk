@@ -1645,3 +1645,184 @@ def test_b006_on_an_inherited_field_says_not_to_redeclare_it(tmp_path: Path) -> 
     ]
     assert inherited
     assert all("do not redeclare it" in f.message for f in inherited)
+
+
+# ── SDK-retired inherited fields (FND-3107) ───────────────────────────────────
+
+_SDK_RETIRED_BASE = """\
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+class ConnectorBase(ExtractionInput):
+    pass
+"""
+
+_SDK_RETIRED_VIA_BASE = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+from base import ConnectorBase
+
+class DbtExtractInput(ConnectorBase):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: DbtExtractInput) -> ExtractionOutput:
+        pass
+"""
+
+_SDK_RETIRED_ON_PLAIN_INPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Input
+from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+
+class DbtExtractInput(Input):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: DbtExtractInput) -> ExtractionOutput:
+        pass
+"""
+
+
+@pytest.fixture
+def _sdk_retired_credential_guid(monkeypatch: pytest.MonkeyPatch) -> ContractLedger:
+    """The SDK removed ExtractionInput.credential_guid after sunsetting it.
+
+    The conformance release that ships the removal no longer lists the field in
+    its template table, and its bundled SDK ledger records it 'sunset'.
+    """
+    from conformance.suite.checks._sdk_contract_mixins import (
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+    )
+
+    monkeypatch.setitem(
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        "ExtractionInput",
+        tuple(
+            f
+            for f in SDK_TEMPLATE_CONTRACT_FIELDS["ExtractionInput"]
+            if f.name != "credential_guid"
+        ),
+    )
+    return _make_ledger(
+        ContractField("ExtractionInput", "credential_guid", "str", "sunset")
+    )
+
+
+def _scan_with_sdk_ledger(
+    tmp_path: Path,
+    files: dict[str, str],
+    ledger: ContractLedger,
+    sdk_ledger: ContractLedger,
+) -> list:
+    paths: list[Path] = []
+    for name, src in files.items():
+        p = tmp_path / name
+        p.write_text(src, encoding="utf-8")
+        paths.append(p)
+    return scan_contract_compat(paths, tmp_path, ledger, sdk_ledger=sdk_ledger)
+
+
+def test_b005_sdk_retired_inherited_field_is_not_this_apps_break(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """The SDK deliberately retired a field the app only inherited.
+
+    The app's ledger still records it 'active' because the generator refreshes
+    status only while a field is live. The app did not remove it and cannot
+    restore it; the SDK's own B005 run guards the template field.
+    """
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "app_name", "str", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """An in-repo base between the contract and the SDK template changes nothing."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": _SDK_RETIRED_VIA_BASE},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_app_declared_field_removed_still_fires_after_sdk_retirement(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """The exemption covers only what the SDK retired, not the app's own fields."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "own_flag", "bool", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert _contract_fields_reported(findings, "B005") == {"DbtExtractInput.own_flag"}
+
+
+def test_b005_in_repo_base_field_removed_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """A field the app's own base declared is the app's change, SDK ancestor or not."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "tenant_hint", "str", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": _SDK_RETIRED_VIA_BASE},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.tenant_hint"
+    }
+
+
+def test_b005_dropping_the_sdk_base_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Leaving the retiring template is the app's own removal of its fields."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"app.py": _SDK_RETIRED_ON_PLAIN_INPUT},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+def test_b005_sdk_field_gone_without_sdk_sunset_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Only a retirement the SDK recorded as 'sunset' is excused."""
+    unmarked = _make_ledger(
+        ContractField("ExtractionInput", "credential_guid", "str", "active")
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, unmarked
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }

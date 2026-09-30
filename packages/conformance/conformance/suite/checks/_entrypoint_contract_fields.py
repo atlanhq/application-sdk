@@ -450,6 +450,45 @@ def resolve_contract_fields(
     return list(fields_by_name.values())
 
 
+def sdk_contract_ancestors(
+    classdef: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
+) -> frozenset[str]:
+    """SDK contract names *classdef* inherits from, directly or via in-repo bases.
+
+    Walks the same base chain as :func:`resolve_contract_fields` and returns the
+    ancestors it resolves from the static SDK registries rather than from repo
+    source. A name declared in the scanned repo is never included, so an SDK
+    self-scan (where the templates are in-repo) yields an empty set.
+    """
+    found: set[str] = set()
+    seen: set[str] = {classdef.name}
+
+    def walk(name: str) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                for base_name in rec.bases:
+                    walk(base_name)
+        elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
+            found.add(name)
+
+    for base in classdef.bases:
+        bname = _base_name(base)
+        if bname is not None:
+            walk(aliases.get(bname, bname))
+    return frozenset(found)
+
+
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
 
 

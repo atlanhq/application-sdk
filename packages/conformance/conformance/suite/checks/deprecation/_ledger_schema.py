@@ -157,6 +157,24 @@ def load_ledger(
     return _parse(payload)
 
 
+def load_sdk_ledger() -> ContractLedger:
+    """The SDK's own ledger bundled in this package, ignoring every override.
+
+    B005 reads it in a consumer app to tell an SDK-retired template field from
+    an app-made removal: the SDK records a deliberate retirement as 'sunset'
+    here, and this copy ships in the same release whose template registry no
+    longer lists the field. Unlike :func:`load_ledger`, neither the env override
+    nor the app's own ledger may stand in for it.
+    """
+    try:
+        text = (
+            _ir.files("conformance").joinpath(*_LEDGER_RELPATH).read_text("utf-8")
+        )
+        return _parse(json.loads(text))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return ContractLedger(version=LEDGER_VERSION, fields=[])
+
+
 def load_ledger_baseline(outfile: Path) -> ContractLedger:
     """The ledger to build a *write* on top of — empty when *outfile* is absent.
 
