@@ -73,45 +73,45 @@
       "symbol": "StorageNotFoundError"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "download_file is deprecated; use application_sdk.storage.ops.download_file \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "download_file is deprecated here; use application_sdk.storage.ops.download_file, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.helpers",
       "removal_version": "4.0.0",
       "symbol": "download_file"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "atomic_write is deprecated; use application_sdk.common.atomic.atomic_write \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "atomic_write is deprecated here; use application_sdk.common.atomic.atomic_write, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
       "symbol": "atomic_write"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "disk_full_guard is deprecated; use application_sdk.common.atomic.disk_full_guard \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "disk_full_guard is deprecated here; use application_sdk.common.atomic.disk_full_guard, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
       "symbol": "disk_full_guard"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "get_persistent_artifacts_path is deprecated; use application_sdk.common.incremental.helpers.get_persistent_artifacts_path \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_artifacts_path is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_artifacts_path, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
       "symbol": "get_persistent_artifacts_path"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "upload_file is deprecated; use application_sdk.storage.ops.upload_file \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "upload_file is deprecated here; use application_sdk.storage.ops.upload_file, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.marker",
       "removal_version": "4.0.0",
@@ -127,9 +127,9 @@
       "symbol": "StorageError"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "count_json_files_recursive is deprecated; use application_sdk.common.incremental.helpers.count_json_files_recursive \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "count_json_files_recursive is deprecated here; use application_sdk.common.incremental.helpers.count_json_files_recursive, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_reader",
       "removal_version": "4.0.0",
@@ -145,27 +145,27 @@
       "symbol": "download_current_state"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "download_prefix is deprecated; use application_sdk.storage.batch.download_prefix \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "download_prefix is deprecated here; use application_sdk.storage.batch.download_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_reader",
       "removal_version": "4.0.0",
       "symbol": "download_prefix"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "get_persistent_s3_prefix is deprecated; use application_sdk.common.incremental.helpers.get_persistent_s3_prefix \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_s3_prefix is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_s3_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_reader",
       "removal_version": "4.0.0",
       "symbol": "get_persistent_s3_prefix"
     },
     {
-      "kind": "constant",
-      "marker_via": "module-getattr",
-      "message": "run_in_thread is deprecated; use application_sdk._runtime.offload.run_in_thread \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_in_thread is deprecated here; use application_sdk._runtime.offload.run_in_thread, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
       "migration_target": true,
       "module": "application_sdk.common.incremental.state.state_reader",
       "removal_version": "4.0.0",
@@ -179,6 +179,15 @@
       "module": "application_sdk.common.incremental.state.state_writer",
       "removal_version": "4.0.0",
       "symbol": "cleanup_previous_state"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_s3_prefix is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_s3_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "get_persistent_s3_prefix"
     },
     {
       "kind": "function",

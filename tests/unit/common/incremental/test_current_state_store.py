@@ -12,6 +12,7 @@ import json
 import time
 import warnings
 from collections.abc import Iterator
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -300,9 +301,70 @@ class TestCommit:
         await state.commit(_write(tmp_path / "b", {"t/b.json": "b"}), "run-b")
 
         # run-a's prune, arriving late: the manifest now names run-b.
-        await state._prune(set(first.keys), "run-a")
+        await state._prune(set(first.keys), "run-a", None)
 
         assert (await state.probe()).committed_run_id == "run-b"
+
+    async def test_a_concurrent_commits_upload_is_never_pruned(
+        self, local, tmp_path
+    ) -> None:
+        """Run B has uploaded but not yet written its manifest when run A
+        commits: A's prune must leave B's keys, or B's manifest would name
+        keys that are gone."""
+        state = CurrentStateStore(PREFIX)
+        await state.commit(_write(tmp_path / "p", {"t/p.json": "p"}), "run-p")
+        with patch.object(
+            store_module, "_put", side_effect=StorageError("injected: B stalls")
+        ):
+            with pytest.raises(StorageError):
+                await state.commit(_write(tmp_path / "b", {"t/b.json": "b"}), "run-b")
+        b_keys = {k for k in await list_keys(PREFIX) if "b.json" in k}
+        assert b_keys
+
+        await state.commit(_write(tmp_path / "a", {"t/a.json": "a"}), "run-a")
+
+        remaining = set(await list_keys(PREFIX))
+        assert b_keys <= remaining
+        # The snapshot run A replaced is gone; only A, B and the manifest remain.
+        assert not any("p.json" in k for k in remaining)
+
+    async def test_another_runs_old_leftovers_are_pruned(
+        self, local, tmp_path, monkeypatch
+    ) -> None:
+        """A dead commit's keys, past the grace window, go with the next prune."""
+        state = CurrentStateStore(PREFIX)
+        with patch.object(
+            store_module, "_put", side_effect=StorageError("injected: dies")
+        ):
+            with pytest.raises(StorageError):
+                await state.commit(
+                    _write(tmp_path / "d", {"t/d.json": "d"}), "run-dead"
+                )
+        monkeypatch.setattr(store_module, "_FOREIGN_KEY_GRACE", timedelta(0))
+
+        committed = await state.commit(
+            _write(tmp_path / "a", {"t/a.json": "a"}), "run-a"
+        )
+
+        in_store = set(await list_keys(PREFIX))
+        assert in_store == (
+            set(committed.keys)
+            | {f"{k}.sha256" for k in committed.keys}
+            | {state.manifest_key}
+        )
+
+    async def test_committing_a_missing_directory_keeps_the_snapshot(
+        self, local, tmp_path
+    ) -> None:
+        state = CurrentStateStore(PREFIX)
+        first = await state.commit(_write(tmp_path / "r1", {"t/a.json": "a"}), "r1")
+
+        with pytest.raises(FileNotFoundError):
+            await state.commit(tmp_path / "never-built", "r2")
+
+        after = await state.probe()
+        assert after.committed_run_id == "r1"
+        assert after.keys == first.keys
 
 
 # ---------------------------------------------------------------------------
@@ -331,6 +393,22 @@ class TestMaterialize:
         committed = await state.commit(_write(tmp_path / "b", {"t/a.json": "a"}), "r1")
         dest = await state.materialize(committed, tmp_path / "prev")
         assert list(_files(dest).values()) == [b"a"]
+
+    async def test_an_object_vanishing_after_the_probe_fails_the_read(
+        self, local, tmp_path
+    ) -> None:
+        """A key the probe listed but that is gone by its download must fail
+        the materialize, so the task retries rather than diffing a partial
+        previous state."""
+        state = CurrentStateStore(PREFIX)
+        await state.commit(
+            _write(tmp_path / "b", {"t/a.json": "a", "t/b.json": "b"}), "r1"
+        )
+        snapshot = await state.probe()
+        await obstore.delete_async(local, snapshot.keys[0])
+
+        with pytest.raises(StorageError):
+            await state.materialize(snapshot, tmp_path / "prev")
 
 
 def test_run_state_dirs_are_scoped_to_the_output_path(tmp_path) -> None:
@@ -388,8 +466,14 @@ def _jsonl(path: Path, rows: list[dict]) -> None:
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", DeprecationWarning)
 
-    class _Connector(IncrementalSqlMetadataExtractor):
-        """A connector whose "source" is ``self.tables``: name -> state."""
+    class _ConnectorBase(IncrementalSqlMetadataExtractor):
+        """A connector whose "source" is ``self.tables``: name -> state.
+
+        Still abstract (``build_incremental_column_sql`` is left to the
+        subclass the ``env`` fixture defines), so importing this module
+        registers no app and no task: the concrete class is created inside
+        the registry-reset fixtures and gone with them.
+        """
 
         tables: dict[str, str]
 
@@ -432,11 +516,6 @@ with warnings.catch_warnings():
             await self._publish(input.output_path, "column/chunk-0.json", rows)
             return FetchColumnsOutput(total_record_count=len(rows))
 
-        def build_incremental_column_sql(
-            self, table_ids: list[str], ctx: IncrementalRunContext
-        ) -> str:
-            return ",".join(table_ids)
-
         async def execute_column_sql(
             self, sql: str, input: ExecuteColumnBatchInput, ctx: IncrementalRunContext
         ) -> int:
@@ -451,9 +530,20 @@ class TestTwoRunsEndToEnd:
     """Run 1 full; run 2 incremental with one table dropped and one added."""
 
     @pytest.fixture
-    def env(self, tmp_path, local, monkeypatch):
+    def env(
+        self, tmp_path, local, monkeypatch, clean_app_registry, clean_task_registry
+    ):
         monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path / "staging"))
         monkeypatch.setenv("ATLAN_APPLICATION_NAME", APP)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+
+            class _Connector(_ConnectorBase):
+                def build_incremental_column_sql(
+                    self, table_ids: list[str], ctx: IncrementalRunContext
+                ) -> str:
+                    return ",".join(table_ids)
+
         connector = _Connector.__new__(_Connector)
         connector.root = tmp_path
 
@@ -470,7 +560,7 @@ class TestTwoRunsEndToEnd:
         ):
             yield connector
 
-    async def _run(self, connector: _Connector, tmp_path: Path, run: str):
+    async def _run(self, connector: _ConnectorBase, tmp_path: Path, run: str):
         with patch(
             "temporalio.workflow.info", return_value=SimpleNamespace(run_id=run)
         ):

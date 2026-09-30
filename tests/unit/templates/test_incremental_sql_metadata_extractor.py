@@ -458,7 +458,7 @@ class TestReadCurrentState:
         assert seen == [(snap, dest)]
 
     async def test_legacy_task_override_still_gets_a_materialized_path(
-        self, tmp_path
+        self, tmp_path, clean_app_registry, clean_task_registry
     ) -> None:
         """A connector overriding the task (and reading ``current_state_path``
         from ``super()``) keeps a populated path, now run-scoped, and is told

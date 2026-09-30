@@ -12,7 +12,9 @@ carry state forward on their own. Two things are new underneath it.
 
 **A manifest, written last.** ``current-state/.sdk-manifest`` names every key
 of the committed snapshot. ``commit`` uploads the snapshot, then writes the
-manifest, then prunes every key the manifest does not name. A reader trusts
+manifest, then prunes the keys that commit made stale (see
+:meth:`CurrentStateStore.commit` for which ones, and why a concurrent run's
+recent keys are never among them). A reader trusts
 the manifest over the listing, so a commit that died part-way — before its
 manifest — is invisible: the next run still reads the previous snapshot
 whole. The name is dot-prefixed and has no ``.json`` suffix because the
@@ -45,10 +47,11 @@ import hashlib
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import obstore
 import orjson
 
 from application_sdk._runtime.offload import run_in_thread
@@ -65,10 +68,13 @@ from application_sdk.storage.batch import (
     _delete_paths_individually,
     _download_listed,
     list_data_objects,
-    list_keys,
     upload_prefix,
 )
-from application_sdk.storage.integrity import sidecar_key
+from application_sdk.storage.integrity import (
+    SIDECAR_SUFFIX,
+    is_sidecar_key,
+    sidecar_key,
+)
 from application_sdk.storage.ops import _get_bytes, _put, _resolve_store, normalize_key
 
 if TYPE_CHECKING:
@@ -83,6 +89,15 @@ _MANIFEST_VERSION = 1
 
 #: ``{12 hex}--`` — the run stamp ``commit`` puts in front of a file name.
 _STAMP_RE = re.compile(r"^[0-9a-f]{12}--")
+
+#: How old a key stamped by a third run must be before a commit prunes it. Such
+#: a key is either a dead commit's leftover or a concurrent commit's upload that
+#: its manifest does not name yet; only age tells them apart. Twice the
+#: template's ``write_current_state`` timeout (1h): no attempt can still be
+#: uploading a key this old, and a retry re-uploads its keys with fresh times.
+#: Kept short because publish globs the prefix: a leftover it can see is a
+#: duplicate record until some commit prunes it.
+_FOREIGN_KEY_GRACE = timedelta(hours=2)
 
 _MATERIALIZE_LOCKS = PathLockRegistry("incremental.current_state.materialize.lock_wait")
 
@@ -339,16 +354,25 @@ class CurrentStateStore:
            *local_dir* keeps mirroring what is committed).
         2. Upload the tree.
         3. Write the manifest — the commit point.
-        4. Delete every key under the prefix the manifest does not name.
+        4. Prune the keys this commit made stale: this run's own leftovers,
+           the snapshot it replaced, and unstamped legacy keys. A key stamped
+           by any other run is pruned only once it is two hours old — it
+           may be a concurrent commit's upload that its manifest does not
+           name yet.
 
         A failure before step 3 leaves the previous snapshot committed and
-        intact; a failure in step 4 leaves stale keys that the next commit
-        prunes and that every reader already ignores.
+        intact; a failure in step 4 happens after the commit point, so the new
+        snapshot is committed and the leftover keys, which every reader
+        already ignores, go with a later commit's prune.
 
         Raises:
             StorageError: If an upload, the manifest write, or the prune fails.
+            FileNotFoundError: If *local_dir* does not exist. An empty
+                directory commits an empty snapshot; a missing one is a
+                caller's bug, and committing it would prune the live snapshot.
             OSError: If *local_dir* cannot be walked or renamed.
         """
+        previous_run = await self._live_run_id()
         stamp = _run_stamp(run_id)
         sizes = await _run_drained(run_in_thread(_stamp_tree, local_dir, stamp))
         uploaded = await upload_prefix(
@@ -372,7 +396,7 @@ class CurrentStateStore:
             self.s3_prefix,
             run_id,
         )
-        await self._prune(set(uploaded), run_id)
+        await self._prune(set(uploaded), run_id, previous_run)
 
         json_count = sum(1 for k in relative if k.endswith(".json"))
         return CurrentStateSnapshot(
@@ -384,30 +408,80 @@ class CurrentStateStore:
             keys=tuple(sorted(uploaded)),
         )
 
-    async def _prune(self, committed: set[str], run_id: str) -> None:
+    async def _live_run_id(self) -> str | None:
+        """The run named by the manifest now under the prefix, if any."""
+        raw = await _get_bytes(self.manifest_key, self._store)
+        return self._parse_manifest(raw)[0] if raw is not None else None
+
+    async def _prune(
+        self, committed: set[str], run_id: str, previous_run: str | None
+    ) -> None:
         # Re-read the manifest first: if a concurrent run of this connection
         # committed after us, its keys are the live snapshot and pruning to
         # ours would delete them. That run prunes on its own commit.
-        raw = await _get_bytes(self.manifest_key, self._store)
-        live_run = self._parse_manifest(raw)[0] if raw is not None else None
-        if live_run != run_id:
+        if await self._live_run_id() != run_id:
             logger.warning(
                 "Current-state at %s was re-committed by another run during this "
                 "commit; leaving the prune to it",
                 self.s3_prefix,
             )
             return
-        keep = committed | {sidecar_key(k) for k in committed} | {self.manifest_key}
-        existing = await list_keys(
-            self._key_prefix, self._store, normalize=False, include_markers=True
+        # The check above is not atomic with the deletes below: another run can
+        # upload, or even commit, in between. So the deletes never rely on it
+        # alone — _select_stale leaves every other run's recent keys alone.
+        resolved = _resolve_store(self._store)
+        listing: list[tuple[str, datetime]] = []
+        async for batch in obstore.list(resolved, prefix=self._key_prefix):
+            listing.extend((str(o["path"]), o["last_modified"]) for o in batch)
+        stale = await run_in_thread(
+            self._select_stale,
+            listing,
+            committed,
+            run_id,
+            previous_run,
+            datetime.now(UTC) - _FOREIGN_KEY_GRACE,
         )
-        stale = [k for k in existing if k not in keep]
         if stale:
-            await _delete_paths_individually(_resolve_store(self._store), stale)
+            await _delete_paths_individually(resolved, stale)
             logger.info(
                 "Pruned %d key(s) outside the committed current-state manifest",
                 len(stale),
             )
+
+    def _select_stale(
+        self,
+        listing: list[tuple[str, datetime]],
+        committed: set[str],
+        run_id: str,
+        previous_run: str | None,
+        foreign_cutoff: datetime,
+    ) -> list[str]:
+        """Pick the keys under the prefix this commit may delete. Blocking.
+
+        Safe to delete: this run's own keys the manifest does not name (an
+        earlier attempt's leftovers), the snapshot this commit replaced, and
+        unstamped keys (a pre-manifest snapshot). A key stamped by any other
+        run is deleted only once older than *foreign_cutoff*: until then it may
+        be a concurrent commit's upload, about to be named by its manifest.
+        A sidecar goes with its data key.
+        """
+        keep = committed | {sidecar_key(k) for k in committed} | {self.manifest_key}
+        superseded = {_run_stamp(run_id)}
+        if previous_run is not None:
+            superseded.add(_run_stamp(previous_run))
+        stale: list[str] = []
+        for key, modified in listing:
+            if key in keep:
+                continue
+            data_key = key.removesuffix(SIDECAR_SUFFIX) if is_sidecar_key(key) else key
+            stamp = _STAMP_RE.match(data_key.rsplit("/", 1)[-1])
+            if (
+                stamp is None
+                or stamp.group(0) in superseded
+                or modified < foreign_cutoff
+            ):
+                stale.append(key)
+        return stale
 
 
 def _stamp_tree(root: Path, stamp: str) -> dict[str, int]:
@@ -418,9 +492,9 @@ def _stamp_tree(root: Path, stamp: str) -> dict[str, int]:
     and SDK working directories are skipped, matching ``upload_prefix``.
     Blocking: callers offload it.
     """
+    if not root.is_dir():
+        raise FileNotFoundError(f"current-state build directory {root} does not exist")
     sizes: dict[str, int] = {}
-    if not root.exists():
-        return sizes
     for dirpath, dirs, filenames in os.walk(root, followlinks=False):
         prune_internal_dirs(dirs)
         # Unstamped names first: they claim the plain ``{stamp}{name}``, and a

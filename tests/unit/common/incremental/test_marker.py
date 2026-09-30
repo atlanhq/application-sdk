@@ -167,6 +167,32 @@ class TestPersistMarkerToStorage:
         )
         assert not any(tmp_path.rglob("marker.txt"))
 
+    async def test_a_marker_that_does_not_match_its_sidecar_is_refused(
+        self, memory_store, monkeypatch
+    ):
+        """The in-memory read keeps the download's integrity check: a damaged
+        marker with a later timestamp would make the next run skip changes."""
+        import hashlib
+
+        from application_sdk import constants
+        from application_sdk.common.incremental import helpers
+        from application_sdk.storage.errors import StorageIntegrityError
+        from application_sdk.storage.ops import _put
+
+        monkeypatch.setattr(constants, "STORAGE_VERIFY_TRANSFERS", True)
+        key = f"{helpers.get_persistent_s3_prefix('t/c/123', 'oracle')}/marker.txt"
+        good = b"2025-01-15T10:00:00Z"
+        await _put(key, b"2099-01-01T00:00:00Z")
+        await _put(f"{key}.sha256", hashlib.sha256(good).hexdigest().encode())
+
+        with pytest.raises(StorageIntegrityError):
+            await helpers.download_marker_from_s3("t/c/123", "oracle")
+
+        await _put(key, good)
+        assert await helpers.download_marker_from_s3("t/c/123", "oracle") == (
+            "2025-01-15T10:00:00Z"
+        )
+
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
         with patch(

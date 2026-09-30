@@ -8,12 +8,16 @@ This module contains helper functions for:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import warnings
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+from typing_extensions import deprecated
 
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
@@ -30,7 +34,19 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
+from application_sdk.storage.integrity import (
+    check_transfer_digest,
+    read_expected_digest,
+    verification_enabled,
+)
 from application_sdk.storage.ops import _get_bytes
+from application_sdk.storage.ops import download_file as _download_file
+from application_sdk.storage.ops import normalize_key
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
+    from application_sdk.storage.ops import BoundStore
 
 logger = get_logger(__name__)
 
@@ -40,10 +56,6 @@ logger = get_logger(__name__)
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "StorageNotFoundError": (
         "application_sdk.storage.errors.StorageNotFoundError",
-        "it was only ever re-exported here as a side effect of an import",
-    ),
-    "download_file": (
-        "application_sdk.storage.ops.download_file",
         "it was only ever re-exported here as a side effect of an import",
     ),
 }
@@ -65,6 +77,41 @@ def __getattr__(name: str) -> object:
     from importlib import import_module  # noqa: PLC0415 — resolved on access only
 
     return getattr(import_module(module_name), attr)
+
+
+@deprecated(
+    "download_file is deprecated here; use application_sdk.storage.ops.download_file, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+async def download_file(
+    key: str,
+    local_path: str | Path,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    compute_hash: bool = False,
+    min_chunk_size: int = 10 * 1024 * 1024,
+    normalize: bool = True,
+    verify: bool | None = None,
+    expected_sha256: str | None = None,
+    sidecar_present: bool | None = None,
+) -> str | None:
+    """Deprecated alias of :func:`application_sdk.storage.ops.download_file`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.storage.ops`. Will be removed in
+        v4.0.0.
+    """
+    return await _download_file(
+        key,
+        local_path,
+        store,
+        compute_hash=compute_hash,
+        min_chunk_size=min_chunk_size,
+        normalize=normalize,
+        verify=verify,
+        expected_sha256=expected_sha256,
+        sidecar_present=sidecar_present,
+    )
 
 
 def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
@@ -277,6 +324,8 @@ async def download_marker_from_s3(
             not existing. A missing marker means "first run"; any other
             failure must not silently become a full extraction, so it
             propagates and the task retries.
+        StorageIntegrityError: If the marker does not match its ``.sha256``
+            sidecar (only when transfer verification is on).
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
     marker_s3_key = f"{s3_prefix}/marker.txt"
@@ -286,12 +335,38 @@ async def download_marker_from_s3(
     if raw is None:
         logger.info("Marker file not found in S3 (first incremental run)")
         return None
+    await _verify_marker_bytes(marker_s3_key, raw)
     marker = raw.decode("utf-8").strip()
     if not marker:
         logger.info("Marker file found but empty")
         return None
     logger.info("Marker read: %s", marker)
     return marker
+
+
+async def _verify_marker_bytes(marker_s3_key: str, raw: bytes) -> None:
+    """Check *raw* against the marker's ``.sha256`` sidecar, as a download would.
+
+    The in-memory read skips the transfer checks ``download_file`` makes, and a
+    damaged marker that still decodes can carry a later timestamp, which would
+    make the next extraction skip changes. No sidecar (or verification turned
+    off) means nothing to verify against, exactly as for a download.
+
+    Raises:
+        StorageIntegrityError: If the bytes do not match the recorded digest.
+    """
+    if not verification_enabled(None):
+        return
+    key = normalize_key(marker_s3_key)
+    expected = await read_expected_digest(None, key)
+    if expected is None:
+        return
+    check_transfer_digest(
+        "marker read",
+        key,
+        expected=expected,
+        actual=hashlib.sha256(raw).hexdigest(),
+    )
 
 
 async def download_s3_prefix_with_structure(

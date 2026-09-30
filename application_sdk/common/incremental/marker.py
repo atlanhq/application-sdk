@@ -25,12 +25,20 @@ Example:
 
 from __future__ import annotations
 
-import warnings
+from contextlib import AbstractContextManager
 from datetime import UTC, datetime
-from typing import Any
+from pathlib import Path
+from typing import IO, TYPE_CHECKING, Any
 
+from typing_extensions import deprecated
+
+from application_sdk.common.atomic import atomic_write as _atomic_write
+from application_sdk.common.atomic import disk_full_guard as _disk_full_guard
+from application_sdk.common.incremental.helpers import download_marker_from_s3
 from application_sdk.common.incremental.helpers import (
-    download_marker_from_s3,
+    get_persistent_artifacts_path as _get_persistent_artifacts_path,
+)
+from application_sdk.common.incremental.helpers import (
     get_persistent_s3_prefix,
     normalize_marker_timestamp,
     prepone_marker_timestamp,
@@ -38,48 +46,112 @@ from application_sdk.common.incremental.helpers import (
 from application_sdk.constants import MARKER_TIMESTAMP_FORMAT
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import upload_file_from_bytes
+from application_sdk.storage.ops import upload_file as _upload_file
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
+    from application_sdk.storage.ops import BoundStore
 
 logger = get_logger(__name__)
 
-#: name -> (replacement, why). The marker is no longer written to a local file, so
-#: these stopped being imported here; they are served once more for callers
-#: that imported (or patched) them via this module.
-_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
-    "atomic_write": (
-        "application_sdk.common.atomic.atomic_write",
-        "it was only ever re-exported here as a side effect of an import",
-    ),
-    "disk_full_guard": (
-        "application_sdk.common.atomic.disk_full_guard",
-        "it was only ever re-exported here as a side effect of an import",
-    ),
-    "get_persistent_artifacts_path": (
-        "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-        "it was only ever re-exported here as a side effect of an import",
-    ),
-    "upload_file": (
-        "application_sdk.storage.ops.upload_file",
-        "it was only ever re-exported here as a side effect of an import",
-    ),
-}
+# The marker is no longer written to a local file, so these stopped being
+# imported here; they are kept as deprecated aliases for callers that imported
+# (or patched) them via this module.
 
 
-def __getattr__(name: str) -> object:
-    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
-    entry = _DEPRECATED_CONSTANTS.get(name)
-    if entry is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    replacement, note = entry
-    warnings.warn(
-        f"{name} is deprecated here; use {replacement} instead — {note}. "
-        "Will be removed in v4.0.0.",
-        DeprecationWarning,
-        stacklevel=2,
+@deprecated(
+    "atomic_write is deprecated here; use application_sdk.common.atomic.atomic_write, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+def atomic_write(
+    path: str | Path,
+    *,
+    operation: str,
+    mode: str = "wb",
+    encoding: str | None = None,
+    required_bytes: int | None = None,
+    **open_kwargs: Any,
+) -> AbstractContextManager[IO[Any]]:
+    """Deprecated alias of :func:`application_sdk.common.atomic.atomic_write`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.common.atomic`. Will be removed in v4.0.0.
+    """
+    return _atomic_write(
+        path,
+        operation=operation,
+        mode=mode,
+        encoding=encoding,
+        required_bytes=required_bytes,
+        **open_kwargs,
     )
-    module_name, _, attr = replacement.rpartition(".")
-    from importlib import import_module  # noqa: PLC0415 — resolved on access only
 
-    return getattr(import_module(module_name), attr)
+
+@deprecated(
+    "disk_full_guard is deprecated here; use application_sdk.common.atomic.disk_full_guard, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+def disk_full_guard(
+    path: str | Path, *, operation: str, required_bytes: int | None = None
+) -> AbstractContextManager[None]:
+    """Deprecated alias of :func:`application_sdk.common.atomic.disk_full_guard`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.common.atomic`. Will be removed in v4.0.0.
+    """
+    return _disk_full_guard(path, operation=operation, required_bytes=required_bytes)
+
+
+@deprecated(
+    "get_persistent_artifacts_path is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_artifacts_path, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+def get_persistent_artifacts_path(
+    connection_qualified_name: str, artifact_subpath: str, application_name: str = ""
+) -> Path:
+    """Deprecated alias of :func:`application_sdk.common.incremental.helpers.get_persistent_artifacts_path`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.common.incremental.helpers`. Will be removed in v4.0.0.
+    """
+    return _get_persistent_artifacts_path(
+        connection_qualified_name, artifact_subpath, application_name
+    )
+
+
+@deprecated(
+    "upload_file is deprecated here; use application_sdk.storage.ops.upload_file, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+async def upload_file(
+    key: str,
+    local_path: str | Path,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    chunk_size: int | None = None,
+    normalize: bool = True,
+    retain_local_copy: bool = True,
+    compute_hash: bool = True,
+    verify: bool | None = None,
+    write_sidecar: bool | None = None,
+) -> str | None:
+    """Deprecated alias of :func:`application_sdk.storage.ops.upload_file`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.storage.ops`. Will be removed in v4.0.0.
+    """
+    return await _upload_file(
+        key,
+        local_path,
+        store,
+        chunk_size=chunk_size,
+        normalize=normalize,
+        retain_local_copy=retain_local_copy,
+        compute_hash=compute_hash,
+        verify=verify,
+        write_sidecar=write_sidecar,
+    )
 
 
 def create_next_marker() -> str:
