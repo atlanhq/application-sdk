@@ -140,7 +140,11 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
         remediation_reference=RemediationReference(
             kind=RemediationKind.COMMAND,
-            target="atlan-application-sdk-conformance bootstrap --resync",
+            target="atlan-application-sdk-conformance bootstrap --json",
+            note=(
+                "run with no other flags; `--resync` is a human-only remedy for "
+                "drifted `tests.yaml` / `renovate.json` (FND-2542)"
+            ),
         ),
     ),
     RuleDefinition(
