@@ -4,13 +4,18 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-import threading
-import time
+import warnings
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.app.context import AppContext
 from application_sdk.app.task import is_task, task
+from application_sdk.common.incremental.column_extraction import (
+    ColumnExtractionAnalysis,
+)
+from application_sdk.common.incremental.marker import MarkerPair, MarkerPersistResult
+from application_sdk.common.incremental.state.store import CurrentStateSnapshot
 from application_sdk.contracts.base import Input, Output
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.errors.leaves import UnimplementedError
@@ -342,12 +347,15 @@ def _make_extractor() -> _MinimalIncremental:
 class TestFetchIncrementalMarkerInlineImport:
     """Exercises the inline import in fetch_incremental_marker (line 358)."""
 
-    async def test_calls_fetch_marker_from_storage_and_maps_output(self) -> None:
+    async def test_calls_fetch_marker_and_maps_output(self) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.fetch_marker_from_storage",
+            "application_sdk.common.incremental.marker.fetch_marker",
             new=AsyncMock(
-                return_value=("2025-01-01T00:00:00Z", "2025-02-01T00:00:00Z")
+                return_value=MarkerPair(
+                    marker="2025-01-01T00:00:00Z",
+                    next_marker="2025-02-01T00:00:00Z",
+                )
             ),
         ) as mock_fn:
             out = await extractor.fetch_incremental_marker(
@@ -369,8 +377,10 @@ class TestFetchIncrementalMarkerInlineImport:
     ) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.fetch_marker_from_storage",
-            new=AsyncMock(return_value=(None, "2025-02-01T00:00:00Z")),
+            "application_sdk.common.incremental.marker.fetch_marker",
+            new=AsyncMock(
+                return_value=MarkerPair(marker=None, next_marker="2025-02-01T00:00:00Z")
+            ),
         ):
             out = await extractor.fetch_incremental_marker(
                 FetchIncrementalMarkerInput(
@@ -382,40 +392,116 @@ class TestFetchIncrementalMarkerInlineImport:
         assert out.next_marker_timestamp == "2025-02-01T00:00:00Z"
 
 
-class TestReadCurrentStateInlineImport:
-    """Exercises the inline import in read_current_state (line 384)."""
+def _snapshot(
+    *, exists: bool = True, json_count: int = 7, run: str | None = "run-0"
+) -> CurrentStateSnapshot:
+    return CurrentStateSnapshot(
+        s3_prefix="persistent-artifacts/apps/app/connection/c/current-state",
+        exists=exists,
+        json_count=json_count,
+        total_bytes=json_count * 10,
+        committed_run_id=run,
+        keys=(),
+    )
 
-    async def test_maps_download_result_to_output(self) -> None:
+
+_PROBE = "application_sdk.common.incremental.state.store.CurrentStateStore.probe"
+_MATERIALIZE = (
+    "application_sdk.common.incremental.state.state_writer.materialize_previous_state"
+)
+
+
+class TestReadCurrentState:
+    """read_current_state probes; it materializes only for an override."""
+
+    def _input(self, output_path: str = "") -> ReadCurrentStateInput:
+        return ReadCurrentStateInput(
+            connection_qualified_name="default/test/123",
+            application_name="app",
+            output_path=output_path,
+        )
+
+    async def test_maps_probe_result_without_downloading(self) -> None:
         extractor = _make_extractor()
-        with patch(
-            "application_sdk.common.incremental.state.state_reader.download_current_state",
-            new=AsyncMock(return_value=("/tmp/state", "s3://bucket/state", True, 7)),
-        ) as mock_fn:
-            out = await extractor.read_current_state(
-                ReadCurrentStateInput(
-                    connection_qualified_name="c", application_name="app"
-                )
-            )
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot())) as probe,
+            patch(_MATERIALIZE, new=AsyncMock()) as materialize,
+        ):
+            out = await extractor.read_current_state(self._input())
         assert isinstance(out, ReadCurrentStateOutput)
-        assert out.current_state_path == "/tmp/state"
-        assert out.current_state_s3_prefix == "s3://bucket/state"
+        assert out.current_state_path == ""
+        assert out.current_state_s3_prefix == (
+            "persistent-artifacts/apps/app/connection/123/current-state"
+        )
         assert out.current_state_available is True
         assert out.current_state_json_count == 7
-        mock_fn.assert_awaited_once()
+        probe.assert_awaited_once()
+        materialize.assert_not_awaited()
 
     async def test_first_run_state_unavailable(self) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.state.state_reader.download_current_state",
-            new=AsyncMock(return_value=("/tmp/state", "", False, 0)),
+            _PROBE, new=AsyncMock(return_value=_snapshot(exists=False, json_count=0))
         ):
-            out = await extractor.read_current_state(
-                ReadCurrentStateInput(
-                    connection_qualified_name="c", application_name="app"
-                )
-            )
+            out = await extractor.read_current_state(self._input())
         assert out.current_state_available is False
         assert out.current_state_json_count == 0
+
+    async def test_hook_override_materializes_into_run_scoped_dir(
+        self, tmp_path
+    ) -> None:
+        seen: list[tuple[CurrentStateSnapshot, object]] = []
+
+        class _Hooked(_MinimalIncremental):
+            async def after_current_state_read(self, snapshot, local_dir) -> None:
+                seen.append((snapshot, local_dir))
+
+        extractor = _Hooked.__new__(_Hooked)
+        snap = _snapshot()
+        dest = tmp_path / "incremental" / "previous-state"
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=snap)),
+            patch(_MATERIALIZE, new=AsyncMock(return_value=dest)) as materialize,
+        ):
+            out = await extractor.read_current_state(self._input(str(tmp_path)))
+        assert materialize.await_args.args[1] == dest
+        assert out.current_state_path == str(dest)
+        assert seen == [(snap, dest)]
+
+    async def test_legacy_task_override_still_gets_a_materialized_path(
+        self, tmp_path, clean_app_registry, clean_task_registry
+    ) -> None:
+        """A connector overriding the task (and reading ``current_state_path``
+        from ``super()``) keeps a populated path, now run-scoped, and is told
+        once to move to the hook."""
+        with pytest.warns(DeprecationWarning, match="after_current_state_read"):
+
+            class _LegacyOverride(_MinimalIncremental):
+                @task(timeout_seconds=300)
+                async def read_current_state(
+                    self, input: ReadCurrentStateInput
+                ) -> ReadCurrentStateOutput:
+                    out = await super().read_current_state(input)
+                    assert out.current_state_path, "override lost its local state"
+                    return out
+
+        extractor = _LegacyOverride.__new__(_LegacyOverride)
+        dest = tmp_path / "incremental" / "previous-state"
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot())),
+            patch(_MATERIALIZE, new=AsyncMock(return_value=dest)),
+        ):
+            out = await extractor.read_current_state(self._input(str(tmp_path)))
+        assert out.current_state_path == str(dest)
+
+    def test_compat_flag_is_not_a_classvar_on_the_base(self) -> None:
+        """Apps re-annotate inherited ClassVars and fail pyright; the flag must
+        be a private attribute set on the overriding subclass only."""
+        assert "_sdk_materialize_on_read" not in vars(IncrementalSqlMetadataExtractor)
+        assert "_sdk_materialize_on_read" not in getattr(
+            IncrementalSqlMetadataExtractor, "__annotations__", {}
+        )
+        assert not getattr(_MinimalIncremental, "_sdk_materialize_on_read", False)
 
 
 class TestUpdateIncrementalMarkerInlineImport:
@@ -436,13 +522,12 @@ class TestUpdateIncrementalMarkerInlineImport:
     async def test_persists_marker_via_inline_import(self) -> None:
         extractor = _make_extractor()
         with patch(
-            "application_sdk.common.incremental.marker.persist_marker_to_storage",
+            "application_sdk.common.incremental.marker.persist_marker",
             new=AsyncMock(
-                return_value={
-                    "marker_written": True,
-                    "marker_timestamp": "2025-03-01T00:00:00Z",
-                    "s3_key": "s3://bucket/markers/m.json",
-                }
+                return_value=MarkerPersistResult(
+                    marker_timestamp="2025-03-01T00:00:00Z",
+                    s3_key="s3://bucket/markers/m.json",
+                )
             ),
         ) as mock_fn:
             out = await extractor.update_incremental_marker(
@@ -457,23 +542,38 @@ class TestUpdateIncrementalMarkerInlineImport:
         assert out.s3_key == "s3://bucket/markers/m.json"
         mock_fn.assert_awaited_once()
 
-    async def test_persist_returns_minimal_dict_uses_defaults(self) -> None:
-        """If helper returns dict missing keys, .get() defaults apply."""
+    async def test_marker_tasks_do_not_call_the_deprecated_shims(self) -> None:
+        """The template uses the typed API, so it emits no DeprecationWarning."""
         extractor = _make_extractor()
-        with patch(
-            "application_sdk.common.incremental.marker.persist_marker_to_storage",
-            new=AsyncMock(return_value={}),
+        with (
+            patch(
+                "application_sdk.common.incremental.marker.download_marker_from_s3",
+                new=AsyncMock(return_value="2025-01-01T00:00:00Z"),
+            ),
+            patch(
+                "application_sdk.common.incremental.marker.upload_file_from_bytes",
+                new=AsyncMock(),
+            ),
+            warnings.catch_warnings(),
         ):
-            out = await extractor.update_incremental_marker(
+            warnings.simplefilter("error", DeprecationWarning)
+            fetched = await extractor.fetch_incremental_marker(
+                FetchIncrementalMarkerInput(
+                    connection_qualified_name="default/test/1",
+                    application_name="app",
+                    prepone_enabled=False,
+                )
+            )
+            persisted = await extractor.update_incremental_marker(
                 UpdateMarkerInput(
-                    connection_qualified_name="c",
-                    next_marker_timestamp="2025-03-01T00:00:00Z",
+                    connection_qualified_name="default/test/1",
+                    next_marker_timestamp=fetched.next_marker_timestamp,
                     application_name="app",
                 )
             )
-        assert out.marker_written is False
-        assert out.marker_timestamp == ""
-        assert out.s3_key == ""
+        assert fetched.marker_timestamp == "2025-01-01T00:00:00Z"
+        assert persisted.marker_written is True
+        assert persisted.s3_key.endswith("/connection/1/marker.txt")
 
 
 class TestExecuteSingleColumnBatchInlineImports:
@@ -598,46 +698,6 @@ class TestPrepareColumnExtractionQueriesInlineImports:
                 )
             )
 
-    async def test_unreadable_cached_table_dir_raises_the_scan_error(
-        self, tmp_path
-    ) -> None:
-        """A failed walk of the cached state leaves as JsonScanError, not OSError."""
-        from application_sdk.common.incremental.incremental_errors import JsonScanError
-
-        extractor = _make_extractor()
-        with (
-            patch(
-                "application_sdk.execution.get_object_store_prefix",
-                return_value="s3://prefix/transformed",
-            ),
-            patch(
-                "application_sdk.storage.batch.download_prefix",
-                new=AsyncMock(return_value=None),
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current-state",
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.count_json_files_recursive",
-                side_effect=PermissionError("injected: unreadable table dir"),
-            ),
-            pytest.raises(JsonScanError) as exc_info,
-        ):
-            await extractor.prepare_column_extraction_queries(
-                PrepareColumnQueriesInput(
-                    output_path=str(tmp_path),
-                    column_batch_size=10,
-                    connection_qualified_name="c",
-                    application_name="app",
-                    current_state_available=True,
-                    current_state_s3_prefix="persistent/current-state",
-                )
-            )
-
-        assert exc_info.value.base_dir == str(tmp_path / "current-state" / "table")
-        assert isinstance(exc_info.value.__cause__, PermissionError)
-
     async def test_zero_tables_returns_empty_output(self, tmp_path) -> None:
         """When no tables need extraction, returns total_batches=0 and skips upload."""
         extractor = _make_extractor()
@@ -660,7 +720,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(MagicMock(), 0, 0, 0),
+                return_value=ColumnExtractionAnalysis([], 0, 0, 0),
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(
@@ -679,11 +739,17 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         # No upload happened because there were no batches
         mock_upload.assert_not_awaited()
 
-    async def test_batches_tables_and_uploads(self, tmp_path) -> None:
-        """Happy path: tables exist → batched → JSON files written → uploaded."""
+    @pytest.mark.parametrize("plain_tuple", [False, True], ids=["named", "plain"])
+    async def test_batches_tables_and_uploads(self, tmp_path, plain_tuple) -> None:
+        """Happy path: tables exist → batched → JSON files written → uploaded.
+
+        Also with the analysis mocked as the plain 4-tuple it used to return,
+        as a consumer's test may still do.
+        """
         extractor = _make_extractor()
 
-        fake_rows = [{"table_id": f"t{i}"} for i in range(5)]
+        fake_rows: list[dict[str, object]] = [{"table_id": f"t{i}"} for i in range(5)]
+        analysis = ColumnExtractionAnalysis(fake_rows, 4, 1, 0)
 
         with (
             patch(
@@ -704,7 +770,7 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(fake_rows, 4, 1, 0),
+                return_value=tuple(analysis) if plain_tuple else analysis,
             ),
         ):
             out = await extractor.prepare_column_extraction_queries(
@@ -739,24 +805,6 @@ class TestPrepareColumnExtractionQueriesInlineImports:
         )
 
         extractor = _make_extractor()
-
-        fake_rows: list[dict] = []
-
-        # Make get_persistent_artifacts_path return a path that exists but no
-        # table dir / no json files, so the download branch is taken
-        artifacts_dir = tmp_path / "persistent"
-        artifacts_dir.mkdir()
-
-        # Both downloads go through download_prefix now, so fail only the
-        # current-state one and let the transformed download succeed.
-        state_downloads = 0
-
-        async def _download(*, prefix: str, **kwargs) -> None:
-            nonlocal state_downloads
-            if prefix == "s3://state":
-                state_downloads += 1
-                raise RuntimeError("S3 failure")
-
         with (
             patch(
                 "application_sdk.execution.get_object_store_prefix",
@@ -764,20 +812,13 @@ class TestPrepareColumnExtractionQueriesInlineImports:
             ),
             patch(
                 "application_sdk.storage.batch.download_prefix",
-                new=AsyncMock(side_effect=_download),
+                new=AsyncMock(return_value=None),
             ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=artifacts_dir,
-            ),
+            patch(_PROBE, new=AsyncMock(side_effect=RuntimeError("S3 failure"))),
             patch(
                 "application_sdk.common.incremental.column_extraction.get_backfill_tables",
                 return_value=set(),
             ) as mock_backfill,
-            patch(
-                "application_sdk.common.incremental.column_extraction.get_tables_needing_column_extraction",
-                return_value=(fake_rows, 0, 0, 0),
-            ),
             pytest.raises(StateDownloadError) as excinfo,
         ):
             await extractor.prepare_column_extraction_queries(
@@ -791,7 +832,6 @@ class TestPrepareColumnExtractionQueriesInlineImports:
                 )
             )
         assert isinstance(excinfo.value.__cause__, RuntimeError)
-        assert state_downloads == 1
         # Backfill detection never ran against a missing previous state.
         mock_backfill.assert_not_called()
 
@@ -838,13 +878,21 @@ class TestWriteCurrentStateInlineImports:
         with pytest.raises(ValidationError):
             IncrementalExtractionInput(**base, upload_concurrency=-3)
 
+    @staticmethod
+    def _extractor(run_id: str = "run") -> _MinimalIncremental:
+        """An extractor whose Temporal context carries *run_id*."""
+        extractor = _make_extractor()
+        extractor._context = AppContext(
+            app_name="app", app_version="0.1.0", run_id=run_id, workflow_id="wf"
+        )
+        return extractor
+
     def _make_input(self, **overrides) -> WriteCurrentStateInput:
         defaults = dict(
             workflow_id="wf",
-            workflow_run_id="run",
             connection=ConnectionRef(
                 attributes=ConnectionAttributes(
-                    qualified_name="default/test/c", name="c"
+                    qualified_name="default/test/123", name="c"
                 )
             ),
             output_path="/tmp/out",
@@ -856,109 +904,186 @@ class TestWriteCurrentStateInlineImports:
         defaults.update(overrides)
         return WriteCurrentStateInput(**defaults)
 
-    async def test_happy_path_calls_helpers_and_returns_output(self, tmp_path) -> None:
-        extractor = _make_extractor()
-
-        # Build the expected snapshot result
+    def _snap_result(self, tmp_path, *, diff: bool = True) -> MagicMock:
         snap_result = MagicMock()
-        snap_result.current_state_dir = tmp_path / "current"
+        snap_result.current_state_dir = tmp_path / "incremental" / "current-state"
         snap_result.current_state_s3_prefix = "s3://current"
         snap_result.total_files = 5
-        snap_result.incremental_diff_dir = tmp_path / "diff"
-        snap_result.incremental_diff_s3_prefix = "s3://diff"
-        snap_result.incremental_diff_files = 2
+        snap_result.incremental_diff_dir = (
+            tmp_path / "incremental" / "diff" if diff else None
+        )
+        snap_result.incremental_diff_s3_prefix = "s3://diff" if diff else None
+        snap_result.incremental_diff_files = 2 if diff else 0
+        return snap_result
 
+    async def test_happy_path_uses_run_scoped_directories(self, tmp_path) -> None:
+        extractor = self._extractor()
+        snap = _snapshot()
         with (
+            patch(_PROBE, new=AsyncMock(return_value=snap)),
             patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current",
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
-                return_value="s3://persist",
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
-            ) as mock_cleanup,
+                _MATERIALIZE,
+                new=AsyncMock(side_effect=lambda store, dest, snapshot=None: dest),
+            ) as materialize,
             patch(
                 "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
-                new=AsyncMock(return_value=snap_result),
-            ),
+                new=AsyncMock(return_value=self._snap_result(tmp_path)),
+            ) as create,
             patch(
                 "application_sdk.common.incremental.state.state_writer.download_transformed_data",
                 new=AsyncMock(return_value=tmp_path / "transformed"),
             ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
-                new=AsyncMock(return_value=tmp_path / "prev"),
-            ),
         ):
-            out = await extractor.write_current_state(self._make_input())
+            out = await extractor.write_current_state(
+                self._make_input(output_path=str(tmp_path))
+            )
         assert isinstance(out, WriteCurrentStateOutput)
         assert out.current_state_files == 5
         assert out.incremental_diff_files == 2
-        assert "current" in out.current_state_path
-        mock_cleanup.assert_called_once()
+        run_dirs = tmp_path / "incremental"
+        assert materialize.await_args.args[1] == run_dirs / "previous-state"
+        # The probe's snapshot is reused, not probed a second time.
+        assert materialize.await_args.args[2] is snap
+        kwargs = create.await_args.kwargs
+        assert kwargs["previous_state_dir"] == run_dirs / "previous-state"
+        assert kwargs["current_state_dir"] == run_dirs / "current-state"
+        assert kwargs["incremental_diff_dir"] == run_dirs / "diff"
 
-    async def test_empty_diff_dir_yields_empty_string(self, tmp_path) -> None:
-        extractor = _make_extractor()
-        snap_result = MagicMock()
-        snap_result.current_state_dir = tmp_path / "current"
-        snap_result.current_state_s3_prefix = "s3://current"
-        snap_result.total_files = 0
-        snap_result.incremental_diff_dir = None
-        snap_result.incremental_diff_s3_prefix = None
-        snap_result.incremental_diff_files = 0
-
+    async def test_first_run_skips_materialize(self, tmp_path) -> None:
+        extractor = self._extractor()
         with (
             patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current",
+                _PROBE,
+                new=AsyncMock(return_value=_snapshot(exists=False, json_count=0)),
             ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
-                return_value="s3://persist",
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
-            ),
+            patch(_MATERIALIZE, new=AsyncMock()) as materialize,
             patch(
                 "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
-                new=AsyncMock(return_value=snap_result),
-            ),
+                new=AsyncMock(return_value=self._snap_result(tmp_path, diff=False)),
+            ) as create,
             patch(
                 "application_sdk.common.incremental.state.state_writer.download_transformed_data",
                 new=AsyncMock(return_value=tmp_path / "transformed"),
             ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
-                new=AsyncMock(return_value=None),
-            ),
         ):
-            out = await extractor.write_current_state(self._make_input())
+            out = await extractor.write_current_state(
+                self._make_input(
+                    output_path=str(tmp_path), current_state_available=False
+                )
+            )
+        materialize.assert_not_awaited()
+        assert create.await_args.kwargs["previous_state_dir"] is None
         assert out.incremental_diff_path == ""
         assert out.incremental_diff_s3_prefix == ""
 
-    async def test_exception_raises_typed_error_and_cleans_up(self, tmp_path) -> None:
-        """Exception inside try-block raises IncrementalStateWriteError; finally still cleans up."""
+    async def test_retry_after_commit_reports_the_commit_without_rebuilding(
+        self, tmp_path
+    ) -> None:
+        """An attempt that died after its manifest landed has already replaced
+        the previous snapshot; rebuilding would diff the run against itself."""
+        extractor = self._extractor()
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot(run="run"))),
+            patch(
+                "application_sdk.storage.batch.list_data_keys",
+                new=AsyncMock(return_value=["d/metadata.json", "d/table/a.json"]),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(),
+            ) as create,
+        ):
+            out = await extractor.write_current_state(
+                self._make_input(output_path=str(tmp_path))
+            )
+        create.assert_not_awaited()
+        assert out.current_state_files == 7
+        assert out.incremental_diff_files == 2
+        assert out.incremental_diff_s3_prefix.endswith("runs/run/incremental-diff")
+
+    async def _write(self, tmp_path, inp: WriteCurrentStateInput) -> AsyncMock:
+        """Run write_current_state under Temporal run ID ``temporal-run``."""
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot())),
+            patch(
+                _MATERIALIZE,
+                new=AsyncMock(side_effect=lambda store, dest, snapshot=None: dest),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(return_value=self._snap_result(tmp_path)),
+            ) as create,
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+        ):
+            await self._extractor("temporal-run").write_current_state(inp)
+        return create
+
+    async def test_omitted_run_id_stamps_with_temporal_run_id(self, tmp_path) -> None:
+        """No caller run ID no longer falls back to workflow_id, which repeats
+        across runs and would overwrite the live snapshot in place."""
+        create = await self._write(
+            tmp_path, self._make_input(output_path=str(tmp_path))
+        )
+        assert create.await_args.kwargs["run_id"] == "temporal-run"
+
+    async def test_disagreeing_run_id_is_ignored_and_logged(
+        self, tmp_path, loguru_capture
+    ) -> None:
+        inp = self._make_input(output_path=str(tmp_path), workflow_run_id="caller-run")
+        create = await self._write(tmp_path, inp)
+        assert create.await_args.kwargs["run_id"] == "temporal-run"
+        warned = [
+            r
+            for r in loguru_capture
+            if r["level"].name == "WARNING" and "caller-run" in r["message"]
+        ]
+        assert len(warned) == 1
+        assert "temporal-run" in warned[0]["message"]
+
+    async def test_matching_run_id_is_not_logged(
+        self, tmp_path, loguru_capture
+    ) -> None:
+        inp = self._make_input(
+            output_path=str(tmp_path), workflow_run_id="temporal-run"
+        )
+        await self._write(tmp_path, inp)
+        assert not [r for r in loguru_capture if r["level"].name == "WARNING"]
+
+    async def test_disagreeing_run_id_does_not_steer_the_committed_retry(
+        self, tmp_path
+    ) -> None:
+        """The committed-retry shortcut compares against Temporal's run ID, so a
+        caller value that happens to match the committed run cannot skip a
+        real rebuild."""
+        inp = self._make_input(output_path=str(tmp_path), workflow_run_id="run-0")
+        create = await self._write(tmp_path, inp)
+        create.assert_awaited_once()
+
+    def test_workflow_run_id_field_is_deprecated(self) -> None:
+        from application_sdk.contracts.compat import field_lifecycle
+
+        assert (
+            field_lifecycle(WriteCurrentStateInput, "workflow_run_id") == "deprecated"
+        )
+        inp = self._make_input(workflow_run_id="x")
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            _ = inp.workflow_run_id
+
+    async def test_exception_raises_typed_error(self, tmp_path) -> None:
         from application_sdk.templates._template_errors import (
             IncrementalStateWriteError,
         )
 
-        extractor = _make_extractor()
-
+        extractor = self._extractor()
         with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot())),
             patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current",
+                _MATERIALIZE,
+                new=AsyncMock(side_effect=lambda store, dest, snapshot=None: dest),
             ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
-                return_value="s3://persist",
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
-            ) as mock_cleanup,
             patch(
                 "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
                 new=AsyncMock(side_effect=RuntimeError("boom")),
@@ -967,155 +1092,12 @@ class TestWriteCurrentStateInlineImports:
                 "application_sdk.common.incremental.state.state_writer.download_transformed_data",
                 new=AsyncMock(return_value=tmp_path / "transformed"),
             ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
-                new=AsyncMock(return_value=tmp_path / "prev"),
-            ),
         ):
             with pytest.raises(IncrementalStateWriteError) as excinfo:
-                await extractor.write_current_state(self._make_input())
+                await extractor.write_current_state(
+                    self._make_input(output_path=str(tmp_path))
+                )
             assert excinfo.value.code == "INTERNAL_INCREMENTAL_STATE_WRITE"
-        # cleanup_previous_state runs in finally
-        mock_cleanup.assert_called_once()
-
-    async def test_cleanup_offloaded_to_thread(self, tmp_path) -> None:
-        """The finally-block cleanup must not rmtree on the event loop.
-
-        ``cleanup_previous_state`` removes the whole downloaded previous state,
-        and this runs inside a ``@task`` whose auto-heartbeat must keep flowing
-        for the duration — so the helper is offloaded at this call site rather
-        than made async (its sync callers keep the sync entry point).
-        """
-        snap_result = MagicMock()
-        snap_result.current_state_dir = tmp_path / "current"
-        snap_result.current_state_s3_prefix = "s3://current"
-        snap_result.total_files = 1
-        snap_result.incremental_diff_dir = None
-        snap_result.incremental_diff_s3_prefix = None
-        snap_result.incremental_diff_files = 0
-
-        extractor = _make_extractor()
-
-        with (
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current",
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
-                return_value="s3://persist",
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
-            ) as mock_cleanup,
-            patch(
-                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
-                new=AsyncMock(return_value=snap_result),
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
-                new=AsyncMock(return_value=tmp_path / "transformed"),
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
-                new=AsyncMock(return_value=tmp_path / "prev"),
-            ),
-            patch(
-                "application_sdk.templates.incremental_sql_metadata_extractor.run_in_thread",
-                new_callable=AsyncMock,
-                side_effect=lambda func, *a, **kw: func(*a, **kw),
-            ) as mock_offload,
-        ):
-            await extractor.write_current_state(self._make_input())
-
-        mock_offload.assert_awaited_once()
-        assert mock_offload.await_args is not None
-        assert mock_offload.await_args.args[0] is mock_cleanup
-        assert mock_offload.await_args.args[1] == tmp_path / "prev"
-        mock_cleanup.assert_called_once()
-
-    async def test_cleanup_completes_when_task_cancelled(self, tmp_path) -> None:
-        """Cancellation must not abandon the offloaded removal mid-flight.
-
-        The executor thread cannot be cancelled, so an abandoned await returns
-        control while the thread is still deleting ``previous_state_dir`` — a
-        path that is deterministic per connection, so a concurrent retry's
-        ``prepare_previous_state`` would clear and recreate it underneath the
-        running removal. The removal must therefore finish before
-        ``CancelledError`` propagates.
-
-        Cancellation is delivered **three times**: one ``cancel()`` throws once
-        and is then consumed, so even an unshielded await in the ``finally``
-        would run to completion. Repeated cancellation (worker shutdown, a
-        ``wait_for`` timeout, a retry-cancel) is what abandons the removal
-        mid-flight: a second throw lands on the shield, and a third lands on
-        whatever the handler re-awaits. The finally therefore loops a shielded
-        await until the offload is actually done, however many times the throw
-        is re-delivered.
-        """
-        finished = threading.Event()
-
-        def _slow_cleanup(_previous_state_dir) -> None:
-            # Runs on the offload thread, so this sleep never blocks the loop.
-            # Long enough that an abandoned await would observe it unfinished.
-            time.sleep(0.2)
-            finished.set()
-
-        snapshot_started = asyncio.Event()
-
-        async def _hang(*_args, **_kwargs):
-            snapshot_started.set()
-            await asyncio.sleep(3600)
-
-        extractor = _make_extractor()
-
-        with (
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_artifacts_path",
-                return_value=tmp_path / "current",
-            ),
-            patch(
-                "application_sdk.common.incremental.helpers.get_persistent_s3_prefix",
-                return_value="s3://persist",
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.cleanup_previous_state",
-                new=_slow_cleanup,
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
-                new=AsyncMock(side_effect=_hang),
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
-                new=AsyncMock(return_value=tmp_path / "transformed"),
-            ),
-            patch(
-                "application_sdk.common.incremental.state.state_writer.prepare_previous_state",
-                new=AsyncMock(return_value=tmp_path / "prev"),
-            ),
-        ):
-            task = asyncio.ensure_future(
-                extractor.write_current_state(self._make_input())
-            )
-            await snapshot_started.wait()
-            task.cancel()
-            # One loop turn: the throw lands in `_hang`, the finally runs and
-            # suspends on the shielded offloaded removal (already submitted to
-            # a thread).
-            await asyncio.sleep(0)
-            task.cancel()
-            # Another loop turn: the second throw lands on the shield and the
-            # handler re-awaits the shielded removal — exactly where a third
-            # cancel would abandon an unshielded re-await.
-            await asyncio.sleep(0)
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
-
-        assert (
-            finished.is_set()
-        ), "cancellation propagated before the offloaded removal finished"
 
 
 class TestResolveDatabasePlaceholdersDefault:

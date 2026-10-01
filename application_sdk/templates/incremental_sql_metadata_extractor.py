@@ -53,16 +53,23 @@ import asyncio
 import os
 import warnings
 from abc import abstractmethod
-from typing import Any, ClassVar
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.task import task
+from application_sdk.constants import (
+    COLUMN_BATCHES_SUBPATH,
+    CURRENT_STATE_SUBPATH,
+    TRANSFORMED_SUBDIR,
+)
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.templates._template_errors import (
     IncrementalSqlMetadataExtractorNotImplementedError,
     SqlOutputPathMissingError,
 )
 from application_sdk.templates.contracts.incremental_sql import (
+    ColumnBatchStatus,
     ExecuteColumnBatchInput,
     ExecuteColumnBatchOutput,
     FetchColumnsIncrementalInput,
@@ -80,6 +87,8 @@ from application_sdk.templates.contracts.incremental_sql import (
     UpdateMarkerOutput,
     WriteCurrentStateInput,
     WriteCurrentStateOutput,
+    marker_from_wire,
+    marker_to_wire,
 )
 from application_sdk.templates.contracts.sql_metadata import (
     FetchColumnsOutput,
@@ -93,11 +102,21 @@ from application_sdk.templates.contracts.sql_metadata import (
 )
 from application_sdk.templates.sql_metadata_extractor import SqlMetadataExtractor
 
+if TYPE_CHECKING:
+    from application_sdk.common.incremental.state.store import CurrentStateSnapshot
+
 logger = get_logger(__name__)
 
 # Maximum number of column batch tasks to fan-out in parallel.
 # Matches v2 behaviour exactly (default Temporal fan-out limit).
 MAX_CONCURRENT_COLUMN_BATCHES: int = 10
+
+
+class _BatchWriteCounts(NamedTuple):
+    """What ``prepare_column_extraction_queries`` wrote: batch files and tables."""
+
+    batches: int
+    tables: int
 
 
 class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
@@ -142,6 +161,26 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        # Whether read_current_state must also put the snapshot on disk.
+        # Plain private attributes, not ClassVar declarations on the base: an
+        # app re-annotating an inherited ClassVar fails pyright.
+        if "after_current_state_read" in cls.__dict__:
+            cls._sdk_materialize_on_read = True
+        if "read_current_state" in cls.__dict__:
+            # A connector that overrides the task and reads
+            # current_state_path from super()'s output was written against
+            # the old contract, where the read downloaded the whole snapshot.
+            # Keep that working: the base read still materializes for it.
+            cls._sdk_materialize_on_read = True
+            warnings.warn(
+                f"{cls.__name__} overrides read_current_state, which no longer "
+                "downloads the current state by default; override "
+                "after_current_state_read(snapshot, local_dir) instead. The "
+                "override keeps working — the base task materializes the "
+                "snapshot for it — until v4.0.0.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if cls.__module__.startswith("application_sdk."):
             return
         if IncrementalSqlMetadataExtractor not in cls.__bases__:
@@ -390,10 +429,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         and a freshly generated ``next_marker_timestamp``.
         """
         from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            fetch_marker_from_storage,
+            fetch_marker,
         )
 
-        marker, next_marker = await fetch_marker_from_storage(
+        markers = await fetch_marker(
             connection_qualified_name=input.connection_qualified_name,
             application_name=input.application_name,
             existing_marker=input.existing_marker,
@@ -401,34 +440,94 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             prepone_hours=input.prepone_hours,
         )
         return FetchIncrementalMarkerOutput(
-            marker_timestamp=marker or "",
-            next_marker_timestamp=next_marker,
+            marker_timestamp=marker_to_wire(markers.marker),
+            next_marker_timestamp=markers.next_marker,
         )
 
     @task(timeout_seconds=300)
     async def read_current_state(
         self, input: ReadCurrentStateInput
     ) -> ReadCurrentStateOutput:
-        """Download the current-state snapshot from persistent S3 storage.
+        """Probe the committed current-state snapshot in persistent S3 storage.
 
-        Returns metadata about the downloaded state including whether it
-        exists (``current_state_available``). On the first run the state does
-        not exist and the task returns with ``current_state_available=False``.
+        One listing (plus the manifest read): reports whether a snapshot
+        exists and how many JSON files it holds, and downloads nothing. The
+        tasks that need the files materialize them later, into the run's own
+        ``{output_path}/incremental/previous-state``.
+
+        When a subclass overrides :meth:`after_current_state_read` — or, for
+        compatibility, overrides this task itself — the snapshot is also
+        materialized here, ``current_state_path`` names the directory, and the
+        hook runs with it. On the first run the state does not exist and the
+        task returns with ``current_state_available=False``.
         """
-        from application_sdk.common.incremental.state.state_reader import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            download_current_state,
+        from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            get_persistent_artifacts_path,
+        )
+        from application_sdk.common.incremental.state.state_writer import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            materialize_previous_state,
+        )
+        from application_sdk.common.incremental.state.store import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            CurrentStateStore,
+            DamagedManifestPolicy,
+            RunStateDirs,
         )
 
-        state_dir, s3_prefix, exists, json_count = await download_current_state(
-            connection_qualified_name=input.connection_qualified_name,
-            application_name=input.application_name,
+        store = CurrentStateStore.for_connection(
+            input.connection_qualified_name, input.application_name
         )
+        # A damaged manifest blocks every run until it is fixed by hand, so
+        # start over: no snapshot means a full extraction, and its commit
+        # writes a fresh manifest.
+        snapshot = await store.probe(
+            on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+        )
+        logger.info(
+            "Current-state probe: exists=%s json_files=%d committed_run=%s",
+            snapshot.exists,
+            snapshot.json_count,
+            snapshot.committed_run_id,
+        )
+
+        local_dir = ""
+        if getattr(type(self), "_sdk_materialize_on_read", False):
+            dest = (
+                RunStateDirs.for_output_path(input.output_path).previous_state
+                if input.output_path
+                # No output path from an old run(): the per-connection
+                # directory the read used before run-scoped state.
+                else get_persistent_artifacts_path(
+                    input.connection_qualified_name,
+                    CURRENT_STATE_SUBPATH,
+                    input.application_name,
+                )
+            )
+            materialized = await materialize_previous_state(store, dest, snapshot)
+            await self.after_current_state_read(snapshot, materialized)
+            local_dir = str(materialized)
+
         return ReadCurrentStateOutput(
-            current_state_path=str(state_dir),
-            current_state_s3_prefix=s3_prefix,
-            current_state_available=exists,
-            current_state_json_count=json_count,
+            current_state_path=local_dir,
+            current_state_s3_prefix=store.s3_prefix,
+            current_state_available=snapshot.exists,
+            current_state_json_count=snapshot.json_count,
         )
+
+    async def after_current_state_read(
+        self, snapshot: CurrentStateSnapshot, local_dir: Path
+    ) -> None:
+        """Hook: run connector logic over the committed snapshot on disk.
+
+        Called by :meth:`read_current_state` after it materializes the
+        snapshot into *local_dir* (``{output_path}/incremental/previous-state``).
+        Overriding this is what makes the read materialize at all; the default
+        does nothing and is never reached unless a subclass overrides this or
+        ``read_current_state``.
+
+        Args:
+            snapshot: The committed snapshot the probe found.
+            local_dir: The directory it was materialized into.
+        """
 
     @task(timeout_seconds=3600)
     async def prepare_column_extraction_queries(
@@ -450,13 +549,12 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             get_backfill_tables,
             get_tables_needing_column_extraction,
         )
-        from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            count_json_files_recursive,
-            get_persistent_artifacts_path,
+        from application_sdk.common.incremental.state.state_writer import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            materialize_previous_state,
         )
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            JsonScanError,
-            StateDownloadError,
+        from application_sdk.common.incremental.state.store import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            CurrentStateStore,
+            RunStateDirs,
         )
         from application_sdk.execution import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_object_store_prefix,
@@ -472,7 +570,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             )
 
         # Step 1: Download transformed files from S3
-        transformed_local_path = os.path.join(input.output_path, "transformed")
+        transformed_local_path = os.path.join(input.output_path, TRANSFORMED_SUBDIR)
         transformed_s3_prefix = get_object_store_prefix(transformed_local_path)
         import pathlib  # noqa: PLC0415 — stdlib pathlib; lazy use only
 
@@ -492,50 +590,19 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         batch_size = input.column_batch_size
         logger.info("Preparing column extraction batches: batch_size=%d", batch_size)
 
-        # Step 2: Download previous current-state for backfill comparison
+        # Step 2: Materialize the committed current-state for backfill
+        # comparison, into this run's own directory. A same-run retry (or a
+        # killed attempt's partial tree) is synced, never trusted as-is, and
+        # no other run of the connection shares the directory.
         previous_current_state_dir = None
         if input.current_state_available and input.current_state_s3_prefix:
-            previous_current_state_dir = get_persistent_artifacts_path(
-                input.connection_qualified_name,
-                "current-state",
-                input.application_name,
+            # A failure here must fail the task rather than skip backfill:
+            # without the previous state, tables newly entering the filter
+            # are never detected and never get columns.
+            previous_current_state_dir = await materialize_previous_state(
+                CurrentStateStore(input.current_state_s3_prefix),
+                RunStateDirs.for_output_path(input.output_path).previous_state,
             )
-            previous_current_state_dir.mkdir(parents=True, exist_ok=True)
-
-            # Offloaded: the cached table directory holds one file per table
-            # chunk and scales with the connection (ADR-0010). The walk now
-            # surfaces traversal errors; they leave as the incremental scan
-            # error for this directory, not as a bare OSError.
-            table_dir = previous_current_state_dir.joinpath("table")
-            try:
-                table_file_count = await run_in_thread(
-                    count_json_files_recursive, table_dir
-                )
-            except OSError as e:
-                raise JsonScanError(base_dir=str(table_dir), cause=e) from e
-
-            if not table_file_count:
-                logger.info(
-                    "Downloading current-state from S3 for backfill comparison: %s",
-                    input.current_state_s3_prefix,
-                )
-                # A failure here must fail the task rather than skip backfill:
-                # without the previous state, tables newly entering the filter
-                # are never detected and never get columns.
-                try:
-                    await download_prefix(
-                        prefix=input.current_state_s3_prefix,
-                        local_dir=previous_current_state_dir,
-                        strip_prefix=True,
-                    )
-                # conformance: ignore[E004] re-raises as typed StateDownloadError; exception propagates to caller
-                except Exception as e:
-                    raise StateDownloadError(cause=e) from e
-                logger.info("Current-state downloaded: %s", previous_current_state_dir)
-            else:
-                logger.info(
-                    "Previous current-state already present: %d files", table_file_count
-                )
 
         # Step 3: Find backfill tables using DuckDB
         #
@@ -553,6 +620,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Found %d tables needing backfill", backfill_count_for_log)
 
         # Step 4: Get tables needing column extraction using DuckDB
+        # Unpacked by position, not read by field name: the result is a
+        # ColumnExtractionAnalysis NamedTuple, but a caller's test may still
+        # mock it with the plain 4-tuple it used to be.
         (
             filtered_rows,
             changed_count,
@@ -575,12 +645,10 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         logger.info("Batching %d tables into groups of %d", total_tables, batch_size)
 
         # Step 5: Batch table_ids into JSON files
-        batches_dir = pathlib.Path(input.output_path).joinpath(
-            "batches", "column-table-ids"
-        )
+        batches_dir = pathlib.Path(input.output_path).joinpath(COLUMN_BATCHES_SUBPATH)
         batches_dir.mkdir(parents=True, exist_ok=True)
 
-        def _write_batches() -> tuple[int, int]:
+        def _write_batches() -> _BatchWriteCounts:
             written_batches = 0
             batched = 0
             current_batch: list[str] = []
@@ -600,16 +668,16 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 batch_file.write_bytes(orjson.dumps(current_batch))
                 written_batches += 1
                 batched += len(current_batch)
-            return written_batches, batched
+            return _BatchWriteCounts(batches=written_batches, tables=batched)
 
         # Offloaded: one pass over every table needing extraction, writing a
         # file per batch, with no await in the loop (ADR-0010).
-        batch_idx, total_tables_batched = await run_in_thread(_write_batches)
+        written = await run_in_thread(_write_batches)
 
         logger.info(
             "Created %d batch files for %d tables at %s",
-            batch_idx,
-            total_tables_batched,
+            written.batches,
+            written.tables,
             batches_dir,
         )
 
@@ -623,7 +691,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
 
         return PrepareColumnQueriesOutput(
-            total_batches=batch_idx,
+            total_batches=written.batches,
             changed_tables=changed_count,
             backfill_tables=backfill_count,
             total_tables=total_tables,
@@ -663,15 +731,13 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             workflow_id=input.workflow_id,
             output_prefix=input.output_prefix,
             output_path=input.output_path,
-            marker_timestamp=input.marker_timestamp or None,
+            marker_timestamp=marker_from_wire(input.marker_timestamp),
             current_state_available=input.current_state_available,
             column_chunk_size=input.column_chunk_size,
             application_name=input.application_name,
         )
 
-        batches_dir = pathlib.Path(input.output_path).joinpath(
-            "batches", "column-table-ids"
-        )
+        batches_dir = pathlib.Path(input.output_path).joinpath(COLUMN_BATCHES_SUBPATH)
         batches_dir.mkdir(parents=True, exist_ok=True)
 
         batch_filename = f"batch-{input.batch_index}.json"
@@ -693,7 +759,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             return ExecuteColumnBatchOutput(
                 batch_index=input.batch_index,
                 records=0,
-                status="not_found",
+                status=ColumnBatchStatus.NOT_FOUND,
             )
 
         table_ids = orjson.loads(batch_file.read_bytes())
@@ -718,7 +784,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         return ExecuteColumnBatchOutput(
             batch_index=input.batch_index,
             records=batch_records,
-            status="success",
+            status=ColumnBatchStatus.SUCCESS,
         )
 
     async def execute_column_sql(
@@ -755,30 +821,61 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
     async def write_current_state(
         self, input: WriteCurrentStateInput
     ) -> WriteCurrentStateOutput:
-        """Create lightweight current-state snapshot with deletion detection and upload to S3.
+        """Create lightweight current-state snapshot with deletion detection and commit it.
 
         Steps:
         1. Build ``transformed_dir`` from ``input.output_path``.
-        2. Download previous state via ``prepare_previous_state()``.
-        3. Get ``current_state_dir`` via ``get_persistent_artifacts_path()``.
-        4. Call ``create_current_state_snapshot()`` (copy + diff + delete detection + upload).
-        5. Clean up temporary previous state directory.
+        2. Probe the committed snapshot. If this run already committed it (a
+           retry after the commit point), report that commit and stop — the
+           previous snapshot it would diff against is gone.
+        3. Materialize the previous snapshot into
+           ``{output_path}/incremental/previous-state``.
+        4. Call ``create_current_state_snapshot()`` into
+           ``{output_path}/incremental/current-state`` (copy + diff + delete
+           detection + diff upload + manifest commit).
+
+        Every local directory is run-scoped, so nothing is cleaned up here: a
+        retry of this run resumes in the same directories, and no other run
+        can collide with them.
         """
         from application_sdk.common.incremental.column_extraction import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             get_backfill_tables,
         )
         from application_sdk.common.incremental.helpers import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            get_persistent_artifacts_path,
             get_persistent_s3_prefix,
         )
         from application_sdk.common.incremental.state.state_writer import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            cleanup_previous_state,
             create_current_state_snapshot,
             download_transformed_data,
-            prepare_previous_state,
+            materialize_previous_state,
+        )
+        from application_sdk.common.incremental.state.store import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            CurrentStateStore,
+            DamagedManifestPolicy,
+            RunStateDirs,
+        )
+        from application_sdk.constants import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            INCREMENTAL_DIFF_SUBPATH_TEMPLATE,
+        )
+        from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
+            list_data_keys,
         )
 
-        run_id = input.workflow_run_id or input.workflow_id or "unknown"
+        # The run ID stamps the current-state files and keys the published diff,
+        # so it must be unique across runs and stable across retries: Temporal's
+        # run ID, never a caller-supplied value that may be empty or repeat.
+        run_id = self.run_id
+        # Read past the deprecated attribute so the SDK's own check does not
+        # emit the caller's DeprecationWarning.
+        caller_run_id = input.model_dump(include={"workflow_run_id"})["workflow_run_id"]
+        if caller_run_id and caller_run_id != run_id:
+            logger.warning(
+                "Ignoring WriteCurrentStateInput.workflow_run_id=%s; it disagrees "
+                "with this run's Temporal run ID %s, which keys the current-state "
+                "snapshot and incremental diff instead",
+                caller_run_id,
+                run_id,
+            )
         conn_qn = input.connection.attributes.qualified_name
         app_name = input.application_name
 
@@ -788,27 +885,57 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             run_id,
         )
 
-        previous_state_dir = None
         try:
+            dirs = RunStateDirs.for_output_path(input.output_path)
+            s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
+            store = CurrentStateStore(f"{s3_prefix}/{CURRENT_STATE_SUBPATH}")
+            diff_s3_prefix = (
+                f"{s3_prefix}/"
+                f"{INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)}"
+            )
+
+            snapshot = await store.probe(
+                on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+            )
+            if snapshot.committed_run_id == run_id:
+                # An earlier attempt of this run reached the commit point and
+                # then failed (the prune, or the activity result). Its diff was
+                # uploaded before the commit; rebuilding now would diff this
+                # run's snapshot against itself and publish no changes.
+                diff_keys = [
+                    k
+                    for k in await list_data_keys(diff_s3_prefix)
+                    if k.endswith(".json")
+                ]
+                logger.info(
+                    "Current-state already committed by this run (%s); "
+                    "reporting that commit",
+                    run_id,
+                )
+                return WriteCurrentStateOutput(
+                    current_state_path="",
+                    current_state_s3_prefix=store.s3_prefix,
+                    current_state_files=snapshot.json_count,
+                    incremental_diff_path="",
+                    incremental_diff_s3_prefix=diff_s3_prefix if diff_keys else "",
+                    incremental_diff_files=len(diff_keys),
+                )
+
             transformed_dir = await download_transformed_data(input.output_path)
 
-            s3_prefix = get_persistent_s3_prefix(conn_qn, app_name)
-            current_state_dir = get_persistent_artifacts_path(
-                conn_qn, "current-state", app_name
-            )
-
-            previous_state_dir = await prepare_previous_state(
-                connection_qualified_name=conn_qn,
-                current_state_available=input.current_state_available,
-                current_state_dir=current_state_dir,
-                application_name=app_name,
-            )
+            previous_state_dir = None
+            # A manifest damaged since read_current_state: diff against no
+            # previous state rather than an empty one, as a full extraction.
+            if input.current_state_available and not snapshot.manifest_discarded:
+                previous_state_dir = await materialize_previous_state(
+                    store, dirs.previous_state, snapshot
+                )
 
             result = await create_current_state_snapshot(
                 connection_qualified_name=conn_qn,
                 transformed_dir=transformed_dir,
                 previous_state_dir=previous_state_dir,
-                current_state_dir=current_state_dir,
+                current_state_dir=dirs.current_state,
                 s3_prefix=s3_prefix,
                 run_id=run_id,
                 application_name=app_name,
@@ -818,6 +945,8 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 # entering the filter get columns extracted but never reach
                 # publish through the diff.
                 get_backfill_tables_fn=get_backfill_tables,
+                incremental_diff_dir=dirs.diff,
+                state_store=store,
             )
 
             return WriteCurrentStateOutput(
@@ -840,40 +969,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             )
 
             raise IncrementalStateWriteError(cause=e) from e
-        finally:
-            # Offloaded at the call site (the helper stays sync for its sync
-            # callers): its rmtree spans the whole downloaded previous state,
-            # and this runs inside a @task whose auto-heartbeat must keep
-            # flowing while the tree is removed.
-            #
-            # Shielded because the thread cannot be cancelled: abandoning the
-            # await on cancellation leaves the executor thread still deleting
-            # `previous_state_dir`, which is deterministic per connection — a
-            # concurrent retry's prepare_previous_state() would clear and
-            # recreate that exact path underneath the still-running removal.
-            # Wait for it to finish before propagating the cancellation.
-            #
-            # One `asyncio.shield` is not enough: each `cancel()` landing while
-            # suspended re-raises `CancelledError` from the *current* await, so
-            # an unshielded re-await in the handler still abandons the wait on
-            # a third cancellation. Loop the shield instead — every throw is
-            # recorded and the shield is re-entered until the offloaded removal
-            # is done; only then does the cancellation propagate.
-            cleanup = asyncio.ensure_future(
-                run_in_thread(cleanup_previous_state, previous_state_dir)
-            )
-            cancelled = False
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    cancelled = True
-            # Surface a cleanup failure, if any, before the cancellation.
-            # cleanup_previous_state already logs and absorbs a failed rmtree,
-            # so anything raised here is unexpected and must not be hidden.
-            cleanup.result()
-            if cancelled:
-                raise asyncio.CancelledError
 
     @task(timeout_seconds=120)
     async def update_incremental_marker(
@@ -891,18 +986,18 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             return UpdateMarkerOutput(marker_written=False)
 
         from application_sdk.common.incremental.marker import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
-            persist_marker_to_storage,
+            persist_marker,
         )
 
-        result = await persist_marker_to_storage(
+        result = await persist_marker(
             connection_qualified_name=input.connection_qualified_name,
             marker_value=input.next_marker_timestamp,
             application_name=input.application_name,
         )
         return UpdateMarkerOutput(
-            marker_written=result.get("marker_written", False),
-            marker_timestamp=result.get("marker_timestamp", ""),
-            s3_key=result.get("s3_key", ""),
+            marker_written=True,
+            marker_timestamp=result.marker_timestamp,
+            s3_key=result.s3_key,
         )
 
     # ------------------------------------------------------------------
@@ -962,13 +1057,14 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 prepone_hours=float(ctx.prepone_marker_hours),
             )
         )
-        ctx.marker_timestamp = marker_result.marker_timestamp or None
+        ctx.marker_timestamp = marker_from_wire(marker_result.marker_timestamp)
         ctx.next_marker_timestamp = marker_result.next_marker_timestamp
 
         state_result = await self.read_current_state(
             ReadCurrentStateInput(
                 connection_qualified_name=ctx.connection_qualified_name,
                 application_name=ctx.application_name,
+                output_path=ctx.output_path,
             )
         )
         ctx.current_state_available = state_result.current_state_available
@@ -1025,7 +1121,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
             )
@@ -1045,7 +1141,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
             )
@@ -1071,7 +1167,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                     temp_table_regex=input.temp_table_regex,
                     source_tag_prefix=input.source_tag_prefix,
                     incremental_extraction=ctx.incremental_extraction,
-                    marker_timestamp=ctx.marker_timestamp or "",
+                    marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                     current_state_available=ctx.current_state_available,
                     column_chunk_size=ctx.column_chunk_size,
                     connection_qualified_name=ctx.connection_qualified_name,
@@ -1109,7 +1205,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                                     temp_table_regex=input.temp_table_regex,
                                     source_tag_prefix=input.source_tag_prefix,
                                     incremental_extraction=ctx.incremental_extraction,
-                                    marker_timestamp=ctx.marker_timestamp or "",
+                                    marker_timestamp=marker_to_wire(
+                                        ctx.marker_timestamp
+                                    ),
                                     current_state_available=ctx.current_state_available,
                                     column_chunk_size=ctx.column_chunk_size,
                                     batch_index=i,
@@ -1141,10 +1239,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 temp_table_regex=input.temp_table_regex,
                 source_tag_prefix=input.source_tag_prefix,
                 incremental_extraction=ctx.incremental_extraction,
-                marker_timestamp=ctx.marker_timestamp or "",
+                marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
-                workflow_run_id=run_id,
                 current_state_s3_prefix=ctx.current_state_s3_prefix,
                 copy_workers=ctx.copy_workers,
                 upload_concurrency=ctx.upload_concurrency,

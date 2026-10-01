@@ -144,29 +144,59 @@ class TestFetchMarkerFromStorage:
 
 
 class TestPersistMarkerToStorage:
-    """Tests for persist_marker_to_storage (local write + S3 upload)."""
+    """Tests for persist_marker_to_storage (in-memory upload)."""
 
-    async def test_writes_and_uploads_marker(self):
-        """Writes marker to local file and uploads to S3."""
-        with patch(
-            "application_sdk.common.incremental.marker.upload_file"
-        ) as mock_store:
-            result = await persist_marker_to_storage(
-                connection_qualified_name="t/c/123",
-                marker_value="2025-01-15T10:00:00Z",
-                application_name="oracle",
-            )
+    async def test_round_trips_through_the_store(
+        self, memory_store, tmp_path, monkeypatch
+    ):
+        """What persist writes, the next run's read returns — with no local copy."""
+        from application_sdk.common.incremental import helpers
+
+        monkeypatch.setattr(helpers, "TEMPORARY_PATH", str(tmp_path))
+        result = await persist_marker_to_storage(
+            connection_qualified_name="t/c/123",
+            marker_value="2025-01-15T10:00:00Z",
+            application_name="oracle",
+        )
 
         assert result["marker_written"] is True
         assert result["marker_timestamp"] == "2025-01-15T10:00:00Z"
-        assert "s3_key" in result
-        assert "marker.txt" in result["s3_key"]
-        mock_store.assert_awaited_once()
+        assert result["s3_key"].endswith("/marker.txt")
+        assert await helpers.download_marker_from_s3("t/c/123", "oracle") == (
+            "2025-01-15T10:00:00Z"
+        )
+        assert not any(tmp_path.rglob("marker.txt"))
+
+    async def test_a_marker_that_does_not_match_its_sidecar_is_refused(
+        self, memory_store, monkeypatch
+    ):
+        """The in-memory read keeps the download's integrity check: a damaged
+        marker with a later timestamp would make the next run skip changes."""
+        import hashlib
+
+        from application_sdk import constants
+        from application_sdk.common.incremental import helpers
+        from application_sdk.storage.errors import StorageIntegrityError
+        from application_sdk.storage.ops import _put
+
+        monkeypatch.setattr(constants, "STORAGE_VERIFY_TRANSFERS", True)
+        key = f"{helpers.get_persistent_s3_prefix('t/c/123', 'oracle')}/marker.txt"
+        good = b"2025-01-15T10:00:00Z"
+        await _put(key, b"2099-01-01T00:00:00Z")
+        await _put(f"{key}.sha256", hashlib.sha256(good).hexdigest().encode())
+
+        with pytest.raises(StorageIntegrityError):
+            await helpers.download_marker_from_s3("t/c/123", "oracle")
+
+        await _put(key, good)
+        assert await helpers.download_marker_from_s3("t/c/123", "oracle") == (
+            "2025-01-15T10:00:00Z"
+        )
 
     async def test_s3_upload_failure_raises(self):
         """S3 upload failure propagates the exception."""
         with patch(
-            "application_sdk.common.incremental.marker.upload_file",
+            "application_sdk.common.incremental.marker.upload_file_from_bytes",
             new_callable=AsyncMock,
             side_effect=Exception("S3 unavailable"),
         ):

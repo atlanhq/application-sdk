@@ -6,21 +6,53 @@ metadata extraction workflows.
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Dict, List, Optional, Set, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SkipValidation
 
-from application_sdk.common.incremental.storage.rocksdb_utils import create_states_db
+from application_sdk.common.incremental.storage.rocksdb_utils import (
+    StatesStore,
+    create_states_db,
+)
 
 
-class EntityType(str, Enum):
-    """Metadata entity types used across the extraction workflow."""
+class EntityType(StrEnum):
+    """Metadata entity types used across the extraction workflow.
+
+    A ``StrEnum``: each member *is* its string value, so it compares equal to,
+    formats as, and serializes as ``"table"`` / ``"column"`` / ... exactly as
+    the plain strings did.
+    """
 
     TABLE = "table"
     COLUMN = "column"
     SCHEMA = "schema"
     DATABASE = "database"
+
+
+class TableState(StrEnum):
+    """A table's incremental state, as the transform stamps it.
+
+    The values are the wire strings in ``customAttributes.incremental_state``
+    and in the DuckDB SQL that reads it; a ``StrEnum`` member compares equal to
+    its string, so a row read back from JSON or DuckDB matches the member
+    without conversion.
+
+    Members:
+        CREATED: New at the source since the marker.
+        UPDATED: Changed at the source since the marker.
+        NO_CHANGE: Unchanged since the marker. The wire value has a space,
+            ``"NO CHANGE"``.
+        BACKFILL: Unchanged at the source but absent from the previous state
+            (for example, newly inside the include filter). Detected by
+            comparing states; never stamped by the transform.
+    """
+
+    CREATED = "CREATED"
+    UPDATED = "UPDATED"
+    NO_CHANGE = "NO CHANGE"
+    BACKFILL = "BACKFILL"
 
 
 class ConnectionInfo(BaseModel):
@@ -124,7 +156,8 @@ class TableScope(BaseModel):
 
     For large datasets (millions of tables), uses:
     - Set[str] for table_qualified_names (in-memory, ~10MB for 100K tables)
-    - Rdict (RocksDB) for table_states (disk-backed state storage with Bloom filter)
+    - Rdict (RocksDB) for table_states (disk-backed state storage with Bloom filter);
+      any :class:`StatesStore`, such as a ``dict``, works in its place
 
     Attributes:
         table_qualified_names: Set of all table qualified names in current extraction
@@ -134,7 +167,9 @@ class TableScope(BaseModel):
     """
 
     table_qualified_names: Set[str] = Field(default_factory=set)
-    table_states: Any = Field(  # Rdict type
+    # SkipValidation: a StatesStore is a structural type — an Rdict in
+    # production, a dict in tests — so there is no class to isinstance-check.
+    table_states: SkipValidation[StatesStore] = Field(
         default_factory=create_states_db,
         exclude=True,
     )

@@ -6,6 +6,7 @@ This package provides generic helpers for incremental column extraction:
 """
 
 from application_sdk.common.incremental.column_extraction.analysis import (
+    ColumnExtractionAnalysis,
     get_tables_needing_column_extraction,
     get_transformed_dir,
 )
@@ -14,6 +15,7 @@ from application_sdk.common.incremental.column_extraction.backfill import (
 )
 
 __all__ = [
+    "ColumnExtractionAnalysis",
     "get_backfill_tables",
     "get_tables_needing_column_extraction",
     "get_transformed_dir",
