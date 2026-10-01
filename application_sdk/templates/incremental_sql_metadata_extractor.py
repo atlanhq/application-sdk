@@ -469,13 +469,19 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
         from application_sdk.common.incremental.state.store import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             CurrentStateStore,
+            DamagedManifestPolicy,
             RunStateDirs,
         )
 
         store = CurrentStateStore.for_connection(
             input.connection_qualified_name, input.application_name
         )
-        snapshot = await store.probe()
+        # A damaged manifest blocks every run until it is fixed by hand, so
+        # start over: no snapshot means a full extraction, and its commit
+        # writes a fresh manifest.
+        snapshot = await store.probe(
+            on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+        )
         logger.info(
             "Current-state probe: exists=%s json_files=%d committed_run=%s",
             snapshot.exists,
@@ -845,6 +851,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
         )
         from application_sdk.common.incremental.state.store import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
             CurrentStateStore,
+            DamagedManifestPolicy,
             RunStateDirs,
         )
         from application_sdk.constants import (  # noqa: PLC0415 — circular: package __init__ loads sibling modules
@@ -873,7 +880,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 f"{INCREMENTAL_DIFF_SUBPATH_TEMPLATE.format(run_id=run_id)}"
             )
 
-            snapshot = await store.probe()
+            snapshot = await store.probe(
+                on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+            )
             if input.workflow_run_id and snapshot.committed_run_id == run_id:
                 # An earlier attempt of this run reached the commit point and
                 # then failed (the prune, or the activity result). Its diff was
@@ -901,7 +910,9 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             transformed_dir = await download_transformed_data(input.output_path)
 
             previous_state_dir = None
-            if input.current_state_available:
+            # A manifest damaged since read_current_state: diff against no
+            # previous state rather than an empty one, as a full extraction.
+            if input.current_state_available and not snapshot.manifest_discarded:
                 previous_state_dir = await materialize_previous_state(
                     store, dirs.previous_state, snapshot
                 )
