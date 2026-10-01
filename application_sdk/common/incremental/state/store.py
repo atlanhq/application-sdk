@@ -47,6 +47,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -95,6 +96,23 @@ _STAMP_RE = re.compile(r"^[0-9a-f]{12}--")
 _MATERIALIZE_LOCKS = PathLockRegistry("incremental.current_state.materialize.lock_wait")
 
 
+class DamagedManifestPolicy(StrEnum):
+    """What :meth:`CurrentStateStore.probe` does with a damaged manifest.
+
+    A manifest is damaged when it is unreadable or names a key the store does
+    not hold. No retry repairs either, so a caller that would otherwise fail
+    every run until someone fixes the manifest by hand can choose to start over.
+    """
+
+    #: Raise :class:`CurrentStateManifestError`. The default.
+    RAISE = "raise"
+    #: Log a WARNING naming the manifest and report no snapshot
+    #: (``exists=False``, ``manifest_discarded=True``). The caller's next
+    #: :meth:`CurrentStateStore.commit` writes a fresh manifest and prunes
+    #: every key it does not name.
+    TREAT_AS_ABSENT = "treat_as_absent"
+
+
 def _run_stamp(run_id: str) -> str:
     """The file-name stamp for *run_id*; stable across a run's retries."""
     return hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:12] + "--"
@@ -117,6 +135,9 @@ class CurrentStateSnapshot:
             written before manifests existed (or no snapshot at all).
         keys: Every object key of the snapshot, excluding the manifest and
             integrity sidecars.
+        manifest_discarded: Whether the probe found a damaged manifest and,
+            under :attr:`DamagedManifestPolicy.TREAT_AS_ABSENT`, reported no
+            snapshot in its place.
     """
 
     s3_prefix: str
@@ -125,6 +146,7 @@ class CurrentStateSnapshot:
     total_bytes: int
     committed_run_id: str | None
     keys: tuple[str, ...]
+    manifest_discarded: bool = False
     #: The listing entries behind ``keys`` (size, etag, sidecar flag), carried
     #: so ``materialize`` does not list the prefix a second time.
     _objects: tuple[DataObject, ...] = field(default=(), repr=False, compare=False)
@@ -190,24 +212,55 @@ class CurrentStateStore:
     # probe
     # ------------------------------------------------------------------
 
-    async def probe(self) -> CurrentStateSnapshot:
+    async def probe(
+        self,
+        *,
+        on_damaged_manifest: DamagedManifestPolicy = DamagedManifestPolicy.RAISE,
+    ) -> CurrentStateSnapshot:
         """Find the committed snapshot with one listing (plus the manifest read).
 
         Downloads nothing but the manifest. With a manifest, exactly its keys
         are the snapshot; without one, the listing is — minus run-stamped keys,
         which only a commit that never reached its manifest leaves behind.
 
+        Args:
+            on_damaged_manifest: What to do when the manifest is unreadable or
+                names a key the listing does not hold. A failed listing or
+                manifest read is never a damaged manifest: it raises
+                ``StorageError`` under either policy, since a retry can fix it.
+
         Raises:
             CurrentStateManifestError: If the manifest is unreadable or names a
-                key the listing does not hold.
+                key the listing does not hold, under
+                :attr:`DamagedManifestPolicy.RAISE`.
             StorageError: If the listing or the manifest read fails.
         """
         listing = await list_data_objects(self._key_prefix, self._store)
         has_manifest = any(o.key == self.manifest_key for o in listing)
         raw = await _get_bytes(self.manifest_key, self._store) if has_manifest else None
-        # Offloaded: at 100k keys the decode and the reconcile below are one
-        # pass each over the whole snapshot, with no await in between.
-        return await run_in_thread(self._reconcile, listing, raw)
+        try:
+            # Offloaded: at 100k keys the decode and the reconcile below are one
+            # pass each over the whole snapshot, with no await in between.
+            return await run_in_thread(self._reconcile, listing, raw)
+        except CurrentStateManifestError as exc:
+            if on_damaged_manifest is DamagedManifestPolicy.RAISE:
+                raise
+            logger.warning(
+                "Current-state manifest %s is damaged (%s); treating the "
+                "snapshot as absent, so this run extracts in full and its "
+                "commit replaces the manifest",
+                self.manifest_key,
+                exc.message,
+            )
+            return CurrentStateSnapshot(
+                s3_prefix=self.s3_prefix,
+                exists=False,
+                json_count=0,
+                total_bytes=0,
+                committed_run_id=None,
+                keys=(),
+                manifest_discarded=True,
+            )
 
     def _reconcile(
         self, listing: list[DataObject], raw_manifest: bytes | None
