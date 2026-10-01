@@ -447,8 +447,19 @@ class ExecuteColumnBatchOutput(Output):
 class WriteCurrentStateInput(IncrementalTaskInput):
     """Input for the write_current_state task."""
 
-    workflow_run_id: str = ""
-    """Temporal run ID used to name the incremental diff subfolder."""
+    workflow_run_id: str = Field(
+        default="",
+        deprecated=(
+            "WriteCurrentStateInput.workflow_run_id is deprecated and ignored; "
+            "write_current_state reads the run ID from its own Temporal context, "
+            "so stop passing it — will be removed in v4.0.0."
+        ),
+    )
+    """Deprecated and ignored; the task uses its own Temporal run ID instead.
+
+    That run ID stamps the current-state snapshot and keys the incremental
+    diff. A value here that disagrees with it is logged at WARNING. Will be
+    removed in v4.0.0."""
 
     current_state_s3_prefix: str = ""
     """S3 prefix for the existing current-state (for previous-state download)."""

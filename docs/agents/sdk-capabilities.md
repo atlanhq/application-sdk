@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.40.0
-source-sha:    ecb40bf82760d8160347dda34b374dde32e8db51
-source-date:   2026-09-30T13:13:42+01:00
+source-sha:    a8606b386b9dd9802eda8e765a93796963f23058
+source-date:   2026-10-01T00:03:04+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -8029,7 +8029,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import WriteCurrentStateInput`
 - **Summary:** Input for the write_current_state task.
 - **Fields:**
-  - `workflow_run_id: str` `= ''` — Temporal run ID used to name the incremental diff subfolder.
+  - `workflow_run_id: str` `= Field(default='', deprecated='WriteCurrentStateInput.workflow_run_id is deprecated and ignored; write_current_state reads the run ID from its own Temporal context, so stop passing it — will be removed in v4.0.0.')` — Deprecated and ignored; the task uses its own Temporal run ID instead.
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the existing current-state (for previous-state download).
   - `copy_workers: int` `= 3` — Parallel workers for file copy operations.
   - `upload_concurrency: int` `= Field(default=4, gt=0)` — Max concurrent object-store requests when uploading the current-state

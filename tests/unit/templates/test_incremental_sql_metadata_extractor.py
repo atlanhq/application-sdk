@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from application_sdk.app.context import AppContext
 from application_sdk.app.task import is_task, task
 from application_sdk.common.incremental.column_extraction import (
     ColumnExtractionAnalysis,
@@ -877,10 +878,18 @@ class TestWriteCurrentStateInlineImports:
         with pytest.raises(ValidationError):
             IncrementalExtractionInput(**base, upload_concurrency=-3)
 
+    @staticmethod
+    def _extractor(run_id: str = "run") -> _MinimalIncremental:
+        """An extractor whose Temporal context carries *run_id*."""
+        extractor = _make_extractor()
+        extractor._context = AppContext(
+            app_name="app", app_version="0.1.0", run_id=run_id, workflow_id="wf"
+        )
+        return extractor
+
     def _make_input(self, **overrides) -> WriteCurrentStateInput:
         defaults = dict(
             workflow_id="wf",
-            workflow_run_id="run",
             connection=ConnectionRef(
                 attributes=ConnectionAttributes(
                     qualified_name="default/test/123", name="c"
@@ -908,7 +917,7 @@ class TestWriteCurrentStateInlineImports:
         return snap_result
 
     async def test_happy_path_uses_run_scoped_directories(self, tmp_path) -> None:
-        extractor = _make_extractor()
+        extractor = self._extractor()
         snap = _snapshot()
         with (
             patch(_PROBE, new=AsyncMock(return_value=snap)),
@@ -941,7 +950,7 @@ class TestWriteCurrentStateInlineImports:
         assert kwargs["incremental_diff_dir"] == run_dirs / "diff"
 
     async def test_first_run_skips_materialize(self, tmp_path) -> None:
-        extractor = _make_extractor()
+        extractor = self._extractor()
         with (
             patch(
                 _PROBE,
@@ -972,7 +981,7 @@ class TestWriteCurrentStateInlineImports:
     ) -> None:
         """An attempt that died after its manifest landed has already replaced
         the previous snapshot; rebuilding would diff the run against itself."""
-        extractor = _make_extractor()
+        extractor = self._extractor()
         with (
             patch(_PROBE, new=AsyncMock(return_value=_snapshot(run="run"))),
             patch(
@@ -992,12 +1001,83 @@ class TestWriteCurrentStateInlineImports:
         assert out.incremental_diff_files == 2
         assert out.incremental_diff_s3_prefix.endswith("runs/run/incremental-diff")
 
+    async def _write(self, tmp_path, inp: WriteCurrentStateInput) -> AsyncMock:
+        """Run write_current_state under Temporal run ID ``temporal-run``."""
+        with (
+            patch(_PROBE, new=AsyncMock(return_value=_snapshot())),
+            patch(
+                _MATERIALIZE,
+                new=AsyncMock(side_effect=lambda store, dest, snapshot=None: dest),
+            ),
+            patch(
+                "application_sdk.common.incremental.state.state_writer.create_current_state_snapshot",
+                new=AsyncMock(return_value=self._snap_result(tmp_path)),
+            ) as create,
+            patch(
+                "application_sdk.common.incremental.state.state_writer.download_transformed_data",
+                new=AsyncMock(return_value=tmp_path / "transformed"),
+            ),
+        ):
+            await self._extractor("temporal-run").write_current_state(inp)
+        return create
+
+    async def test_omitted_run_id_stamps_with_temporal_run_id(self, tmp_path) -> None:
+        """No caller run ID no longer falls back to workflow_id, which repeats
+        across runs and would overwrite the live snapshot in place."""
+        create = await self._write(
+            tmp_path, self._make_input(output_path=str(tmp_path))
+        )
+        assert create.await_args.kwargs["run_id"] == "temporal-run"
+
+    async def test_disagreeing_run_id_is_ignored_and_logged(
+        self, tmp_path, loguru_capture
+    ) -> None:
+        inp = self._make_input(output_path=str(tmp_path), workflow_run_id="caller-run")
+        create = await self._write(tmp_path, inp)
+        assert create.await_args.kwargs["run_id"] == "temporal-run"
+        warned = [
+            r
+            for r in loguru_capture
+            if r["level"].name == "WARNING" and "caller-run" in r["message"]
+        ]
+        assert len(warned) == 1
+        assert "temporal-run" in warned[0]["message"]
+
+    async def test_matching_run_id_is_not_logged(
+        self, tmp_path, loguru_capture
+    ) -> None:
+        inp = self._make_input(
+            output_path=str(tmp_path), workflow_run_id="temporal-run"
+        )
+        await self._write(tmp_path, inp)
+        assert not [r for r in loguru_capture if r["level"].name == "WARNING"]
+
+    async def test_disagreeing_run_id_does_not_steer_the_committed_retry(
+        self, tmp_path
+    ) -> None:
+        """The committed-retry shortcut compares against Temporal's run ID, so a
+        caller value that happens to match the committed run cannot skip a
+        real rebuild."""
+        inp = self._make_input(output_path=str(tmp_path), workflow_run_id="run-0")
+        create = await self._write(tmp_path, inp)
+        create.assert_awaited_once()
+
+    def test_workflow_run_id_field_is_deprecated(self) -> None:
+        from application_sdk.contracts.compat import field_lifecycle
+
+        assert (
+            field_lifecycle(WriteCurrentStateInput, "workflow_run_id") == "deprecated"
+        )
+        inp = self._make_input(workflow_run_id="x")
+        with pytest.warns(DeprecationWarning, match="removed in v4.0.0"):
+            _ = inp.workflow_run_id
+
     async def test_exception_raises_typed_error(self, tmp_path) -> None:
         from application_sdk.templates._template_errors import (
             IncrementalStateWriteError,
         )
 
-        extractor = _make_extractor()
+        extractor = self._extractor()
         with (
             patch(_PROBE, new=AsyncMock(return_value=_snapshot())),
             patch(

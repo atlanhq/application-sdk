@@ -21,6 +21,7 @@ import orjson
 import pytest
 from obstore.store import LocalStore, MemoryStore
 
+from application_sdk.app.context import AppContext
 from application_sdk.app.task import task
 from application_sdk.common._listing import has_internal_component
 from application_sdk.common.incremental import helpers
@@ -597,6 +598,11 @@ class TestTwoRunsEndToEnd:
             yield connector
 
     async def _run(self, connector: _ConnectorBase, tmp_path: Path, run: str):
+        # In production the worker gives every task this run's Temporal run ID
+        # through the app context; the tasks here are plain calls.
+        connector._context = AppContext(
+            app_name=APP, app_version="0.1.0", run_id=run, workflow_id="wf"
+        )
         with patch(
             "temporalio.workflow.info", return_value=SimpleNamespace(run_id=run)
         ):
