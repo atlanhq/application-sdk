@@ -4489,7 +4489,19 @@ def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
     for body in (brief, summary):
         assert "Verify ran out of output budget" in body and fid in body
         assert "`/lens force verify-budget`" in body
-    assert json.loads(review_mod.to_json(res))["verify_cut_off"] == res.verify_cut_off
+    from lens import report as report_mod  # noqa: PLC0415
+
+    # Both JSON outputs carry the same cut-off, guidance included, not just the ids.
+    rep = report_mod.build(res)
+    for cut in (
+        json.loads(review_mod.to_json(res))["verify_cut_off"],
+        rep["verify_cut_off"],
+    ):
+        assert cut["items"] == res.verify_cut_off
+        assert (cut["max_tokens"], cut["opted_in"]) == (8000, False)
+        assert cut["opt_in_tokens"] == 24000
+        assert "`/lens force verify-budget`" in cut["message"]
+    assert "Verify ran out of output budget" in report_mod.markdown(rep, 1)
 
 
 def test_a_cut_off_with_the_opt_in_does_not_offer_it_again():
@@ -4503,3 +4515,59 @@ def test_a_cut_off_with_the_opt_in_does_not_offer_it_again():
     line = review_mod.verify_cut_off_line(res)
     assert "24,000" in line and "already the opt-in budget" in line
     assert "/lens force verify-budget" not in line
+
+
+def test_a_responses_api_cut_off_is_read_from_its_incomplete_status(repo: Path):
+    """The shipped config uses Responses, which reports the cap as status
+    `incomplete`. Fewer tokens than the cap, so only the status can flag it."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    status, headers, text = _responses_reply([REASONING], output=500, reasoning=500)
+    body = json.loads(text)
+    body["status"] = "incomplete"
+    client = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script((status, headers, json.dumps(body))),
+        api="responses",
+    )
+
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert got.fixed == [] and got.cut_off == [f.id]
+    assert f.status != "fixed"
+
+
+@pytest.mark.parametrize(
+    ("argv", "verify_budget"),
+    [([], False), (["--verify-budget"], True)],
+)
+def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budget):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    seen: dict = {}
+
+    def fake_run(**kwargs):
+        seen.update(kwargs)
+        return review_mod.RunResult("skipped", "test")
+
+    class QuietGitHub:  # --dry-run posts nothing; only cleanup is looked up
+        def __init__(self, repo):
+            pass
+
+        def delete_comment(self, comment_id):  # pragma: no cover - id is 0
+            raise AssertionError("a dry run posts no progress note to delete")
+
+    monkeypatch.setattr(cli, "GitHub", QuietGitHub)
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("LENS_REPORT_PATH", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    root = str(Path(__file__).resolve().parents[3])
+
+    code = cli.main(
+        ["review", "--repo", "o/r", "--pr", "7", "--root", root, "--dry-run", *argv]
+    )
+
+    assert code == 0 and seen["verify_budget"] is verify_budget

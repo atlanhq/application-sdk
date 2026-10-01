@@ -1435,6 +1435,20 @@ def verify_cut_off_line(res: RunResult) -> str:
     )
 
 
+def verify_cut_off_report(res: RunResult) -> dict[str, Any] | None:
+    """The cut-off for machine readers: which items, the budget they had, the
+    opt-in, and the same guidance the verdict gives. None when nothing was cut off."""
+    if not res.verify_cut_off:
+        return None
+    return {
+        "items": res.verify_cut_off,
+        "max_tokens": res.verify_max_tokens,
+        "opt_in_tokens": res.verify_opt_in_tokens,
+        "opted_in": res.verify_opted_in,
+        "message": verify_cut_off_line(res),
+    }
+
+
 def verdict_brief(res: RunResult, summary_url: str) -> str:
     """The verdict, kept within GitHub's comment limit: this round's new findings are
     shown in full, then shortened, then listed by title (the summary has them all)."""
@@ -1584,7 +1598,7 @@ def to_json(res: RunResult) -> str:
             "unplaced": [f.__dict__ for f in res.unplaced],
             "resolved_free": res.resolved_free,
             "resolved_verified": res.resolved_verified,
-            "verify_cut_off": res.verify_cut_off,
+            "verify_cut_off": verify_cut_off_report(res),
             "skipped_files": res.skipped_files,
             "bundles": [
                 {
