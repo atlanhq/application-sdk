@@ -575,3 +575,25 @@ def collect_entrypoint_contract_names(
                         )
 
     return frozenset(entrypoint_contracts)
+
+
+#: Where the SDK declares :data:`SDK_CONTRACT_BASE_FIELDS`' classes.
+SDK_CONTRACT_BASE_MODULE = "application_sdk/contracts/base.py"
+
+
+def sdk_base_contract_names(by_name: dict[str, ClassRecord]) -> frozenset[str]:
+    """The SDK contract bases (``Input``, ``Output``, ``PublishInputMixin``) declared in this scan.
+
+    They are no entrypoint's contract, but every app contract inherits from
+    one, so the SDK records them in its own ledger alongside its template
+    contracts. A 'sunset' there is what lets B005 in a consumer app recognise
+    a base field the SDK retired (FND-3107/FND-3108). Only the SDK's own scan
+    declares them, in :data:`SDK_CONTRACT_BASE_MODULE`; anywhere else the set
+    is empty.
+    """
+    return frozenset(
+        name
+        for name in SDK_CONTRACT_BASE_FIELDS
+        if (rec := by_name.get(name)) is not None
+        and Path(rec.file).as_posix() == SDK_CONTRACT_BASE_MODULE
+    )

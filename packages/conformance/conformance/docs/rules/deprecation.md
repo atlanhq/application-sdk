@@ -220,11 +220,13 @@ Composing a contract from a mixin (the documented pattern) does not require rede
 the mixin's fields to stay ledger-protected.
 
 The same resolution means an app ledger records fields its contract only inherits from
-an SDK template (`ExtractionInput` and the rest). When the SDK deliberately retires one,
-it marks the field `sunset` in its own ledger, which ships inside this package. A
-missing field that ledger records `sunset` on an SDK contract the app contract still
-inherits from is not reported: the SDK's own B005 run guards that field, and the app did
-not remove it and cannot restore it. The app's ledger entry is left as it is.
+an SDK template (`ExtractionInput` and the rest) or an SDK contract base (`Input`,
+`Output`, `PublishInputMixin`). When the SDK deliberately retires one, it marks the
+field `sunset` in its own ledger — the SDK repo's root `contract_schema.lock.json`,
+which this package ships as package data. A missing field that ledger records `sunset`
+on an SDK contract the app contract still inherits from is not reported: the SDK's own
+B005 run guards that field, and the app did not remove it and cannot restore it. The
+app's ledger entry is left as it is.
 
 Only entrypoint contracts are gated — Input/Output classes bound to an
 `@entrypoint`-decorated method or an undecorated `async def run` on a class that
@@ -300,7 +302,8 @@ gains fields.  Regenerating with an older locked version therefore rewrites the 
 byte-identically and leaves the finding standing with no diff to commit — a dead end on
 a BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the suite is
 in-tree, so there the command is `uv run atlan-application-sdk-conformance
-gen-contract-ledger`.
+gen-contract-ledger`, which writes the repo-root `contract_schema.lock.json` from any
+directory in the checkout.
 
 The generator is append-only — it appends new live fields and refreshes `status` from
 source but never deletes an entry or rewrites a recorded `type`.  Regenerating after a

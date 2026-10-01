@@ -568,7 +568,7 @@ def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
     Same invariant as `gen-contract-ledger`, via the shared baseline helper."""
     import json
 
-    from conformance.suite.checks.deprecation._ledger_schema import load_ledger
+    from conformance.suite.checks.deprecation._ledger_schema import load_sdk_ledger
 
     (tmp_path / "app.py").write_text(
         "from application_sdk.app import App\n\n"
@@ -583,8 +583,8 @@ def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
     contracts = {f["contract"] for f in payload["fields"]}
     assert contracts == {"MyInput"}
 
-    # Nothing from the SDK's own bundled ledger leaked in.
-    bundled = {f.contract for f in load_ledger(None).fields}
+    # Nothing from the SDK's own ledger leaked in.
+    bundled = {f.contract for f in load_sdk_ledger().fields}
     assert (
         bundled
     ), "the packaged SDK ledger should be non-empty for this to mean anything"

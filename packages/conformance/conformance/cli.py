@@ -155,7 +155,8 @@ commands:
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
                        --repo DIR    repo root to scan (default: auto-detected)
-                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd)
+                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd;
+                                       repo root in the SDK)
                        --check       verify ledger is current; exit 1 if stale
   gen-toolkit-baseline Regenerate data/toolkit_baseline.json from contract-toolkit/src/PklProject
                        --sdk-root DIR  repo root to read (default: auto-detected)

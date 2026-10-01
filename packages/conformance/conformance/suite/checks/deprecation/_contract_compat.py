@@ -29,6 +29,7 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
+    sdk_base_contract_names,
     sdk_contract_ancestors,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
@@ -572,7 +573,9 @@ def scan_contract_compat(
     # would make every aliased contract read as an ambiguous name.
     register_alias_records(by_name, alias_targets)
 
-    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(
+        file_trees, by_name
+    ) | sdk_base_contract_names(by_name)
 
     if not entrypoint_names:
         return []
