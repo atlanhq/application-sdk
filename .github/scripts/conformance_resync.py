@@ -50,7 +50,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 import urllib.parse
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -818,10 +817,10 @@ def process_repo(
     result.update(
         action=action,
         pr=pr.get("html_url"),
-        automerge=set_automerge(repo, pr["number"], False, runner)
-        if pushed_this_run and keep and pr.get("number")
+        automerge=set_automerge(repo, pr["number"], automerge, runner)
+        if pr.get("number")
         else None,
-        automergeReason="armed only once the gate approves the current head",
+        automergeReason=automerge_reason,
     )
     _maybe_dispatch(
         repo,
@@ -831,7 +830,6 @@ def process_repo(
         result,
         skip_if_pushed=pushed_this_run,
         repo_automerge=repo_automerge,
-        arm=(automerge, automerge_reason),
     )
     return result
 
@@ -845,13 +843,9 @@ def _maybe_dispatch(
     *,
     skip_if_pushed: bool = False,
     repo_automerge: tuple[bool, str] = (False, "repo auto-merge mode not evaluated"),
-    arm: tuple[bool, str] = (False, "auto-merge not evaluated"),
 ) -> None:
-    """Approval pass, and the only place auto-merge is armed: for a PR this run
-    left untouched, in a repo whose renovate.json auto-merges, dispatch the gate,
-    wait for it, and arm auto-merge only when it approved the current head.
-    Connector rulesets require no approval, so the gate's verdict holds a merge
-    only because auto-merge waits for it. Elsewhere a person reviews the PR."""
+    """Approval-dispatch pass: only for a PR this run left untouched, in a repo
+    whose renovate.json auto-merges. Elsewhere a person reviews the PR."""
     if skip_if_pushed or not pr or pr.get("state") != "open":
         return
     allowed, reason = repo_automerge
@@ -864,144 +858,28 @@ def _maybe_dispatch(
     number = pr.get("number")
     if not number:
         return
-    head_sha = str((pr.get("head") or {}).get("sha") or "")
-    reviews = list_reviews(repo, number, runner)
-    approved = bool(head_sha) and gate.count_resync_approvals(reviews, head_sha) > 0
-    if not approved:
-        checks_ok = checks_all_green(repo, number, runner)
-        if not should_dispatch_approval(pr, checks_ok, reviews):
-            result["trace"].append(
-                f"PR #{number}: required checks not green yet; auto-merge stays off."
-            )
-            return
-        if dry_run:
-            result["trace"].append(
-                f"would dispatch {APPROVE_WORKFLOW} for PR #{number} and arm "
-                "auto-merge once it approves this head."
-            )
-            return
-        started = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        failure = dispatch_approval(repo, number, runner)
-        if failure:
-            result["trace"].append(
-                f"could not dispatch {APPROVE_WORKFLOW} for PR #{number}: {failure}"
-            )
-            result["approvalDispatchError"] = failure
-            return
-        result["approvalDispatched"] = True
-        result["trace"].append(f"dispatched {APPROVE_WORKFLOW} for PR #{number}.")
-        if not wait_for_approver_run(repo, started, runner):
-            result["trace"].append(
-                f"PR #{number}: the approver run did not finish in time; "
-                "auto-merge stays off until the next run."
-            )
-            return
-        reviews = list_reviews(repo, number, runner)
-        approved = gate.count_resync_approvals(reviews, head_sha) > 0
-    if not approved:
-        result["trace"].append(
-            f"PR #{number}: the gate did not approve this head; auto-merge stays off."
-        )
-        result["approvalWithheld"] = True
-        return
-    allowed_to_arm, arm_reason = arm
-    if not allowed_to_arm:
-        result["trace"].append(
-            f"PR #{number}: approved; not arming auto-merge: {arm_reason}."
-        )
-        return
-    if dry_run:
-        result["trace"].append(f"would arm auto-merge on approved PR #{number}.")
-        return
-    result["automerge"] = set_automerge(repo, number, True, runner)
-    result["trace"].append(
-        f"PR #{number}: approved at this head; auto-merge {result['automerge']}."
-    )
-
-
-def list_reviews(repo: str, number: int, runner: Runner) -> list:
-    return _flatten(
+    checks_ok = checks_all_green(repo, number, runner)
+    reviews = _flatten(
         gh_json(
             ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"],
             runner,
             what="listing reviews",
         )
     )
-
-
-APPROVER_WAIT_BUDGET = {"seconds": 1800.0}
-
-
-def wait_for_approver_run(
-    repo: str,
-    started: str,
-    runner: Runner,
-    *,
-    timeout: float = 600,
-    interval: float = 15,
-    sleep: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.monotonic,
-) -> bool:
-    """True once a workflow_dispatch run of the approver created at or after
-    ``started`` has completed. False on timeout, which leaves auto-merge off.
-    Waits draw on one per-run budget (``APPROVER_WAIT_BUDGET``) so a release
-    that leaves many PRs awaiting approval cannot outlast the job's timeout."""
-    budget = APPROVER_WAIT_BUDGET["seconds"]
-    if budget <= 0:
-        return False
-    began = clock()
-    deadline = began + min(timeout, budget)
-    try:
-        return _poll_approver_run(
-            repo, started, runner, deadline, interval, sleep, clock
+    if should_dispatch_approval(pr, checks_ok, reviews):
+        if not dry_run:
+            failure = dispatch_approval(repo, number, runner)
+            if failure:
+                result["trace"].append(
+                    f"could not dispatch {APPROVE_WORKFLOW} for PR #{number}: {failure}"
+                )
+                result["approvalDispatchError"] = failure
+                return
+        result["trace"].append(
+            f"{'would dispatch' if dry_run else 'dispatched'} {APPROVE_WORKFLOW} for PR #{number} "
+            "(checks green, not yet approved, head unchanged this run)."
         )
-    finally:
-        APPROVER_WAIT_BUDGET["seconds"] = max(0.0, budget - (clock() - began))
-
-
-def _poll_approver_run(
-    repo: str,
-    started: str,
-    runner: Runner,
-    deadline: float,
-    interval: float,
-    sleep: Callable[[float], None],
-    clock: Callable[[], float],
-) -> bool:
-    while True:
-        result = _run(
-            [
-                "gh",
-                "run",
-                "list",
-                "-R",
-                repo,
-                "--workflow",
-                APPROVE_WORKFLOW,
-                "--event",
-                "workflow_dispatch",
-                "--limit",
-                "10",
-                "--json",
-                "createdAt,status",
-            ],
-            runner,
-        )
-        if result.returncode == 0:
-            try:
-                runs = json.loads(result.stdout or "[]")
-            except ValueError:
-                runs = []
-            if any(
-                isinstance(r, dict)
-                and str(r.get("createdAt", "")) >= started
-                and r.get("status") == "completed"
-                for r in runs
-            ):
-                return True
-        if clock() >= deadline:
-            return False
-        sleep(interval)
+        result["approvalDispatched"] = not dry_run
 
 
 # ── Driver ────────────────────────────────────────────────────────────────
