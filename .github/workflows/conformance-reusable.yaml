@@ -192,8 +192,9 @@ on:
           Repo-relative path to the app's committed contract ledger
           (contract_schema.lock.json).  The guard compares this file between
           origin/main and HEAD and blocks any deletion or type change.
-          Default: contract_schema.lock.json (repo root — convention for app repos).
-          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+          Default: contract_schema.lock.json (repo root — the convention for app
+          repos and the SDK alike; the SDK's conformance wheel packages its root
+          ledger at build time).
         required: false
         default: "contract_schema.lock.json"
         type: string
@@ -555,7 +556,8 @@ jobs:
   # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
   # travels with the published package — no local script copy needed in app repos.
   # The ledger-path input lets each caller point to its own ledger; the SDK
-  # overrides the default via conformance.yaml / sdk-gate.yaml.
+  # passes the same repo-root default explicitly via conformance.yaml /
+  # sdk-gate.yaml.
   #
   # Requires fetch-depth: 0 so the full git history (and origin/main) is
   # available to `git show`.  Skipped on push to main (no base-ref diff).
