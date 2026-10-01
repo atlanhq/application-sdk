@@ -83,17 +83,18 @@ workflowTypeOverride: String?
 /// streaming shell (`EventTriggerConfig.streaming.enabled`).
 ///
 /// Streaming is a genuinely different execution: the batch shell's workflow reads the
-/// entrypoint's Iceberg events table, while the streaming shard hands the DAG its
+/// entrypoint's Iceberg events table, while the streaming shell hands the DAG its
 /// events inline and never writes that table. Those are two different workflow types
 /// in the app, so one `workflowTypeOverride` cannot serve both — and an entrypoint
 /// whose triggers stream while its DAG still dispatches the batch type is the worst
-/// available outcome: AE signals the shard, the shard runs the DAG, the batch
+/// available outcome: AE starts the streaming run, that run walks the DAG, the batch
 /// workflow starts with no events in its arguments, and nothing reports an error.
 /// Observed end-to-end on a tenant before this field existed.
 ///
 /// When set, and when at least one event trigger has `streaming.enabled`, the extract
 /// node renders this workflow type and gains `args.batch` + `args.batch_key` — the
-/// list of `{id, topic, data}` envelopes the shard delivers.
+/// list of `{id, topic, data}` envelopes AE delivers for one micro-batch, or `null`
+/// above its inline cap — `args.batch_key` is always set alongside it.
 streamingWorkflowType: String?
 
 /// Refuses both ways an entrypoint's single extract node can end up dispatching a
@@ -105,7 +106,7 @@ streamingWorkflowType: String?
 /// shapes it can take, and they are mutually exclusive:
 ///
 ///   - the batch type, which reads the entrypoint's Iceberg events table
-///   - the streaming type, which reads `args.batch` handed to it inline by the shard
+///   - the streaming type, which reads `args.batch` / `args.batch_key` handed to it
 ///
 /// So a streaming entrypoint may hold streaming event triggers and nothing else.
 /// A `DISABLED` non-streaming trigger counts: it is one somebody means to enable, and
@@ -126,7 +127,7 @@ hidden _streamingEntrypointCheck: Any =
         throw("This entrypoint sets streamingWorkflowType but no event trigger has streaming.enabled = true, so the extract node renders the batch workflow type and the streaming type is dropped. Set streaming { enabled = true } on the trigger(s) that should stream, or remove streamingWorkflowType.")
       else null
     else if (streamingWorkflowType == null || streamingWorkflowType!! == "")
-      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowType. AE would signal the streaming shard, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowType to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowType. AE would start the streaming run, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowType to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
     else if (!_batch.isEmpty)
       throw("This entrypoint mixes streaming and non-streaming event triggers: streaming = \(_streaming.map((e) -> e.name)), batch = \(_batch.map((e) -> e.name)). Both start the same extract node, which now dispatches the streaming workflow type — so the batch trigger(s) would start it with args.batch resolving to nothing and apply nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
     else if (!schedules.isEmpty)
@@ -2430,6 +2431,28 @@ local reservedUiFieldInvariant: Any =
     + "log identity set `name`, or `appName` on the specific node. "
     + "See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
 
+/// The streaming half of `reservedUiFieldInvariant`. The arg-rendering loops skip a
+/// uiConfig property named `batch` / `batch_key` while streaming so the event
+/// jsonpath can own that key; without this the skip is silent, and the author gets a
+/// form field that collects a value nothing reads — the exact failure the `app_name`
+/// invariant exists to prevent. Conditional because the names are reserved only while
+/// streaming: a batch contract may legitimately have a `batch` field.
+/// Mirrors App.pkl — the two modules must not drift on this rule.
+local streamingReservedUiFieldInvariant: Any =
+  if (!events.toList().any((e) -> e.triggerConfig.streaming.enabled)) null
+  else
+    let (offenders = uiConfig.properties.keys.toList()
+      .filter((k) -> streamingReservedArgNames.contains(toPyName(k))))
+    if (offenders.isEmpty) null
+  else throw("uiConfig property \(offenders.join(", ")) uses the name `batch` or "
+    + "`batch_key`, which AE's streaming event context owns. This entrypoint has a "
+    + "trigger with streaming.enabled = true, so the extract node renders both args "
+    + "from `$.event.batch` / `$.event.batch_key` and the form field is dropped from "
+    + "the args mapping — it would still render on the setup form, accept a tenant "
+    + "value, and reach nothing. Refused rather than silently dropped, for the same "
+    + "reason `app_name` is. Rename the property (e.g. `source-batch`), or drop "
+    + "`streaming`. See contract-toolkit/docs/reference.md -> Streaming dispatch.")
+
 /// Auto-derived: hide the auth-type radio when the connector has a single auth
 /// option, since presenting a one-item radio adds no value. Auto-calculation
 /// keeps this in sync as connectors add or remove auth options — no manual
@@ -2683,8 +2706,9 @@ class StreamingDispatch {
 /// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
 class EventTriggerConfig {
   /// Redelivery bound for the batch path. Inert when `streaming.enabled` — the
-  /// streaming shard never reads it (verified against AE: `streaming_dispatch.py`
-  /// references neither `max_retries` nor `ack_paths`), so it is suppressed from the
+  /// streaming path never reads it (verified against AE: the micro-batch consumer in
+  /// `routes/dapr.py` and `workflows/streaming_batch.py` references neither
+  /// `max_retries` nor `ack_paths`), so it is suppressed from the
   /// rendered manifest rather than shipped as a key AE will not act on.
   maxRetries: Int(this >= 0) = 3
 
@@ -3014,7 +3038,7 @@ local function generateExtractNode(): Mapping<String, Any> =
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
-        // The streaming shard hands the DAG its events inline; nothing else does.
+        // The streaming run carries its batch in these args; nothing else does.
         // Without this the streaming workflow starts with no events to apply.
         // Reserved while streaming, like app_name/agent_json/extraction_method above:
         // the loops below skip a `batch`/`batch_key` property to avoid a duplicate key. Not in
@@ -3426,6 +3450,9 @@ output =
   // Forced here rather than inside generateExtractNode so the check cannot be
   // skipped by a contract whose extract node is never evaluated. Mirrors App.pkl.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Same reasoning, streaming-conditional: the arg loops skip these names rather
+  // than refusing them, so without this force the collision is silent.
+  let (_streamingReservedUiCheck = streamingReservedUiFieldInvariant)
   // Forced here as well as inside generateExtractNode: `pipeline { extract = null }`
   // is a supported opt-out, and the in-node reference is skipped for exactly those
   // contracts — so a streaming trigger on an extract-less entrypoint rendered

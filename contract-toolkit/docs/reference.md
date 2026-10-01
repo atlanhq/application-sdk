@@ -270,7 +270,7 @@ shape, and `examples/scheduled` is the batch-plus-schedules shape.
 streamingWorkflowType = "example-app:cdc-stream"
 
 events {
-  // Real-time: one event, one DAG walk.
+  // Streaming: one short run per Kafka micro-batch.
   new EventTriggerSpec {
     name = "cdc-user-realtime"
     source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
@@ -306,11 +306,14 @@ its events inline from the `$.event.*` jsonpath namespace:
 
 | Path | Shape |
 |---|---|
-| `$.event.batch` | A list of `{id, topic, data}` envelopes when the batch fits AE's inline cap — **`null` when it does not**. |
-| `$.event.batch_key` | Always set: the object-store key holding the same list. Read it whenever `batch` is null. |
-| `$.event.event_ids` | The batch's event ids. |
-| `$.event.data` | Convenience alias for the single event's payload — set only when the batch holds exactly one event. |
-| `$.event.topic` | Convenience alias for the single event's Kafka topic — set only when the batch holds exactly one event. Not derivable from the payload: a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
+| `$.event.batch_key` | **Always set.** The object-store key holding the batch as a list of `{id, topic, data}` envelopes. Read it whenever `batch` is null. |
+| `$.event.batch` | The same list inline when the batch fits AE's inline cap — **`null` when it does not**. |
+| `$.event.event_count` | Always set: how many events the batch holds. |
+| `$.event.topic` | Always set: the Kafka topic the batch came from. Not derivable from the payload — a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
+
+These four are the whole namespace. AE builds the event context in one place
+(`automation_engine/workflows/streaming_batch.py`) and sends nothing else, so a DAG
+reading any other `$.event.*` path fails its node with `did not match any value`.
 
 **Caveats.**
 
@@ -327,8 +330,10 @@ its events inline from the `$.event.*` jsonpath namespace:
   by then — see *Your streaming workflow must handle both delivery forms* above.
 - There is no watchdog backstop on this path. A run that exhausts its Temporal retries
   is not recovered: its events were acked to Kafka when the run started.
-- The streaming DAG receives its events at `args.batch` (`$.event.batch`) and must not
-  expect to read the Iceberg events table — the streaming path never writes it.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) when they fit
+  inline, and otherwise reads `args.batch_key` (`$.event.batch_key`), which is always
+  set. It must not expect to read the Iceberg events table — the streaming path never
+  writes it.
 
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 

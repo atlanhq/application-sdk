@@ -1,8 +1,8 @@
 // Tests for streaming dispatch config on event triggers.
 //
 // AE grew a second dispatch shell for event triggers: instead of firing a fresh
-// top-level run per ingest batch, a `streaming_enabled` trigger signals each event
-// into a persistent shard that runs the DAG inline. The knobs live on AE's
+// top-level run per ingest batch, a `streaming_enabled` trigger has AE start one short
+// run per Kafka micro-batch, handed its events directly. The knobs live on AE's
 // `TriggerConfig`, so the toolkit has to be able to render them — without them an
 // app has no way to opt in from its contract.
 //
@@ -19,6 +19,7 @@ import "pkl:json"
 import "../src/App.pkl" as App
 import "../src/NativeApp.pkl" as NativeApp
 import "../src/Connectors.pkl"
+import "../src/Config.pkl"
 
 local parser = new json.Parser { useMapping = true }
 
@@ -173,7 +174,7 @@ facts {
 
   // AE bounds a micro-batch by BYTES, not by a count the contract picks, so there
   // is no size or timing knob to render. These keys existed for the signal-driven
-  // shard and AE stopped reading them when that shell was deleted; a contract that
+  // earlier shard shell and AE stopped reading them when that shell was deleted; a contract that
   // still emitted them would describe a queue the runtime does not have.
   ["App.pkl: no batch-size or timing keys are rendered at all"] {
     !appRealtimeCfg.containsKey("streaming_batch_size")
@@ -182,7 +183,7 @@ facts {
   }
 
   ["App.pkl: streaming suppresses max_retries, keeps ack_paths well-formed"] {
-    // max_retries is inert on the streaming path — AE's streaming_dispatch.py reads
+    // max_retries is inert on the streaming path — AE's micro-batch consumer reads
     // neither it nor ack_paths — so it is not rendered at all. Shipping a key AE will
     // not act on leaves a contract author no way to tell which keys are live. AE
     // defaults it to 3 when absent.
@@ -218,7 +219,7 @@ facts {
     nativeNoStreamCfg.toMap().keys == Set("max_retries", "ack_paths")
   }
 
-  // The ceiling is a measured cliff, not a style preference: past it the shard
+  // The ceiling is a measured cliff, not a style preference: past it the earlier shard
   // builds a batch inside one workflow activation and risks Temporal's
   // non-configurable two-second deadlock budget, which fails the task
   // deterministically and therefore permanently. Caught at eval time so an
@@ -236,7 +237,7 @@ facts {
     })._ackShapeCheck == null
   }
 
-  // max_retries is inert on the streaming path (AE's streaming_dispatch.py reads
+  // max_retries is inert on the streaming path (AE's micro-batch consumer reads
   // neither max_retries nor ack_paths), so it must not be rendered — a contract
   // author has no other way to tell which manifest keys are live.
   ["max_retries is suppressed under streaming"] {
@@ -249,7 +250,7 @@ facts {
 
   // The gap this closes, found end-to-end on a tenant: streaming was on, the DAG
   // still dispatched the batch workflow type with no events in its arguments, and
-  // nothing errored — the shard ran and applied nothing.
+  // nothing errored — the run happened and applied nothing.
   ["streaming DAG dispatches the streaming workflow type"] {
     appDag(appStreamingRealtime)["extract"]["inputs"]["workflow_type"] == "example-app:cdc-stream"
   }
@@ -328,22 +329,83 @@ facts {
     })).contains("no event trigger has streaming.enabled")
   }
 
-  ["App.pkl: streaming on an extract-less entrypoint is still refused"] {
+  // Keeps the null-type case, but asserts the message it actually produces: with the
+  // type nulled this is the ordinary missing-type refusal, NOT the extract-less one.
+  ["App.pkl: extract-less AND type-less streaming hits the missing-type refusal"] {
     module.catch(() -> forceOutput((appStreamingRealtime) {
       pipeline { extract = null }
       streamingWorkflowType = null
-    })).contains("streamingWorkflowType")
+    })).contains("no streamingWorkflowType")
+  }
+
+  // The case the fact above masked. With a VALID streaming workflow type and no
+  // extract node, every other streaming refusal passes and the contract rendered a
+  // manifest carrying `streaming_enabled: true` with nothing wired to receive the
+  // batch. Reported by lens (F-e71d23 / A2).
+  ["App.pkl: streaming with a valid type but no extract node is refused"] {
+    module.catch(() -> forceOutput((appStreamingRealtime) {
+      pipeline { extract = null }
+    })).contains("no extract node")
   }
 
   // No NativeApp equivalent: it has no `pipeline`, so the extract node is not
   // optional there and the in-node reference always fires. The output-block force is
   // still applied to both schemas to keep them in lockstep.
 
+  // ── NativeApp has its own validation and arg-rendering code, and every refusal /
+  // collision fact above instantiates App. The NativeApp fixtures also carry
+  // `uiConfig { tasks {} }`, so no NativeApp contract here ever had a property to
+  // collide. These four close that gap — a NativeApp-only regression would
+  // otherwise fail nothing. Reported by lens (F-0fbf55).
+
+  ["NativeApp: streaming without a streaming workflow type is refused"] {
+    module.catch(() -> nativeDag((nativeStreamingRealtime) {
+      streamingWorkflowType = null
+    })).contains("no streamingWorkflowType")
+  }
+
+  ["NativeApp: a streaming workflow type with nothing streaming is refused"] {
+    module.catch(() -> nativeDag((nativeNoStreaming) {
+      streamingWorkflowType = "native-app:cdc-stream"
+    })).contains("no event trigger has streaming.enabled")
+  }
+
+  ["NativeApp: ackPaths together with streaming is refused"] {
+    module.catch(() -> nativeDag((nativeStreamingRealtime) {
+      events {
+        new NativeApp.EventTriggerSpec {
+          name = "cdc-acked"
+          source = new NativeApp.EventSource {
+            name = "atlan-kafka"
+            topic = "app.cdc.acked"
+          }
+          triggerConfig = new NativeApp.EventTriggerConfig {
+            streaming { enabled = true }
+            ackPaths { "$.nodes.apply.output" }
+          }
+        }
+      }
+    })).contains("ackPaths is inert when streaming.enabled")
+  }
+
+  ["NativeApp: a `batch-key` uiConfig property under streaming is refused"] {
+    module.catch(() -> forceOutput((nativeStreamingRealtime) {
+      uiConfig {
+        tasks {
+          ["Configuration"] {
+            inputs { ["batch-key"] = new Config.TextInput { title = "Batch key" } }
+          }
+        }
+      }
+    })).contains("AE's streaming event context owns")
+  }
+
   // `batch` collides with a UI property of the same name in the extract-node args
-  // mapping. Verified before the guard: a duplicate-key crash, not a silent override —
-  // the same failure the app_name/agent_json/extraction_method guards prevent.
-  ["a `batch` property does not collide with args.batch under streaming"] {
-    let (withBatchProp = (appStreamingRealtime) {
+  // mapping. The arg loop skips the property so the event jsonpath owns the key —
+  // but skipping alone leaves a form field that collects a value nothing reads, so
+  // the collision is refused outright, exactly as `app_name` is.
+  ["a `batch` uiConfig property under streaming is refused"] {
+    module.catch(() -> forceOutput((appStreamingRealtime) {
       uiConfig = new App.UIConfig {
         tasks {
           ["Configuration"] {
@@ -351,15 +413,15 @@ facts {
           }
         }
       }
-    })
-      appDag(withBatchProp)["extract"]["inputs"]["args"]["batch"] == "$.event.batch"
+    })).contains("AE's streaming event context owns")
   }
 
   // ``batch_key`` is reserved by the same mechanism and for the same reason: the
   // extract node emits it too, so a property of that name would land on the same
-  // key. ``toPyName`` swaps ``-`` for ``_``, so ``batch-key`` reaches it as well.
-  ["a `batch_key` property does not collide with args.batch_key under streaming"] {
-    let (withKeyProp = (appStreamingRealtime) {
+  // key. ``toPyName`` swaps ``-`` for ``_``, so ``batch-key`` reaches it as well —
+  // which is the spelling this fact uses deliberately.
+  ["a `batch-key` uiConfig property under streaming is refused"] {
+    module.catch(() -> forceOutput((appStreamingRealtime) {
       uiConfig = new App.UIConfig {
         tasks {
           ["Configuration"] {
@@ -367,8 +429,7 @@ facts {
           }
         }
       }
-    })
-      appDag(withKeyProp)["extract"]["inputs"]["args"]["batch_key"] == "$.event.batch_key"
+    })).contains("AE's streaming event context owns")
   }
 
   ["a `batch_key` property is untouched without streaming"] {

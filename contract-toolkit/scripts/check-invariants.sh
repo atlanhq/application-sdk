@@ -260,6 +260,156 @@ uiConfig = new Config.UIConfig {
 }'
 
 # --------------------------------------------------------------------------
+# 8b. Streaming dispatch refusals. The pkl facts cover these through App.pkl;
+#     NativeApp.pkl has its own validation and arg-rendering code and must not
+#     drift, and a bundle root emits no manifest so a streaming declaration on
+#     one is dropped silently. Asserted here rather than in pkl test because
+#     facts cannot express "eval fails" for a whole module's output.
+# --------------------------------------------------------------------------
+echo ":: Checking streaming dispatch refusals..."
+check_eval_fails() {
+  local label="$1" expect="$2" body="$3"
+  local contract out_dir err
+  contract="$(mktemp "$REPO_ROOT/test-streaming-XXXXXX.pkl")"
+  out_dir="$(mktemp -d "$REPO_ROOT/test-streaming-out-XXXXXX")"
+  printf '%s\n' "$body" > "$contract"
+  err="$(pkl eval -m "$out_dir" "$contract" 2>&1 || true)"
+  rm -f "$contract"
+  rm -rf "$out_dir"
+  if ! echo "$err" | grep -q "$expect"; then
+    echo "FAIL: streaming refusal did not fire for $label (expected: $expect)"
+    echo "  Got: $err"
+    fail=1
+  fi
+}
+
+# $1 = streamingWorkflowType line, $2 = extra uiConfig inputs
+native_streaming_body() {
+  cat <<PKLEOF
+amends "src/NativeApp.pkl"
+
+import "src/Connectors.pkl"
+import "src/Config.pkl"
+
+name = "streaming-native"
+connector = Connectors.API
+icon = "https://example.com/icon.svg"
+workflowType = "NativeStreamingWorkflow"
+$1
+
+events {
+  new EventTriggerSpec {
+    name = "cdc-user"
+    source = new EventSource { name = "atlan-kafka"; topic = "app.cdc.user" }
+    triggerConfig = new EventTriggerConfig { streaming { enabled = true } }
+  }
+}
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { $2 }
+    }
+  }
+}
+PKLEOF
+}
+
+# A streaming trigger with no streamingWorkflowType renders the BATCH workflow type
+# and applies nothing. App.pkl refuses this; NativeApp.pkl must too.
+check_eval_fails "NativeApp.pkl (no streamingWorkflowType)" "no streamingWorkflowType" \
+  "$(native_streaming_body '' '["target"] = new Config.TextInput { title = "Target"; placeholderText = "x" }')"
+
+# The mirror: a declared streaming type with nothing streaming is dropped silently.
+check_eval_fails "NativeApp.pkl (type declared, nothing streaming)" "no event trigger has streaming.enabled" \
+  'amends "src/NativeApp.pkl"
+
+import "src/Connectors.pkl"
+import "src/Config.pkl"
+
+name = "streaming-native-inert"
+connector = Connectors.API
+icon = "https://example.com/icon.svg"
+workflowType = "NativeStreamingWorkflow"
+streamingWorkflowType = "streaming-native-inert:stream"
+
+uiConfig = new Config.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs { ["target"] = new Config.TextInput { title = "Target"; placeholderText = "x" } }
+    }
+  }
+}'
+
+# A uiConfig property named batch / batch-key is skipped by the arg loops so the
+# event jsonpath owns the key — the form field would collect a value nothing reads.
+check_eval_fails "NativeApp.pkl (batch-key uiConfig collision)" "streaming event context owns" \
+  "$(native_streaming_body 'streamingWorkflowType = "streaming-native:stream"' '["batch-key"] = new Config.TextInput { title = "Batch key"; placeholderText = "x" }')"
+
+# Control: the same NativeApp contract with a non-reserved property must generate.
+echo ":: Checking a valid NativeApp streaming contract still generates (control)..."
+NSTREAM_CONTRACT="$(mktemp "$REPO_ROOT/test-streaming-ctrl-XXXXXX.pkl")"
+NSTREAM_OUT="$(mktemp -d "$REPO_ROOT/test-streaming-ctrl-out-XXXXXX")"
+native_streaming_body 'streamingWorkflowType = "streaming-native:stream"' \
+  '["target"] = new Config.TextInput { title = "Target"; placeholderText = "x" }' > "$NSTREAM_CONTRACT"
+NSTREAM_ERR="$(pkl eval -m "$NSTREAM_OUT" "$NSTREAM_CONTRACT" 2>&1 || true)"
+rm -f "$NSTREAM_CONTRACT"
+rm -rf "$NSTREAM_OUT"
+if echo "$NSTREAM_ERR" | grep -q "Pkl Error"; then
+  echo "FAIL: control NativeApp streaming contract failed to generate"
+  echo "  Got: $NSTREAM_ERR"
+  fail=1
+fi
+
+# A bundle root renders no manifest of its own, so a streaming declaration on one is
+# dropped without a word. Needs a real child contract to form a bundle, hence the
+# two-file setup rather than the single-body helper above.
+echo ":: Checking streaming on a bundle root is refused..."
+BUNDLE_CHILD="$REPO_ROOT/test-streaming-child.pkl"
+BUNDLE_ROOT="$(mktemp "$REPO_ROOT/test-streaming-root-XXXXXX.pkl")"
+BUNDLE_OUT="$(mktemp -d "$REPO_ROOT/test-streaming-root-out-XXXXXX")"
+cat > "$BUNDLE_CHILD" <<'PKLEOF'
+amends "src/App.pkl"
+
+name = "stream-child"
+displayName = "Stream Child"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+pipeline { publish = null }
+PKLEOF
+cat > "$BUNDLE_ROOT" <<PKLEOF
+amends "src/App.pkl"
+
+import "test-streaming-child.pkl" as Child
+
+name = "stream-root"
+displayName = "Stream Root"
+icon = "https://example.com/icon.svg"
+hasCredentialConfig = false
+
+// Declared on the root, which emits no manifest — this must be refused, not dropped.
+streamingWorkflowType = "stream-root:stream"
+
+entrypoints {
+  new Entrypoint {
+    name = "child"
+    displayName = "Child"
+    source = "api"
+    sourceCategory = "api"
+    contract = Child
+  }
+}
+PKLEOF
+BUNDLE_ERR="$(pkl eval -m "$BUNDLE_OUT" "$BUNDLE_ROOT" 2>&1 || true)"
+rm -f "$BUNDLE_CHILD" "$BUNDLE_ROOT"
+rm -rf "$BUNDLE_OUT"
+if ! echo "$BUNDLE_ERR" | grep -q "multi-entrypoint bundle root"; then
+  echo "FAIL: streaming on a bundle root was not refused"
+  echo "  Got: $BUNDLE_ERR"
+  fail=1
+fi
+
+# --------------------------------------------------------------------------
 # 9. artifactSchemas (ADR-0020): the three declarations that must fail to
 #    generate rather than render a declaration that checks nothing.
 #

@@ -232,3 +232,44 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   does not accept is a 422 and a dropped row, visible only as one WARNING
   carrying a status code. Adding a member on either side is additive; renaming
   one is not.
+
+## The streaming event-trigger contract (`trigger_config` keys ↔ `$.event.*` args)
+
+This one runs **both ways**, which is why it is here rather than only in the
+Automation Engine: the toolkit produces the trigger config AE reads, and AE
+produces the event shape an app's DAG reads through paths the toolkit renders.
+
+| | |
+|---|---|
+| **Produced by (toolkit → AE)** | The `triggers.events[].trigger_config` block rendered by `contract-toolkit/src/App.pkl` and `NativeApp.pkl` from `EventTriggerConfig` |
+| **Produced by (AE → app)** | `event_context` in `automation_engine/workflows/streaming_batch.py`, constructed there and nowhere else; `workflows/executor.py` forwards it unchanged into `$.event.*` |
+| **Key (toolkit → AE)** | `streaming_enabled`, `ack_paths`; `max_retries` is deliberately **not** rendered under streaming |
+| **Key (AE → app)** | Exactly four: `batch_key` (always set), `batch` (the events inline, or `null` above AE's inline cap), `event_count`, `topic` |
+| **Read by** | The Automation Engine, which registers the trigger and picks a dispatch shell from `streaming_enabled`; every streaming consumer app, whose extract-node args resolve `$.event.batch` / `$.event.batch_key` |
+| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every refusal) and the streaming section of `contract-toolkit/scripts/check-invariants.sh` (the eval-failure cases facts cannot express) |
+| **Owner (AE side)** | Anurag Badoni — change `event_context` or the `TriggerConfig` keys through this entry |
+| **Design record** | DISTR-973 |
+
+Both directions fail **silently** by default, which is what makes this worth an
+entry rather than a comment:
+
+- **AE ignores unknown `trigger_config` keys.** Pydantic drops what it does not
+  model, so a toolkit-side key AE has not implemented registers as a trigger
+  with that key absent — for `streaming_enabled` that means a contract reading
+  as streaming and running as batch, with nothing logged. Ship the AE side
+  first, always.
+- **A `$.event.*` path AE does not send fails the node** with `did not match
+  any value` at run time, not at render time. Adding a key to `event_context`
+  is safe; renaming or removing one breaks every DAG wired to it, and the
+  toolkit cannot catch it because the path is a string it renders faithfully.
+- **`batch` is permanent, but it is not the contract.** `batch_key` is always
+  set — AE writes the object before deciding whether the batch fits inline.
+  `batch` is present-but-`null` above the cap, deliberately: an *absent* key
+  raises `did not match any value`, while a null one lets the consumer fall
+  through to the key. A DAG that reads `batch` alone applies nothing on the
+  first over-cap batch and reports success, and Kafka was acked when the run
+  started. Handle `batch_key`; treat `batch` as an optimisation.
+- **`ack_paths` renders under streaming even though it is inert there**, because
+  AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
+  `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
+  shipped first — the same ordering as the first bullet.

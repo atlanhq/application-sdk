@@ -1,6 +1,7 @@
 /// Streaming dispatch example — demonstrates `EventTriggerConfig.streaming`.
 ///
-/// AE signals each matching event into a persistent per-slug shard that runs this
+/// AE collects matching events into Kafka micro-batches and starts one short run per
+/// batch, which walks this
 /// DAG inline (Shell B), instead of firing a fresh top-level run per ingest batch
 /// and reading the workflow's Iceberg events table (Shell A).
 ///
@@ -39,17 +40,17 @@ uiConfig = new UIConfig {
   }
 }
 
-// The shard hands the DAG its events inline, so the entrypoint must dispatch a
+// The run is handed its batch directly, so the entrypoint must dispatch a
 // workflow that reads them from `args.batch` rather than the batch workflow, which
-// reads the Iceberg events table the shard never writes. Omitting this while any
+// reads the Iceberg events table the streaming path never writes. Omitting this while any
 // trigger streams is refused at eval time — the failure it prevents is silent.
 streamingWorkflowType = "example-app:cdc-stream"
 
 // Every trigger here streams, and there are no `schedules`. Both are load-bearing:
 // see the note at the top of this file.
 events {
-  // Real-time: one event, one DAG walk. `ackPaths` is left at its default and is
-  // inert on this path — the shard writes no acks and has no watchdog backstop, so
+  // Streaming: one short run per Kafka micro-batch. `ackPaths` is left at its default and is
+  // inert on this path — the streaming path writes no acks and has no watchdog backstop, so
   // declaring one explicitly is refused rather than silently ignored.
   new EventTriggerSpec {
     name = "cdc-user-streaming"
