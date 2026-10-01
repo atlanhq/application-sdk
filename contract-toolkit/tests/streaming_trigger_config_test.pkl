@@ -113,6 +113,9 @@ local appNoStreamCfg = appCfg(appNoStreaming)
 
 // ── NativeApp.pkl ─────────────────────────────────────────────────────────
 
+// These two fixtures carry empty UI tasks because they pin render shape only.
+// NativeApp's refusals and its `batch-key` collision have their own fixtures in
+// the "NativeApp: …" facts below, and eval-failure cases in check-invariants.sh.
 local nativeStreamingRealtime = (NativeApp) {
   streamingWorkflowType = "native-app:cdc-stream"
   name = "native-streaming-realtime"
@@ -247,6 +250,10 @@ facts {
   ["max_retries is still rendered without streaming"] {
     appNoStreamCfg.containsKey("max_retries")
   }
+
+  // The bundle-root refusal is pinned as an eval failure in check-invariants.sh
+  // ("streaming on a bundle root is refused"), alongside the toolkit's other
+  // bundle-root refusals, rather than as a fact here.
 
   // The gap this closes, found end-to-end on a tenant: streaming was on, the DAG
   // still dispatched the batch workflow type with no events in its arguments, and

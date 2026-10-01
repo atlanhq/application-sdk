@@ -3214,9 +3214,11 @@ local function generateExtractNode(): Mapping<String, Any> =
         // The streaming run carries its batch in these args; nothing else does.
         // Without this the streaming workflow starts with no events to apply.
         // Reserved while streaming, like app_name/agent_json/extraction_method above:
-        // the loops below skip a `batch`/`batch_key` property to avoid a duplicate key. Not in
-        // reservedUiFieldNames, which is unconditional — a non-streaming contract may
-        // legitimately have one. Both keys are reserved; see streamingReservedArgNames.
+        // the loops below skip a `batch`/`batch_key` property to avoid a duplicate key, and
+        // `streamingReservedUiFieldInvariant` fails generation up front so the skip can
+        // never silently drop a live form field. Not in reservedUiFieldNames, which is
+        // unconditional — a non-streaming contract may legitimately have one. Both keys
+        // are reserved; see streamingReservedArgNames.
         when (_isStreaming) {
           // Both, because AE sends both: `batch` is the events inline when the
           // serialised micro-batch fits its inline cap and `null` when it does not,
@@ -3253,6 +3255,9 @@ local function generateExtractNode(): Mapping<String, Any> =
         when (uiConfig == null || !uiConfig!!.properties.containsKey("extraction-method")) {
           ["extraction_method"] = "{{extraction-method}}"
         }
+        // The `_isStreaming` skip below never drops a live form field: a uiConfig
+        // property named `batch` / `batch_key` on a streaming contract is refused
+        // by `streamingReservedUiFieldInvariant` (forced from `output`) first.
         for (argName, formField in manifestTopLevelArgs) {
           when (argName != "app_name" && !(_isStreaming && streamingReservedArgNames.contains(argName)) && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
