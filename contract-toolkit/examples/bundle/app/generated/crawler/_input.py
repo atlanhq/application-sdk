@@ -8,7 +8,7 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts import ExtractionInput
 
 
-class AppInputContract(ExtractionInput):
+class CrawlerInputContract(ExtractionInput):
     _config_hash_exclude: ClassVar[set[str]] = {
         "output_dir",
         "checkpoint_dir",
@@ -25,3 +25,6 @@ class AppInputContract(ExtractionInput):
     """If True, load extracted metadata to Atlan via publish-app."""
     publish_dry_run: bool = False
     """When True, skip the Atlas publish step (executor_enabled=False)."""
+
+
+AppInputContract = CrawlerInputContract

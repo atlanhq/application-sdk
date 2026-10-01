@@ -255,6 +255,42 @@ local credentialConflictNames: List<String> =
     !files.every((file) -> file.output.text == files.first.output.text)
   )
 
+// FND-3140: a bundle gives each entrypoint's input class a unique name and keeps
+// `AppInputContract` as an alias, so existing imports still resolve.
+local function capitalizeFirst(s: String): String =
+  if (s.isEmpty) s else s.take(1).toUpperCase() + s.drop(1)
+
+local function inputClassName(entrypointName: String): String =
+  entrypointName.split(Regex("[^A-Za-z0-9]+")).map((seg) -> capitalizeFirst(seg)).join("") + "InputContract"
+
+local inputClassDecl: String = "\nclass AppInputContract("
+
+local function entrypointInputPy(entrypointName: String, file: FileOutput): FileOutput =
+  let (cls = inputClassName(entrypointName))
+  if (cls == "AppInputContract" || !file.text.contains(inputClassDecl)) file
+  else new FileOutput {
+    text = file.text.replaceFirst(inputClassDecl, "\nclass \(cls)(") + "\n\nAppInputContract = \(cls)\n"
+  }
+
+local contractEntrypointNames: List<String> =
+  entrypoints.toList().filter((e) -> e.contract != null).map((e) -> e.name)
+
+local inputClassNameGroups: Map<String, List<String>> =
+  contractEntrypointNames.groupBy((n) -> inputClassName(n))
+
+local _inputClassNameCheck: Any =
+  let (invalid = contractEntrypointNames
+    .filter((n) -> !inputClassName(n).matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))))
+  let (clashes = inputClassNameGroups.filter((_, names) -> names.length > 1))
+  if (!invalid.isEmpty)
+    throw("Entrypoint name(s) \(invalid.join(", ")) do not yield a valid Python class name "
+      + "for the generated input contract. Start each entrypoint name with a letter.")
+  else if (!clashes.isEmpty)
+    throw("Entrypoints \(clashes.values.map((names) -> names.join(" and ")).join("; ")) "
+      + "generate the same input contract class name (\(clashes.keys.join(", "))). "
+      + "Rename one so every entrypoint gets a unique class.")
+  else null
+
 hidden _credentialConflictCheck: Any =
   if (!credentialConflictNames.isEmpty)
     throw("NativeAppBundle found credential config filename(s) generated with different content: \(credentialConflictNames.join(", ")). "
@@ -263,6 +299,7 @@ hidden _credentialConflictCheck: Any =
 
 output =
   let (_ = _credentialConflictCheck)
+  let (_inputNameCheck = _inputClassNameCheck)
   new ModuleOutput {
   files = new Mapping {
     when (emitAtlanYaml) {
@@ -279,7 +316,9 @@ output =
         when (entrypoint.contract != null) {
           for (fileName, fileOutput in entrypoint.contract!!.output.files) {
             when (!isCredentialFile(entrypoint, fileName)) {
-              ["\(entrypoint.name)/\(fileName)"] = fileOutput
+              ["\(entrypoint.name)/\(fileName)"] =
+                if (fileName == "_input.py") entrypointInputPy(entrypoint.name, fileOutput)
+                else fileOutput
             }
           }
         }

@@ -4551,6 +4551,39 @@ local function normalizeContractFileName(fileName: String): String =
   else if (fileName.startsWith(prefix)) fileName.drop(prefix.length)
   else fileName
 
+// FND-3140: a bundle gives each entrypoint's input class a unique name and keeps
+// `AppInputContract` as an alias, so existing imports still resolve.
+local function bundleInputClassName(entrypointName: String): String =
+  pascalCase(entrypointName) + "InputContract"
+
+local bundleInputClassDecl: String = "\nclass AppInputContract("
+
+local function bundleInputPy(entrypointName: String, file: FileOutput): FileOutput =
+  let (cls = bundleInputClassName(entrypointName))
+  if (cls == "AppInputContract" || !file.text.contains(bundleInputClassDecl)) file
+  else new FileOutput {
+    text = file.text.replaceFirst(bundleInputClassDecl, "\nclass \(cls)(") + "\n\nAppInputContract = \(cls)\n"
+  }
+
+local bundleContractEntrypointNames: List<String> =
+  entrypoints.toList().filter((e) -> e.contract != null).map((e) -> e.name)
+
+local bundleInputClassNameGroups: Map<String, List<String>> =
+  bundleContractEntrypointNames.groupBy((n) -> bundleInputClassName(n))
+
+local _bundleInputClassNameCheck: Any =
+  let (invalid = bundleContractEntrypointNames
+    .filter((n) -> !bundleInputClassName(n).matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))))
+  let (clashes = bundleInputClassNameGroups.filter((_, names) -> names.length > 1))
+  if (!invalid.isEmpty)
+    throw("Entrypoint name(s) \(invalid.join(", ")) do not yield a valid Python class name "
+      + "for the generated input contract. Start each entrypoint name with a letter.")
+  else if (!clashes.isEmpty)
+    throw("Entrypoints \(clashes.values.map((names) -> names.join(" and ")).join("; ")) "
+      + "generate the same input contract class name (\(clashes.keys.join(", "))). "
+      + "Rename one so every entrypoint gets a unique class.")
+  else null
+
 local function isCredentialFile(entrypoint: Entrypoint, rawFileName: String): Boolean =
   let (normalized = normalizeContractFileName(rawFileName))
   normalized != "" &&
@@ -4631,6 +4664,7 @@ output =
   // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
   // never be evaluated and would vanish without a word.
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
+  let (_bundleInputNameCheck = _bundleInputClassNameCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
@@ -4694,7 +4728,9 @@ output =
                 when (normalizeContractFileName(fileName) != ""
                       && normalizeContractFileName(fileName) != "_e2e_base.py"
                       && !isCredentialFile(entrypoint, fileName)) {
-                  ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] = fileOutput
+                  ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] =
+                    if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
+                    else fileOutput
                 }
               }
               ["app/generated/\(entrypoint.name)/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)

@@ -16,7 +16,7 @@ echo ":: Checking allow_unbounded_fields invariant..."
 for f in $(find examples -name '_input.py'); do
   if grep -q 'dict\[str, Any\]' "$f" \
      && ! grep -q 'allow_unbounded_fields=True' "$f" \
-     && ! grep -qE 'class AppInputContract\(ExtractionInput\)' "$f"; then
+     && ! grep -qE 'class [A-Za-z0-9_]*InputContract\(ExtractionInput\)' "$f"; then
     echo "FAIL: $f has dict[str, Any] but neither allow_unbounded_fields=True nor ExtractionInput base"
     fail=1
   fi
