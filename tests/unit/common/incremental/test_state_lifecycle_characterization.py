@@ -30,6 +30,7 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from obstore.store import LocalStore
 
+from application_sdk.app.context import AppContext
 from application_sdk.common._listing import has_internal_component
 from application_sdk.common.incremental import helpers
 from application_sdk.common.incremental.marker import fetch_marker_from_storage
@@ -182,9 +183,17 @@ def _require(condition: bool, precondition: str) -> None:
         pytest.fail(f"precondition: {precondition}")
 
 
-def _extractor() -> _Extractor:
-    """An extractor instance without App registration (tasks are plain calls)."""
-    return _Extractor.__new__(_Extractor)
+def _extractor(run_id: str = "run") -> _Extractor:
+    """An extractor instance without App registration (tasks are plain calls).
+
+    *run_id* stands in for the Temporal run ID the worker puts on the app
+    context, which ``write_current_state`` stamps and keys by.
+    """
+    extractor = _Extractor.__new__(_Extractor)
+    extractor._context = AppContext(
+        app_name=APP, app_version="0.1.0", run_id=run_id, workflow_id="wf"
+    )
+    return extractor
 
 
 # ---------------------------------------------------------------------------
@@ -412,10 +421,9 @@ async def test_write_current_state_diff_includes_backfill_tables(
     with patch.object(
         state_writer, "download_transformed_data", AsyncMock(return_value=transformed)
     ):
-        out = await _extractor().write_current_state(
+        out = await _extractor("run-2").write_current_state(
             WriteCurrentStateInput(
                 workflow_id="wf",
-                workflow_run_id="run-2",
                 connection=ConnectionRef(
                     attributes=ConnectionAttributes(qualified_name=CONN_QN, name="c")
                 ),

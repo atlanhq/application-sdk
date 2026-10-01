@@ -861,7 +861,21 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             list_data_keys,
         )
 
-        run_id = input.workflow_run_id or input.workflow_id or "unknown"
+        # The run ID stamps the current-state files and keys the published diff,
+        # so it must be unique across runs and stable across retries: Temporal's
+        # run ID, never a caller-supplied value that may be empty or repeat.
+        run_id = self.run_id
+        # Read past the deprecated attribute so the SDK's own check does not
+        # emit the caller's DeprecationWarning.
+        caller_run_id = input.model_dump(include={"workflow_run_id"})["workflow_run_id"]
+        if caller_run_id and caller_run_id != run_id:
+            logger.warning(
+                "Ignoring WriteCurrentStateInput.workflow_run_id=%s; it disagrees "
+                "with this run's Temporal run ID %s, which keys the current-state "
+                "snapshot and incremental diff instead",
+                caller_run_id,
+                run_id,
+            )
         conn_qn = input.connection.attributes.qualified_name
         app_name = input.application_name
 
@@ -883,7 +897,7 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
             snapshot = await store.probe(
                 on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
             )
-            if input.workflow_run_id and snapshot.committed_run_id == run_id:
+            if snapshot.committed_run_id == run_id:
                 # An earlier attempt of this run reached the commit point and
                 # then failed (the prune, or the activity result). Its diff was
                 # uploaded before the commit; rebuilding now would diff this
@@ -1228,7 +1242,6 @@ class IncrementalSqlMetadataExtractor(SqlMetadataExtractor):
                 marker_timestamp=marker_to_wire(ctx.marker_timestamp),
                 current_state_available=ctx.current_state_available,
                 column_chunk_size=ctx.column_chunk_size,
-                workflow_run_id=run_id,
                 current_state_s3_prefix=ctx.current_state_s3_prefix,
                 copy_workers=ctx.copy_workers,
                 upload_concurrency=ctx.upload_concurrency,
