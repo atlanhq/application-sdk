@@ -88,7 +88,7 @@ application_sdk/common/incremental/
 |--------|---------|
 | `CurrentStateStore(s3_prefix, store=None)` | The store for one current-state prefix (`.../connection/{id}/current-state`) |
 | `CurrentStateStore.for_connection(connection_qualified_name, application_name="")` | The store for a connection, via `get_persistent_s3_prefix` |
-| `CurrentStateStore.probe()` | One listing plus the manifest read: returns a `CurrentStateSnapshot` (`exists`, `json_count`, `total_bytes`, `committed_run_id`, `keys`). Downloads nothing. |
+| `CurrentStateStore.probe(*, on_damaged_manifest=DamagedManifestPolicy.RAISE)` | One listing plus the manifest read: returns a `CurrentStateSnapshot` (`exists`, `json_count`, `total_bytes`, `committed_run_id`, `keys`, `manifest_discarded`). Downloads nothing. A damaged manifest raises `CurrentStateManifestError`, or with `TREAT_AS_ABSENT` reads as no snapshot |
 | `CurrentStateStore.materialize(snapshot, dest)` | Mirror exactly the snapshot's keys into `dest` with sync semantics (already-current files skipped, anything else in `dest` deleted), under a per-directory lock |
 | `CurrentStateStore.commit(local_dir, run_id)` | Stamp file names with the run, upload, write the manifest (the commit point), then prune every key the manifest does not name, and re-upload any named key the store lost. Assumes one run per connection at a time |
 | `RunStateDirs.for_output_path(output_path)` | `{output_path}/incremental/` with `.previous_state`, `.current_state` and `.diff` |
@@ -212,6 +212,17 @@ read `current-state/{entity}/` directly. So:
 - **A retry after the commit point** finds `committed_run_id` equal to its own
   run and reports that commit instead of rebuilding (which would diff the
   snapshot against itself).
+- **A damaged manifest** — unreadable, or naming a key the store does not
+  hold — means the snapshot was damaged after its commit, and no retry fixes
+  it. The template's `read_current_state` and `write_current_state` probe with
+  `DamagedManifestPolicy.TREAT_AS_ABSENT`: they log a WARNING naming the
+  manifest key, and the run continues as a full extraction
+  (`current_state_available=False`, no previous state, no diff). Its commit
+  writes a fresh manifest and prunes every key that manifest does not name, so
+  the connection heals itself. A failed listing or manifest read is not a
+  damaged manifest: it raises `StorageError` and the task retries, because a
+  read failure must never silently become a full extraction. Other callers of
+  `probe()` still get `CurrentStateManifestError` by default.
 
 ### Run-scoped Local Directories
 

@@ -181,6 +181,15 @@ Constraints that come from the readers:
   commit, such as atlan-oracle-app's carry-forward reads, still sees a failed
   run's copy, and the fix for it is to read through the manifest. The old
   layout was worse on both counts: it never pruned at all.
+- **A damaged manifest resets the connection to a full extraction.** If
+  `.sdk-manifest` is unreadable or names a key the store does not hold, the
+  template's probes treat the snapshot as absent (`DamagedManifestPolicy.TREAT_AS_ABSENT`):
+  the run extracts in full, writes no diff, and its commit replaces the
+  manifest and prunes every key it does not name. For readers this means a
+  damaged manifest is followed by one full snapshot — and a batch publish, not
+  a stream one — rather than a connection that fails every run. A failed
+  listing or manifest read still fails the task, so a transient outage never
+  becomes a full extraction.
 - **`metadata.json` keys are routing inputs.** Adding a key is safe; renaming
   or dropping one — or writing it non-atomically — changes which publish mode
   Argo picks. It is written with `atomic_write` because a truncated counts

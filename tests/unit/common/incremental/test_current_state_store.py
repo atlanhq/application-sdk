@@ -33,6 +33,7 @@ from application_sdk.common.incremental.state import store as store_module
 from application_sdk.common.incremental.state.store import (
     MANIFEST_NAME,
     CurrentStateStore,
+    DamagedManifestPolicy,
     RunStateDirs,
 )
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
@@ -164,6 +165,50 @@ class TestProbe:
         await obstore.put_async(local, f"{PREFIX}/{MANIFEST_NAME}", b"not json")
         with pytest.raises(CurrentStateManifestError, match="unreadable"):
             await CurrentStateStore(PREFIX).probe()
+
+    async def test_damaged_manifest_can_be_treated_as_absent(
+        self, local, tmp_path
+    ) -> None:
+        state = CurrentStateStore(PREFIX)
+        committed = await state.commit(
+            _write(tmp_path / "b", {"table/a.json": "{}\n", "table/b.json": "{}\n"}),
+            "r1",
+        )
+        await obstore.delete_async(local, committed.keys[0])
+
+        snapshot = await state.probe(
+            on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+        )
+
+        assert snapshot.manifest_discarded
+        assert not snapshot.exists
+        assert snapshot.keys == ()
+        assert snapshot.committed_run_id is None
+
+    async def test_unreadable_manifest_can_be_treated_as_absent(self, local) -> None:
+        await obstore.put_async(local, f"{PREFIX}/{MANIFEST_NAME}", b"not json")
+        snapshot = await CurrentStateStore(PREFIX).probe(
+            on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+        )
+        assert snapshot.manifest_discarded
+        assert not snapshot.exists
+
+    @pytest.mark.parametrize("failing", ["list_data_objects", "_get_bytes"])
+    async def test_a_storage_failure_still_raises_when_treating_as_absent(
+        self, local, tmp_path, failing
+    ) -> None:
+        """A retry can fix a failed read, so it must not become a full extraction."""
+        state = CurrentStateStore(PREFIX)
+        await state.commit(_write(tmp_path / "b", {"table/a.json": "{}\n"}), "r1")
+
+        async def _fail(*args, **kwargs):
+            raise StorageError("injected: read")
+
+        with patch.object(store_module, failing, _fail):
+            with pytest.raises(StorageError, match="injected"):
+                await state.probe(
+                    on_damaged_manifest=DamagedManifestPolicy.TREAT_AS_ABSENT
+                )
 
     async def test_manifest_name_is_invisible_to_the_publish_glob(self) -> None:
         """Publish globs ``current-state/**/*.json``; the manifest must not match."""
@@ -673,6 +718,43 @@ class TestTwoRunsEndToEnd:
         # And the marker moved only now, after the commit.
         assert second.marker_updated
         assert await self._marker() != marker_after_run_1
+
+    @pytest.mark.parametrize("damage", ["unreadable", "missing_key"])
+    async def test_a_damaged_manifest_falls_back_to_a_full_extraction(
+        self, env, tmp_path, local, damage
+    ) -> None:
+        """The run completes in full, and its commit leaves a valid snapshot."""
+        env.tables = {"KEEP": "CREATED", "DROP": "CREATED"}
+        await self._run(env, tmp_path, "run-1")
+        committed = await CurrentStateStore(PREFIX).probe()
+        if damage == "unreadable":
+            await obstore.put_async(local, f"{PREFIX}/{MANIFEST_NAME}", b"not json")
+        else:
+            await obstore.delete_async(local, committed.keys[0])
+        with pytest.raises(CurrentStateManifestError):
+            await CurrentStateStore(PREFIX).probe()
+
+        env.tables = {"KEEP": "NO CHANGE"}
+        await asyncio.sleep(1.1)
+        second = await self._run(env, tmp_path, "run-2")
+
+        # A full extraction: no previous state was read, so there is no diff
+        # and DROP's absence is not reported as a deletion.
+        run_dir = tmp_path / "run-2" / "incremental"
+        assert not (run_dir / "previous-state").exists()
+        assert not (run_dir / "diff").exists()
+        assert second.incremental_diff_files == 0
+        assert second.marker_updated
+
+        # The commit wrote a fresh manifest and pruned everything it does not name.
+        snapshot = await CurrentStateStore(PREFIX).probe()
+        assert snapshot.committed_run_id == "run-2"
+        assert snapshot.exists
+        local_build = tmp_path / "run-2" / "incremental" / "current-state"
+        in_store = {
+            k for k in _relative(await list_keys(PREFIX)) if not k.endswith(".sha256")
+        }
+        assert in_store == set(_files(local_build)) | {MANIFEST_NAME}
 
     async def test_marker_does_not_advance_when_the_commit_fails(
         self, env, tmp_path
