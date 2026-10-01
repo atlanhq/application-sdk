@@ -232,32 +232,26 @@ class TestProbe:
             memory, f"{PREFIX}/{MANIFEST_NAME}", orjson.dumps(manifest)
         )
 
-        # A ticker on the loop: its largest gap is how long the loop (and an
-        # activity's auto-heartbeat) was held by the probe.
-        max_gap = 0.0
-        done = asyncio.Event()
+        # Structural, not a loop-gap timer: at this size the reconcile held
+        # inline blocks the loop for ~50ms, well under any threshold a shared CI
+        # runner's GIL contention stays below, so a timer could only flake.
+        offloaded: list[str] = []
+        real_run_in_thread = store_module.run_in_thread
 
-        async def _tick() -> None:
-            nonlocal max_gap
-            last = time.perf_counter()
-            while not done.is_set():
-                await asyncio.sleep(0.01)
-                now = time.perf_counter()
-                max_gap = max(max_gap, now - last)
-                last = now
+        async def _spy(fn, *args, **kwargs):
+            offloaded.append(fn.__name__)
+            return await real_run_in_thread(fn, *args, **kwargs)
 
-        ticker = asyncio.create_task(_tick())
         started = time.perf_counter()
-        snapshot = await CurrentStateStore(PREFIX, memory).probe()
+        with patch.object(store_module, "run_in_thread", _spy):
+            snapshot = await CurrentStateStore(PREFIX, memory).probe()
         elapsed = time.perf_counter() - started
-        done.set()
-        await ticker
 
         assert snapshot.json_count == 100_000
         assert elapsed < 10, f"probe of 100k keys took {elapsed:.1f}s"
-        # Far below any heartbeat budget; a probe that walked the snapshot
-        # inline would hold the loop for its whole duration.
-        assert max_gap < 1.0, f"event loop held for {max_gap:.2f}s"
+        # The one pass over the whole snapshot (manifest decode + reconcile)
+        # runs off the loop, so an activity's auto-heartbeat keeps beating.
+        assert offloaded == ["_reconcile"]
 
 
 # ---------------------------------------------------------------------------

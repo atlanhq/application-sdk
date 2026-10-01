@@ -251,6 +251,7 @@ class CurrentStateStore:
                 "commit replaces the manifest",
                 self.manifest_key,
                 exc.message,
+                exc_info=True,
             )
             return CurrentStateSnapshot(
                 s3_prefix=self.s3_prefix,
