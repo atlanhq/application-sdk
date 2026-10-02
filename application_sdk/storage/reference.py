@@ -231,7 +231,7 @@ async def persist_file_reference(
             sha256 = await upload_file(file_key, file_path, store, normalize=False)
             # compute_hash defaults to True, so the digest is always returned here.
             assert sha256 is not None
-            _write_local_sidecar(str(file_path), sha256)
+            await run_in_thread(_write_local_sidecar, str(file_path), sha256)
 
         try:
             from application_sdk.constants import (  # noqa: PLC0415
@@ -309,7 +309,7 @@ async def persist_file_reference(
             sha256 = await upload_file(storage_path, local, store, normalize=False)
             # compute_hash defaults to True, so the digest is always returned here.
             assert sha256 is not None
-            _write_local_sidecar(ref.local_path, sha256)
+            await run_in_thread(_write_local_sidecar, ref.local_path, sha256)
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
@@ -561,7 +561,7 @@ async def _materialize_single_file(
 
         if stored_hash is not None and local_hash == stored_hash:
             # File is intact — stamp local sidecar and reuse.
-            _write_local_sidecar(ref.local_path, local_hash)
+            await run_in_thread(_write_local_sidecar, ref.local_path, local_hash)
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.skipped",
@@ -677,7 +677,7 @@ async def _materialize_single_file(
                 key=ref.storage_path,
             )
 
-        _write_local_sidecar(out_path, sha256)
+        await run_in_thread(_write_local_sidecar, out_path, sha256)
     except Exception as exc:
         # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
         logger.error(
@@ -815,7 +815,7 @@ async def _materialize_directory(
             sidecar_present=obj.has_sidecar,
         )
         if sha256 is not None:
-            _write_local_sidecar(dest, sha256)
+            await run_in_thread(_write_local_sidecar, dest, sha256)
         return False
 
     try:
