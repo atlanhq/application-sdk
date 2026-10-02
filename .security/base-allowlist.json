@@ -16,5 +16,23 @@
     "added_by": "@atlan-app-fleet (vuln-triage)",
     "case": 4,
     "ticket": "BLDX-1653"
+  },
+  "CVE-2026-97687": {
+    "package": "py3-pip-wheel",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
+    "expires": "2026-11-01",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 4,
+    "ticket": "BLDX-1656"
+  },
+  "CVE-2026-97689": {
+    "package": "py3-pip-wheel",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
+    "expires": "2026-11-01",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 4,
+    "ticket": "BLDX-1656"
   }
 }
