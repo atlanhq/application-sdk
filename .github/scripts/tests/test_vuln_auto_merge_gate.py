@@ -249,3 +249,66 @@ def test_process_pr_idempotent_when_already_approved():
     # No new approval, but auto-merge is (re-)ensured.
     assert r.reviews == []
     assert len(r.merges) == 1
+
+
+# ---------------------------------------------------------------------------
+# Approver identity + token split (dedicated application-sdk approver)
+# ---------------------------------------------------------------------------
+
+
+class _EnvRecordingRunner(_FakeRunner):
+    """_FakeRunner that also records the GH_TOKEN each merge call ran with."""
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self.merge_tokens = []
+        self.review_jq = []
+
+    def __call__(self, cmd, check=False, capture_output=False, text=False, env=None):
+        if cmd[:3] == ["gh", "pr", "merge"]:
+            self.merge_tokens.append((env or {}).get("GH_TOKEN"))
+        if "/reviews" in " ".join(cmd):
+            self.review_jq.append(cmd[-1])
+        return super().__call__(cmd, check, capture_output, text)
+
+
+def test_merge_token_enables_automerge_so_the_approver_pat_never_merges():
+    r = _EnvRecordingRunner(_meta(), [".security/base-allowlist.json"])
+    acted = gate.process_pr(
+        "o/r", "5", "abc", LABEL, TRUSTED, "sdk-approver", r, "fleet-token"
+    )
+    assert acted is True
+    assert len(r.reviews) == 1
+    assert r.merge_tokens == ["fleet-token"]
+
+
+def test_without_merge_token_automerge_uses_the_ambient_token():
+    r = _EnvRecordingRunner(_meta(), [".security/base-allowlist.json"])
+    gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, APPROVER, r)
+    assert r.merge_tokens == [None]
+
+
+def test_approval_body_names_the_configured_approver():
+    r = _FakeRunner(_meta(), [".security/base-allowlist.json"])
+    gate.process_pr("o/r", "5", "abc", LABEL, TRUSTED, "sdk-approver", r)
+    body = r.reviews[0][r.reviews[0].index("--body") + 1]
+    assert "`sdk-approver`" in body
+    assert "atlan-ci" not in body
+
+
+def test_already_approved_matches_the_new_and_the_legacy_login():
+    # A legacy atlan-ci approval posted before the cutover must still read as
+    # "already approved", or the switch double-approves every open PR.
+    r = _EnvRecordingRunner(_meta(), [".security/base-allowlist.json"])
+    gate.already_approved("o/r", "5", r, "sdk-approver")
+    jq = r.review_jq[0]
+    assert '"atlan-ci"' in jq and '"sdk-approver"' in jq
+
+
+def test_self_authored_check_uses_the_configured_approver():
+    r = _FakeRunner(_meta(author="sdk-approver"), [".security/base-allowlist.json"])
+    acted = gate.process_pr(
+        "o/r", "5", "abc", LABEL, TRUSTED | {"sdk-approver"}, "sdk-approver", r
+    )
+    assert acted is False
+    assert r.reviews == []

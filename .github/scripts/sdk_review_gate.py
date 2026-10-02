@@ -73,9 +73,13 @@ import subprocess
 import time
 from collections.abc import Callable
 
+from approver_identity import approver_logins
+
 # Logins the workflow's `if:` lets through besides OWNER/MEMBER/COLLABORATOR
-# humans. These are the automated re-triggers worth gating.
-BOT_TRIGGERS = frozenset({"mothership-ai[bot]", "atlan-ci"})
+# humans. These are the automated re-triggers worth gating: mothership, and the
+# code-owner approver that posts the stale-head re-review request (the legacy
+# `atlan-ci` plus APPROVER_LOGIN, when the workflow names a dedicated account).
+BOT_TRIGGERS = frozenset({"mothership-ai[bot]"}) | approver_logins()
 
 SUMMARY_MARKER = "<!-- SDK_REVIEW -->"
 REVIEWED_HEAD_RE = re.compile(r"<!--\s*REVIEWED_HEAD:\s*([0-9a-f]{40})\s*-->")

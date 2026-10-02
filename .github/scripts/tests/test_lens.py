@@ -3329,6 +3329,38 @@ def test_withdraw_dismisses_only_lens_approvals_by_the_code_owner():
     assert gh.dismissed == [5, 6] and "withdrew 2" in out
 
 
+def test_after_the_approver_cutover_legacy_atlan_ci_approvals_are_still_withdrawn():
+    # Approvals posted as atlan-ci before APPROVER_LOGIN named a dedicated
+    # account are still live; a withdraw that ignored them would leave one
+    # standing on a head lens no longer calls ready.
+    gh = _ApproveGH(
+        reviews=[
+            _lens_approval(5, "h1", login="atlan-ci"),
+            _lens_approval(6, "h1", login="sdk-approver"),
+            _lens_approval(7, "h1", login="someone-else"),
+        ]
+    )
+    out = approve_mod.apply(
+        gh,
+        _Approver(),
+        {"pr": 1, "action": "withdraw", "head": "h1"},
+        login="sdk-approver",
+    )
+    assert gh.dismissed == [5, 6] and "withdrew 2" in out
+
+
+def test_a_legacy_atlan_ci_approval_on_the_head_is_not_duplicated():
+    gh = _ApproveGH(reviews=[_lens_approval(5, "h1", login="atlan-ci")])
+    owner = _Approver()
+    approve_mod.apply(
+        gh,
+        owner,
+        {"pr": 1, "action": "approve", "head": "h1", "round": 2},
+        login="sdk-approver",
+    )
+    assert owner.approved == []
+
+
 def test_the_step_never_fails_a_finished_review(tmp_path, monkeypatch, capsys):
     p = tmp_path / "d.json"
     assert approve_mod.run_step("o/r", str(p)) == 0  # no decision file

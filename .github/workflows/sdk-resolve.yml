@@ -61,6 +61,7 @@ jobs:
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || github.event.comment.user.login == vars.SDK_APPROVER_LOGIN
         )
       )
     runs-on: ubuntu-latest

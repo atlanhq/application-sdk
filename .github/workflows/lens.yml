@@ -128,7 +128,11 @@ jobs:
         working-directory: .github/scripts
         env:
           GITHUB_TOKEN: ${{ steps.app.outputs.token }}
-          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # The approver account and its PAT: a dedicated application-sdk-only
+          # credential once provisioned, atlan-ci's ORG_PAT_GITHUB until then
+          # (.github/scripts/approver_identity.py).
+          APPROVER_TOKEN: ${{ secrets.SDK_APPROVER_TOKEN || secrets.ORG_PAT_GITHUB }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           REPO: ${{ github.repository }}
           LENS_APPROVAL_PATH: ${{ runner.temp }}/lens-approval.json
         run: python -m lens approve --repo "$REPO" --decision "$LENS_APPROVAL_PATH"

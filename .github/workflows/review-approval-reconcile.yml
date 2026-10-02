@@ -136,7 +136,11 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # The APPROVE call only — atlan-ci is the CODEOWNER whose approval
           # satisfies branch protection.
-          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # The approver account and its PAT: a dedicated application-sdk-only
+          # credential once provisioned, atlan-ci's ORG_PAT_GITHUB until then
+          # (.github/scripts/approver_identity.py).
+          APPROVER_TOKEN: ${{ secrets.SDK_APPROVER_TOKEN || secrets.ORG_PAT_GITHUB }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           # The one identity whose lens summary and `lens` status are trusted
           # as lens's own; the same value lens.yml runs with.
           LENS_BOT_LOGIN: atlan-app-fleet[bot]

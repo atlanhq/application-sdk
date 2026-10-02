@@ -112,6 +112,7 @@ jobs:
           || github.event.comment.author_association == 'MEMBER'
           || github.event.comment.author_association == 'COLLABORATOR'
           || github.event.comment.user.login == 'atlan-ci'
+          || github.event.comment.user.login == vars.SDK_APPROVER_LOGIN
           || github.event.comment.user.login == 'mothership-ai[bot]'
         )
       )
@@ -137,6 +138,7 @@ jobs:
           GATE_PHASE: preflight
           EVENT_NAME: ${{ github.event_name }}
           TRIGGER_ACTOR: ${{ github.event.comment.user.login }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
         run: python3 .github/scripts/sdk_review_gate.py
 
       # If the gate job itself fails (e.g. checkout failure, unexpected error in
@@ -300,6 +302,7 @@ jobs:
           GATE_PHASE: locked
           EVENT_NAME: ${{ github.event_name }}
           TRIGGER_ACTOR: ${{ github.event.comment.user.login }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           RUN_ID: ${{ github.run_id }}
         run: python3 .github/scripts/sdk_review_gate.py
 
@@ -921,11 +924,15 @@ jobs:
         if: success() && steps.parse.outputs.pr_number != '' && steps.lock_gate.outputs.decision != 'skip'
         env:
           # Everything except the APPROVE call. Keeping the reads, label writes
-          # and dismissals off the `atlan-ci` PAT is what stops the one call
+          # and dismissals off the approver PAT is what stops the one call
           # that genuinely needs that identity from being starved of quota.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # The APPROVE call only.
-          APPROVER_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+          # The approver account and its PAT: a dedicated application-sdk-only
+          # credential once provisioned, atlan-ci's ORG_PAT_GITHUB until then
+          # (.github/scripts/approver_identity.py).
+          APPROVER_TOKEN: ${{ secrets.SDK_APPROVER_TOKEN || secrets.ORG_PAT_GITHUB }}
+          APPROVER_LOGIN: ${{ vars.SDK_APPROVER_LOGIN || 'atlan-ci' }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ steps.parse.outputs.pr_number }}
           # Empty: read the newest summary comment off the PR rather than an
