@@ -4483,12 +4483,15 @@ def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
     )
 
     assert fid in res.verify_cut_off and fid not in res.resolved_verified
+    assert res.verify_skipped == []  # verify ran; it was cut off, not skipped
     assert any(f.id == fid for f in res.state.open_findings())
     brief = review_mod.verdict_brief(res, "https://example.test/summary")
     summary = review_mod.render_summary(res)
     for body in (brief, summary):
         assert "Verify ran out of output budget" in body and fid in body
         assert "`/lens force verify-budget`" in body
+        # Without force, a merge-only push re-checks nothing: never offer that form.
+        assert "`/lens verify-budget`" not in body
     from lens import report as report_mod  # noqa: PLC0415
 
     # Both JSON outputs carry the same cut-off, guidance included, not just the ids.
@@ -4571,3 +4574,127 @@ def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budg
     )
 
     assert code == 0 and seen["verify_budget"] is verify_budget
+
+
+def _round_two_merge_only(gh):
+    """A second head that only merges the base branch: no PR file changes."""
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = ""
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = gh.files[
+        ("application_sdk/storage/fetch.py", "h1")
+    ]
+
+
+def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
+    """A merge-only push left 0 PR files in range, so verify was skipped and the
+    open findings were shown again with nothing saying they were not re-checked."""
+    from lens import report as report_mod  # noqa: PLC0415
+
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        verify_budget=True,
+    )
+
+    assert res.verify_skipped and fid in res.verify_skipped
+    assert res.verify_cut_off == [] and fid not in res.resolved_verified
+    assert not any("<changes_this_round>" in json.dumps(r) for r in script.requests)
+    brief = review_mod.verdict_brief(res, "https://example.test/summary")
+    summary = review_mod.render_summary(res)
+    for body in (brief, summary):
+        assert "Nothing was re-checked this round" in body and fid in body
+        assert "`/lens force`" in body
+    rep = report_mod.build(res)
+    for skipped in (
+        json.loads(review_mod.to_json(res))["verify_skipped"],
+        rep["verify_skipped"],
+    ):
+        assert skipped["items"] == res.verify_skipped
+        assert "Nothing was re-checked" in skipped["message"]
+    assert "Nothing was re-checked this round" in report_mod.markdown(rep, 1)
+
+
+def test_a_round_that_rechecks_says_nothing_about_skipping(repo: Path):
+    """Control: a round that touches a PR file runs verify and adds no notice."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    _round_two_elsewhere(gh)
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(
+            Script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+
+    assert res.verify_skipped == [] and res.verify_cut_off == []
+    assert review_mod.verify_notice_line(res) == ""
+    assert "Nothing was re-checked" not in review_mod.render_summary(res)
+
+
+def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
+    """The cut-off hint names `/lens force verify-budget`. Followed on a new head that
+    only merges the base branch, force must still re-check: it reviews the (empty) new
+    commits incrementally, and verify used to be skipped, so the hint did nothing."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        force=True,
+        verify_budget=True,
+    )
+
+    assert res.mode == "incremental"  # a new head: force did not make it a full review
+    assert res.verify_skipped == [] and res.verify_opted_in
+    assert len(script.requests) == 1 and fid in json.dumps(script.requests[0])
+    # Nothing in the round's own range, so verify is shown the whole PR's change.
+    assert "<changes_this_round>" in json.dumps(script.requests[0])
+    assert review_mod.verify_notice_line(res) == ""
