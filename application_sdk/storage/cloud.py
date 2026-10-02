@@ -591,8 +591,8 @@ def _create_s3_store(
             if base_access_key
             else None,
             # Required when the role's trust policy has an sts:ExternalId
-            # condition. Blank -> None: STS rejects an empty ExternalId.
-            external_id=(extra.get("aws_external_id") or "").strip() or None,
+            # condition; the provider drops a blank one.
+            external_id=extra.get("aws_external_id"),
         )
         _log().debug("S3 cross-account assume-role auth configured")
     elif access_key and secret_key:
