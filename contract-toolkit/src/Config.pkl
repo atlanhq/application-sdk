@@ -2078,13 +2078,19 @@ class ConditionalInput extends UIElement {
   // `connectorConfig` above supply `credential` / `connectorConfigName`, and
   // `multiSelect` emits `isMultiple` (not sqltree's `multiple`) for apitree.
 
-  /// Key of the metadata template the apitree loads its tree from. Emitted as
-  /// `metadataTemplateKey`; without it the direct-mode tree picker cannot load.
-  hidden metadataTemplate: String?
+  /// Routing key sent with the apitree's metadata request, e.g. `"folders"`.
+  /// A short name, not a template body. On a native SDK app it reaches the
+  /// metadata handler as `MetadataInput.metadata_template_key` (mirrored onto
+  /// `object_filter`), and the handler chooses what to list from it. On a
+  /// legacy REST connector it selects an entry in the credential configmap's
+  /// `restMetadataTemplate`. Emitted as `metadataTemplateKey`.
+  hidden metadataTemplateKey: String?
 
-  /// Key of the metadata transformer template. Emitted as
-  /// `metadataTransformerTemplateKey`.
-  hidden metadataTransformer: String?
+  /// Routing key for the output transformer, sent with the metadata request.
+  /// Only legacy REST connectors use it: it selects an entry in the credential
+  /// configmap's `restMetadataOutputTransformerTemplate`. Native SDK apps
+  /// ignore it. Emitted as `metadataTransformerTemplateKey`.
+  hidden metadataTransformerTemplateKey: String?
 
   /// Whether to flatten values retrieved via API. Emitted as `flattenValue`.
   hidden flatten: Boolean?
@@ -2143,8 +2149,8 @@ class ConditionalInput extends UIElement {
     isMultiple = if (baseWidgetType == "apitree") multiSelect else null
     dependentConnectionField = dependsOn
     areDatabasesUnselectable = databasesUnselectable
-    metadataTemplateKey = metadataTemplate
-    metadataTransformerTemplateKey = metadataTransformer
+    metadataTemplateKey = outer.metadataTemplateKey
+    metadataTransformerTemplateKey = outer.metadataTransformerTemplateKey
     flattenValue = flatten
     treeCheckStrictly = strict
     // connection properties (null/omitted when not a connection)

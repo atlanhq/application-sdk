@@ -569,9 +569,10 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 | `Widgets.Sage` / `Widgets.SageV2` | `sage`/`sageV2` | `str` |
 
 `ConditionalInput` with `baseWidgetType = "apitree"` takes the apitree props
-`metadataTemplate`, `metadataTransformer`, `flatten`, `strict`, and
-`multiSelect`, so the base `ui` keeps `metadataTemplateKey` and the direct-mode
-tree picker loads. Use it for an apitree that becomes a text input in agent
+`metadataTemplateKey`, `metadataTransformerTemplateKey`, `flatten`, `strict`,
+and `multiSelect`, so the base `ui` keeps `metadataTemplateKey` and the
+direct-mode tree picker loads. `metadataTemplateKey` is a routing key (e.g.
+`"folders"`) that the app's metadata handler switches on, not a template body. Use it for an apitree that becomes a text input in agent
 mode. See [`docs/reference.md`](docs/reference.md#example-apitree-with-agent-mode-fallback).
 
 ## Field Lifecycle — Deprecating and Sunsetting Fields

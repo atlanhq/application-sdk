@@ -1430,9 +1430,9 @@ class ConditionalInput extends UIElement {
 
   hidden databasesUnselectable: Boolean?
 
-  hidden metadataTemplate: String?
+  hidden metadataTemplateKey: String?
 
-  hidden metadataTransformer: String?
+  hidden metadataTransformerTemplateKey: String?
 
   hidden flatten: Boolean?
 
@@ -1474,8 +1474,8 @@ class ConditionalInput extends UIElement {
     isMultiple = if (baseWidgetType == "apitree") multiSelect else null
     dependentConnectionField = dependsOn
     areDatabasesUnselectable = databasesUnselectable
-    metadataTemplateKey = metadataTemplate
-    metadataTransformerTemplateKey = metadataTransformer
+    metadataTemplateKey = outer.metadataTemplateKey
+    metadataTransformerTemplateKey = outer.metadataTransformerTemplateKey
     flattenValue = flatten
     treeCheckStrictly = strict
     connectionOptions = connOptions

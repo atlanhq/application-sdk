@@ -3203,8 +3203,8 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 | `multiSelect` | Boolean? | null | Multi-select. Emits `isMultiple` when `baseWidgetType = "apitree"`, `multiple` otherwise |
 | `dependsOn` | String? | null | Sibling form field whose value scopes the sqltree branch; emits `dependentConnectionField` |
 | `databasesUnselectable` | Boolean? | null | Lock database-level selection in sqltree branch; emits `areDatabasesUnselectable` |
-| `metadataTemplate` | String? | null | Metadata template the apitree loads its tree from; emits `metadataTemplateKey` (when apitree). Without it the direct-mode tree picker cannot load. |
-| `metadataTransformer` | String? | null | Metadata transformer template; emits `metadataTransformerTemplateKey` (when apitree) |
+| `metadataTemplateKey` | String? | null | Routing key sent with the apitree's metadata request, e.g. `"folders"` — a short name, not a template body. Native SDK apps receive it as `MetadataInput.metadata_template_key` and the metadata handler picks what to list from it. Legacy REST connectors use it to select an entry in the credential configmap's `restMetadataTemplate`. Emitted as `metadataTemplateKey` (when apitree). |
+| `metadataTransformerTemplateKey` | String? | null | Routing key for the output transformer. Only legacy REST connectors use it (selects an entry in `restMetadataOutputTransformerTemplate`); native SDK apps ignore it. Emitted as `metadataTransformerTemplateKey` (when apitree). |
 | `flatten` | Boolean? | null | Flatten values retrieved via API; emits `flattenValue` (when apitree) |
 | `strict` | Boolean? | null | Strictly check the tree returned via API; emits `treeCheckStrictly` (when apitree) |
 | `connOptions` | Boolean? | null | Show connection options (when `baseWidgetType = "connection"`) |
@@ -3269,7 +3269,7 @@ a text input when `extraction-method = "agent"`:
   baseWidgetType = "apitree"
   connectorConfig = "atlan-connectors-example"
   credentialRef = "credential-guid"
-  metadataTemplate = "folders"
+  metadataTemplateKey = "folders"
   width = 4
   default = new Mapping {}
   additionalProperties = new Dynamic { type = "array" }
@@ -3290,9 +3290,16 @@ a text input when `extraction-method = "agent"`:
 
 The base (direct-mode) `ui` carries the same keys a plain `APITree` emits:
 `widget: "apitree"`, `connectorConfigName`, `credential`, and
-`metadataTemplateKey`. `metadataTransformer`, `flatten`, `strict`, and
-`multiSelect` emit `metadataTransformerTemplateKey`, `flattenValue`,
-`treeCheckStrictly`, and `isMultiple` only when set. Unlike `APITree`,
+`metadataTemplateKey`. `metadataTransformerTemplateKey`, `flatten`,
+`strict`, and `multiSelect` emit `metadataTransformerTemplateKey`,
+`flattenValue`, `treeCheckStrictly`, and `isMultiple` only when set.
+
+`metadataTemplateKey` is a routing key, not a template. The frontend sends it
+with the tree's metadata request. A native SDK app receives it as
+`MetadataInput.metadata_template_key` (also mirrored onto `object_filter`), and
+its metadata handler decides what to list, e.g. folders vs. projects. The key
+names here match the emitted `ui` keys; `APITree` keeps its older
+`metadataTemplate` / `metadataTransformer` names. Unlike `APITree`,
 `ConditionalInput` does not default `credentialRef`, `default`, or
 `additionalProperties`; set them as shown. Other base widget types are
 unchanged: a sqltree `multiSelect` still emits `multiple`. Both
