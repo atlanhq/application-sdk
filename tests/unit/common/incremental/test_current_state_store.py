@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import warnings
 from collections.abc import Iterator
@@ -21,6 +22,7 @@ import orjson
 import pytest
 from obstore.store import LocalStore, MemoryStore
 
+from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app.context import AppContext
 from application_sdk.app.task import task
 from application_sdk.common._listing import has_internal_component
@@ -42,6 +44,7 @@ from application_sdk.infrastructure.context import (
     clear_infrastructure,
     set_infrastructure,
 )
+from application_sdk.storage import batch as batch_module
 from application_sdk.storage.batch import list_keys, upload_prefix
 from application_sdk.storage.errors import StorageError
 from application_sdk.storage.factory import create_local_store
@@ -485,6 +488,51 @@ class TestMaterialize:
 
         with pytest.raises(StorageError):
             await state.materialize(snapshot, tmp_path / "prev")
+
+    async def test_a_retry_after_a_cancelled_materialize_is_not_overwritten(
+        self, local, tmp_path
+    ) -> None:
+        """A timed-out read's attempt is cancelled, but its offloaded download
+        thread is not: it keeps writing into the tree. The cancellation must
+        not surface until that thread is done, or its late write lands on top
+        of the retry's freshly materialized file (FND-3011)."""
+        state = CurrentStateStore(PREFIX)
+        await state.commit(
+            _write(tmp_path / "b", {"t/a.json": "a", "t/b.json": "b"}), "r1"
+        )
+        snapshot = await state.probe()
+        dest = tmp_path / "incremental" / "previous-state"
+        started = threading.Event()
+        finished = threading.Event()
+
+        def _abandoned_write(path: str) -> None:
+            started.set()
+            time.sleep(0.3)
+            Path(path).write_bytes(b"written by the cancelled attempt")
+            finished.set()
+
+        real_download = batch_module.download_file_chunked
+
+        async def _download(key, dest_path, *args, **kwargs):
+            if key.endswith("b.json"):
+                await run_in_thread(_abandoned_write, dest_path)
+            else:
+                await real_download(key, dest_path, *args, **kwargs)
+
+        with patch.object(batch_module, "download_file_chunked", _download):
+            attempt = asyncio.create_task(state.materialize(snapshot, dest))
+            assert await asyncio.to_thread(started.wait, 5), "download never began"
+            attempt.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await attempt
+        assert finished.is_set(), "cancelled attempt's thread outlived its unwind"
+
+        await state.materialize(snapshot, dest)
+        # Without the drain the thread is still asleep here; give it the time
+        # to land its write so a regression shows in the tree, not as a race.
+        await asyncio.to_thread(finished.wait, 5)
+
+        assert sorted(_files(dest).values()) == [b"a", b"b"]
 
 
 def test_run_state_dirs_are_scoped_to_the_output_path(tmp_path) -> None:
