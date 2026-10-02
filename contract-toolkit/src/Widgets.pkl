@@ -1430,6 +1430,14 @@ class ConditionalInput extends UIElement {
 
   hidden databasesUnselectable: Boolean?
 
+  hidden metadataTemplate: String?
+
+  hidden metadataTransformer: String?
+
+  hidden flatten: Boolean?
+
+  hidden strict: Boolean?
+
   hidden connOptions: Boolean?
 
   hidden credentialType: String?
@@ -1462,9 +1470,14 @@ class ConditionalInput extends UIElement {
     schemaExcludePattern = schemaExcludePatterns
     databaseExcludePattern = databaseExcludePatterns
     description = desc
-    multiple = multiSelect
+    multiple = if (baseWidgetType == "apitree") null else multiSelect
+    isMultiple = if (baseWidgetType == "apitree") multiSelect else null
     dependentConnectionField = dependsOn
     areDatabasesUnselectable = databasesUnselectable
+    metadataTemplateKey = metadataTemplate
+    metadataTransformerTemplateKey = metadataTransformer
+    flattenValue = flatten
+    treeCheckStrictly = strict
     connectionOptions = connOptions
     credentialType = outer.credentialType
     isTestAuthenticationDisabled = if (allowTestAuthentication != null) !allowTestAuthentication else null

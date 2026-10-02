@@ -1990,8 +1990,8 @@ class ConditionalInput extends UIElement {
   required: Boolean? = false
 
   /// Base widget type for the UI rendering. Defaults to "radio".
-  /// Set to "sqltree" for conditional metadata trees, "connection" for
-  /// conditional connections, etc.
+  /// Set to "sqltree" for conditional SQL metadata trees, "apitree" for
+  /// conditional API-backed trees, "connection" for conditional connections, etc.
   hidden baseWidgetType: String = "radio"
 
   /// Base enum values.
@@ -2071,6 +2071,28 @@ class ConditionalInput extends UIElement {
   /// Emitted as `areDatabasesUnselectable` when set.
   hidden databasesUnselectable: Boolean?
 
+  // --- APITree-specific properties (used when baseWidgetType = "apitree") ---
+  //
+  // These mirror `APITree` so a conditional apitree keeps its tree-picker
+  // wiring in the base (unmatched) branch. `credentialRef` and
+  // `connectorConfig` above supply `credential` / `connectorConfigName`, and
+  // `multiSelect` emits `isMultiple` (not sqltree's `multiple`) for apitree.
+
+  /// Key of the metadata template the apitree loads its tree from. Emitted as
+  /// `metadataTemplateKey`; without it the direct-mode tree picker cannot load.
+  hidden metadataTemplate: String?
+
+  /// Key of the metadata transformer template. Emitted as
+  /// `metadataTransformerTemplateKey`.
+  hidden metadataTransformer: String?
+
+  /// Whether to flatten values retrieved via API. Emitted as `flattenValue`.
+  hidden flatten: Boolean?
+
+  /// Whether to strictly check the tree returned via API. Emitted as
+  /// `treeCheckStrictly`.
+  hidden strict: Boolean?
+
   // --- Connection-specific properties (used when baseWidgetType = "connection") ---
 
   /// Whether to show connection options dropdown.
@@ -2117,9 +2139,14 @@ class ConditionalInput extends UIElement {
     schemaExcludePattern = schemaExcludePatterns
     databaseExcludePattern = databaseExcludePatterns
     description = desc
-    multiple = multiSelect
+    multiple = if (baseWidgetType == "apitree") null else multiSelect
+    isMultiple = if (baseWidgetType == "apitree") multiSelect else null
     dependentConnectionField = dependsOn
     areDatabasesUnselectable = databasesUnselectable
+    metadataTemplateKey = metadataTemplate
+    metadataTransformerTemplateKey = metadataTransformer
+    flattenValue = flatten
+    treeCheckStrictly = strict
     // connection properties (null/omitted when not a connection)
     connectionOptions = connOptions
     // credential properties (null/omitted when not a credential)
