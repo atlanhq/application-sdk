@@ -3185,7 +3185,7 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"connection"`, `"radio"`, etc.) |
+| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"apitree"`, `"connection"`, `"radio"`, etc.) |
 | `baseEnum` | Listing<String>? | null | Base enum values (for radio/select base widgets) |
 | `baseEnumNames` | Listing<String>? | null | Base enum display names |
 | `default` | Any? | null | Default value |
@@ -3195,14 +3195,18 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 | `uiType` / `content` / `iconName` / `hideWidgetIcon` / `linkConfig` | mixed | null | Generic base UI props used by widgets such as `InfoBanner`. |
 | `widgetConfig` | Any? | null | Generic base UI config object used by widgets such as `dsnTreeMap`. |
 | `sqlQuery` | String? | null | SQL query (when `baseWidgetType = "sqltree"`) |
-| `credentialRef` | String? | null | Credential variable name (when sqltree) |
-| `connectorConfig` | String? | null | Connector config name (when sqltree) |
+| `credentialRef` | String? | null | Credential variable name; emits `credential` (when sqltree or apitree) |
+| `connectorConfig` | String? | null | Connector config name; emits `connectorConfigName` (when sqltree or apitree) |
 | `schemaExcludePatterns` | List<String>? | null | Schema exclude patterns (when sqltree) |
 | `databaseExcludePatterns` | List<String>? | null | Database exclude patterns (when sqltree) |
 | `desc` | String? | null | Description text (when sqltree) |
-| `multiSelect` | Boolean? | null | Multi-select (when sqltree) |
+| `multiSelect` | Boolean? | null | Multi-select. Emits `isMultiple` when `baseWidgetType = "apitree"`, `multiple` otherwise |
 | `dependsOn` | String? | null | Sibling form field whose value scopes the sqltree branch; emits `dependentConnectionField` |
 | `databasesUnselectable` | Boolean? | null | Lock database-level selection in sqltree branch; emits `areDatabasesUnselectable` |
+| `metadataTemplateKey` | String? | null | Routing key sent with the apitree's metadata request, e.g. `"folders"` — a short name, not a template body. Native SDK apps receive it as `MetadataInput.metadata_template_key` and the metadata handler picks what to list from it. Legacy REST connectors use it to select an entry in the credential configmap's `restMetadataTemplate`. Emitted as `metadataTemplateKey` (when apitree). |
+| `metadataTransformerTemplateKey` | String? | null | Routing key for the output transformer. Only legacy REST connectors use it (selects an entry in `restMetadataOutputTransformerTemplate`); native SDK apps ignore it. Emitted as `metadataTransformerTemplateKey` (when apitree). |
+| `flatten` | Boolean? | null | Flatten values retrieved via API; emits `flattenValue` (when apitree) |
+| `strict` | Boolean? | null | Strictly check the tree returned via API; emits `treeCheckStrictly` (when apitree) |
 | `connOptions` | Boolean? | null | Show connection options (when `baseWidgetType = "connection"`) |
 
 ### Condition
@@ -3251,6 +3255,56 @@ Each `Config.Condition` in a `conditions` listing (used by `ConditionalInput` an
 ```
 
 Generates `type: "conditional"` with `ui.widget: "sqltree"` as the base, and a condition that switches to a plain text input when `extraction-method = "agent"`.
+
+### Example: APITree with Agent Mode Fallback
+
+In agent (SDR) mode the Atlan UI cannot reach the source credentials, so an
+API-backed tree cannot load. Wrap the apitree in a `ConditionalInput` and swap in
+a text input when `extraction-method = "agent"`:
+
+```pkl
+["include-folders"] = new ConditionalInput {
+  title = "Include Folders"
+  helpText = "Only selected folders will be crawled."
+  baseWidgetType = "apitree"
+  connectorConfig = "atlan-connectors-example"
+  credentialRef = "credential-guid"
+  metadataTemplateKey = "folders"
+  width = 4
+  default = new Mapping {}
+  additionalProperties = new Dynamic { type = "array" }
+  conditions {
+    new Condition {
+      property = "extraction-method"
+      value = "agent"
+      overrideUi = new Mapping<String, Any> {
+        ["widget"] = "input"
+        ["label"] = "Include Folders"
+        ["placeholder"] = #"{"^folder1$": [], "^folder2$": []}"#
+        ["grid"] = 4
+      }
+    }
+  }
+}
+```
+
+The base (direct-mode) `ui` carries the same keys a plain `APITree` emits:
+`widget: "apitree"`, `connectorConfigName`, `credential`, and
+`metadataTemplateKey`. `metadataTransformerTemplateKey`, `flatten`,
+`strict`, and `multiSelect` emit `metadataTransformerTemplateKey`,
+`flattenValue`, `treeCheckStrictly`, and `isMultiple` only when set.
+
+`metadataTemplateKey` is a routing key, not a template. The frontend sends it
+with the tree's metadata request. A native SDK app receives it as
+`MetadataInput.metadata_template_key` (also mirrored onto `object_filter`), and
+its metadata handler decides what to list, e.g. folders vs. projects. The key
+names here match the emitted `ui` keys; `APITree` keeps its older
+`metadataTemplate` / `metadataTransformer` names. Unlike `APITree`,
+`ConditionalInput` does not default `credentialRef`, `default`, or
+`additionalProperties`; set them as shown. Other base widget types are
+unchanged: a sqltree `multiSelect` still emits `multiple`. Both
+`Widgets.ConditionalInput` (App.pkl) and `Config.ConditionalInput`
+(NativeApp.pkl) support these properties.
 
 ---
 
