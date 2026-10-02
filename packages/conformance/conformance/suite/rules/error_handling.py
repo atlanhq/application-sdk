@@ -371,6 +371,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "optional AND the fallback path is correct AND there is a comment.  Log at\n"
             "DEBUG if the module is preferred but not required.  Flag if the module is\n"
             "expected to be present (will fail later with a confusing AttributeError).\n"
+            "A cause-preserving re-raise on every path (including a typed error raised\n"
+            "from the ImportError) surfaces the failure and does not need a duplicate log.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
     ),

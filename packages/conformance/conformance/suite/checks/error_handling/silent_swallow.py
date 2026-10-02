@@ -223,6 +223,16 @@ class SilentSwallowMixin:
         exc_type = _get_name(node.type)
         if exc_type not in _OPTIONAL_IMPORT_TYPES:
             return
+        # An unconditional cause-preserving re-raise surfaces the missing
+        # dependency instead of hiding it behind a silent fallback. An explicit
+        # ``from`` replaces the implicit context, so it only counts when the
+        # cause carries the caught ImportError.
+        if (
+            _body_always_raises(node.body)
+            and not _body_has_bypassing_exit(node.body)
+            and _raises_chain_caught(node)
+        ):
+            return
         if _any_logging_in(node.body):
             return
         self._add(
@@ -402,6 +412,28 @@ class SilentSwallowMixin:
             f"except {exc_type}: [continue/break/pass] inside a loop — exception is "
             f"silently swallowed. Log at DEBUG before the loop control statement.",
         )
+
+
+def _raises_chain_caught(handler: ast.ExceptHandler) -> bool:
+    """True when every ``raise ... from <cause>`` in *handler* chains the caught error.
+
+    A bare ``raise`` or ``raise X(...)`` keeps the ImportError as implicit
+    context. An explicit ``from`` replaces that context, so the cause must read
+    the handler's bound name; an unbound handler has nothing to chain. Nested
+    ``def``/``class`` bodies are skipped — their raises are not handler exits.
+    """
+    caught = frozenset({handler.name}) if handler.name else frozenset()
+    for stmt in handler.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in (stmt, *_iter_shallow(stmt)):
+            if not isinstance(node, ast.Raise) or node.cause is None:
+                continue
+            if not any(
+                isinstance(n, ast.Name) and n.id in caught for n in ast.walk(node.cause)
+            ):
+                return False
+    return True
 
 
 def _inspection_aliases(
