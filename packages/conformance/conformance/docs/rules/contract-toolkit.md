@@ -5,7 +5,7 @@
 
 # Contract-Toolkit Conformance Rules (K-series)
 
-**21 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
+**22 rules** · Checker: `suite.checks.legacy_contract` (K001–K002, pkl-source regex, scans ``contract/**/*.pkl``), `suite.checks.generated_freshness` (K003–K005, scans ``contract/PklProject``, ``contract/PklProject.deps.json``, ``atlan.yaml``, ``app.yaml``, and ``app/generated/**``), `suite.checks.manifest_contract` (K006/K015, cross-references ``app/generated/**/manifest.json`` against Python ``Output`` contracts and the SDK ``App``'s ``legacy_workflow_types`` declaration)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -36,6 +36,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
+| [K027](#k027) | `EntrypointContractClassNameCollision` | `block` | `app` | `contract-toolkit` | yes | 0.42.0 |
 
 ---
 
@@ -1348,5 +1349,58 @@ WARN and app-scoped, and both no-op on any repo without `app/generated/`.
 **Suppress** with `# conformance: ignore[K021] <reason>` on the `Input` class definition
 (or the comment-only line directly above it) — for example when the string is genuinely
 coerced by a path the static check cannot follow.
+
+---
+
+## K027 — `EntrypointContractClassNameCollision` {#k027}
+
+**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.42.0
+
+> two entrypoints bind different Input/Output contract classes that share one bare class name
+
+**Rationale:** The contract ledger keys every entrypoint contract by its bare class name, and the class
+registry B005/B006 and the ledger generator build is first-wins by that name. Two
+entrypoints that bind different classes under one name therefore share one ledger
+identity: one contract's fields are checked against the other's, or one contract drops
+out of the ledger and its field removals go unchecked. The runtime never notices,
+because the SDK validates with the class object, so nothing fails until a breaking
+contract change ships unguarded. Before contract-toolkit named bundle classes per
+entrypoint, every app/generated/<entrypoint>/_input.py declared class AppInputContract,
+so an app binding the generated classes directly collided by construction. Most
+multi-entrypoint apps already give each entrypoint a unique class; the rule keeps the
+rest from regressing. Customer impact: a breaking change to one entrypoint's contract (a
+removed or retyped field) passes the B005 gate whenever the other class under the same
+name still declares that field, so the release ships and a tenant's saved workflow
+config for that entrypoint loses the value or fails validation. The fix is a mechanical
+rename.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/contracts.py — the extract_metadata and extract_lineage
+  entrypoints bind MetabaseInput/MetabaseOutput and
+  MetabaseLineageInput/MetabaseLineageOutput, one uniquely named class per entrypoint
+  and direction, so no two contracts share a ledger key.
+
+Two or more entrypoints bind Input or Output contract classes that are declared in
+different places but reach the contract ledger under the same bare class name.
+
+Each annotation is resolved through imports (including `import x as y` and `from pkg
+import module`), module-level rebindings such as `AppInputContract =
+CrawlerInputContract`, and string annotations to the in-repo class that declares it. A
+binding reaches the ledger under two names: the import-de-aliased name the annotation
+uses, and the declaring class's own name. A collision is one such name reached from two
+distinct declarations. One class reused by two entrypoints is not a collision, and SDK
+classes (`application_sdk.*`) are never checked: they are the same class everywhere and
+the ledger does not record them.
+
+**Fix:** give each entrypoint's contract a unique class name. Subclass the generated
+class under a unique name, as atlan-mssql-app does (`class
+MinerInputContract(_GeneratedMinerInput)`), or regenerate with a contract-toolkit that
+names bundle input classes `<Entrypoint>InputContract` and import that unique name, not
+the `AppInputContract` alias the generated module keeps for backward compatibility. Then
+regenerate the contract ledger.
+
+**Suppress** with `# conformance: ignore[K027] <reason>` on the entrypoint method
+definition (or the comment-only line directly above it).
 
 ---

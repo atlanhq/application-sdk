@@ -1,0 +1,72 @@
+// FND-3140: every bundle entrypoint's generated `_input.py` used to declare
+// `class AppInputContract`, so one app shipped several different classes under
+// one name. A bundle now names each class after its entrypoint and keeps
+// `AppInputContract` as an alias; single-entrypoint output is unchanged.
+
+amends "pkl:test"
+
+import "../examples/bundle/app.pkl" as bundleApp
+import "../examples/minimal/app.pkl" as minimalApp
+import "../src/App.pkl" as App
+import "fixtures/app_bundle_entrypoint_names.pkl" as namesBundle
+import "fixtures/native_app_bundle.pkl" as nativeBundle
+import "fixtures/native_app_pipeline.pkl" as nativePipeline
+import "../examples/bundle/miner.pkl" as Miner
+
+local crawlerPy: String = bundleApp.output.files["app/generated/crawler/_input.py"].text
+local minerPy: String = bundleApp.output.files["app/generated/miner/_input.py"].text
+local minimalPy: String = minimalApp.output.files["app/generated/_input.py"].text
+
+local function clashingBundle(a: String, b: String) = (namesBundle) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = a; contract = Miner }
+    new App.Entrypoint { name = b; contract = Miner }
+  }
+}
+
+facts {
+  ["Bundle entrypoints get a unique input class named after the entrypoint"] {
+    crawlerPy.contains("\nclass CrawlerInputContract(ExtractionInput):\n")
+    minerPy.contains("\nclass MinerInputContract(ExtractionInput):\n")
+    !crawlerPy.contains("class AppInputContract")
+    !minerPy.contains("class AppInputContract")
+  }
+
+  ["Bundle input modules keep AppInputContract as a backward-compatible alias"] {
+    crawlerPy.endsWith("\n\n\nAppInputContract = CrawlerInputContract\n")
+    minerPy.endsWith("\n\n\nAppInputContract = MinerInputContract\n")
+  }
+
+  ["Entrypoint names with dashes and underscores are PascalCased"] {
+    namesBundle.output.files["app/generated/query_miner/_input.py"].text
+      .contains("\nclass QueryMinerInputContract(ExtractionInput):\n")
+    namesBundle.output.files["app/generated/usage-stats/_input.py"].text
+      .contains("\nclass UsageStatsInputContract(ExtractionInput):\n")
+  }
+
+  ["Single-entrypoint input output is unchanged"] {
+    minimalPy.contains("\nclass AppInputContract(ExtractionInput):\n")
+    !minimalPy.contains("AppInputContract = ")
+    Miner.output.files["app/generated/_input.py"].text.contains("\nclass AppInputContract(ExtractionInput):\n")
+  }
+
+  ["Entrypoints whose names map to the same class name are rejected"] {
+    module.catch(() -> clashingBundle("foo-bar", "foo_bar").output.files)
+      .contains("generate the same input contract class name (FooBarInputContract)")
+  }
+
+  ["Entrypoint names that do not start with a letter are rejected"] {
+    module.catch(() -> clashingBundle("2nd", "miner").output.files)
+      .contains("do not yield a valid Python class name")
+  }
+
+  ["NativeAppBundle entrypoints get the same unique names and alias"] {
+    nativeBundle.output.files["crawler/_input.py"].text
+      .contains("\nclass CrawlerInputContract(ExtractionInput):\n")
+    nativeBundle.output.files["crawler/_input.py"].text
+      .endsWith("\n\n\nAppInputContract = CrawlerInputContract\n")
+    nativeBundle.output.files["query-miner/_input.py"].text
+      .contains("\nclass QueryMinerInputContract(ExtractionInput):\n")
+    nativePipeline.output.files["_input.py"].text.contains("\nclass AppInputContract(ExtractionInput):\n")
+  }
+}

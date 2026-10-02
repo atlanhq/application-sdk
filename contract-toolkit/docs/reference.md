@@ -1061,6 +1061,8 @@ app/generated/
 
 Credential files are hoisted by matching `connectorConfigName`. If two entrypoints produce the same filename with different content, generation fails — use unique `connectorConfigName` values for genuinely different credentials.
 
+**Per-entrypoint input class names:** in a bundle, each entrypoint's `_input.py` declares its class as `<PascalCase(entrypoint name)>InputContract` (`crawler` → `CrawlerInputContract`, `query-miner` → `QueryMinerInputContract`; `-` and `_` both split words) and ends with `AppInputContract = <that class>`, so existing `from app.generated.<entrypoint>._input import AppInputContract` imports keep working. Give each entrypoint a distinct class name so tools that key contracts by class name (the conformance contract ledger) do not conflate them; import the unique name in new code. Generation fails when two entrypoints map to the same class name (`foo-bar` and `foo_bar`) or a name does not start with a letter. Single-entrypoint contracts are unchanged: `app/generated/_input.py` still declares `class AppInputContract` and emits no alias.
+
 ### Other App.pkl Properties
 
 | Property | Type | Default | Description |
@@ -1274,6 +1276,8 @@ contract/app.pkl
     ├─▶ miner/manifest.json
     └─▶ miner/_input.py
 ```
+
+Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `AppInputContract` alias as an `App.pkl` bundle (see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle)).
 
 `atlan-connectors-agent.json` is intentionally not part of this app output shape. Apps reference that shared configmap from `AgentSelector.agentConfigEntries`; the canonical payload is owned by `AgentConfig.pkl` and generated separately.
 
