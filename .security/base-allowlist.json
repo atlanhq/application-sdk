@@ -7,32 +7,5 @@
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
-  "CVE-2026-82049": {
-    "package": "python-3.12-base",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
-    "expires": "2026-11-01",
-    "added_by": "@atlan-app-fleet (vuln-triage)",
-    "case": 4,
-    "ticket": "BLDX-1653"
-  },
-  "CVE-2026-97687": {
-    "package": "py3-pip-wheel",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
-    "expires": "2026-11-01",
-    "added_by": "@atlan-app-fleet (vuln-triage)",
-    "case": 4,
-    "ticket": "BLDX-1656"
-  },
-  "CVE-2026-97689": {
-    "package": "py3-pip-wheel",
-    "severity": "HIGH",
-    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
-    "expires": "2026-11-01",
-    "added_by": "@atlan-app-fleet (vuln-triage)",
-    "case": 4,
-    "ticket": "BLDX-1656"
-  }
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
 }
