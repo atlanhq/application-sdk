@@ -54,6 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel as PydanticBaseModel
 from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
+from typing_extensions import deprecated
 
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk.app._generated_tree import (
@@ -2643,6 +2644,12 @@ def _register_workflow_routes(
 # ---------------------------------------------------------------------------
 
 
+@deprecated(
+    "create_app_handler_service is deprecated; use server_sdk.build_asgi_app from "
+    "atlan-application-sdk-server instead — it installs without the worker "
+    "dependency tree and registers the handler routes only, so check the routes "
+    "your app relies on — will be removed in v4.0"
+)
 def create_app_handler_service(
     handler: Handler,
     *,
@@ -2681,6 +2688,11 @@ def create_app_handler_service(
     state_store: Any = None,
 ) -> FastAPI:
     """Create a FastAPI app for a single handler.
+
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` from ``atlan-application-sdk-server``.
+        It installs without the worker dependency tree and registers the handler
+        routes only, so check the routes your app relies on. Removed in v4.0.
 
     Args:
         handler: The Handler instance to serve.
@@ -3346,6 +3358,12 @@ def create_app_handler_service(
     return app
 
 
+@deprecated(
+    "run_app_handler_service is deprecated; use server_sdk.build_asgi_app with your "
+    "own uvicorn.run instead — the consolidated host owns the run loop, so "
+    "atlan-application-sdk-server ships no blocking entry point — will be removed "
+    "in v4.0"
+)
 def run_app_handler_service(
     handler: Handler,
     *,
@@ -3355,6 +3373,11 @@ def run_app_handler_service(
     **kwargs: Any,
 ) -> None:
     """Create and run the handler service with uvicorn.
+
+    .. deprecated:: 3.37
+        Use :func:`server_sdk.build_asgi_app` with your own ``uvicorn.run``. The
+        consolidated host owns the run loop, so ``atlan-application-sdk-server``
+        ships no blocking entry point. Removed in v4.0.
 
     Convenience wrapper around ``create_app_handler_service()`` that blocks
     until the server is stopped. All keyword arguments are forwarded to

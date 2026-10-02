@@ -45,12 +45,15 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
 
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects and one npm project.
-    All three files the refresh lane rewrites."""
+    """A repo shaped like application-sdk: three uv projects and one npm project.
+    All four files the refresh lane rewrites."""
     (tmp_path / "uv.lock").write_text("root lock\n")
     sub = tmp_path / "packages" / "conformance"
     sub.mkdir(parents=True)
     (sub / "uv.lock").write_text("sub lock\n")
+    server = tmp_path / "packages" / "server"
+    server.mkdir(parents=True)
+    (server / "uv.lock").write_text("server lock\n")
     npm_project = tmp_path / orchestrator.NPM_PROJECT
     npm_project.mkdir(parents=True, exist_ok=True)
     (npm_project / "package.json").write_text('{"name": "remediation"}\n')
@@ -156,12 +159,13 @@ class TestWorkflowGuards:
 
 
 class TestProjects:
-    """The declared project set, guarded because both entries are load-bearing."""
+    """The declared project set, guarded because every entry is load-bearing."""
 
-    def test_both_uv_projects_are_covered(self):
+    def test_every_uv_project_is_covered(self):
         assert [p.directory for p in orchestrator.PROJECTS] == [
             ".",
             "packages/conformance",
+            "packages/server",
         ]
 
     def test_the_conformance_project_exempts_the_sdk_and_pyatlan(self):
@@ -178,6 +182,9 @@ class TestProjects:
         # atlan-application-sdk IS this project, and the conformance package is
         # path-sourced via [tool.uv.sources].
         assert by_dir["."] == {"pyatlan"}
+        # The server package resolves no first-party name from PyPI at all, so
+        # an exemption here would widen the bound for nothing.
+        assert by_dir["packages/server"] == set()
 
 
 class TestBoundProject:
@@ -191,7 +198,7 @@ class TestBoundProject:
         for project in orchestrator.PROJECTS:
             orchestrator.bound_project(project, "P7D", "origin/main", tmp_path)
 
-        assert len(calls) == 2
+        assert len(calls) == 3
         for argv, project in zip(calls, orchestrator.PROJECTS):
             assert argv[argv.index("--window") + 1] == "P7D"
             assert argv[argv.index("--baseline-ref") + 1] == "origin/main"
@@ -257,13 +264,14 @@ class TestMain:
         monkeypatch.setattr(orchestrator.npm_bounded, "main", fake_npm_main)
 
     def test_one_commit_carries_every_lock(self, monkeypatch, in_repo):
-        """One commit, not three: each push re-fires the PR's whole check suite."""
+        """One commit, not four: each push re-fires the PR's whole check suite."""
         self._stub_bound(monkeypatch)
 
         assert orchestrator.main(["--window", "P7D", "--baseline-ref", "HEAD"]) == 0
         assert head_files(in_repo) == {
             "uv.lock",
             "packages/conformance/uv.lock",
+            "packages/server/uv.lock",
             f"{orchestrator.NPM_PROJECT}/package-lock.json",
         }
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE

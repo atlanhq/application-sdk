@@ -100,6 +100,12 @@ PROJECTS: tuple[Project, ...] = (
         directory="packages/conformance",
         exempt=("atlan-application-sdk", "pyatlan"),
     ),
+    # The server package (ARUN-942) is the one this repo installs into every
+    # hosted app pod, so it is the lock least able to afford an unattended
+    # minutes-old transitive. No exemptions: it resolves no first-party name
+    # from PyPI -- atlan-application-sdk-server IS this project (editable), and
+    # it deliberately does not depend on atlan-application-sdk or pyatlan.
+    Project(directory="packages/server"),
 )
 
 # The one npm project the refresh lane rewrites: dev-only devDependencies for the

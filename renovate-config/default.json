@@ -45,7 +45,7 @@
     "platformAutomerge": true,
     "postUpgradeTasks": {
       "commands": [
-        "renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan",
+        "renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt atlan-application-sdk-server --exempt pyatlan",
         "renovate-contract-ledger"
       ],
       "fileFilters": [

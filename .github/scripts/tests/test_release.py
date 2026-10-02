@@ -208,6 +208,13 @@ def git_repo(tmp_path: Path) -> Path:
     git("add", ".")
     git("commit", "-m", "fix(contract-toolkit): repair schema")
 
+    # Server-package commit with an SDK-SHAPED subject — filtered by the
+    # pathspec, which is the layer _SUBPKG_RE cannot cover.
+    (tmp_path / "packages" / "server").mkdir(parents=True)
+    (tmp_path / "packages" / "server" / "s.py").write_text("server\n")
+    git("add", ".")
+    git("commit", "-m", "fix: tighten the task queue derivation")
+
     # SDK-level fix — should appear in results
     (tmp_path / "sdk.py").write_text("sdk-4\n")
     git("add", ".")
@@ -227,6 +234,22 @@ class TestGetCommitsSinceLastTag:
         assert "fix: correct connection handling" in commits
         assert not any("conformance" in c for c in commits)
         assert not any("contract-toolkit" in c for c in commits)
+
+    def test_server_only_commits_are_removed_by_path_not_subject(
+        self, git_repo: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The filter is two layers and both are load-bearing.
+
+        _SUBPKG_RE drops scoped subjects; the `:(exclude)` pathspec drops
+        commits that only touch a sub-package whatever their subject says.
+        Adding `server` to _SUBPKG_RE alone left this open, so a commit under
+        packages/server with an ordinary `fix:` subject still bumped the SDK's
+        version and landed in the SDK's changelog.
+        """
+        monkeypatch.chdir(git_repo)
+        commits = release.get_commits_since_last_tag()
+        assert "fix: correct connection handling" in commits
+        assert "fix: tighten the task queue derivation" not in commits
 
     def test_empty_lines_are_removed(
         self, git_repo: Path, monkeypatch: pytest.MonkeyPatch

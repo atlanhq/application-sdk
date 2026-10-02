@@ -29,7 +29,7 @@ def _set_output(key, value):
 # from the SDK bump walk. Path-only exclusion in git log doesn't cover mixed
 # PRs (a squash commit that touches both SDK files and sub-package files), so
 # we also filter by conventional-commit scope on the subject line.
-_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance|server)\)!?:")
 
 
 def _git(*args: str, quiet: bool = False) -> str:
@@ -107,7 +107,14 @@ def get_commits_since_last_tag() -> list[str]:
     rev_range = _resolve_rev_range()
     try:
         # Get all commits in that range, excluding sub-packages that manage
-        # their own versioning and changelogs (contract-toolkit, conformance).
+        # their own versioning and changelogs (contract-toolkit, conformance,
+        # server). Two layers, and BOTH are needed: this pathspec drops commits
+        # that only touch a sub-package, and _SUBPKG_RE below drops scoped
+        # subjects from mixed commits the pathspec still lets through. Adding
+        # `server` to _SUBPKG_RE alone left the other half open -- a commit
+        # touching only packages/server whose subject is not scoped `(server)`
+        # (`fix: tighten the task queue derivation`) still counted as an SDK
+        # change, so it bumped the SDK version and landed in the SDK changelog.
         commits = _git(
             "log",
             *rev_range,
@@ -116,6 +123,7 @@ def get_commits_since_last_tag() -> list[str]:
             ".",
             ":(exclude)contract-toolkit",
             ":(exclude)packages/conformance",
+            ":(exclude)packages/server",
         ).split("\n")
         # Filter out empty lines that may appear between commits
         commits = [commit for commit in commits if commit.strip()]
