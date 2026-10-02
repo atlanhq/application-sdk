@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .review import RunResult, verify_cut_off_report
+from .review import RunResult, verify_cut_off_report, verify_skipped_report
 
 
 def call_line(event: dict[str, Any]) -> str:
@@ -100,6 +100,7 @@ def build(res: RunResult) -> dict[str, Any]:
         ],
         "resolved": {"free": res.resolved_free, "verified": res.resolved_verified},
         "verify_cut_off": verify_cut_off_report(res),
+        "verify_skipped": verify_skipped_report(res),
         "approach": (st.approach if st else {}) or {},
         "calls": calls,
     }
@@ -118,8 +119,9 @@ def markdown(report: dict[str, Any], pr: int) -> str:
         lines.append(f"- ⚠️ incomplete: {r}")
     for n in report["notes"]:
         lines.append(f"- ℹ️ {n}")
-    if report.get("verify_cut_off"):
-        lines.append(f"- {report['verify_cut_off']['message']}")
+    for key in ("verify_cut_off", "verify_skipped"):
+        if report.get(key):
+            lines.append(f"- {report[key]['message']}")
     lines += [
         "",
         "| requests | failed | input tok | cached | output tok | reasoning tok | cache hit | cost | p50 / max latency | total time |",

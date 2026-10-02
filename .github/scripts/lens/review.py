@@ -70,6 +70,9 @@ class RunResult:
     verify_max_tokens: int = 0  # the budget that verify call had
     verify_opt_in_tokens: int = 0  # what `/lens verify-budget` would give it
     verify_opted_in: bool = False
+    # Open items (F-… and A…) not re-checked because this round changed none of the
+    # PR's own files (e.g. only a merge from the base branch): no verify call ran.
+    verify_skipped: list[str] = field(default_factory=list)
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
@@ -519,6 +522,15 @@ def run(
     # in another file (a data file's finding fixed in the code that reads it). The
     # model also sees what changed this round, since the fix may not be at the quote.
     if cfg.verify and round_no > 1:
+        if not touched:
+            res.verify_skipped = [f.id for f in state.open_findings()] + [
+                cid for cid, _ in open_concerns(state)
+            ]
+            if res.verify_skipped:
+                trace.line(
+                    "verify: skipped — no PR file changed this round, so "
+                    f"{', '.join(res.verify_skipped)} were not re-checked"
+                )
         to_verify = state.open_findings() if touched else []
         # The approach check runs once per PR, so without this a concern the author
         # has since addressed would stay on the PR forever. It rides the same call.
@@ -1361,8 +1373,8 @@ def render_summary(res: RunResult) -> str:
         else 0.0
     )
     failed = int(led.get("failed_requests", 0))
-    if res.verify_cut_off:
-        lines.append("\n> " + verify_cut_off_line(res))
+    if verify_notice_line(res):
+        lines.append("\n> " + verify_notice_line(res))
     for n in res.notes:
         lines.append(f"\n> ℹ️ {n}")
     lines.append(
@@ -1430,9 +1442,28 @@ def verify_cut_off_line(res: RunResult) -> str:
             "`.github/lens/config.toml`)."
         )
     return line + (
-        f" Worth opting in: comment `/lens force verify-budget` to re-check this head "
-        f"with {res.verify_opt_in_tokens:,} (or `/lens verify-budget` after the next push)."
+        f" Worth opting in: comment `/lens force verify-budget` to re-check them with "
+        f"{res.verify_opt_in_tokens:,}. Keep `force`: without it, a round whose push "
+        "changes none of the PR's files (a merge from the base branch) re-checks nothing."
     )
+
+
+def verify_skipped_line(res: RunResult) -> str:
+    """Why a round re-checked nothing, and how to make it re-check."""
+    if not res.verify_skipped:
+        return ""
+    return (
+        f"ℹ️ **Nothing was re-checked this round** — none of the PR's own files changed "
+        "since the last review (a merge from the base branch alone changes none), so "
+        f"{', '.join(res.verify_skipped)} were not re-judged. They show as open because "
+        "nothing checked them. Comment `/lens force` to re-check them against the whole "
+        "PR, or `/lens force verify-budget` if the last re-check ran out of output budget."
+    )
+
+
+def verify_notice_line(res: RunResult) -> str:
+    """The one verify notice a round can carry: cut off, or not run at all."""
+    return verify_cut_off_line(res) or verify_skipped_line(res)
 
 
 def verify_cut_off_report(res: RunResult) -> dict[str, Any] | None:
@@ -1447,6 +1478,13 @@ def verify_cut_off_report(res: RunResult) -> dict[str, Any] | None:
         "opted_in": res.verify_opted_in,
         "message": verify_cut_off_line(res),
     }
+
+
+def verify_skipped_report(res: RunResult) -> dict[str, Any] | None:
+    """The skipped re-check for machine readers. None when verify ran or had nothing."""
+    if not res.verify_skipped:
+        return None
+    return {"items": res.verify_skipped, "message": verify_skipped_line(res)}
 
 
 def verdict_brief(res: RunResult, summary_url: str) -> str:
@@ -1500,8 +1538,8 @@ def _verdict_brief(res: RunResult, summary_url: str, detail_chars: int | None) -
     fixed = len(res.resolved_free) + len(res.resolved_verified)
     if fixed:
         lines.append(f"**Resolved this round:** {fixed}")
-    if res.verify_cut_off:
-        lines.append("\n" + verify_cut_off_line(res))
+    if verify_notice_line(res):
+        lines.append("\n" + verify_notice_line(res))
     ap = st.approach or {}
     if ap.get("verdict"):
         # The holistic review, in full: how lens reads the change, and whether the
@@ -1599,6 +1637,7 @@ def to_json(res: RunResult) -> str:
             "resolved_free": res.resolved_free,
             "resolved_verified": res.resolved_verified,
             "verify_cut_off": verify_cut_off_report(res),
+            "verify_skipped": verify_skipped_report(res),
             "skipped_files": res.skipped_files,
             "bundles": [
                 {
