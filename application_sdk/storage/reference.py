@@ -151,7 +151,9 @@ async def persist_file_reference(
     re-downloading.
 
     For directories, walks the directory tree, uploads each file under a
-    generated prefix, and writes per-file sidecars.
+    generated prefix, and writes per-file sidecars both to the store and
+    locally, so a same-pod materialize of the prefix downloads nothing.
+    Existing local ``.sha256`` sidecars in the tree are not uploaded.
 
     Args:
         store: Destination obstore store.
@@ -203,6 +205,11 @@ async def persist_file_reference(
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, local)
+        # Local ``.sha256`` sidecars are a materialize-time cache key, not
+        # data. Uploading one would land on the store-side sidecar key of its
+        # data file, so a directory that was persisted or materialized before
+        # must not ship its sidecars as artifacts.
+        files = [fp for fp in files if not integrity.is_sidecar_key(fp.name)]
         _t0 = time.monotonic()
         # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
         logger.info(
@@ -218,8 +225,13 @@ async def persist_file_reference(
             file_key = f"{prefix}{relative}"
             # upload_file validates the write and writes the store-side
             # ``{key}.sha256`` sidecar itself (FND-306) — one implementation of
-            # the sidecar protocol, shared by every upload path.
-            await upload_file(file_key, file_path, store, normalize=False)
+            # the sidecar protocol, shared by every upload path. The local
+            # sidecar mirrors the single-file branch: without it a same-pod
+            # materialize of this prefix re-downloads every file (FND-3213).
+            sha256 = await upload_file(file_key, file_path, store, normalize=False)
+            # compute_hash defaults to True, so the digest is always returned here.
+            assert sha256 is not None
+            _write_local_sidecar(str(file_path), sha256)
 
         try:
             from application_sdk.constants import (  # noqa: PLC0415
@@ -342,8 +354,9 @@ async def materialize_file_reference(
     stored sha256 sidecar confirms it is intact, the local sidecar is
     (re-)written and the function returns without downloading.
 
-    **Directory**: fast path is always skipped; all files under the prefix
-    are re-listed and downloaded.
+    **Directory**: all files under the prefix are re-listed; each one whose
+    local copy matches its local ``.sha256`` sidecar is skipped, the rest are
+    downloaded.
 
     **Empty prefix**: nothing under the prefix, and either no object at the
     exact key or only a 0-byte directory marker. A ref whose ``local_path`` is
