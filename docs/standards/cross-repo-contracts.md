@@ -324,6 +324,12 @@ entry rather than a comment:
   through to the key. A DAG that reads `batch` alone applies nothing on the
   first over-cap batch and reports success, and Kafka was acked when the run
   started. Handle `batch_key`; treat `batch` as an optimisation.
+- **An SDK app receives only `batch_key`.** The generated input model declares
+  `batch_key` and not `batch`, and the SDK's `Input` drops undeclared keys. The
+  `{id, topic, data}` envelope has no typed contract, and an untyped list of
+  dicts fails the SDK's payload-safety check, so `batch` stays undeclared until
+  the envelope gets a real type definition. Giving it one, on either side, is
+  a change to this entry.
 - **`ack_paths` renders under streaming even though it is inert there**, because
   AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
   `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change

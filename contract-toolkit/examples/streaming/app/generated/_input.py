@@ -8,3 +8,5 @@ from application_sdk.templates.contracts import ExtractionInput
 class AppInputContract(ExtractionInput):
     target: str = ""
     """What to process."""
+    batch_key: str = ""
+    """Object-store key holding this micro-batch's events; AE always sets it."""

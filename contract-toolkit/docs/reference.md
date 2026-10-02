@@ -221,6 +221,19 @@ goes over the cap — and because AE acks Kafka once the run starts, those event
 gone. Both args are rendered together for exactly this reason; there is no contract
 shape that yields one without the other.
 
+**In an SDK app, only `batch_key` reaches your code.** The generated
+`AppInputContract` (`app/generated/_input.py`) declares `batch_key: str` while
+streaming is on, and does **not** declare `batch`. The SDK's `Input` drops undeclared
+keys, so the inline `batch` never arrives; the SDK logs it as an unknown key once per
+run. Read the events from `batch_key` every time.
+
+`batch` is left out on purpose. Its envelope (`{id, topic, data}`, with an arbitrary
+`data` payload) has no typed contract yet, and an untyped `list[dict[str, Any]]`
+fails the SDK's payload-safety check (`AAF-CTR-002`) even with `MaxItems`, because
+the inner dict is unbounded too. Declaring it would mean opting the whole input class
+out of that check. For `batch` to reach an SDK app, the envelope first needs a real
+typed definition.
+
 **Both directions are refused at eval time**, because both leave a contract saying one
 thing while the node renders the other:
 
@@ -327,7 +340,9 @@ reading any other `$.event.*` path fails its node with `did not match any value`
   `streaming`.
 - **Handle `batch = null`.** Over AE's inline cap only the key is sent. A workflow that
   reads `batch` alone applies nothing and reports success, and Kafka is already acked
-  by then — see *Your streaming workflow must handle both delivery forms* above.
+  by then — see *Your streaming workflow must handle both delivery forms* above. An
+  SDK app's generated input model carries only `batch_key`, so it reads the key every
+  time.
 - There is no watchdog backstop on this path. A run that exhausts its Temporal retries
   is not recovered: its events were acked to Kafka when the run started.
 - The streaming DAG receives its events at `args.batch` (`$.event.batch`) when they fit

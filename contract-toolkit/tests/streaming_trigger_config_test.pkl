@@ -488,4 +488,31 @@ facts {
     !nativeDag(nativeNoStreaming)["extract"]["inputs"]["args"].containsKey("batch")
     !nativeDag(nativeNoStreaming)["extract"]["inputs"]["args"].containsKey("batch_key")
   }
+
+  // The SDK's `Input` drops undeclared keys, so the generated input model is the
+  // only way a streaming run's events reach app code. Found end to end: the
+  // extract node rendered `batch_key`, the generated class did not declare it, and
+  // the workflow received nothing for an over-cap batch. `batch` stays undeclared
+  // until its envelope has a typed contract (an untyped list of dicts fails the
+  // SDK's payload-safety check), so `batch_key` is the route for every batch.
+  ["App.pkl: a streaming input model declares batch_key"] {
+    appStreamingRealtime.output.files!!["app/generated/_input.py"].text
+      .contains("    batch_key: str = \"\"\n")
+  }
+  ["App.pkl: a streaming input model does not declare an untyped batch"] {
+    !appStreamingRealtime.output.files!!["app/generated/_input.py"].text.contains("    batch:")
+  }
+  ["App.pkl: a non-streaming input model declares neither"] {
+    !appNoStreaming.output.files!!["app/generated/_input.py"].text.contains("batch_key")
+  }
+  ["NativeApp.pkl: a streaming input model declares batch_key"] {
+    nativeStreamingRealtime.output.files!!["_input.py"].text
+      .contains("    batch_key: str = \"\"\n")
+  }
+  ["NativeApp.pkl: a streaming input model does not declare an untyped batch"] {
+    !nativeStreamingRealtime.output.files!!["_input.py"].text.contains("    batch:")
+  }
+  ["NativeApp.pkl: a non-streaming input model declares neither"] {
+    !nativeNoStreaming.output.files!!["_input.py"].text.contains("batch_key")
+  }
 }
