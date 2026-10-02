@@ -204,6 +204,7 @@ def render(
     dataforge_env_tier: str = "",
     dataforge_output_prefix: str = "",
     dataforge_hermetic_fallback: str = "",
+    dataforge_lifecycle: str = "",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -265,7 +266,7 @@ def render(
       ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
       ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
       ``source_available_overrides`` (FND-1865 — the per-suite overrides of
-      the repo-wide ``source-available``) and the five ``dataforge_*``
+      the repo-wide ``source-available``) and the six ``dataforge_*``
       values.  All default ``""`` — no line, so the reusable's
       own default applies — and the chain emits nothing at all when every one
       of them is empty, which is what keeps the no-override render
@@ -343,4 +344,5 @@ def render(
         dataforge_env_tier=dataforge_env_tier,
         dataforge_output_prefix=dataforge_output_prefix,
         dataforge_hermetic_fallback=dataforge_hermetic_fallback,
+        dataforge_lifecycle=dataforge_lifecycle,
     )
