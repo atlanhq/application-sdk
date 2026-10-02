@@ -1,8 +1,7 @@
 # .github/workflows/renovate-auto-approve-reusable.yml
 #
-# Reusable workflow: automatically post an atlan-ci code-owner approval on
-# Renovate dependency-only PRs once all required CI checks are green on the
-# current HEAD.
+# Reusable workflow: automatically post an approval on Renovate dependency-only
+# PRs once all required CI checks are green on the current HEAD.
 #
 # All approval logic lives here so that atlan-*-app repos never copy it —
 # they carry only a thin caller that sets their workflow_run trigger and
@@ -17,12 +16,23 @@
 #   In a reusable workflow, github.repository refers to the *calling* repository,
 #   not application-sdk. So REPO picks up the consumer's repo automatically.
 #
-# Why atlan-ci:
-#   atlan-ci is a regular GitHub User account listed in CODEOWNERS (the `*` rule).
-#   Running `gh pr review --approve` with GH_TOKEN set to ORG_PAT_GITHUB
-#   posts the review as atlan-ci, satisfying require_code_owner_review.
-#   GitHub Apps cannot be CODEOWNERS, so this one step deliberately keeps
-#   using the atlan-ci PAT rather than the atlan-app-fleet App token.
+# Who approves (first token present wins; APPROVER_LOGIN always names it):
+#   1. Connector repos: the dedicated approver GitHub App (org var
+#      PR_APPROVER_APP_ID + org secret PR_APPROVER_APP_PRIVATE_KEY, both scoped
+#      by an org admin to the Renovate-onboarded connector repos only). Connector
+#      rulesets do not require a code-owner review (on 2026-09-30, 81 of the 83
+#      onboarded repos required 0 approvals; one required a code owner, one
+#      required 1 approval), so an App review is enough, and it spends the App's
+#      installation quota instead of atlan-ci's shared 5,000 req/hr.
+#   2. application-sdk's own Renovate PRs: the SDK approver PAT
+#      (SDK_APPROVER_TOKEN + repo var SDK_APPROVER_LOGIN). Its main ruleset
+#      requires a code-owner review, and GitHub Apps cannot be CODEOWNERS, so
+#      this repo keeps a User. The App step is skipped here by construction.
+#   3. Fallback while the above is provisioned: the atlan-ci PAT
+#      (org_pat / ORG_PAT_GITHUB), login atlan-ci. Remove once the App is
+#      installed fleet-wide.
+#   The App token is minted with continue-on-error, so a repo the App is not
+#   installed on degrades to (3) instead of losing its approval.
 #
 # Caller migration (fleet rollout in progress):
 #   Callers should use `secrets: inherit` rather than the old explicit
@@ -56,7 +66,8 @@
 #   5. All ruleset-required checks are green (gh pr checks --required exits 0)
 #   6. Renovate's own renovate/artifacts status is green — this is what stops a
 #      failed post-upgrade task from auto-merging
-#   7. atlan-ci has not already posted an APPROVED review with this signature
+#   7. The approver (or, during cutover, atlan-ci) has not already posted an
+#      APPROVED review with this signature
 #
 # Where that logic lives:
 #   .github/scripts/renovate_approval_conditions.py, unit-tested by
@@ -121,6 +132,12 @@ on:
       ORG_PAT_GITHUB:
         description: "PAT owned by atlan-ci with repo read + pull-request write access. Required for the approval step; available via secrets: inherit."
         required: false
+      PR_APPROVER_APP_PRIVATE_KEY:
+        description: "Private key of the connector approver App (app id: org var PR_APPROVER_APP_ID). Connector repos only; available via secrets: inherit."
+        required: false
+      SDK_APPROVER_TOKEN:
+        description: "application-sdk only: fine-grained PAT of the SDK code-owner approver (login: repo var SDK_APPROVER_LOGIN). Available via secrets: inherit."
+        required: false
       FLEET_APP_ID:
         description: "UNUSED since the dashboard dispatch was removed. Still declared so a caller that passes it by name keeps validating; drop it once no caller does."
         required: false
@@ -170,11 +187,32 @@ jobs:
           sparse-checkout-cone-mode: false
           path: .sdk-scripts
 
+      # Never on application-sdk: its ruleset requires a code owner, which an
+      # App review cannot satisfy. Scoped to the calling repo and to exactly
+      # the calls the gate makes (reads + one review).
+      - name: Mint approver App token
+        id: approver-app
+        if: vars.PR_APPROVER_APP_ID != '' && github.repository != 'atlanhq/application-sdk'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.PR_APPROVER_APP_ID }}
+          private-key: ${{ secrets.PR_APPROVER_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-pull-requests: write # post the approval; read PR, files, reviews
+          permission-contents: read # compare/diff reads
+          permission-checks: read # gh pr checks --required
+          permission-statuses: read # renovate/artifacts commit status
+
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
-          # secrets.org_pat: old explicit-passthrough callers. secrets.ORG_PAT_GITHUB:
-          # new callers using `secrets: inherit`. Same credential either way.
-          GH_TOKEN: ${{ secrets.org_pat || secrets.ORG_PAT_GITHUB }}
+          # See "Who approves" in the header. secrets.org_pat: old
+          # explicit-passthrough callers; ORG_PAT_GITHUB: `secrets: inherit`.
+          GH_TOKEN: ${{ steps.approver-app.outputs.token || secrets.SDK_APPROVER_TOKEN || secrets.org_pat || secrets.ORG_PAT_GITHUB }}
+          # Must name whoever GH_TOKEN acts as: condition (g) matches on it.
+          # The same precedence as GH_TOKEN, one arm per token.
+          APPROVER_LOGIN: ${{ steps.approver-app.outputs.token != '' && format('{0}[bot]', steps.approver-app.outputs.app-slug) || secrets.SDK_APPROVER_TOKEN != '' && (vars.SDK_APPROVER_LOGIN || 'atlan-ci') || 'atlan-ci' }}
           REPO: ${{ github.repository }}
           EVENT_NAME: ${{ inputs.event_name }}
           RUN_SHA: ${{ inputs.head_sha }}

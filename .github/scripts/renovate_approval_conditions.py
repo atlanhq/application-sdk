@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Approval gate for Renovate dependency-only PRs — the atlan-ci code-owner review.
+"""Approval gate for Renovate dependency-only PRs — the automated approval review.
 
 Driver for ``.github/workflows/renovate-auto-approve-reusable.yml``. Every
 consumer repo in the fleet calls that reusable at ``@main``, so this file is the
@@ -22,7 +22,7 @@ order is load-bearing for cost as well as for the log):
      diff (see :func:`non_pin_only_workflows`)
   e. every ruleset-required check is green (``gh pr checks --required``)
   f. Renovate's own ``renovate/artifacts`` commit status is ``success``
-  g. atlan-ci has not already posted an APPROVED review with our signature
+  g. the approver has not already posted an APPROVED review with our signature
 
 **Fail closed.** Every condition withholds approval on anything other than an
 affirmative signal. A missing value is never a falsy default that reads as
@@ -37,7 +37,10 @@ inherited ``set -euo pipefail`` behaviour and it is deliberate: a red step is
 visible, and the next workflow_run completion re-evaluates everything anyway.
 
 Environment:
-    GH_TOKEN                PAT owned by atlan-ci (repo read + PR write).
+    GH_TOKEN                the approver's token (repo read + PR write): the
+                            approver App's installation token in connector
+                            repos, the SDK approver PAT in application-sdk.
+    APPROVER_LOGIN          the login GH_TOKEN acts as (default ``atlan-ci``).
     REPO                    owner/name — in a reusable workflow ``github.repository``
                             is the *calling* repo, which is what we want.
     EVENT_NAME              'workflow_run' or 'workflow_dispatch'.
@@ -69,10 +72,19 @@ from typing import Any
 #: @sdk-review workflows deliberately do NOT match it so the two never collide.
 APPROVAL_SIGNATURE = "**Renovate auto-approval:**"
 
-#: The login the gate's GH_TOKEN acts as, and whose prior approvals count for
-#: idempotency. atlan-ci is a real User account listed in CODEOWNERS — GitHub
-#: Apps cannot be code owners, which is why this one path keeps using the PAT.
-APPROVER_LOGIN = "atlan-ci"
+#: The login every approval was posted as before the approver identity became
+#: configurable. Its approvals still count for idempotency while the fleet cuts
+#: over, so a PR it already approved is not approved a second time.
+LEGACY_APPROVER_LOGIN = "atlan-ci"
+
+#: The login the gate's GH_TOKEN acts as. The reusable workflow sets it: the
+#: approver App's ``<slug>[bot]`` in connector repos, whose rulesets do not
+#: require a code owner; the SDK approver in application-sdk, whose ruleset does
+#: (GitHub Apps cannot be code owners, so that repo keeps a User PAT).
+APPROVER_LOGIN = os.environ.get("APPROVER_LOGIN", "").strip() or LEGACY_APPROVER_LOGIN
+
+#: Every login whose signed approval satisfies condition (g).
+APPROVER_LOGINS = frozenset({APPROVER_LOGIN, LEGACY_APPROVER_LOGIN})
 
 #: The self-hosted fleet runner — the sanctioned engine in every repo.
 FLEET_AUTHOR = "atlan-app-fleet[bot]"
@@ -182,7 +194,7 @@ DEP_FILE_RE = (
 APPROVAL_BODY = (
     f"{APPROVAL_SIGNATURE} all required CI checks passed.\n"
     "\n"
-    "This is an automated code-owner approval posted by `atlan-ci` for a\n"
+    f"This is an automated approval posted by `{APPROVER_LOGIN}` for a\n"
     "dependency-only Renovate PR. It is automatically dismissed on any new\n"
     "push (`dismiss_stale_reviews_on_push`) and re-posted once the new\n"
     "HEAD's required checks are green."
@@ -451,18 +463,18 @@ def classify_artifact_state(payload: Any) -> str:
 
 
 def count_signature_approvals(reviews: list[Any]) -> int:
-    """Condition (g): count live atlan-ci approvals bearing our signature.
+    """Condition (g): count live approver approvals bearing our signature.
 
     Only ``APPROVED`` counts. A push-dismissed review has state ``DISMISSED``, so
     it does not match and a fresh approval is correctly posted on the next green
-    run. A human's approval, or an atlan-ci review carrying a different signature
+    run. A human's approval, or an approver review carrying a different signature
     (``**SDK reviewer's verdict:**``), does not suppress ours.
     """
     return sum(
         1
         for r in reviews
         if isinstance(r, dict)
-        and (r.get("user") or {}).get("login") == APPROVER_LOGIN
+        and (r.get("user") or {}).get("login") in APPROVER_LOGINS
         and r.get("state") == "APPROVED"
         and str(r.get("body") or "").startswith(APPROVAL_SIGNATURE)
     )
@@ -655,7 +667,7 @@ def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
 
 
 def approve(repo: str, pr: str, runner: Runner) -> None:
-    """Post the atlan-ci code-owner approval. A failure aborts the step."""
+    """Post the approval as APPROVER_LOGIN. A failure aborts the step."""
     runner(
         [
             "gh",
@@ -746,13 +758,13 @@ def process_pr(
     # g. Idempotency.
     if count_signature_approvals(fetch_reviews(repo, pr, runner)):
         print(
-            f"PR #{pr}: atlan-ci has already approved with the Renovate "
+            f"PR #{pr}: {APPROVER_LOGIN} has already approved with the Renovate "
             "signature — skipping."
         )
         return False
 
     approve(repo, pr, runner)
-    print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
+    print(f"✅ Approved PR #{pr} as {APPROVER_LOGIN} (Renovate auto-approval).")
     return True
 
 
