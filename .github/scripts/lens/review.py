@@ -13,7 +13,8 @@ The round rules that make the loop converge are here, in code:
   Fingerprint dedupe makes a restatement of an old finding a no-op.
 - **Free resolution.** A finding whose quoted code no longer exists at the
   head is resolved without a model call. Only findings whose code still
-  exists in a file the new commits touched get one verify call.
+  exists get one verify call, in a round whose new commits touched a PR
+  file or that `/lens force` asked for.
 - **Merge rule.** Blocking = open critical/high findings. Medium/low never block.
 """
 
@@ -293,9 +294,10 @@ def run(
     # Only a different MODEL is a different reviewer. A lens config change (cards,
     # prompts, limits) does not re-open code an earlier round already passed: that
     # moved the goalposts on reviewed code. It applies from the next new commits.
-    # `/lens force` only lifts the skip and round-cap rules: after new commits it
+    # `/lens force` lifts the skip and round-cap rules: after new commits it
     # reviews just those (the cheap way to get an approval back after a small push);
     # on an unchanged head it re-reviews the whole PR under the current config.
+    # Either way it re-checks every open finding, even when no PR file changed.
     same_reviewer = state.model == cfg.model
     # A head already reviewed is skipped — unless part of it was left unreviewed by a
     # failure, in which case only those files are retried (never the whole PR again).
@@ -522,7 +524,12 @@ def run(
     # in another file (a data file's finding fixed in the code that reads it). The
     # model also sees what changed this round, since the fix may not be at the quote.
     if cfg.verify and round_no > 1:
-        if not touched:
+        # A round that changed no PR file (a merge from the base branch alone) has
+        # nothing new to judge, so it skips verify — unless `/lens force` asked for a
+        # re-check, which then judges the open items against the whole PR's change.
+        recheck = bool(touched) or force
+        verify_files = all_files if touched else full_files
+        if not recheck:
             res.verify_skipped = [f.id for f in state.open_findings()] + [
                 cid for cid, _ in open_concerns(state)
             ]
@@ -531,10 +538,10 @@ def run(
                     "verify: skipped — no PR file changed this round, so "
                     f"{', '.join(res.verify_skipped)} were not re-checked"
                 )
-        to_verify = state.open_findings() if touched else []
+        to_verify = state.open_findings() if recheck else []
         # The approach check runs once per PR, so without this a concern the author
         # has since addressed would stay on the PR forever. It rides the same call.
-        concerns = open_concerns(state) if touched else []
+        concerns = open_concerns(state) if recheck else []
         res.verify_opted_in = verify_budget
         res.verify_opt_in_tokens = cfg.limits.verify_max_tokens_opt_in
         res.verify_max_tokens = (
@@ -549,7 +556,7 @@ def run(
                     client,
                     ws,
                     to_verify,
-                    round_diff(all_files, to_verify),
+                    round_diff(verify_files, to_verify),
                     concerns,
                     removed=removed_paths(full_files),
                     max_tokens=res.verify_max_tokens,
@@ -1444,7 +1451,8 @@ def verify_cut_off_line(res: RunResult) -> str:
     return line + (
         f" Worth opting in: comment `/lens force verify-budget` to re-check them with "
         f"{res.verify_opt_in_tokens:,}. Keep `force`: without it, a round whose push "
-        "changes none of the PR's files (a merge from the base branch) re-checks nothing."
+        "changes none of the PR's files (a merge from the base branch) re-checks nothing; "
+        "with it, they are re-checked whatever the push changed."
     )
 
 
