@@ -1815,6 +1815,53 @@ except ImportError:
     )
 
 
+def test_p008_unrelated_explicit_cause_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_explicit_cause_on_unbound_handler_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_no_finding_on_implicit_chain_or_bare_reraise() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend runtime is required")
+    return optional_backend
+
+
+def load_other():
+    try:
+        import other_backend
+    except ImportError:
+        raise
+    return other_backend
+"""
+    )
+
+
 def test_p008_conditional_reraise_that_can_fall_through_still_fires() -> None:
     _single(
         """\

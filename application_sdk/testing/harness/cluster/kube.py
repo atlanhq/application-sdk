@@ -331,7 +331,6 @@ def kubeconfig_apis(*, kube_context: str | None = None) -> KubernetesApis:
     """
     try:
         from kubernetes import client, config  # noqa: PLC0415
-    # conformance: ignore[E008] the miss is re-raised as KubernetesExtraMissingError naming the extra to install; logging it here as well would report the same gap twice
     except ImportError as error:
         raise KubernetesExtraMissingError(
             message=(
