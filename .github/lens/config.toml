@@ -58,6 +58,11 @@ max_empty_turns = 2
 context_limit_tokens = 60000
 review_max_tokens = 24000     # reasoning tokens count against this; sized for max effort
 reflect_max_tokens = 8000
+# Verify re-checks still-open findings each round; reasoning tokens count against it too.
+# When a re-check spends it all before answering, the verdict says so and names the opt-in:
+# `/lens verify-budget` gives that one run verify_max_tokens_opt_in instead.
+verify_max_tokens = 8000
+verify_max_tokens_opt_in = 24000
 max_comments = 12
 max_nits = 5              # low-severity (nit) findings kept per bundle
 # Plan: turn 0 of the same (cached) conversation on bundles with >= plan_min_lines changed.
