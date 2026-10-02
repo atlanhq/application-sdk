@@ -616,23 +616,34 @@ a clear evidence trail and a short time-to-diagnosis.
 | # | When | Level | Where | Grep |
 |---|------|-------|-------|------|
 | 1 | Worker/combined/handler startup | `INFO` | pod log (first lines) | `"Process memory at start"` |
-| 2 | Every 20 s during an active task, once RSS ≥ 80 % of limit | `WARNING` | pod log | `"Memory pressure on task"` |
+| 2 | During an active task while RSS ≥ 80 % of limit — on crossing, on each 5-point band climbed, and every 5 min in between | `WARNING` | pod log | `"Memory pressure on task"` |
 | 3 | Immediately after pod restart, if `exitCode == 137` | `CRITICAL` | pod log (first lines of new pod) | `"exit code 137 = SIGKILL"` |
 | 4 | When Temporal re-dispatches an activity after worker loss | `WARNING` | workflow log | `"re-dispatched after worker eviction"` |
 
 Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
-where memory stood when the pod was last healthy. Signal 2 fires on the rising
-edge and re-arms after the ratio drops below 75 %, giving pre-kill leading
-indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
+where memory stood when the pod was last healthy. Signal 2 fires on crossing
+80 %, again each time the ratio climbs another 5 points (85 / 90 / 95 %), and
+every 5 minutes while it stays within a band. A warned band re-arms once the
+ratio falls a full band below it, so a fall and second climb warns again, and
+the warning fully re-arms once the ratio drops below 75 %. Each repeat carries the change since the previous line (e.g.
+`+0.60 GiB in 40s`), so a fast climb to a kill shows its rate, and the
+container's cgroup usage (`container 0.95 GiB`), which also counts child
+processes such as the offload pool that the process RSS misses. The throttle is
+per process, not per activity: concurrent activities share it. Together these
+give pre-kill leading indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
 entrypoint immediately on restart — before any Temporal heartbeat timeout — so
 the first thing you see in `kubectl logs` is the exit code, along with the
 diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly
 alongside KEDA scale-down, spot preemption, and rolling deploys.
 
-### Required Kubernetes configuration
+### Where the limit comes from
 
-Signal 2 and signal 1's percentage require `K8S_POD_MEMORY_LIMIT` to be
-injected via the Downward API:
+Signal 2 and signal 1's percentage need the container's memory limit. The SDK
+reads the enforced cgroup limit (`/sys/fs/cgroup/memory.max`, or
+`memory/memory.limit_in_bytes` on cgroup v1) first. No pod-spec wiring is
+needed, and because the heartbeat re-reads it every minute, a VPA resize
+(including an in-place one mid-activity) is picked up. Only when the cgroup reports no limit does it fall back
+to `K8S_POD_MEMORY_LIMIT`, which can still be injected via the Downward API:
 
 ```yaml
 env:
@@ -643,7 +654,7 @@ env:
         divisor: "1"          # raw bytes; parse_pod_memory_limit() also accepts Ki/Mi/Gi suffixes
 ```
 
-When this env var is absent the memory-pressure warning is silently disabled
+When neither supplies a limit the memory-pressure warning is silently disabled
 (no false positives in local dev / non-Kubernetes environments).
 
 ### Diagnostic runbook (OOM kill)

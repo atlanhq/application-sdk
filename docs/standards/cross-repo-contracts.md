@@ -113,7 +113,7 @@ route:
 |---|---|
 | **Produced by** | `get_persistent_s3_prefix()` in `application_sdk/common/incremental/helpers.py`, from `PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE` in `application_sdk/constants.py`; local counterpart `get_persistent_artifacts_path()` |
 | **Layout** | `persistent-artifacts/apps/{application_name}/connection/{connection_id}/`, where `connection_id` is the **last** segment of `connection_qualified_name` |
-| **Written under it** | `marker.txt` (the incremental watermark, via `persist_marker_to_storage`), `current-state/`, and per-app siblings such as a miner's own marker file |
+| **Written under it** | `marker.txt` (the incremental watermark, via `persist_marker`), `current-state/`, and per-app siblings such as a miner's own marker file |
 | **Read by** | Every connector app doing incremental extraction — the crawler and the miner of the same connection both key off this prefix, in separate repos, and must agree; the object store retains it across runs, so past runs read what past SDK versions wrote |
 | **Pinned by** | `TestExtractEpochId` and `TestGetPersistentS3Prefix` in `tests/unit/common/incremental/test_helpers.py`; conformance `P048`/`P049` enforce that apps derive it from here rather than re-deriving it |
 
@@ -142,6 +142,61 @@ Two consequences for changes here:
   went missing with every test green. The one rejected case is an *empty* last
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
+
+## The S3 current-state layout, its manifest, and the incremental diff
+
+| | |
+|---|---|
+| **Produced by** | `CurrentStateStore.commit()` in `application_sdk/common/incremental/state/store.py`, called by `create_current_state_snapshot()` in `state/state_writer.py`; the diff by `create_incremental_diff()` / `_write_metadata()` in `state/incremental_diff.py`, uploaded by `create_current_state_snapshot()` before the commit |
+| **Layout** | Under the connection-scoped prefix (previous entry), `persistent-artifacts/apps/{app}/connection/{id}/`: **current state** at `current-state/{entity}/{stamp}--{file}.json` plus `current-state/.sdk-manifest`; **incremental diff** at `runs/{run_id}/incremental-diff/` (`INCREMENTAL_DIFF_SUBPATH_TEMPLATE`) with `table/`, `column/`, `schema/`, `database/`, `delete/table/`, `delete/column/` and `metadata.json` |
+| **Shape** | `.sdk-manifest` is JSON: `version`, `run_id`, `committed_at`, `keys` → size. `{stamp}` is 12 hex characters derived from the committing run ID. After the manifest is written, the commit prunes every key the manifest does not name — the snapshot it replaced, a failed run's uploads, and unstamped legacy keys — except keys with its own run's stamp, since two attempts of one run can overlap. An earlier attempt's leftovers go with the next run's commit. It then re-uploads any key the manifest names that the store no longer holds. Between a failed run and the next commit, a listing can hold stamped keys the manifest does not name — the manifest, not the listing, is the snapshot. This relies on one run per connection at a time, which scheduling guarantees. `metadata.json` is JSON with `is_incremental`, `tables_created`, `tables_updated`, `tables_backfill`, `tables_deleted`, `columns_total`, `columns_deleted`, `schemas_total`, `databases_total`, `total_changed_entities`, `total_files` |
+| **Read by** | **Argo publish templates** in marketplace-packages — the incremental connectors pass `current-state/` as `transformed-input-path` (marketplace-scripts' `convert_transformer_file_structure` globs it with `**/*.json` and takes the parent directory as the asset type), and `metadata.json` routes the publish (diff with entities → stream publish; no diff → batch publish; diff with zero entities → skip). **atlan-snowflake-app**, which duplicates the layout: it builds the `persistent-artifacts/apps/{app}/connection/{id}` prefix and the `current-state` subpath from its own constants rather than from this SDK. **atlan-oracle-app**, which rebuilds the object keys under that prefix itself. The SDK's own `probe()` on the next run |
+| **Pinned by** | `tests/unit/common/incremental/test_current_state_store.py` (`test_manifest_name_is_invisible_to_the_publish_glob`, the commit/prune tests, the two-run end-to-end test), the FND-3061 regressions in `test_state_lifecycle_characterization.py`, and `TestWriteMetadata` in `tests/unit/common/incremental/test_incremental_diff.py` (`test_metadata_key_set_is_the_argo_routing_contract` pins the exact `metadata.json` key set) |
+
+Constraints that come from the readers:
+
+- **The manifest must never match `**/*.json`.** A root `_manifest.json` would
+  be parsed by the publish converter as asset records under an asset type
+  named `current-state`. Hence the dot-prefixed, suffix-less `.sdk-manifest`.
+- **Entity files must stay directly under `{entity}/`.** The converter reads
+  the asset type from the file's parent directory, so the run stamp goes in
+  the file name, never in a subdirectory. Readers must glob `{entity}/*.json`:
+  file names change every commit.
+- **The prefix, `current-state`, and `runs/{run_id}/incremental-diff` are
+  spelled out in other repos.** atlan-snowflake-app and atlan-oracle-app do
+  not import them from here, so renaming or relocating any segment strands
+  those apps' state exactly as the previous entry describes for the marker —
+  silently, with a full re-extraction as the only symptom. Coordinate the
+  change with both apps, and with the Argo templates, before landing it.
+- **A key a reader rebuilds must still exist after the prune.** An app that
+  constructs a current-state key by name rather than listing the prefix will
+  miss run-stamped files; that app must list `{entity}/`, not guess a name.
+- **The snapshot is the manifest, not the listing.** A reader that lists or
+  globs `current-state/` — the Argo publish converter, atlan-oracle-app's
+  direct `download_prefix` reads — also sees stamped keys no manifest names: a
+  failed commit's upload, until the next commit prunes it (see **Shape**).
+  New readers go through `CurrentStateStore.probe()` / `materialize()`, which
+  read only the manifest's keys. Glob readers that run after a commit, such as
+  Argo publish, see only its snapshot. A glob reader that runs before the next
+  commit, such as atlan-oracle-app's carry-forward reads, still sees a failed
+  run's copy, and the fix for it is to read through the manifest. The old
+  layout was worse on both counts: it never pruned at all.
+- **A damaged manifest resets the connection to a full extraction.** If
+  `.sdk-manifest` is unreadable or names a key the store does not hold, the
+  template's probes treat the snapshot as absent (`DamagedManifestPolicy.TREAT_AS_ABSENT`):
+  the run extracts in full, writes no diff, and its commit replaces the
+  manifest and prunes every key it does not name. For readers this means a
+  damaged manifest is followed by one full snapshot — and a batch publish, not
+  a stream one — rather than a connection that fails every run. A failed
+  listing or manifest read still fails the task, so a transient outage never
+  becomes a full extraction.
+- **`metadata.json` keys are routing inputs.** Adding a key is safe; renaming
+  or dropping one — or writing it non-atomically — changes which publish mode
+  Argo picks. It is written with `atomic_write` because a truncated counts
+  block reads as zero entities and turns a stream publish into a skipped one.
+- **Diff before commit.** The diff is uploaded before `CurrentStateStore.commit`
+  moves the snapshot, so any committed snapshot has a durable diff behind it;
+  a publish step reading both never sees a committed snapshot without its diff.
 
 ## The preflight gate's Temporal failure payload
 

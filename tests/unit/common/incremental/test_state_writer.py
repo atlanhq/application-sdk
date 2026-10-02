@@ -4,7 +4,7 @@ Tests cover public functions with real business logic:
 - copy_non_column_entities: Entity iteration and parallel copy
 - cleanup_previous_state: Safe cleanup with exception handling
 - prepare_current_state_directory: Idempotent directory cleanup
-- prepare_previous_state: Conditional download with cleanup on failure
+- prepare_previous_state: Conditional materialize (deprecated shim)
 - download_transformed_data: Output path validation
 - _copy_columns_from_transformed: Lightweight column copy
 - upload_current_state: Single-call upload with S3 prefix derivation
@@ -22,6 +22,7 @@ from application_sdk.common.incremental.models import TableScope
 from application_sdk.common.incremental.state.state_writer import (
     CurrentStateResult,
     _copy_columns_from_transformed,
+    _reset_directory,
     cleanup_previous_state,
     copy_non_column_entities,
     create_current_state_snapshot,
@@ -30,7 +31,9 @@ from application_sdk.common.incremental.state.state_writer import (
     prepare_previous_state,
     upload_current_state,
 )
+from application_sdk.common.incremental.state.store import CurrentStateStore
 from application_sdk.common.incremental.state.table_scope import add_table_to_scope
+from application_sdk.storage.errors import StorageError
 from application_sdk.storage.ops import _put
 
 # ---------------------------------------------------------------------------
@@ -184,54 +187,39 @@ class TestPreparePreviousState:
 
         assert result is None
 
-    async def test_downloads_previous_state(self):
-        """Downloads previous state when available."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            state_dir = Path(temp_dir) / "current-state"
-            state_dir.mkdir()
+    async def test_downloads_previous_state(self, memory_store, tmp_path):
+        """Materializes beside the given directory, as the old layout did."""
+        state_dir = tmp_path / "current-state"
+        state_dir.mkdir()
 
-            with patch(
-                "application_sdk.common.incremental.state.state_writer."
-                "download_prefix",
-                new_callable=AsyncMock,
-            ):
-                result = await prepare_previous_state(
+        with pytest.warns(DeprecationWarning, match="materialize_previous_state"):
+            result = await prepare_previous_state(
+                connection_qualified_name="t/c/123",
+                current_state_available=True,
+                current_state_dir=state_dir,
+                application_name="oracle",
+            )
+
+        assert result == tmp_path / "current-state.previous"
+        assert result.exists()
+
+    async def test_download_failure_raises_state_download_error(
+        self, memory_store, tmp_path
+    ):
+        with patch(
+            "application_sdk.common.incremental.state.store.list_data_objects",
+            new=AsyncMock(side_effect=StorageError("S3 failure")),
+        ):
+            with pytest.raises(
+                Exception, match="Failed to download previous state"
+            ) as exc_info:
+                await prepare_previous_state(
                     connection_qualified_name="t/c/123",
                     current_state_available=True,
-                    current_state_dir=state_dir,
+                    current_state_dir=tmp_path / "current-state",
                     application_name="oracle",
                 )
-
-            assert result is not None
-            assert result.exists()
-            assert "previous" in result.name
-
-    async def test_cleans_up_on_download_failure(self):
-        """Cleans up temp directory if S3 download fails."""
-        with tempfile.TemporaryDirectory() as temp_dir:
-            state_dir = Path(temp_dir) / "current-state"
-            state_dir.mkdir()
-
-            with patch(
-                "application_sdk.common.incremental.state.state_writer."
-                "download_prefix",
-                new_callable=AsyncMock,
-                side_effect=Exception("S3 failure"),
-            ):
-                with pytest.raises(
-                    Exception, match="Failed to download previous state"
-                ) as exc_info:
-                    await prepare_previous_state(
-                        connection_qualified_name="t/c/123",
-                        current_state_available=True,
-                        current_state_dir=state_dir,
-                        application_name="oracle",
-                    )
-                assert "S3 failure" in str(exc_info.value.__cause__)
-
-            # Temp dir should be cleaned up after failure
-            expected_temp = state_dir.parent / f"{state_dir.name}.previous"
-            assert not expected_temp.exists()
+        assert "S3 failure" in str(exc_info.value.__cause__)
 
     async def test_previous_state_lands_unnested_in_temp_dir(
         self, memory_store, tmp_path
@@ -261,44 +249,26 @@ class TestPreparePreviousState:
         assert (previous / "table" / "chunk-0.json").read_bytes() == b'{"t": 1}'
         assert not (previous / "persistent-artifacts").exists()
 
-    async def test_stale_temp_removal_offloaded_to_thread(self):
-        """The leftover-temp rmtree must not run inline on the event loop.
+    async def test_stale_local_files_are_pruned(self, memory_store, tmp_path):
+        """A leftover from an earlier download is removed by the sync, not
+        trusted as part of the previous state."""
+        prefix = "persistent-artifacts/apps/oracle/connection/123/current-state"
+        await _put(f"{prefix}/table/chunk-0.json", b'{"t": 1}', memory_store)
+        state_dir = tmp_path / "current-state"
+        stale = tmp_path / "current-state.previous" / "table" / "leftover.json"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("{}")
 
-        The temp tree holds a full previous-state download (one JSON file per
-        asset), so removing it inline stalls every other coroutine — including
-        the enclosing @task's auto-heartbeat — for the whole call.
-        """
-        with tempfile.TemporaryDirectory() as temp_dir:
-            state_dir = Path(temp_dir) / "current-state"
-            state_dir.mkdir()
-            stale_temp = state_dir.parent / f"{state_dir.name}.previous"
-            stale_temp.mkdir()
-            (stale_temp / "leftover.json").write_text("{}")
+        previous = await prepare_previous_state(
+            connection_qualified_name="default/oracle/123",
+            current_state_available=True,
+            current_state_dir=state_dir,
+            application_name="oracle",
+        )
 
-            with (
-                patch(
-                    "application_sdk.common.incremental.state.state_writer."
-                    "download_prefix",
-                    new_callable=AsyncMock,
-                ),
-                patch(
-                    "application_sdk.common.incremental.state.state_writer."
-                    "run_in_thread",
-                    new_callable=AsyncMock,
-                    side_effect=lambda func, *a, **kw: func(*a, **kw),
-                ) as mock_offload,
-            ):
-                await prepare_previous_state(
-                    connection_qualified_name="t/c/123",
-                    current_state_available=True,
-                    current_state_dir=state_dir,
-                    application_name="oracle",
-                )
-
-            assert mock_offload.await_args_list, "stale-temp removal not offloaded"
-            offloaded = mock_offload.await_args_list[0].args
-            assert offloaded[0] is shutil.rmtree
-            assert offloaded[1] == stale_temp
+        assert previous is not None
+        assert not stale.exists()
+        assert (previous / "table" / "chunk-0.json").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -413,39 +383,35 @@ class TestCopyColumnsFromTransformed:
 
 
 class TestUploadCurrentState:
-    """Tests for upload_current_state: derives S3 prefix and calls upload."""
+    """upload_current_state (deprecated) commits through CurrentStateStore."""
 
-    async def test_uploads_to_derived_prefix(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            state_dir = Path(temp_dir) / "current-state"
-            state_dir.mkdir()
+    async def test_the_upload_becomes_the_committed_snapshot(
+        self, memory_store, tmp_path
+    ):
+        """Once a manifest exists, a plain upload would be invisible to every
+        reader; the deprecated helper must commit instead."""
+        store = CurrentStateStore.for_connection("default/oracle/123", "oracle")
+        first = tmp_path / "first"
+        (first / "table").mkdir(parents=True)
+        (first / "table" / "chunk-0.json").write_text("old")
+        await store.commit(first, "run-1")
 
-            with (
-                patch(
-                    "application_sdk.common.incremental.state.state_writer.get_persistent_s3_prefix",
-                    return_value="persistent-artifacts/apps/oracle/connection/123",
-                ) as mock_prefix,
-                patch(
-                    "application_sdk.common.incremental.state.state_writer.upload_prefix",
-                    new_callable=AsyncMock,
-                ) as mock_upload,
-            ):
-                result = await upload_current_state(
-                    state_dir,
-                    connection_qualified_name="default/oracle/123",
-                    application_name="oracle",
-                )
-
-            assert result == (
-                "persistent-artifacts/apps/oracle/connection/123/current-state"
+        state_dir = tmp_path / "current-state"
+        (state_dir / "table").mkdir(parents=True)
+        (state_dir / "table" / "chunk-0.json").write_text("new")
+        with pytest.warns(DeprecationWarning, match="upload_current_state"):
+            result = await upload_current_state(
+                state_dir,
+                connection_qualified_name="default/oracle/123",
+                application_name="oracle",
             )
-            mock_prefix.assert_called_once_with("default/oracle/123", "oracle")
-            mock_upload.assert_awaited_once_with(
-                local_dir=str(state_dir),
-                prefix=(
-                    "persistent-artifacts/apps/oracle/connection/123/current-state"
-                ),
-            )
+
+        assert result == store.s3_prefix
+        snapshot = await store.probe()
+        assert snapshot.committed_run_id is not None
+        assert snapshot.committed_run_id.startswith("legacy-upload-")
+        dest = await store.materialize(snapshot, tmp_path / "prev")
+        assert [p.read_text() for p in dest.rglob("*.json")] == ["new"]
 
 
 # ---------------------------------------------------------------------------
@@ -505,6 +471,9 @@ class TestCreateCurrentStateSnapshot:
             )
 
             mock_diff = MagicMock(total_files=7)
+            state_store = MagicMock(spec=CurrentStateStore)
+            state_store.s3_prefix = "persistent/oracle/conn/123/current-state"
+            state_store.commit = AsyncMock(return_value=MagicMock())
 
             with (
                 patch(
@@ -562,8 +531,10 @@ class TestCreateCurrentStateSnapshot:
                             s3_prefix="persistent/oracle/conn/123",
                             run_id="run-abc",
                             get_backfill_tables_fn=get_backfill_tables_fn,
+                            state_store=state_store,
                             **snapshot_kwargs,
                         )
+                    state_store.commit.assert_not_awaited()
                     return None
 
                 result = await create_current_state_snapshot(
@@ -576,15 +547,19 @@ class TestCreateCurrentStateSnapshot:
                     s3_prefix="persistent/oracle/conn/123",
                     run_id="run-abc",
                     get_backfill_tables_fn=get_backfill_tables_fn,
+                    state_store=state_store,
                     **snapshot_kwargs,
                 )
 
             # close_scope must always be called when scope is created
             mock_close_scope.assert_called_once_with(scope)
-            # upload_prefix called for current-state, plus diff if previous present
-            expected_uploads = 2 if previous_state_present else 1
+            # The diff is a plain upload; current-state goes through one commit.
+            expected_uploads = 1 if previous_state_present else 0
             assert mock_upload.await_count == expected_uploads
+            state_store.commit.assert_awaited_once()
+            assert state_store.commit.await_args.args == (current_state, "run-abc")
             self._last_upload_calls = list(mock_upload.call_args_list)
+            self._last_commit = state_store.commit.await_args
 
             if previous_state_present:
                 mock_create_diff.assert_called_once()
@@ -631,9 +606,9 @@ class TestCreateCurrentStateSnapshot:
         """No override → both uploads use upload_prefix's historical default."""
         result = await self._run(scope_qns=["db/s/t1"], previous_state_present=True)
         assert result is not None
-        assert len(self._last_upload_calls) == 2
-        for call in self._last_upload_calls:
-            assert call.kwargs["max_concurrency"] == 4
+        assert len(self._last_upload_calls) == 1
+        assert self._last_upload_calls[0].kwargs["max_concurrency"] == 4
+        assert self._last_commit.kwargs["max_concurrency"] == 4
 
     async def test_upload_concurrency_override_reaches_both_uploads(self):
         """Explicit upload_concurrency reaches both the diff and current-state
@@ -645,16 +620,15 @@ class TestCreateCurrentStateSnapshot:
             upload_concurrency=16,
         )
         assert result is not None
-        assert len(self._last_upload_calls) == 2
-        for call in self._last_upload_calls:
-            assert call.kwargs["max_concurrency"] == 16
+        assert len(self._last_upload_calls) == 1
+        assert self._last_upload_calls[0].kwargs["max_concurrency"] == 16
+        assert self._last_commit.kwargs["max_concurrency"] == 16
 
     async def test_directory_prep_and_diff_clear_offloaded_to_thread(self):
         """Both tree removals inside the snapshot must be offloaded.
 
-        ``prepare_current_state_directory`` stays sync for its sync callers, so
-        the offload lives at this call site; the incremental-diff clear is
-        offloaded inline. Either one running on the loop would stall the
+        The current-state reset and the incremental-diff clear are both
+        offloaded at this call site. Either one running on the loop would stall the
         enclosing @task's auto-heartbeat for the tree's removal time.
         """
         offloaded: list[tuple[object, tuple]] = []
@@ -676,7 +650,7 @@ class TestCreateCurrentStateSnapshot:
         assert result is not None
         called = [func for func, _ in offloaded]
         assert (
-            prepare_current_state_directory in called
+            _reset_directory in called
         ), "current-state directory prep was not offloaded"
         diff_clears = [
             args

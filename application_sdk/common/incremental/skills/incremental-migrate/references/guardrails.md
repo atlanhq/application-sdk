@@ -14,30 +14,33 @@ resolve it before proceeding.
 ### GUARD-PRE-01: Verify SDK Dependency Version
 
 Check that `atlan-application-sdk` is declared in `pyproject.toml` and that
-the pinned version includes `application_sdk.common.incremental.marker`.
+the pinned version exposes the incremental seam: the marker helpers and the
+current-state store.
 
 **How to verify:**
 ```bash
 grep "atlan-application-sdk" pyproject.toml
-python -c "from application_sdk.common.incremental.marker import IncrementalMarker; print('OK')"
+python -c "from application_sdk.common.incremental import fetch_marker, persist_marker; print('OK')"
+python -c "from application_sdk.common.incremental.state.store import CurrentStateStore, RunStateDirs; print('OK')"
 ```
 
 **Failure mode:** If the SDK version predates incremental support, all marker
 imports will fail at runtime. Upgrade the SDK dependency first.
 
-### GUARD-PRE-02: Verify ObjectStore API Surface
+### GUARD-PRE-02: Verify Storage API Surface
 
-Confirm that `ObjectStore` exposes all four methods needed for state persistence:
+Confirm that `application_sdk.storage` exposes the four functions needed for
+state persistence:
 - `upload_file` -- write a single artifact
-- `get_content` -- read a single artifact
+- `download_file` -- read a single artifact (raises `StorageNotFoundError` when absent)
 - `upload_prefix` -- bulk upload a directory tree
 - `download_prefix` -- bulk download a directory tree
 
 **How to verify:**
 ```python
-from application_sdk.common.object_store import ObjectStore
-for method in ["upload_file", "get_content", "upload_prefix", "download_prefix"]:
-    assert hasattr(ObjectStore, method), f"Missing: {method}"
+import application_sdk.storage as storage
+for name in ["upload_file", "download_file", "upload_prefix", "download_prefix"]:
+    assert hasattr(storage, name), f"Missing: {name}"
 ```
 
 **Failure mode:** Older SDK versions may lack bulk operations. Chunked storage
@@ -247,20 +250,27 @@ def write_chunked(data: list[dict], prefix: str) -> int:
 **Failure mode (Tableau R4/R6):** Field-extract files and the metadata cache
 both exceeded the 100 MB gRPC limit on large Tableau sites, crashing extraction.
 
-### GUARD-IMPL-07: Use `suppress_error=True` on State Reads
+### GUARD-IMPL-07: Treat Only "Not Found" as Missing State
 
-When reading incremental state artifacts from ObjectStore, always use
-`suppress_error=True`. Missing state is NOT an error -- it means this is
-the first run (or state was cleared) and should trigger full extraction.
+Missing state is NOT an error -- it means this is the first run (or state
+was cleared) and should trigger full extraction. Every *other* storage error
+must propagate, so the task retries instead of silently running a full
+extraction. Catch `StorageNotFoundError` only:
 
 ```python
-content = await object_store.get_content(
-    state_path, suppress_error=True
-)
-if content is None:
+from application_sdk.storage import StorageNotFoundError, download_file
+
+try:
+    await download_file(key=state_key, local_path=local_path)
+except StorageNotFoundError:
     # First run or cleared state -- do full extraction
     return None
 ```
+
+For the marker itself, `fetch_marker()` already applies this
+rule (a missing marker gives `MarkerPair.marker is None`; anything else raises). For the SQL
+current-state snapshot, `CurrentStateStore.probe()` reports
+`exists=False` rather than raising.
 
 ### GUARD-IMPL-08: Handle None Markers Gracefully
 
@@ -436,9 +446,11 @@ ObjectStore:
 Check every persisted artifact:
 
 ```python
-for artifact in list_artifacts(state_prefix):
-    size_mb = get_artifact_size(artifact) / (1024 * 1024)
-    assert size_mb < 50, f"Artifact {artifact} is {size_mb:.1f} MB (limit: 50 MB)"
+from application_sdk.storage import list_data_objects
+
+for obj in await list_data_objects(state_prefix):
+    size_mb = obj.size / (1024 * 1024)
+    assert size_mb < 50, f"Artifact {obj.key} is {size_mb:.1f} MB (limit: 50 MB)"
 ```
 
 ### GUARD-POST-05: Backward Compatibility

@@ -45,6 +45,7 @@ from application_sdk.common.incremental.models import (
     EntityType,
     IncrementalDiffResult,
     TableScope,
+    TableState,
 )
 from application_sdk.common.incremental.state.table_scope import (
     get_table_state,
@@ -52,6 +53,8 @@ from application_sdk.common.incremental.state.table_scope import (
 )
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,
+    fetch_count,
+    fetch_str_set,
     get_parent_table_qn_expr,
     json_scan,
     managed_duckdb_connection,
@@ -111,17 +114,17 @@ def create_incremental_diff(
     updated_tables: Set[str] = set()
     for qn in iter_scope_table_qns(table_scope):
         state = get_table_state(table_scope, qn)
-        if state in ("CREATED", "UPDATED"):
+        if state in (TableState.CREATED, TableState.UPDATED):
             changed_tables.add(qn)
-        if state == "UPDATED":
+        if state == TableState.UPDATED:
             updated_tables.add(qn)
 
     backfill_only_tables = backfill_tables - changed_tables
     all_changed_tables = changed_tables | backfill_only_tables
 
     state_counts = table_scope.state_counts
-    result.tables_created = state_counts.get("CREATED", 0)
-    result.tables_updated = state_counts.get("UPDATED", 0)
+    result.tables_created = state_counts.get(TableState.CREATED, 0)
+    result.tables_updated = state_counts.get(TableState.UPDATED, 0)
     result.tables_backfill = len(backfill_only_tables)
 
     # ------------------------------------------------------------------
@@ -284,9 +287,9 @@ def _detect_deletions(
             WHERE cq.qualified_name IS NULL
         """)
 
-        deleted_table_count = active_conn.execute(
-            f"SELECT COUNT(*) FROM {del_deleted_tables}"
-        ).fetchone()[0]
+        deleted_table_count = fetch_count(
+            active_conn.execute(f"SELECT COUNT(*) FROM {del_deleted_tables}")
+        )
 
         if deleted_table_count > 0:
             delete_table_dir = delete_dir.joinpath(EntityType.TABLE.value)
@@ -302,12 +305,11 @@ def _detect_deletions(
             counts["tables_deleted"] = deleted_table_count
             logger.info("Detected %d deleted tables", deleted_table_count)
 
-            deleted_table_qns = {
-                row[0]
-                for row in active_conn.execute(
+            deleted_table_qns = fetch_str_set(
+                active_conn.execute(
                     f"SELECT attributes.qualifiedName FROM {del_deleted_tables}"
-                ).fetchall()
-            }
+                )
+            )
 
             # Cascade: delete columns belonging to deleted tables
             cascade_count = _detect_deleted_columns_for_tables(
@@ -388,13 +390,13 @@ def _detect_deleted_columns_for_tables(
             [(qn,) for qn in table_qns],
         )
 
-        count_result = active_conn.execute(f"""
+        count = fetch_count(
+            active_conn.execute(f"""
             SELECT COUNT(*)
             FROM {del_cascade_cols} c
             JOIN {del_cascade_tables} dt ON c.parent_table_qn = dt.table_qn
-        """).fetchone()
-
-        count = count_result[0] if count_result else 0
+        """)
+        )
         if count == 0:
             return 0
 
@@ -497,16 +499,16 @@ def _detect_deleted_columns_for_updated_tables(
             [(qn,) for qn in updated_table_qns],
         )
 
-        count_result = active_conn.execute(f"""
+        count = fetch_count(
+            active_conn.execute(f"""
             SELECT COUNT(*)
             FROM {del_upd_prev_cols} pc
             JOIN {del_upd_tables} ut ON pc.parent_table_qn = ut.table_qn
             LEFT JOIN {del_upd_curr_cols} cc
               ON pc.attributes.qualifiedName = cc.qualified_name
             WHERE cc.qualified_name IS NULL
-        """).fetchone()
-
-        count = count_result[0] if count_result else 0
+        """)
+        )
         if count == 0:
             return 0
 
@@ -633,14 +635,14 @@ def _filter_entities_by_qualified_names(
             WHERE attributes.qualifiedName IS NOT NULL
         """)
 
-        count_result = active_conn.execute(f"""
+        count = fetch_count(
+            active_conn.execute(f"""
             SELECT COUNT(*)
             FROM {entities_data} e
             JOIN {qualified_names_lookup} qn_lookup
               ON e.attributes.qualifiedName = qn_lookup.qualified_name
-        """).fetchone()
-
-        count = count_result[0] if count_result else 0
+        """)
+        )
 
         if count == 0:
             return None
@@ -715,13 +717,13 @@ def _filter_columns_by_tables(
             WHERE {table_qn_expr} IS NOT NULL
         """)
 
-        count_result = active_conn.execute(f"""
+        count = fetch_count(
+            active_conn.execute(f"""
             SELECT COUNT(*)
             FROM {columns_data} c
             JOIN {parent_tables_lookup} pt_lookup ON c.parent_table_qn = pt_lookup.table_qn
-        """).fetchone()
-
-        count = count_result[0] if count_result else 0
+        """)
+        )
 
         if count == 0:
             return None

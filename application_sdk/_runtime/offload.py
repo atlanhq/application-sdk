@@ -27,11 +27,14 @@ import multiprocessing
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
 from typing import Any, TypeVar
 
 from application_sdk._runtime.progress import (
+    DEFAULT_MAX_NO_PROGRESS_SECONDS,
+    ProgressTracker,
     current_progress_tracker,
     declared_hold_active,
 )
@@ -292,11 +295,180 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     # inactive for the call's duration, the duration backstop owns it, and warn
     # mode reports every closed hold with its observed duration. That residual
     # is accepted and surfaced, not closed.
-    with _auto_hold(_THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None):
-        return await loop.run_in_executor(
-            _BLOCKING_EXECUTOR,
-            functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
+    call: Callable[[], T] = functools.partial(
+        ctx.run, functools.partial(func, *args, **kwargs)
+    )
+    label = _offloaded_callable_name(func)
+    scopes = _OFFLOAD_SCOPES.get()
+    if scopes:
+        call = _tracked_offload(call, scopes, label)
+    with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
+        return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+
+
+#: The open :func:`tracking_offloads` scopes, innermost last. A tuple rather
+#: than one set so a nested scope does not hide its calls from an enclosing one:
+#: each ``run_in_thread`` records its marker in every open scope. Tasks copy the
+#: context when they are created, so a ``TaskGroup`` opened inside a scope hands
+#: the same sets to every child.
+_OFFLOAD_SCOPES: contextvars.ContextVar[tuple[set["_OffloadMarker"], ...]] = (
+    contextvars.ContextVar("_OFFLOAD_SCOPES", default=())
+)
+
+
+class _OffloadMarker(concurrent.futures.Future[None]):
+    """A tracked call's marker, carrying the callable's name for the drain's log."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+
+
+def _tracked_offload(
+    call: Callable[[], T],
+    scopes: tuple[set[_OffloadMarker], ...],
+    label: str,
+) -> Callable[[], T]:
+    """Wrap *call* so the open scopes can see whether its thread is still running.
+
+    The asyncio future ``run_in_executor`` returns cannot answer that: cancelling
+    the awaiting task cancels it at once, while the thread it stood for runs on.
+    The marker is a separate ``concurrent.futures.Future`` the thread itself
+    drives — ``RUNNING`` for exactly as long as *call* is executing — so a drain
+    waits on the work, not on the task that stopped waiting for it.
+    """
+    marker = _OffloadMarker(label)
+    for pending in scopes:
+        pending.add(marker)
+
+    def _forget(done: "concurrent.futures.Future[None]") -> None:
+        for pending in scopes:
+            pending.discard(done)
+
+    marker.add_done_callback(_forget)
+
+    def _run() -> T:
+        # A drain cancels markers still PENDING — calls queued behind a full
+        # pool whose caller has already gone — so they never start, rather
+        # than being waited on to run work nobody wants.
+        if not marker.set_running_or_notify_cancel():
+            raise concurrent.futures.CancelledError
+        try:
+            return call()
+        finally:
+            marker.set_result(None)
+
+    return _run
+
+
+@contextlib.contextmanager
+def tracking_offloads() -> Iterator[set[_OffloadMarker]]:
+    """Record every ``run_in_thread`` call made under this block, in any task.
+
+    Yields the live set of markers for calls that have not finished; pass it to
+    :func:`drain_offloads` to wait for them. Calls made in tasks created inside
+    the block are recorded too, because a task inherits the context it was
+    created in.
+    """
+    pending: set[_OffloadMarker] = set()
+    token = _OFFLOAD_SCOPES.set((*_OFFLOAD_SCOPES.get(), pending))
+    try:
+        yield pending
+    finally:
+        _OFFLOAD_SCOPES.reset(token)
+
+
+async def drain_offloads(
+    pending: set[_OffloadMarker],
+    *,
+    max_no_progress_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait until no thread recorded in *pending* is still running, or none is progressing.
+
+    For the unwind path of a fan-out that was cancelled or failed: its tasks
+    have stopped awaiting their threads, but the threads have not stopped, and
+    whatever they write can land after the caller has moved on — a retry
+    included. Calls still queued are cancelled so they never start.
+
+    A cancellation arriving *during* the drain does not cut it short — that
+    would reopen the gap being closed — but it is not lost: it is re-raised once
+    the drain ends.
+
+    **The drain waits only while it is getting somewhere.** It keeps its own
+    stall clock, re-armed each time one of its threads finishes, and gives up
+    once that clock reaches the no-progress allowance — the attempt's resolved
+    ``max_no_progress_seconds``, the number the stall watchdog applies, or
+    :data:`DEFAULT_MAX_NO_PROGRESS_SECONDS` outside an activity. This is
+    enforced whatever ``ATLAN_PROGRESS_WATCHDOG`` says, because the alternative
+    is not "wait a little longer": the calls drained here (an ``fsync``, a file
+    read) take no timeout, so one wedged volume would hold the drain, the
+    cancellation it is holding back, and the worker's shutdown behind it
+    forever.
+
+    It is deliberately not the attempt's own tracker. That one is re-armed by
+    any work in the attempt and vouched for by every other offload's unbounded
+    hold, so it cannot say whether *these* threads are moving; only their
+    finishing can.
+
+    Giving up is logged at WARNING with the calls still running, and then the
+    drain returns — or re-raises the cancellation it was holding — so the
+    caller's own failure propagates unchanged. Those threads are not stopped
+    (a thread cannot be); a call that later completes can still write.
+
+    Args:
+        pending: The live marker set from :func:`tracking_offloads`.
+        max_no_progress_seconds: Override for the allowance; tests use it.
+        clock: Monotonic time source for the drain's stall clock.
+    """
+    # list() snapshots under the GIL; worker threads discard as they finish.
+    running = [
+        marker for marker in list(pending) if not marker.cancel() and not marker.done()
+    ]
+    if not running:
+        return
+    budget = max_no_progress_seconds
+    if budget is None:
+        budget = current_progress_tracker().max_no_progress_seconds
+    if budget is None:
+        budget = DEFAULT_MAX_NO_PROGRESS_SECONDS
+
+    # Only a drained thread finishing is progress here; see the docstring.
+    progress = ProgressTracker(clock=clock)
+    waiting = {asyncio.wrap_future(marker): marker for marker in running}
+    for marker in running:
+        marker.add_done_callback(
+            lambda _done, label=marker.label: progress.mark_progress(label)
         )
+
+    cancelled = False
+    while True:
+        remaining = [w for w, marker in waiting.items() if not marker.done()]
+        if not remaining:
+            break
+        quiet = progress.stalled_for()
+        if quiet >= budget:
+            logger.warning(
+                "Stopped waiting for %d offloaded call(s) that made no progress "
+                "for %.0fs: %s. They are still running and may write after the "
+                "caller has moved on",
+                len(remaining),
+                quiet,
+                ", ".join(sorted(waiting[w].label for w in remaining)),
+            )
+            break
+        try:
+            # Not wait_for: asyncio.wait never cancels what it waits on, so a
+            # timeout or a cancellation here leaves the markers untouched.
+            await asyncio.wait(
+                remaining,
+                timeout=budget - quiet,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def submit_in_thread(

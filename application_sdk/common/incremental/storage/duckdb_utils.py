@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Protocol, TypeAlias
 
 from application_sdk.constants import (
     DUCKDB_COMMON_TEMP_FOLDER,
@@ -21,15 +21,47 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 
+if TYPE_CHECKING:
+    from duckdb import DuckDBPyConnection
+
 logger = get_logger(__name__)
 
 try:
     import duckdb
-
-    DuckDBConnection = Optional[duckdb.DuckDBPyConnection]
 except ImportError:  # conformance: ignore[E008,E009] optional dep duckdb not installed; sentinel fallback
     duckdb = None  # type: ignore[assignment]
-    DuckDBConnection = Any
+
+
+class DuckDBResult(Protocol):
+    """The result side of a DuckDB connection: what ``execute`` hands back.
+
+    Rows are ``tuple[object, ...]``: DuckDB types a column only at run time, so
+    a caller narrows each value it reads.
+    """
+
+    def fetchall(self) -> list[tuple[object, ...]]: ...
+
+    def fetchone(self) -> tuple[object, ...] | None: ...
+
+
+class DuckDBConnectionLike(Protocol):
+    """The subset of ``duckdb.DuckDBPyConnection`` the incremental helpers call.
+
+    Structural, so a real connection satisfies it without importing
+    ``duckdb`` (an optional dependency) at type-check time, and a test can
+    pass a fake.
+    """
+
+    def execute(self, query: str, parameters: object = None, /) -> DuckDBResult: ...
+
+    def executemany(self, query: str, parameters: object = None, /) -> DuckDBResult: ...
+
+    def close(self) -> None: ...
+
+
+#: Optional connection parameter type for helpers that can reuse a caller's
+#: connection or open their own (see :func:`managed_duckdb_connection`).
+DuckDBConnection: TypeAlias = DuckDBConnectionLike | None
 
 
 def _generate_random_uuid(length: int = 8) -> str:
@@ -94,7 +126,7 @@ class DuckDBConnectionManager:
         )
 
     @property
-    def connection(self) -> duckdb.DuckDBPyConnection:
+    def connection(self) -> DuckDBPyConnection:
         """Get the underlying DuckDB connection."""
         if self._is_closed:
             from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
@@ -129,7 +161,7 @@ class DuckDBConnectionManager:
 @contextmanager
 def managed_duckdb_connection(
     conn: DuckDBConnection = None,
-) -> Generator[Any, None, None]:
+) -> Generator[DuckDBConnectionLike, None, None]:
     """Context manager for optional connection reuse.
 
     Used by helper functions that can work standalone OR with a shared connection.
@@ -144,7 +176,7 @@ def managed_duckdb_connection(
         raise ImportError("duckdb is required for managed_duckdb_connection")
 
     owns_connection = conn is None
-    active_conn = conn if conn else duckdb.connect(":memory:")
+    active_conn: DuckDBConnectionLike = conn if conn else duckdb.connect(":memory:")
 
     try:
         yield active_conn
@@ -156,6 +188,27 @@ def managed_duckdb_connection(
 # =============================================================================
 # SQL Helpers
 # =============================================================================
+
+
+def fetch_count(result: DuckDBResult) -> int:
+    """Read a ``SELECT COUNT(*)`` result: its one value, or 0 when there is no row.
+
+    Raises:
+        TypeError: If the first column is not an integer (the query was not a
+            count).
+    """
+    row = result.fetchone()
+    if row is None:
+        return 0
+    value = row[0]
+    if not isinstance(value, int):
+        raise TypeError(f"expected an integer count, got {type(value).__name__}")
+    return value
+
+
+def fetch_str_set(result: DuckDBResult) -> set[str]:
+    """Collect the first column of every row as a set of strings, skipping NULLs."""
+    return {row[0] for row in result.fetchall() if isinstance(row[0], str)}
 
 
 def escape_sql_string(value: str) -> str:

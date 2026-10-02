@@ -64,6 +64,177 @@
       "symbol": "AtlanError"
     },
     {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "StorageNotFoundError is deprecated; use application_sdk.storage.errors.StorageNotFoundError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.helpers",
+      "removal_version": "4.0.0",
+      "symbol": "StorageNotFoundError"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "download_file is deprecated here; use application_sdk.storage.ops.download_file, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.helpers",
+      "removal_version": "4.0.0",
+      "symbol": "download_file"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "atomic_write is deprecated here; use application_sdk.common.atomic.atomic_write, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "atomic_write"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "disk_full_guard is deprecated here; use application_sdk.common.atomic.disk_full_guard, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "disk_full_guard"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "fetch_marker_from_storage is deprecated; use fetch_marker, which returns a MarkerPair (marker, next_marker) instead of a positional tuple \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "fetch_marker_from_storage"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_artifacts_path is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_artifacts_path, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "get_persistent_artifacts_path"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "persist_marker_to_storage is deprecated; use persist_marker, which returns a MarkerPersistResult (marker_timestamp, s3_key) instead of a dict \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "persist_marker_to_storage"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "upload_file is deprecated here; use application_sdk.storage.ops.upload_file, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.marker",
+      "removal_version": "4.0.0",
+      "symbol": "upload_file"
+    },
+    {
+      "kind": "constant",
+      "marker_via": "module-getattr",
+      "message": "StorageError is deprecated; use application_sdk.storage.errors.StorageError \u2014 it was only ever re-exported here as a side effect of an import. Will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "StorageError"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "count_json_files_recursive is deprecated here; use application_sdk.common.incremental.helpers.count_json_files_recursive, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "count_json_files_recursive"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "download_current_state is deprecated; use CurrentStateStore.probe() to learn whether state exists, and CurrentStateStore.materialize() into a run-scoped directory only when its files are needed \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "download_current_state"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "download_prefix is deprecated here; use application_sdk.storage.batch.download_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "download_prefix"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_s3_prefix is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_s3_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "get_persistent_s3_prefix"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "run_in_thread is deprecated here; use application_sdk._runtime.offload.run_in_thread, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_reader",
+      "removal_version": "4.0.0",
+      "symbol": "run_in_thread"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "cleanup_previous_state is deprecated; previous state now lives in the run-scoped RunStateDirs.previous_state, which goes with the run's output \u2014 will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "cleanup_previous_state"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "get_persistent_s3_prefix is deprecated here; use application_sdk.common.incremental.helpers.get_persistent_s3_prefix, where it lives \u2014 it was only ever re-exported here by accident; will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "get_persistent_s3_prefix"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "prepare_current_state_directory is deprecated; create_current_state_snapshot resets its own build directory \u2014 will be removed in v4.0.0.",
+      "migration_target": false,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "prepare_current_state_directory"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "prepare_previous_state is deprecated; use materialize_previous_state (or CurrentStateStore.materialize) into RunStateDirs.previous_state \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "prepare_previous_state"
+    },
+    {
+      "kind": "function",
+      "marker_via": "decorator",
+      "message": "upload_current_state is deprecated; use CurrentStateStore.commit(), which writes a manifest and prunes stale keys \u2014 will be removed in v4.0.0.",
+      "migration_target": true,
+      "module": "application_sdk.common.incremental.state.state_writer",
+      "removal_version": "4.0.0",
+      "symbol": "upload_current_state"
+    },
+    {
       "kind": "enum_member",
       "marker_via": "enum-member",
       "message": "DataframeType.daft is deprecated; use DataframeType.pandas instead \u2014 will be removed in v4.0.0. It routes to the pandas/pyarrow path.",

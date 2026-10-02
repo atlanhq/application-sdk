@@ -8,12 +8,17 @@ This module contains helper functions for:
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
-from concurrent.futures import ThreadPoolExecutor
+import warnings
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+from typing_extensions import deprecated
+
+from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import (
     atomic_copy,
     disk_full_guard,
@@ -21,6 +26,7 @@ from application_sdk.common.atomic import (
 )
 from application_sdk.constants import (
     APPLICATION_NAME,
+    MARKER_FILENAME,
     MARKER_TIMESTAMP_FORMAT,
     MAX_CONCURRENT_STORAGE_TRANSFERS,
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
@@ -28,9 +34,84 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
-from application_sdk.storage.ops import download_file
+from application_sdk.storage.integrity import (
+    check_transfer_digest,
+    read_expected_digest,
+    verification_enabled,
+)
+from application_sdk.storage.ops import _get_bytes
+from application_sdk.storage.ops import download_file as _download_file
+from application_sdk.storage.ops import normalize_key
+
+if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
+    from application_sdk.storage.ops import BoundStore
 
 logger = get_logger(__name__)
+
+#: name -> (replacement, why). The marker read no longer downloads to a local file, so
+#: these stopped being imported here; they are served once more for callers
+#: that imported (or patched) them via this module.
+_DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
+    "StorageNotFoundError": (
+        "application_sdk.storage.errors.StorageNotFoundError",
+        "it was only ever re-exported here as a side effect of an import",
+    ),
+}
+
+
+def __getattr__(name: str) -> object:
+    """Serve the removed re-exports once more, with a deprecation warning (PEP 562)."""
+    entry = _DEPRECATED_CONSTANTS.get(name)
+    if entry is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    replacement, note = entry
+    warnings.warn(
+        f"{name} is deprecated here; use {replacement} instead — {note}. "
+        "Will be removed in v4.0.0.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    module_name, _, attr = replacement.rpartition(".")
+    from importlib import import_module  # noqa: PLC0415 — resolved on access only
+
+    return getattr(import_module(module_name), attr)
+
+
+@deprecated(
+    "download_file is deprecated here; use application_sdk.storage.ops.download_file, where it lives — "
+    "it was only ever re-exported here by accident; will be removed in v4.0.0."
+)
+async def download_file(
+    key: str,
+    local_path: str | Path,
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    compute_hash: bool = False,
+    min_chunk_size: int = 10 * 1024 * 1024,
+    normalize: bool = True,
+    verify: bool | None = None,
+    expected_sha256: str | None = None,
+    sidecar_present: bool | None = None,
+) -> str | None:
+    """Deprecated alias of :func:`application_sdk.storage.ops.download_file`.
+
+    .. deprecated:: 3.x
+        Import it from :mod:`application_sdk.storage.ops`. Will be removed in
+        v4.0.0.
+    """
+    return await _download_file(
+        key,
+        local_path,
+        store,
+        compute_hash=compute_hash,
+        min_chunk_size=min_chunk_size,
+        normalize=normalize,
+        verify=verify,
+        expected_sha256=expected_sha256,
+        sidecar_present=sidecar_present,
+    )
 
 
 def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
@@ -226,7 +307,10 @@ async def download_marker_from_s3(
     connection_qualified_name: str,
     application_name: str = "",
 ) -> str | None:
-    """Download marker.txt from S3 and return its content, or None if not found.
+    """Read marker.txt from S3 into memory and return it, or None if not found.
+
+    Nothing is written locally: the marker is a few bytes, and a local copy at
+    a per-connection path is one more file two runs on a worker would share.
 
     Args:
         connection_qualified_name: The connection qualified name.
@@ -234,30 +318,55 @@ async def download_marker_from_s3(
 
     Returns:
         Marker timestamp string if found, None otherwise
+
+    Raises:
+        StorageError: If the read fails for any reason other than the marker
+            not existing. A missing marker means "first run"; any other
+            failure must not silently become a full extraction, so it
+            propagates and the task retries.
+        StorageIntegrityError: If the marker does not match its ``.sha256``
+            sidecar (only when transfer verification is on).
     """
     s3_prefix = get_persistent_s3_prefix(connection_qualified_name, application_name)
-    marker_s3_key = f"{s3_prefix}/marker.txt"
-    local_marker_path = get_persistent_artifacts_path(
-        connection_qualified_name, "marker.txt", application_name
-    )
-    local_marker_path.parent.mkdir(parents=True, exist_ok=True)
+    marker_s3_key = f"{s3_prefix}/{MARKER_FILENAME}"
 
-    logger.info("Downloading marker from S3: %s", marker_s3_key)
-    try:
-        await download_file(
-            key=marker_s3_key,
-            local_path=str(local_marker_path),
-        )
-        if local_marker_path.exists() and local_marker_path.stat().st_size > 0:
-            marker = local_marker_path.read_text(encoding="utf-8").strip()
-            logger.info("Marker downloaded: %s", marker)
-            return marker
-        logger.info("Marker file downloaded but empty")
-    except FileNotFoundError:
+    logger.info("Reading marker from S3: %s", marker_s3_key)
+    raw = await _get_bytes(marker_s3_key)
+    if raw is None:
         logger.info("Marker file not found in S3 (first incremental run)")
-    except Exception:
-        logger.warning("Failed to download marker from S3", exc_info=True)
-    return None
+        return None
+    await _verify_marker_bytes(marker_s3_key, raw)
+    marker = raw.decode("utf-8").strip()
+    if not marker:
+        logger.info("Marker file found but empty")
+        return None
+    logger.info("Marker read: %s", marker)
+    return marker
+
+
+async def _verify_marker_bytes(marker_s3_key: str, raw: bytes) -> None:
+    """Check *raw* against the marker's ``.sha256`` sidecar, as a download would.
+
+    The in-memory read skips the transfer checks ``download_file`` makes, and a
+    damaged marker that still decodes can carry a later timestamp, which would
+    make the next extraction skip changes. No sidecar (or verification turned
+    off) means nothing to verify against, exactly as for a download.
+
+    Raises:
+        StorageIntegrityError: If the bytes do not match the recorded digest.
+    """
+    if not verification_enabled(None):
+        return
+    key = normalize_key(marker_s3_key)
+    expected = await read_expected_digest(None, key)
+    if expected is None:
+        return
+    check_transfer_digest(
+        "marker read",
+        key,
+        expected=expected,
+        actual=hashlib.sha256(raw).hexdigest(),
+    )
 
 
 async def download_s3_prefix_with_structure(
@@ -301,17 +410,25 @@ async def download_s3_prefix_with_structure(
 
 
 def count_json_files_recursive(directory: Path) -> int:
-    """Recursively count JSON files without creating a list in memory.
+    """Recursively count JSON files under *directory*.
+
+    Walks with :func:`~application_sdk.common._listing.safe_list_directory`
+    rather than ``Path.rglob``, which silently swallows an ``OSError`` part-way
+    through a walk and so under-counts instead of failing. Blocking: async
+    callers must offload it with ``run_in_thread``.
 
     Args:
         directory: Directory to search recursively
 
     Returns:
-        Number of JSON files
+        Number of JSON files; 0 when *directory* does not exist.
+
+    Raises:
+        OSError: If the tree cannot be walked.
     """
     if not directory.exists():
         return 0
-    return sum(1 for _ in directory.rglob("*.json"))
+    return sum(1 for p in safe_list_directory(directory) if p.suffix == ".json")
 
 
 def copy_directory_parallel(
@@ -320,13 +437,19 @@ def copy_directory_parallel(
     pattern: str = "*.json",
     max_workers: int = 3,
 ) -> int:
-    """Copy files from source to destination directory in parallel.
+    """Copy files from source to destination directory.
+
+    Copies one file at a time on the calling thread. Every caller already runs
+    this inside ``run_in_thread``, and a thread pool opened from an offloaded
+    thread is the nesting ``_runtime/offload.py`` warns against: it multiplies
+    the process's thread count without the offload layer seeing it.
 
     Args:
         src_dir: Source directory containing files to copy
         dest_dir: Destination directory (will be created if needed)
         pattern: Glob pattern for files to copy (default: ``*.json``)
-        max_workers: Maximum number of parallel workers (default: 3)
+        max_workers: Ignored; the copy is sequential. Kept so existing callers
+            that pass it keep working.
 
     Returns:
         Number of files copied
@@ -379,11 +502,7 @@ def copy_directory_parallel(
             continue
     ensure_free_space(dest_dir, total_bytes, operation="carry-forward copy")
 
-    def copy_single_file(src_file: Path) -> None:
-        """Copy a single file to dest_dir, atomically. Raises on failure."""
+    for src_file in files:
         atomic_copy(src_file, dest_dir / src_file.name, operation="carry-forward copy")
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        list(executor.map(copy_single_file, files))
 
     return len(files)

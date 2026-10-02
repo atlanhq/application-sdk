@@ -39,7 +39,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T022](#t022) | `E2ETwoStorePostureDisabled` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T023](#t023) | `E2EHarnessScaffoldHandWritten` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T024](#t024) | `E2ERunModeUnset` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
-| [T025](#t025) | `EntrypointWithoutE2ECoverage` | `warn` | `app` | `test-tier-coverage` | yes | 0.22.0 |
+| [T025](#t025) | `EntrypointWithoutE2ECoverage` | `warn` | `app` | `test-tier-coverage` | — | 0.22.0 |
 
 ---
 
@@ -308,6 +308,8 @@ a call named `assert_*` (`self.assertEqual`, `mock.assert_called_once`,
 `pytest.fail(...)` / `self.fail(...)`
 an SDK integration-test scenario-helper call: `.equals` / `.contains` /
     `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`
+a `# should not raise` / `# must not raise` comment anywhere in the body
+    (case-insensitive): the call completing *is* the assertion
 ```
 
 This vocabulary is intentionally broad — the check is biased toward zero false positives
@@ -329,10 +331,17 @@ def test_extracts_users():
     assert result.record_count == 3
 ```
 
-Suppress with `# conformance: ignore[T005] <reason>` only for a test whose sole purpose
-is confirming the call doesn't raise (rare — usually better expressed as
-`pytest.raises`'s absence isn't a thing worth a dedicated test on its own; prefer
-folding the no-raise expectation into a test that also asserts on the return value).
+A test whose sole purpose is confirming the call doesn't raise (a best-effort or
+swallow-errors path) marks the call instead of suppressing:
+
+```python
+async def test_close_is_idempotent():
+    await client.close()
+    await client.close()  # should not raise
+```
+
+Prefer folding the no-raise expectation into a test that also asserts on the outcome
+(the resource is released, the state is reset) when there is one to assert.
 
 ---
 
@@ -1395,7 +1404,7 @@ is set dynamically (e.g. parametrised from an env var) rather than as a class at
 
 ## T025 — `EntrypointWithoutE2ECoverage` {#t025}
 
-**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** yes · **Since:** 0.22.0
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `test-tier-coverage` · **Autofixable:** — · **Since:** 0.22.0
 
 > A bundle (multi-entrypoint) contract entrypoint has no e2e suite
 
@@ -1422,6 +1431,11 @@ would have run it in CI does not exist.
   contract — two @entrypoint methods on one marketplace card (the BLDX-1342 route/card
   split), with extract-lineage run as a DAG node inside the single full-DAG e2e — is the
   multi-entrypoint shape T025 deliberately does not flag.
+
+A person has to close this, not the remediation lane: covering an entrypoint means an
+e2e run against a real source for it (a reachable system and CI credentials), which only
+its owners and the test infrastructure can provide. A class that skips when the source
+is absent satisfies the matcher and none of the rationale.
 
 The app is in **bundle mode** — `app/generated/` holds one `<name>/manifest.json` subdir
 per entrypoint — and at least one of those entrypoints is not exercised by any
