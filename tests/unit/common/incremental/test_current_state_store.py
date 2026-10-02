@@ -503,10 +503,16 @@ class TestMaterialize:
         snapshot = await state.probe()
         dest = tmp_path / "incremental" / "previous-state"
         started = threading.Event()
+        release = threading.Event()
         finished = threading.Event()
 
         def _abandoned_write(path: str) -> None:
             started.set()
+            # Held until the cancel is requested, so the attempt is still
+            # in flight when it is cancelled however late the loop runs.
+            release.wait(5)
+            # Outlasts the retry's materialize, so a missing drain lands this
+            # write after the retry rather than before it.
             time.sleep(0.3)
             Path(path).write_bytes(b"written by the cancelled attempt")
             finished.set()
@@ -523,6 +529,7 @@ class TestMaterialize:
             attempt = asyncio.create_task(state.materialize(snapshot, dest))
             assert await asyncio.to_thread(started.wait, 5), "download never began"
             attempt.cancel()
+            release.set()
             with pytest.raises(asyncio.CancelledError):
                 await attempt
         assert finished.is_set(), "cancelled attempt's thread outlived its unwind"
