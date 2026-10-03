@@ -99,6 +99,12 @@ class AtlanRuleProperties(BaseModel):
     the SARIF — possibly a small one, with no access to the Python catalog —
     knows exactly which reference-app file to open before proposing a fix."""
 
+    remediation_reference: dict[str, str] | None = None
+    """``{"kind", "target", "note"}`` from
+    ``catalog.RuleDefinition.remediation_reference``, carried as
+    ``atlan/remediationReference`` so ``/remediate`` in a connector repo can
+    hand a migration finding to its skill without the Python catalog."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -122,6 +128,8 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/forcesExternalInfluence"] = True
         if self.canonical_reference:
             out["atlan/canonicalReference"] = self.canonical_reference
+        if self.remediation_reference:
+            out["atlan/remediationReference"] = self.remediation_reference
         return out
 
     @classmethod
@@ -142,6 +150,7 @@ class AtlanRuleProperties(BaseModel):
                 props.get("atlan/forcesExternalInfluence", False)
             ),
             canonical_reference=props.get("atlan/canonicalReference"),
+            remediation_reference=props.get("atlan/remediationReference"),
         )
 
 

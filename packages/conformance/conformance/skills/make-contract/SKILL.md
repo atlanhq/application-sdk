@@ -5,6 +5,13 @@ description: Create, migrate, update, generate, or validate an Atlan native app 
 
 # make-contract
 
+## Conformance rules this skill clears
+
+K001, K005, K009. These rules name this skill as their `remediation_reference`, and
+`/remediate` hands their findings here. When the skill is done, run
+`atlan-application-sdk-conformance detect --series K` and confirm none of
+these rule ids is still reported.
+
 Use this skill when the user asks to create, migrate, update, generate, or
 validate an Atlan native app contract. The goal is a correct Pkl contract and
 regenerated SDK artifacts — never hand-edited generated JSON.
@@ -41,11 +48,12 @@ it as the source of truth; trust `README.md` + `CLAUDE.md` + `CHANGELOG.md` +
 
 ## Hard Rules
 
-- Treat `atlanhq/application-sdk` as the canonical source for this skill. The
-  repo-local copies live at `.agents/skills/make-contract/SKILL.md` and
-  `.claude/skills/make-contract/SKILL.md`; mirror any edit between them
-  byte-for-byte, and do not add nested `make-contract` copies under
-  `contract-toolkit/` or app repos.
+- The canonical copy of this skill ships in the conformance package
+  (`packages/conformance/conformance/skills/make-contract/SKILL.md`; resolve
+  it with `atlan-application-sdk-conformance skills-dir`).
+  `.agents/skills/make-contract` and `.claude/skills/make-contract` are
+  symlinks to it: edit the packaged file only, and do not add nested
+  `make-contract` copies under `contract-toolkit/` or app repos.
 - **`App.pkl` is the canonical template. `NativeApp.pkl` and
   `NativeAppBundle.pkl` are frozen legacy.** Author every new contract by
   amending `App.pkl`. Only touch the legacy modules when reading an app that
@@ -369,7 +377,7 @@ node does not fit.
 > that must reach a downstream Atlan system app (publish, lineage, quality), the
 > connector must call `App.upload()` explicitly from `run()` — the task-to-task
 > activity interceptor only writes to the customer-owned `objectstore`. See
-> [ADR-0014](../../../docs/adr/0014-two-store-storage-architecture.md).
+> [ADR-0014](https://github.com/atlanhq/application-sdk/blob/main/docs/adr/0014-two-store-storage-architecture.md).
 
 ## Value-Flow Rules
 

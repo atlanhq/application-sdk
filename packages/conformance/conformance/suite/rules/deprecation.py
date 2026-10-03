@@ -28,7 +28,11 @@ suppressions).  An id never migrates, changes, or gets reused.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -101,6 +105,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
         help_uri=f"{_HELP_BASE}#b001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B002",
@@ -308,6 +316,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "commit the updated ledger in the same PR.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B006",
@@ -397,6 +409,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ledger will be regenerated before the first deploy.\n"
         ),
         help_uri=f"{_HELP_BASE}#b006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
+            note="run the pinned command from the finding message verbatim (FND-607)",
+        ),
     ),
     RuleDefinition(
         id="B007",
@@ -473,6 +490,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
         ),
         help_uri=f"{_HELP_BASE}#b007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-off-daft",
+        ),
     ),
     RuleDefinition(
         id="B008",
@@ -565,5 +586,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "false positives.\n"
         ),
         help_uri=f"{_HELP_BASE}#b008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
 )

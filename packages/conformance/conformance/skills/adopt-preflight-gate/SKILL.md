@@ -51,12 +51,21 @@ outputs:
 
 # Adopt the SDK-native preflight gate
 
+## Conformance rules this skill clears
+
+F001, F002, F003, F004, F005, F006, F007, F008, F009, F010, F011, F012, F014. These rules name this skill as their `remediation_reference`, and
+`/remediate` hands their findings here. When the skill is done, run
+`atlan-application-sdk-conformance detect --series F` and confirm none of
+these rule ids is still reported.
+
 ## Scope boundary — check first
 
 This skill is for **v3 apps only** (subclasses `App`, `@entrypoint` methods,
 `Handler` in `app/handler.py`). If the app is v2 (Argo-era layout,
-`application_sdk.workflows`/`handlers` imports), STOP and run `/upgrade-v3`
-first; this skill picks up after.
+`application_sdk.workflows`/`handlers` imports), STOP: the app needs the v2 → v3
+upgrade first ([`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md),
+in the `atlanhq/application-sdk` repo, not shipped with this package); this
+skill picks up after.
 
 Reference implementation for everything below: **atlan-mysql-app** (PR #340) —
 short-circuiting auth check with typed error, advisory tables check, PARTIAL
@@ -714,7 +723,7 @@ accepted-risk proceed, not a regression. That evidence is only usable if the
 downstream failure is typed; otherwise the two rows disagree about whose fault
 it was and the app's is the one that counts.
 
-Logging on those paths, per `docs/standards/logging.md`: log the typed error
+Logging on those paths, per [`docs/standards/logging.md`](https://github.com/atlanhq/application-sdk/blob/main/docs/standards/logging.md): log the typed error
 (pass the exception, not `str(exc)` interpolated into a message), keep the level
 at `error` only for genuine failures, and never log credential values or a
 driver message that embeds a connection string — the SDK redacts

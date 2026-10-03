@@ -135,8 +135,9 @@ impact analysis and verification*):
 `autofixable = true` rules (the **auto-fixable** ruleset) are applied this
 way. `autofixable = false` rules (the **migration** ruleset) are never applied
 by the loop: steps 1–2 still run, and the result is a `migration_brief` in
-residue — target state in the reference app, files that would change, the
-external skill to run — for the connector's per-rule sub-issue.
+residue — target state in the reference app, files that would change, and the
+rule's `remediation_reference` — for the connector's per-rule sub-issue. See
+*After the loop — migration hand-off*.
 
 ## Phase 1+ — run the loop
 
@@ -147,6 +148,28 @@ Only after Phase 0 has converged (or been recorded as residue):
    - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
 2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
 3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.
+
+## After the loop — migration hand-off
+
+Residue entries for migration rules carry `remediation_reference`
+(`kind`, `target`, `note`). Group them by reference, then:
+
+- `kind = skill` — interactive sessions only. Resolve the skills directory the
+  same way as the programs directory:
+  `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
+  connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
+  anywhere else. Tell the developer which rule ids and how many findings the
+  skill covers, and ask before starting it. Then read
+  `$SKILLS/<target>/SKILL.md` and follow it, stop points included. When it
+  ends, re-run detection for the rule ids it names: a cleared finding leaves
+  residue, a remaining one stays in residue with the skill named.
+- `kind = guide` — apply nothing. Report the rule ids with the guide path
+  `$(dirname "$PROGRAMS")/<target>`.
+- `kind = decision` — apply nothing. Report the rule ids, who decides
+  (`target`) and the choice (`note`).
+
+Headless or harness-driven runs skip the hand-off: the residue report lists
+each reference and nothing is started.
 
 ## Arguments → program inputs
 

@@ -53,6 +53,7 @@ that explains them — the hardest kind of regression to attribute during an inc
   naming the SDK behaviour each floor constraint buys. Bounded at both ends: a floor for
   the features the app uses, a ceiling at the next major so a breaking release cannot
   arrive through a lockfile refresh.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every app must declare `atlan-application-sdk` in `[project.dependencies]` with a
 version specifier that has both a lower bound (`>=` or `==`) and an upper bound (`<` or
@@ -79,6 +80,7 @@ duplicate when the SDK pin changes.
 - **Compliant example:** atlan-openapi-app pyproject.toml — [project.dependencies] holds exactly one entry, the
   SDK. orjson and the pyatlan models are imported under app/ without being redeclared
   there or in any dependency group, so there is one place a version can move.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` (its core `[project.dependencies]`) must not
 be redeclared in the app's `[project.dependencies]` or any
@@ -115,6 +117,7 @@ an entry point/plugin, or run as a server (e.g. uvicorn) without an explicit imp
   directly or builds its engine through the SDK's `BaseSQLClient`
   (`application_sdk.clients.sql`). A dynamically-loaded dependency the checker can see
   is not a finding at all.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 - **Already correct when:** A justified inline `# conformance: ignore[D003] <reason>` IS the correct end state for a
   dependency that is genuinely loaded without a static import — a driver resolved from a
   dialect/plugin string, an entry-point registration, a CLI invoked as a subprocess. The
@@ -167,6 +170,7 @@ validated dev environment and must be touched on every SDK bump.
   not pin as core (pytest-asyncio, pytest-timeout, respx, pre-commit, coverage, scalene,
   poethepoet, the conformance suite). Nothing the SDK already pins is repeated there, so
   an SDK bump never has to touch the group.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
 `[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
@@ -197,6 +201,7 @@ typo is invisible to the resolver that silently dropped it.
 - **Compliant example:** atlan-mysql-app pyproject.toml — `atlan-application-sdk[iam-auth,pandas,sql,workflows]`
   in [project.dependencies]. All four are extras the SDK publishes; a typo here resolves
   to nothing and fails at import, not at install.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
 publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
@@ -223,6 +228,7 @@ environment — exactly where it is hardest to catch in review.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`, the SDK's own floor. A
   lower bound than the SDK's promises an interpreter the dependency tree cannot actually
   satisfy.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The app's `[project].requires-python` lower bound must be at least the SDK's minimum
 supported Python (`>=3.11`). A lower floor lets the app be installed on a Python the SDK
@@ -248,6 +254,7 @@ build changes per-app instead of uniform.
 
 - **Compliant example:** atlan-openapi-app pyproject.toml — `build-backend = "hatchling.build"`, which is what
   the app-runtime base image and the publish pipeline expect.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[build-system].build-backend` must be `hatchling.build`.  Atlan's app fleet
 standardises on Hatchling so the managed build-and-publish workflow and wheel layout are
@@ -271,6 +278,7 @@ APIs pass app CI unnoticed, defeating the point of the typed surface.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `typeCheckingMode = "standard"` under [tool.pyright],
   the SDK baseline. Weakening it locally hides exactly the boundary errors the typed
   contracts exist to catch.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[tool.pyright].typeCheckingMode` must not be weaker than the SDK baseline `standard` —
 `off` and `basic` are flagged; `standard` and `strict` pass.  A weakened mode lets type
@@ -304,6 +312,7 @@ once deployed in the tenant.
   "components"` and calls `shutil.copytree(src, "components", dirs_exist_ok=True)`, with
   a comment saying components/ is gitignored so each environment copies the set matching
   the SDK in uv.lock. No poe task names raw.githubusercontent.com.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
 full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
@@ -344,6 +353,7 @@ tests pass, the first thing that reveals it is the customer's own failed run.
 - **Compliant example:** atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, which is
   what resolves duckdb. An app importing the SDK query transformer without one of
   [sql]/[incremental], or a direct duckdb pin, imports a module whose engine is absent.
+- **Migrate with:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /
@@ -437,6 +447,7 @@ once it is found.
   D-series CI leg that reads the suite from this repo's lock grades it with a current
   ruleset. A hard pin freezes that one leg while every other leg runs the latest; a
   declaration in [project.dependencies] ships the linter to production.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 - **Already correct when:** The specifier must be able to float. Pinning is what freezes one repo's D-series leg to
   a single suite version while every other leg runs the latest.
 
@@ -506,6 +517,7 @@ version moved, no hash moved, only the URLs.
   a project-level uv.toml, because a uv.toml suppresses [tool.uv] in pyproject.toml
   entirely and would silently drop any constraint-dependencies added later — and pinned
   as the default, a machine-wide index cannot rewrite uv.lock on whoever resolves next.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The repo's root `pyproject.toml` must declare PyPI as the resolver's default index:
 
@@ -562,6 +574,7 @@ code.
   and none carries userinfo, so CI installs from the same host the lock was resolved
   against. A lock that has already picked up a proxy host is repaired by restoring the
   committed one, not by re-locking on the machine that rewrote it.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every download URL in the repo's `uv.lock` must name a PyPI host —
 `files.pythonhosted.org` or `pypi.org`.  Two branches:
@@ -621,6 +634,7 @@ cleanup, which is why this is a rule and not another sweep.
   resolves itself, and the lock-refresh driver bounds its own re-resolve — leaving a
   human's `uv lock` and the CVE-fix workflow unfenced, which a date in pyproject.toml
   would not.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The repo's root `pyproject.toml` must not fence uv's resolver to an absolute date.  Both
 places one can be declared are checked, and each yields its own finding:
@@ -705,6 +719,7 @@ the scope is 'both' and not 'app'.
   does need an exclude restates the defaults beside its own entries, as atlan-mysql-app
   pyproject.toml does: `.github/**` followed by `"**/.*"`, `"**/node_modules"` and
   `"**/__pycache__"`, with a comment saying why they are there.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[tool.pyright].exclude` **replaces** pyright's built-in defaults -- `**/node_modules`,
 `**/__pycache__` and `**/.*` -- rather than appending to them.  Losing the first two
