@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.41.1 (October 03, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.41.0...v3.41.1
+
+### Bug Fixes
+
+- write local sidecars when persisting a directory FileReference (#4127) (by @cmgrote in [907728a](https://github.com/atlanhq/application-sdk/commit/907728a))
+
+
 ## v3.41.0 (October 02, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.40.0...v3.41.0
