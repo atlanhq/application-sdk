@@ -1123,6 +1123,22 @@ Keys still inside an `args.metadata` envelope are **not** checked here: an app s
 emitting that envelope consumes it by design until it migrates, so demanding flat
 declarations of those keys would be wrong. The envelope itself is K020.
 
+**Which contract.** The entrypoint's `Input` is the first parameter annotation of its
+`@entrypoint` method, or of an undecorated `async def run` on a class that subclasses,
+directly or through in-repo bases in any file, `App` or an SDK App template (`SqlApp`,
+`BaseMetadataExtractor`, `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`,
+`SqlQueryExtractor`) imported from `application_sdk`. A same-named local class, or one
+imported from any other module, is not an App base. When the app writes no `run()` of
+its own and inherits it unchanged from a template that defines one, the contract is that
+template's `run()` input — `ExtractionInput` for `SqlApp` and `SqlMetadataExtractor`,
+`IncrementalExtractionInput` for `IncrementalSqlMetadataExtractor`,
+`QueryExtractionInput` for `SqlQueryExtractor` — because the runtime validates the
+payload against exactly that model. A contract the app declares beside it (such as a
+generated `AppInputContract`) is not bound to any entrypoint, so an arg only it declares
+is still dropped and is reported. Only when no entrypoint is visible at all
+(`BaseMetadataExtractor` defines no `run()`) does the rule fall back to the app's sole
+live `ExtractionInput` descendant.
+
 **Scope.** This rule checks only that the app can *receive* the payload the Automation
 Engine sends it. A filter can also be lost upstream, in the platform's workflow
 re-render, before the payload is built at all (CONNECT-1318 / APPPLAT-371) — same
@@ -1158,7 +1174,8 @@ hand-edited manifest). If the arg is genuinely not wanted, remove it from
 `contract/app.pkl` and re-run `pkl eval -m . contract/app.pkl`.
 
 **Suppress** with `# conformance: ignore[K018] <reason>` on the `Input` class definition
-(or the comment-only line directly above it).
+(or the comment-only line directly above it) — or, for an app that inherits a template's
+`run()`, on the app class definition, where that finding is anchored.
 
 ---
 

@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+from conformance.suite.checks._ast_common._sdk_app import SDK_APP_BASE_NAMES
 from conformance.suite.checks._entrypoint_contract_fields import (
     _ASSET_ARTIFACT_RE,
     _iter_fields,
@@ -38,7 +39,9 @@ from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
     SDK_TEMPLATE_CONTRACT_FIELDS,
+    SDK_TEMPLATE_RUN_CONTRACTS,
     SdkField,
+    TemplateRunContract,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
@@ -268,6 +271,57 @@ def test_template_registry_fields_are_well_formed() -> None:
             assert entry.name
             assert entry.canonical_type
             assert entry.status in ("active", "deprecated", "sunset")
+
+
+# -- Template run() contracts --------------------------------------------------
+
+
+@_requires_sdk
+def test_template_run_registry_matches_live_sdk() -> None:
+    """Rebuild the table the way ``_collect_implicit_ep`` resolves an inherited run().
+
+    A template whose ``run`` is still ``App.run`` gives a subclass no implicit
+    entrypoint, so it must be absent; every other template must be listed with
+    the input and return types ``get_type_hints`` reports.
+    """
+    import typing
+
+    import application_sdk.templates as templates
+    from application_sdk.app.base import App
+
+    live: dict[str, TemplateRunContract] = {}
+    for name in templates.__all__:
+        run = getattr(templates, name).run
+        if run is App.run:
+            continue
+        hints = typing.get_type_hints(run)
+        live[name] = TemplateRunContract(
+            hints["input"].__name__, hints["return"].__name__
+        )
+    assert live == SDK_TEMPLATE_RUN_CONTRACTS, (
+        "an SDK template's run() contract drifted — update "
+        f"SDK_TEMPLATE_RUN_CONTRACTS in _sdk_contract_mixins.py to {live}"
+    )
+    assert set(templates.__all__) | {"App"} == SDK_APP_BASE_NAMES
+
+
+@_requires_sdk
+def test_template_run_inputs_do_not_keep_undeclared_keys() -> None:
+    """K018 reads the table's fields only, so no template Input may set extra="allow"."""
+    import typing
+
+    import application_sdk.templates as templates
+
+    for name in SDK_TEMPLATE_RUN_CONTRACTS:
+        input_type = typing.get_type_hints(getattr(templates, name).run)["input"]
+        assert input_type.model_config.get("extra") != "allow", name
+
+
+def test_template_run_registry_inputs_have_registered_fields() -> None:
+    for name, contract in SDK_TEMPLATE_RUN_CONTRACTS.items():
+        assert name in SDK_APP_BASE_NAMES
+        assert contract.input in SDK_TEMPLATE_CONTRACT_FIELDS, name
+        assert contract.output in SDK_TEMPLATE_CONTRACT_FIELDS, name
 
 
 # -- Model-declared artifact fields -------------------------------------------

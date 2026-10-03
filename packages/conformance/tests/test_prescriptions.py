@@ -1389,6 +1389,42 @@ def test_p013_implicit_run_fires_on_app_subclass(tmp_path: Path) -> None:
     assert "input" in p013[0].message
 
 
+@pytest.mark.parametrize("base", ["BaseMetadataExtractor", "SqlApp"])
+def test_p013_implicit_run_fires_on_sdk_template_subclass(
+    tmp_path: Path, base: str
+) -> None:
+    """Implicit run() on an SDK App-template subclass with untyped input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            f"from application_sdk.templates import {base}\n"
+            "from contracts import FetchOutput\n"
+            "\n"
+            f"class MyConnector({base}):\n"
+            "    async def run(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    p013 = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+    assert len(p013) == 1
+
+
+def test_p013_implicit_run_silent_on_local_class_named_like_a_template(
+    tmp_path: Path,
+) -> None:
+    """A local class that merely shares a template's name is not an App base."""
+    src = (
+        "class SqlApp:\n"
+        "    pass\n"
+        "\n"
+        "class MyConnector(SqlApp):\n"
+        "    async def run(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    p013 = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P013"]
+    assert p013 == []
+
+
 def test_p013_implicit_run_silent_on_non_app_class(tmp_path: Path) -> None:
     """run() on a class that does not subclass App → not P013."""
     src = (

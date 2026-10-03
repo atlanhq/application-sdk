@@ -29,6 +29,8 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
+    sdk_base_contract_names,
+    sdk_contract_ancestors,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
@@ -38,7 +40,12 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
-from ._ledger_schema import ContractField, ContractLedger, regen_command
+from ._ledger_schema import (
+    ContractField,
+    ContractLedger,
+    load_sdk_ledger,
+    regen_command,
+)
 from ._sdk_type_aliases import TypeAliasDef, collect_sdk_imported_aliases
 
 # ── Main scan function ────────────────────────────────────────────────────────
@@ -501,8 +508,14 @@ def scan_contract_compat(
     root: Path,
     ledger: ContractLedger,
     scope: RuleScope | None = None,
+    *,
+    sdk_ledger: ContractLedger | None = None,
 ) -> list[Finding]:
     """Emit B005/B006 for entrypoint contract backwards-compatibility violations.
+
+    *sdk_ledger* is the SDK's own ledger (default: the copy bundled in this
+    package). A field it records 'sunset' on an SDK contract this contract
+    still inherits from was retired by the SDK, so its absence is not B005.
 
     Two-pass:
     1. Parse every file; build the cross-file class registry (needed for
@@ -560,7 +573,9 @@ def scan_contract_compat(
     # would make every aliased contract read as an ambiguous name.
     register_alias_records(by_name, alias_targets)
 
-    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(
+        file_trees, by_name
+    ) | sdk_base_contract_names(by_name)
 
     if not entrypoint_names:
         return []
@@ -572,6 +587,11 @@ def scan_contract_compat(
     ledger_by_contract: dict[str, list[ContractField]] = {}
     for f in ledger.fields:
         ledger_by_contract.setdefault(f.contract, []).append(f)
+
+    sdk_retired: dict[str, set[str]] = {}
+    for f in (sdk_ledger if sdk_ledger is not None else load_sdk_ledger()).fields:
+        if f.status == "sunset":
+            sdk_retired.setdefault(f.contract, set()).add(f.field)
 
     regen = regen_command(scope)
     has_ambiguous_names = any(len(v) > 1 for v in by_name_all.values())
@@ -628,6 +648,14 @@ def scan_contract_compat(
                         )
                     )
 
+            retired_upstream = {
+                field
+                for ancestor in sdk_contract_ancestors(
+                    class_node, aliases, by_name, by_name_all=by_name_all
+                )
+                for field in sdk_retired.get(ancestor, ())
+            }
+
             # B005: every ledger field must still exist with its recorded type
             for lf in ledger_by_contract.get(class_node.name, []):
                 live = live_by_name.get(lf.field)
@@ -639,6 +667,8 @@ def scan_contract_compat(
                     # it did nothing and the finding outlived the retirement.
                     # A sunset field is withdrawn by decision; 'deprecated'
                     # still means shipped-but-discouraged and must stay present.
+                    continue
+                if live is None and lf.field in retired_upstream:
                     continue
                 if live is None:
                     findings.append(
