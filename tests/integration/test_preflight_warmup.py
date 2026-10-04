@@ -17,7 +17,7 @@ and an app that declares no warmup.
 The short-circuit tests pin *how many* ``warmup_state`` polls ran and that the
 run ended well inside the ceiling. That is what makes them fail when the
 short-circuit is removed: a gate that kept polling past ``FAILED`` would still
-block eventually, at the ceiling, as ``SOURCE_UNAVAILABLE``.
+block eventually, at the ceiling, as ``SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED``.
 """
 
 from __future__ import annotations
@@ -380,16 +380,17 @@ class TestTerminalStatesFailImmediately:
 
 
 class TestTheCeiling:
-    async def test_still_warming_at_the_ceiling_is_source_unavailable(
+    async def test_still_warming_at_the_ceiling_is_warmup_exhausted(
         self, run_worker, executor, reregister_app
     ):
         fake = WarmingFake(states=[WarmupState(status=WarmupStatus.RUNNING)])
         primary, took = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
-        assert primary["code"] == "SOURCE_UNAVAILABLE"
+        assert primary["code"] == "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
+        assert primary["category"] == "SOURCE_UNAVAILABLE"
         assert primary["audience"] == "USER"
-        assert f"{CEILING_SECONDS}s warmup ceiling" in primary["message"]
+        assert f"wasn't ready within {CEILING_SECONDS}s" in primary["message"]
         assert "last reported: running" in primary["message"]
         assert took >= CEILING_SECONDS
         # Polled on the timer, not in a loop: about one poll per interval.
@@ -405,7 +406,7 @@ class TestTheCeiling:
         primary, _ = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
-        assert primary["code"] == "SOURCE_UNAVAILABLE"
+        assert primary["code"] == "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
         assert "resume API returned 503" in primary["message"]
 
 

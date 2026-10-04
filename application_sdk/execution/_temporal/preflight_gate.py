@@ -79,6 +79,7 @@ with workflow.unsafe.imports_passed_through():
         DependencyUnavailableError,
         PreconditionError,
         SourceUnavailableError,
+        SourceWarmupExhaustedError,
     )
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
@@ -124,6 +125,9 @@ with workflow.unsafe.imports_passed_through():
         GATE_TIER_KEY,
         GATE_TIMEOUT_KEY,
         PREFLIGHT_SURFACE_KEY,
+        WARMUP_DURATION_KEY,
+        WARMUP_OUTCOME_KEY,
+        WARMUP_TRANSITIONS_KEY,
         AtlanLoggerAdapter,
         get_logger,
     )
@@ -512,6 +516,57 @@ if TYPE_CHECKING:
     from application_sdk.storage.preflight import ObjectStoreCheckResult
 
 
+class WarmupOutcome(SerializableEnum):
+    """What the gate's warmup phase came to; the ``warmup_outcome`` wire values.
+
+    Stamped only on the rows of an app that declares a warmup. ``WARMING`` is
+    the ``fast`` row's value: that row is written while the warmup is still in
+    flight, so a run that ends there — cancelled, or its worker lost mid-wait —
+    reads as still warming rather than as a missing verdict. The other values
+    are the state that ended the wait: the hook's ``READY`` / ``NOT_REQUIRED``
+    / ``FAILED``, ``EXHAUSTED`` for the ceiling, and ``BROKEN`` for a warmup
+    activity that itself failed (the gate's plumbing, which fails open). Values
+    are shipped wire strings and must not be reworded: dashboards filter on them.
+    """
+
+    WARMING = "warming"
+    READY = "ready"
+    NOT_REQUIRED = "not_required"
+    FAILED = "failed"
+    EXHAUSTED = "exhausted"
+    BROKEN = "broken"
+
+
+class WarmupTransition(BaseModel):
+    """One warmup state the workflow observed, and when, from gate start."""
+
+    status: WarmupStatus
+    at_ms: float
+
+
+#: The most transitions a row records. A hook that flaps between two states for
+#: a whole ceiling would otherwise grow the row with every poll.
+WARMUP_TRANSITIONS_MAX = 32
+
+
+class WarmupObservation(BaseModel):
+    """What the workflow saw of the warmup, for the rows that report it.
+
+    Built in the workflow off ``workflow.now()``, so every value is replay-safe,
+    and handed to the ``warmup``-tier check dispatch on
+    :attr:`PreflightGateInput.warmup` because that activity, not the workflow,
+    writes the row its verdict produces.
+    """
+
+    outcome: WarmupOutcome
+    duration_ms: float | None = None
+    """Gate start to the state that ended the wait. ``None`` while warming."""
+
+    transitions: list[WarmupTransition] = Field(default_factory=list)
+    """Each status change the polls observed, first one included, oldest first,
+    capped at :data:`WARMUP_TRANSITIONS_MAX`."""
+
+
 class PreflightGateInput(BaseModel):
     """Secret-free routing envelope threaded from the extraction input into the
     gate activity.
@@ -547,6 +602,12 @@ class PreflightGateInput(BaseModel):
     (``App.preflight_warmup_ceiling_seconds``) is dispatched twice: ``FAST`` at
     gate start, ``WARMUP`` once its warmup reports ready. Set by the workflow,
     never read off the extraction input."""
+
+    warmup: WarmupObservation | None = None
+    """What the workflow saw of the warmup before this dispatch, for the row it
+    writes. ``WARMING`` on the ``FAST`` dispatch, the state that ended the wait
+    on the ``WARMUP`` one, ``None`` for an app with no warmup. Set by the
+    workflow; never read by the handler."""
 
     workflow_slug: str = ""
     """AE's slug for the workflow being gated, copied from
@@ -947,14 +1008,17 @@ def gate_outcome_row(
     audience: str | None = None,
     primary: FailureDetails | None = None,
     tier: CheckTier | None = None,
+    warmup: WarmupObservation | None = None,
 ) -> dict[str, Any]:
     """The one ``Preflight gate outcome`` row shape, for the activity and the workflow.
 
     Both frames emit through this builder so a consumer parsing ``gate_mode`` or
     ``gate_duration_ms`` never finds a row missing the key it filters on.
     ``check_matrix`` is present on every row, ``[]`` where no check ran.
-    ``gate_tier`` is conditional, like ``failure.audience``: only the rows of an
-    app that declares a warmup carry it.
+    ``gate_tier`` and ``warmup_outcome`` are conditional, like
+    ``failure.audience``: only the rows of an app that declares a warmup carry
+    them. ``warmup_duration_ms`` and ``warmup_transitions`` follow once the wait
+    has ended — a ``warming`` row has neither.
     """
     row: dict[str, Any] = {
         "app_name": app_name,
@@ -973,8 +1037,25 @@ def gate_outcome_row(
         row[FAILURE_AUDIENCE_KEY] = audience
     if tier is not None:
         row[GATE_TIER_KEY] = tier.value
+    if warmup is not None:
+        row.update(_warmup_fields(warmup))
     row.update(_failure_fields(checks, primary))
     return row
+
+
+def _warmup_fields(warmup: WarmupObservation) -> dict[str, Any]:
+    """*warmup* as row attributes. ``warmup_transitions`` is one JSON string,
+    like ``check_matrix``, so it lands as a single ``JSONExtract``-able value."""
+    fields: dict[str, Any] = {WARMUP_OUTCOME_KEY: warmup.outcome.value}
+    if warmup.duration_ms is not None:
+        fields[WARMUP_DURATION_KEY] = warmup.duration_ms
+        fields[WARMUP_TRANSITIONS_KEY] = orjson.dumps(
+            [
+                {"status": t.status.value, "at_ms": t.at_ms}
+                for t in warmup.transitions[:WARMUP_TRANSITIONS_MAX]
+            ]
+        ).decode()
+    return fields
 
 
 def gate_outcome_level(
@@ -1237,24 +1318,29 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     is observable from the outcome itself (``would_block``/``blocked`` means
     the aggregate was NOT_READY; a failed check on a ``proceeded`` run is
     advisory by the handler's own choice).
+
+    ``tier`` appears only on a check whose handler set one, the same rule
+    :meth:`PreflightCheck.to_wire` follows, so an app that never tiers its
+    checks emits exactly the matrix it did before tiers existed.
     """
     rows = []
     for check in checks:
-        rows.append(
-            {
-                "name": check.name,
-                "passed": check.passed,
-                "error_code": check.error.code if check.error else "",
-                # Publish only a plausible elapsed time; nan/inf (orjson would
-                # emit null) and negatives collapse to the -1.0 "not measured"
-                # sentinel so the ClickHouse row stays numeric for JSONExtract
-                # and garbage never reads as a real duration. Never raise — a
-                # raise here fails the gate open and loses the whole event.
-                "duration_ms": check.duration_ms
-                if math.isfinite(check.duration_ms) and check.duration_ms >= 0
-                else -1.0,
-            }
-        )
+        row: dict[str, Any] = {
+            "name": check.name,
+            "passed": check.passed,
+            "error_code": check.error.code if check.error else "",
+            # Publish only a plausible elapsed time; nan/inf (orjson would
+            # emit null) and negatives collapse to the -1.0 "not measured"
+            # sentinel so the ClickHouse row stays numeric for JSONExtract
+            # and garbage never reads as a real duration. Never raise — a
+            # raise here fails the gate open and loses the whole event.
+            "duration_ms": check.duration_ms
+            if math.isfinite(check.duration_ms) and check.duration_ms >= 0
+            else -1.0,
+        }
+        if check.tier is not None:
+            row["tier"] = check.tier.value
+        rows.append(row)
     return orjson.dumps(rows).decode()
 
 
@@ -2536,6 +2622,7 @@ def build_preflight_gate_activity(
                 audience=audience,
                 primary=primary,
                 tier=input.tier,
+                warmup=input.warmup,
             )
             if exc_info is not None:
                 row["exc_info"] = exc_info
@@ -2975,41 +3062,101 @@ def build_preflight_warmup_activities(
     return [preflight_warmup_start, preflight_warmup_state]
 
 
+#: The remediation a warmup failure gets when its evidence carries none, keyed
+#: on ``code`` because that is what separates the two: a source the gate could
+#: not reach is a network problem, a source that answered but never finished
+#: starting is a sizing or queueing one, and the same advice for both sends the
+#: customer to the wrong team. Both are ``audience=USER``.
+WARMUP_SUGGESTED_ACTIONS: dict[str, str] = {
+    SourceUnavailableError.code: (
+        "Check that Atlan can reach the source: network access, firewall "
+        "allowlists, and any private link or agent the connection goes through."
+    ),
+    SourceWarmupExhaustedError.code: (
+        "The source answered but was still starting up. Check its size and "
+        "queue (a warehouse that resumes slowly, jobs queued ahead of this "
+        "one), or raise preflight_warmup_ceiling_seconds if it is known to take "
+        "longer."
+    ),
+}
+
+
+def human_duration(seconds: float) -> str:
+    """*seconds* as a person reads it on a status line: ``40s``, ``30 min``,
+    ``2 min 5s``. Whole seconds; pure, so the workflow can call it."""
+    whole = max(0, int(seconds))
+    minutes, rest = divmod(whole, 60)
+    if minutes == 0:
+        return f"{rest}s"
+    return f"{minutes} min" if rest == 0 else f"{minutes} min {rest}s"
+
+
+def warmup_progress_line(state: WarmupState) -> str:
+    """The hook's own progress line, else its status: what the source is doing."""
+    return state.message or state.status.value
+
+
+def warmup_waiting_details(state: WarmupState, elapsed_seconds: float) -> str:
+    """The workflow's health line while the gate waits on a warmup.
+
+    The warmup is the source getting ready, not the connector failing, so the
+    line says what is being waited on and for how long — ``waiting for source
+    warmup: RESUMING, 40s`` — in the hook's own words where it gave some.
+    """
+    return (
+        f"waiting for source warmup: {warmup_progress_line(state)}, "
+        f"{human_duration(elapsed_seconds)}"
+    )
+
+
+def _with_warmup_suggestion(details: FailureDetails) -> FailureDetails:
+    """*details* with :data:`WARMUP_SUGGESTED_ACTIONS`' line when it has none."""
+    if details.suggested_action is not None:
+        return details
+    suggested = WARMUP_SUGGESTED_ACTIONS.get(details.code)
+    if suggested is None:
+        return details
+    return details.model_copy(update={"suggested_action": suggested})
+
+
 def warmup_unavailable_details(
     state: WarmupState, app_name: str, *, ceiling_seconds: int | None = None
 ) -> FailureDetails:
     """What a warmup that ended the gate's wait is attributed to.
 
-    A ``FAILED`` state's own typed error when it carries one (an AUTH raise, a
-    hook that said why). Otherwise ``SourceUnavailableError`` — the source is
-    the customer's, and the warmup is the source getting ready — naming either
-    the ceiling it ran out (``ceiling_seconds`` set) or the hook's own line.
+    The ceiling (``ceiling_seconds`` set) is :class:`SourceWarmupExhaustedError`
+    — the source was answering and simply did not get ready in time — naming
+    the ceiling and the last progress the hook reported. A ``FAILED`` state
+    keeps its own typed error when it carries one (an AUTH raise, a hook that
+    said why); one that does not is :class:`SourceUnavailableError` with the
+    hook's own line. Either way a failure with no remediation of its own gets
+    the one :data:`WARMUP_SUGGESTED_ACTIONS` holds for its code. All are
+    ``audience=USER`` unless the hook's own error says otherwise.
     Pure: runs in the workflow, so it builds and never raises.
     """
-    if ceiling_seconds is None and state.error is not None:
-        return _stamped(state.error, app_name)
     if ceiling_seconds is not None:
-        last = f"; last reported: {state.status.value}" + (
-            f" ({state.error.message})" if state.error is not None else ""
+        # A transient raise rides on a RUNNING state's error; naming it beats a
+        # bare timeout when the hook's last word was a failure.
+        raised = f" ({state.error.message})" if state.error is not None else ""
+        return _with_warmup_suggestion(
+            SourceWarmupExhaustedError(
+                message=(
+                    f"Source wasn't ready within {human_duration(ceiling_seconds)}"
+                    f"; last reported: {warmup_progress_line(state)}{raised}"
+                ),
+                app_name=app_name,
+                retryable=False,
+            ).to_failure_details()
         )
-        message = (
-            f"Source warmup did not report ready within the {ceiling_seconds}s "
-            f"warmup ceiling{last}"
-        )
-        suggested = (
-            "Check that the source can start (a suspended warehouse resumes, a "
-            "queued job runs), or raise preflight_warmup_ceiling_seconds if it "
-            "is known to take longer."
-        )
-    else:
-        message = state.message or "Source warmup failed"
-        suggested = None
-    return SourceUnavailableError(
-        message=message,
-        suggested_action=suggested,
-        app_name=app_name,
-        retryable=False,
-    ).to_failure_details()
+    if state.error is not None:
+        return _with_warmup_suggestion(_stamped(state.error, app_name))
+    return _with_warmup_suggestion(
+        SourceUnavailableError(
+            message=state.message or "Source warmup failed",
+            app_name=app_name,
+            retryable=False,
+        ).to_failure_details()
+    )
 
 
 # ---------------------------------------------------------------------------

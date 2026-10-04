@@ -80,6 +80,18 @@ GATE_ATTEMPTS_KEY = "gate_attempt"
 # ``gate_attempt``; dedupe on ``(workflow_run_id, gate_tier, gate_attempt)``.
 GATE_TIER_KEY = "gate_tier"
 
+# What the warmup phase did, on the rows of an app that declares one (FND-3041).
+# ``warmup_outcome`` is a closed vocabulary (``WarmupOutcome``): ``warming`` on a
+# ``fast`` row, emitted while the warmup is still in flight, so a run that ends
+# there reads as warming and not as a missing verdict. ``warmup_duration_ms`` is
+# the workflow's own clock from gate start to the state that ended the wait, and
+# ``warmup_transitions`` is the JSON list of states the polls observed, each with
+# its offset — both present only once the wait has ended. Allowlisted, so each is
+# its own attribute rather than a key inside one JSON blob.
+WARMUP_OUTCOME_KEY = "warmup_outcome"
+WARMUP_DURATION_KEY = "warmup_duration_ms"
+WARMUP_TRANSITIONS_KEY = "warmup_transitions"
+
 # Which surface ran Handler.preflight_check on a "Preflight check outcome" row:
 # "http" (the setup form endpoint) or "sdr" (the interactive test-connection
 # activity). The gate's own rows use their distinct event body instead.
@@ -212,6 +224,9 @@ _KNOWN_EXTRA_KEYS = frozenset(
         GATE_DURATION_KEY,
         GATE_ATTEMPTS_KEY,
         GATE_TIER_KEY,
+        WARMUP_OUTCOME_KEY,
+        WARMUP_DURATION_KEY,
+        WARMUP_TRANSITIONS_KEY,
         PREFLIGHT_SURFACE_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,

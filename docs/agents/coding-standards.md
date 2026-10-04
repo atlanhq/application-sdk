@@ -135,7 +135,10 @@ a typed retryable error as an advisory row, never by raising one and never by re
 
 Every gated run emits a structured `Preflight gate outcome` event
 (`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a
-`Preflight gate posture` event per app at worker boot.
+`Preflight gate posture` event per app at worker boot. An app that declares a warmup
+also stamps `gate_tier` and `warmup_outcome` on its rows (plus `warmup_duration_ms` /
+`warmup_transitions` once the wait has ended); every new row key must be added to
+`_KNOWN_EXTRA_KEYS`, or it is dropped before export and cannot be queried.
 
 ### Logging contract
 
