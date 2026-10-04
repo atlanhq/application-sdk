@@ -108,13 +108,15 @@ verdict was reached.
 - **Source-attributable** (`gate_classification="source_unverifiable"`) — a `NOT_READY`
   verdict, anything the handler raises (typed or not), a probe overrunning
   `App.preflight_gate_timeout_seconds`, a killed attempt whose earlier attempt left typed
-  evidence, or a provably absent credential. Subject to `preflight_gate_mode`: hard aborts
-  the run, soft reports `would_block` and proceeds. A verdict is reached on the attempt it
-  happens on.
+  evidence, or a provably absent credential. Subject to `preflight_gate_mode`: soft reports
+  `would_block` and proceeds; hard aborts the run only when the attributed failure's category
+  is `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, and otherwise
+  reports `would_block` and proceeds — it never blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or
+  the deprecated fail-open categories. A verdict is reached on the attempt it happens on.
 - **Frame lost** (`gate_classification="frame_lost"`) — Temporal ended a running attempt
   and nothing survived: a probe that stalled the loop past the gate's cancel, or a worker
-  that died under it. The chain cannot tell them apart, so this is its own value; the mode
-  applies as for a source-attributable failure.
+  that died under it. The chain cannot tell them apart, so this is its own value. Its
+  evidence is a `TIMEOUT`, so hard mode reports it rather than blocking.
 - **Gate plumbing** (`gate_classification="gate_broken"`) — the gate's own credential
   resolution failing (secret-store outage, a collapsed not-found wrapping a transport error),
   or no worker ever running the attempt. **Always** fails open, in both postures: a platform
@@ -124,13 +126,12 @@ verdict was reached.
   `preflight_check`. The pre-3.35 gate treated these as plumbing, and every hard-mode app that
   predates the origin rule raises them on purpose, so they keep failing open in both postures
   until 3.40.0 with a `DeprecationWarning` naming the app and the leaf. From 3.40.0 they are
-  source-attributable like any other raise.
+  source-attributable like any other raise, and still never block a hard gate.
 
 So a handler signals "ask me later" by **returning** `READY` with the failed check carrying
 a typed retryable error as an advisory row, never by raising one and never by returning
-`NOT_READY` — from 3.40.0
-raising blocks a hard gate on a transient and discards the other checks; `NOT_READY` blocks it
-today.
+`NOT_READY`: raising discards the other checks, and an untyped `NOT_READY` is attributed to
+`PRECONDITION`, which blocks a hard gate on a transient.
 
 Every gated run emits a structured `Preflight gate outcome` event
 (`outcome ∈ {proceeded, blocked, would_block, no_verdict, skipped}`), plus a

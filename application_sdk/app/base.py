@@ -865,19 +865,25 @@ class App(ABC):
 
     Soft (default) never blocks — a ``NOT_READY`` verdict lets the run proceed
     and is emitted as ``outcome="would_block"`` on the gate outcome event so it
-    is always reported. Hard is the opt-in that blocks the run on every outcome
-    the gate attributes to the source: a ``NOT_READY`` verdict, anything the
-    handler raises, a probe overrunning the budget, a frame Temporal ended. Set
-    it once the app's checks are trusted to gate real runs. The bare strings
+    is always reported. Hard is the opt-in that blocks the run on an outcome
+    the gate attributes to the source — a ``NOT_READY`` verdict, anything the
+    handler raises, a frame Temporal ended — when the attributed failure is one
+    the customer can act on (``GATE_BLOCKING_CATEGORIES``: auth, permission,
+    invalid input, precondition, not found). Anything else, including a probe
+    overrunning the budget or an unreachable source, is reported as
+    ``would_block`` and the run proceeds. Set it once the app's checks are
+    trusted to gate real runs. The bare strings
     ``"hard"`` and ``"soft"`` are accepted and coerced once; any other value
     resolves to soft. This attribute is the only source of the posture: the
     worker and the workflow both read it, so they cannot disagree. See the
     adopt-preflight-gate skill.
 
     Note this posture applies to *every* outcome the gate can attribute to the
-    source, not only a ``NOT_READY`` verdict: a probe that overruns
-    :attr:`preflight_gate_timeout_seconds`, a handler crash, and a missing
-    credential all block in hard mode. Failures of the gate's own plumbing (secret
+    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``,
+    ``SOURCE_UNAVAILABLE`` or the deprecated fail-open categories: a probe that
+    overruns :attr:`preflight_gate_timeout_seconds` and an untyped handler crash
+    (``INTERNAL``) are reported, a missing credential typed ``NOT_FOUND`` blocks.
+    Failures of the gate's own plumbing (secret
     store outage, rate limit, worker unavailable) always fail open, in both
     postures — a platform blip must not fail a healthy run."""
 
@@ -895,8 +901,9 @@ class App(ABC):
     whatever this says. The 150s default is deliberately generous while the fleet's
     real check durations are being measured; expect it to come down once the
     distribution is known. Raise it only for a source demonstrably slower than
-    that, and size checks to finish inside it with headroom. In hard mode an overrun blocks
-    the run, so this value and the handler's actual cost must agree. Probes must
+    that, and size checks to finish inside it with headroom. An overrun is a ``TIMEOUT``,
+    which hard mode reports rather than blocks, so a budget smaller than the handler's
+    real cost silently turns the gate into a report. Probes must
     also stay awaitable: cancellation lands at an ``await``, so blocking
     synchronous I/O on the event loop cannot be interrupted."""
 
@@ -2641,6 +2648,7 @@ async def _run_preflight_gate(
             classify_gate_failure,
             coerce_gate_mode,
             frame_death_details,
+            gate_blocks,
             gate_budget_seconds,
             gate_heartbeat_timings,
             gate_outcome_level,
@@ -2738,7 +2746,8 @@ async def _run_preflight_gate(
 
         Re-raises the activity's deliberate block unchanged; otherwise
         classifies from the chain, fails open on the gate's own plumbing, and
-        blocks (hard) or reports (soft) anything attributed to the source.
+        blocks or reports anything attributed to the source, as
+        ``gate_blocks`` decides from the posture and the evidence's category.
         """
         # The activity emits the blocked outcome event before it raises; the
         # workflow re-raises the deliberate block unchanged.
@@ -2764,10 +2773,9 @@ async def _run_preflight_gate(
             )
             return
         evidence = failure.evidence or frame_death_details(e, app_name, budget)
+        blocks = gate_blocks(mode, evidence.category)
         _emit_row(
-            PreflightRowOutcome.BLOCKED
-            if mode.enforces
-            else PreflightRowOutcome.WOULD_BLOCK,
+            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
             evidence.code,
             failure.classification,
             _elapsed_ms(),
@@ -2778,7 +2786,7 @@ async def _run_preflight_gate(
             exc_info=True,
             tier=tier,
         )
-        if mode.enforces:
+        if blocks:
             raise build_workflow_block(
                 evidence, failure.checks, app_name, failure.attempt
             ) from e
@@ -2866,7 +2874,9 @@ async def _run_preflight_gate(
         return
 
     # FAILED, or still warming at the ceiling: the WARMUP checks cannot run, and
-    # the reason is the source's.
+    # the reason is the source's. Posture alone decides here, not gate_blocks: a
+    # ceiling breach is SOURCE_UNAVAILABLE, which gate_blocks never blocks on, and
+    # whether it blocks is the warmup posture's call (FND-3036).
     evidence = warmup_unavailable_details(
         state,
         app_name,

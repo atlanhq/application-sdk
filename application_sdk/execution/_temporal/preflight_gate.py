@@ -771,12 +771,13 @@ GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
 #: through. 2s suppresses that geometry while tolerating realistic NTP drift.
 GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 
-# One release train for the pre-3.35 raise idiom. The gate used to treat a typed
-# leaf in these categories, raised from ``preflight_check``, as its own plumbing
-# and failed open; every hard-mode app that predates the origin rule documents
-# and tests that idiom. Until the removal version such a raise still proceeds,
-# with a DeprecationWarning and its own row classification, so the flip to
-# blocking is made against a fleet count rather than an audit.
+# The pre-3.35 raise idiom. The gate used to treat a typed leaf in these
+# categories, raised from ``preflight_check``, as its own plumbing and failed
+# open. Until the removal version such a raise keeps its own row classification
+# and a DeprecationWarning, because it loses the check row a returned verdict
+# would carry. The set itself is policy, not a shim (FND-3040): every member is
+# in GATE_NEVER_BLOCKING_CATEGORIES, so after the removal version the raise is
+# reported as an unverifiable source and still never blocks a hard gate.
 DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     {
         FailureCategory.DEPENDENCY_UNAVAILABLE,
@@ -786,6 +787,43 @@ DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     }
 )
 DEPRECATED_FAIL_OPEN_REMOVED_IN = "3.40.0"
+
+# What a hard gate blocks on (FND-3040): failures that are deterministic and that
+# the customer can act on. Waiting will not fix a wrong password or a missing
+# grant, and the customer is the one who can. An allowlist, so a category added
+# to FailureCategory later proceeds until someone decides it should block.
+GATE_BLOCKING_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {
+        FailureCategory.AUTH,
+        FailureCategory.PERMISSION,
+        FailureCategory.INVALID_INPUT,
+        FailureCategory.PRECONDITION,
+        FailureCategory.NOT_FOUND,
+    }
+)
+
+# What a hard gate never blocks on, whoever reports it: transient or Atlan-side
+# failures a retry, not the customer, resolves. A subset of everything outside
+# GATE_BLOCKING_CATEGORIES, published so the guarantee is a value a test pins
+# rather than a consequence of the allowlist. A warmup that outlives its ceiling
+# is SOURCE_UNAVAILABLE too, but the warmup posture decides that one (FND-3036),
+# so it never reaches gate_blocks.
+GATE_NEVER_BLOCKING_CATEGORIES: frozenset[FailureCategory] = (
+    DEPRECATED_FAIL_OPEN_CATEGORIES
+    | {FailureCategory.TIMEOUT, FailureCategory.SOURCE_UNAVAILABLE}
+)
+
+
+def gate_blocks(mode: PreflightGateMode, category: FailureCategory) -> bool:
+    """Whether a gate in ``mode`` blocks the run on a failure in ``category``.
+
+    The block decision for a verdict or an unverifiable source: both the posture
+    and the attributed failure's category must say so. Soft never blocks; hard
+    blocks only on :data:`GATE_BLOCKING_CATEGORIES`, and anything else is
+    reported as ``would_block`` and the run proceeds.
+    """
+    return mode.enforces and category in GATE_BLOCKING_CATEGORIES
+
 
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
@@ -1908,10 +1946,11 @@ def _deprecated_fail_open_leaf(exc: BaseException) -> AppError | None:
 
 def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
-        f"{app_name}: preflight_check raised {leaf} ({code}). The gate fails open on "
-        f"this category only until application-sdk {DEPRECATED_FAIL_OPEN_REMOVED_IN}; "
-        "return READY with the failed check as an advisory row instead. From "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise blocks a hard gate."
+        f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
+        "is deprecated until application-sdk "
+        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; return READY with the failed check as "
+        f"an advisory row instead. From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
     logger.warning(message)
@@ -2392,7 +2431,9 @@ def build_preflight_gate_activity(
     stays honest ``NOT_READY``, the run proceeds, and the dodged block is emitted
     as ``outcome="would_block"`` so connector-pulse can rank apps whose checks
     would have blocked real runs. Hard is the per-app opt-in: it raises and
-    aborts the run. The handler is never consulted about posture — verdict and
+    aborts the run, but only on a failure in :data:`GATE_BLOCKING_CATEGORIES`
+    (see :func:`gate_blocks`); anything else is a ``would_block`` row there
+    too. The handler is never consulted about posture — verdict and
     enforcement are deliberately separate concerns.
 
     ``budget_seconds`` is the handler's check budget, already clamped by
@@ -2422,7 +2463,6 @@ def build_preflight_gate_activity(
         enforce=enforce,
         default=PreflightGateMode.SOFT,
     )
-    enforce = mode.enforces
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
@@ -2538,8 +2578,8 @@ def build_preflight_gate_activity(
         def _no_verdict(exc: BaseException) -> PreflightOutput:
             """Apply gate mode to a source we could not verify, on any attempt.
 
-            Raises the deliberate block in hard mode, returns the honest
-            ``NOT_READY`` in soft. Everything that escapes the handler lands
+            Raises the deliberate block when :func:`gate_blocks` says so, else
+            returns the honest ``NOT_READY``. Everything that escapes the handler lands
             here: a typed leaf is the handler's statement about the source, and
             an untyped crash is an app fault — neither is the gate's plumbing,
             so neither may fail open. Only the gate's own frames (credential
@@ -2568,9 +2608,10 @@ def build_preflight_gate_activity(
                 )
                 return unverifiable
             block_error = _build_block_error(unverifiable, app_name, _current_attempt())
+            blocks = gate_blocks(mode, block_error.details[0].category)
             _emit_outcome(
                 PreflightRowOutcome.BLOCKED
-                if enforce
+                if blocks
                 else PreflightRowOutcome.WOULD_BLOCK,
                 block_error.details[0].code,
                 unverifiable,
@@ -2583,7 +2624,7 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            if enforce:
+            if blocks:
                 raise block_error
             return unverifiable
 
@@ -2761,9 +2802,12 @@ def build_preflight_gate_activity(
             # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
             if result.status is PreflightStatus.NOT_READY:
                 block_error = _build_block_error(result, app_name, _current_attempt())
+                # Decided on details[0], the failure the row's reason names, so
+                # the row and the decision cannot point at different checks.
+                blocks = gate_blocks(mode, block_error.details[0].category)
                 _emit_outcome(
                     PreflightRowOutcome.BLOCKED
-                    if enforce
+                    if blocks
                     else PreflightRowOutcome.WOULD_BLOCK,
                     block_error.details[0].code,
                     result,
@@ -2771,10 +2815,11 @@ def build_preflight_gate_activity(
                     audience=block_error.details[0].audience.value,
                     primary=block_error.details[0],
                 )
-                if enforce:
+                if blocks:
                     raise block_error
-                # Soft: the verdict stays honest NOT_READY; the gate just does not
-                # enforce it. The would_block row above is the loud record.
+                # Soft, or hard on a category it does not block on: the verdict
+                # stays honest NOT_READY; the gate just does not enforce it. The
+                # would_block row above is the loud record.
                 return result
             proceeded = _proceeded_failure(result, app_name)
             _emit_outcome(

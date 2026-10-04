@@ -446,7 +446,8 @@ to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_
   `outcome="would_block"` (with `gate_mode="soft"` and the per-check `check_matrix`) on the gate
   outcome event. The verdict is always reported, so connector-pulse can rank apps by how often they
   *would* have blocked real runs — that list is the "checks are ready to enforce" queue.
-- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`). This is the
+- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`) and the
+  failure it is attributed to is one the customer can act on — see the next section. This is the
   opt-in for apps whose checks are trusted to gate real runs.
 
 ```python
@@ -459,18 +460,26 @@ class MyConnector(App):
 Hard mode applies to every outcome the gate can attribute to the **source**, not only a
 `NOT_READY` verdict. Failures of the gate's own **plumbing** always fail open, in both postures —
 a platform blip must not fail a healthy run. The gate stamps which of the two happened as
-`gate_classification` on the outcome event, so the two are separable downstream:
+`gate_classification` on the outcome event, so the two are separable downstream.
+
+Among source-attributed outcomes, hard mode blocks only on a failure that is deterministic and that
+the customer can act on: the attributed `FailureDetails.category` (`details[0]`, the failure the
+row's `reason` names) must be `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`
+(`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run proceeds, as in
+soft mode. Hard mode **never** blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or the four pre-3.35
+fail-open categories (`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not
+the customer. An untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
 | Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
-| Verdict `NOT_READY` | — | report `would_block` | **block** |
-| Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
-| Handler raised any error, typed or not, outside the row below | `source_unverifiable` | report `would_block` | **block** |
+| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category, else `would_block` |
+| Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
+| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category, else `would_block` (an untyped crash is `INTERNAL`) |
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
-| Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** |
-| Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`) | `frame_lost` | report `would_block` | **block** |
-| Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
+| Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
+| Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
+| Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
@@ -490,20 +499,24 @@ plumbing and failed open, and every hard-mode app that predates this rule docume
 idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING line (and a
 `DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
 removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
-still rely on it. The row and the log line are the observable signal. From 3.40.0 it blocks like
-any other raise. Migrate by returning `READY` with the failed check as an advisory row, as below.
+still rely on it. The row and the log line are the observable signal. From 3.40.0 it is reported
+as `source_unverifiable` like any other raise, and it still never blocks: the four categories are
+in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
+row, as below, which keeps the other checks.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
 resuming — by **returning** `READY` with the failed check carrying the typed retryable error, never
 by raising. `PARTIAL` is deprecated and the gate treats it exactly like `READY`, so it adds nothing
 but a warning. The run proceeds in both modes, the row carries the check's code as `reason`, and
-the check list is preserved. Returning `NOT_READY` for a transient makes hard mode fail *closed* on
-a blip; raising it makes hard mode block with the right code but loses every other check.
+the check list is preserved. Returning an *untyped* `NOT_READY` for a transient makes hard mode
+fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it keeps the run going
+but loses every other check.
 
 A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
 holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure
 chain: the previous attempt's typed evidence when it left any, else a `TIMEOUT` attributed to the
-app owner. Only a gate that never ran at all fails open.
+app owner, which hard mode reports rather than blocks. Only a gate that never ran at all fails
+open.
 
 Every error that leaves the gate activity carries one `FailureDetails` as `details[0]` and
 `{"status": ..., "checks": [...]}` as `details[1]` (`status` is `not_ready` on every source-attributed
@@ -569,17 +582,17 @@ cannot say different things. One gap remains by design: a **soft**-mode gate doe
 `failure.message` only.
 
 `frame_lost` is its own value because the failure chain cannot separate a probe that stalled
-the event loop past the gate's cancel from a worker that died under it. The mode still applies:
-a stalled probe is the common cause and the one its owner can fix, a lost worker is rare and
-retried, and the classification keeps the two separable in the dashboards.
+the event loop past the gate's cancel from a worker that died under it. It is a `TIMEOUT`, so
+hard mode reports it as `would_block` rather than blocking, and the classification keeps the two
+causes separable in the dashboards.
 
-**Upgrading an app that is already on hard mode:** the `source_unverifiable` and `frame_lost`
-rows above previously fell through to fail-open, so hard mode enforced only the `NOT_READY`
-verdict. They now block, except the `deprecated_fail_open` row, which keeps proceeding until
-3.40.0. Before taking this SDK version, confirm the handler finishes inside
-`preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
-was proceeding on every run and will now abort on every run. The worker logs the budget alongside
-the hard-mode line at boot.
+**Upgrading an app that is already on hard mode:** hard mode used to block on every
+source-attributed outcome whatever its category — a budget overrun, a lost frame, an unreachable
+source, an untyped handler crash. It now blocks only on the five customer-actionable categories
+above; the rest are reported as `would_block` and the run proceeds. A handler that wants a
+transient to stop a hard-gated run has to type it as one of those five, and an app that relied on a
+handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
+policy alongside the hard-mode line at boot.
 
 #### Sizing the check budget
 

@@ -756,11 +756,13 @@ def create_worker(
             # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
-                "extraction on a NOT_READY verdict, and on any outcome the gate "
-                "attributes to the source (probe overrunning the %ds budget, "
-                "handler crash, missing credential). Gate plumbing failures still "
-                "fail open. This is the per-app opt-in; the default posture is "
-                "soft (report only, never block).",
+                "extraction on a NOT_READY verdict or an unverifiable source "
+                "whose failure the customer can act on (auth, permission, "
+                "invalid input, precondition, not found). Anything else — a "
+                "probe overrunning the %ds budget, an unreachable source, a "
+                "handler crash — is reported and the run proceeds, as do gate "
+                "plumbing failures. This is the per-app opt-in; the default "
+                "posture is soft (report only, never block).",
                 name,
                 budget_seconds,
             )
