@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.40.0
-source-sha:    a8606b386b9dd9802eda8e765a93796963f23058
-source-date:   2026-10-01T00:03:04+01:00
+sdk-version:   3.41.0
+source-sha:    907728ae1744976b2c6e3840441495f6c72f0f3d
+source-date:   2026-10-02T23:58:15Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -26,7 +26,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 26 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
@@ -2453,6 +2453,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Base type for form-level metadata forwarded alongside preflight credentials.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `CheckTier`
+
+- **Import:** `from application_sdk.handler import CheckTier`
+- **Signature:** `class CheckTier`
+- **Summary:** Cost tier of a preflight check — when the UI can afford to run it.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 #### `DefaultHandler`
 
 - **Import:** `from application_sdk.handler import DefaultHandler`
@@ -2549,6 +2556,20 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Import:** `from application_sdk.handler import SqlMetadataOutput`
 - **Signature:** `class SqlMetadataOutput`
 - **Summary:** Metadata output for SQL connectors (sqltree widget).
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupState`
+
+- **Import:** `from application_sdk.handler import WarmupState`
+- **Signature:** `class WarmupState`
+- **Summary:** An app's warmup state — the return type of ``warmup_start`` / ``warmup_state``.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupStatus`
+
+- **Import:** `from application_sdk.handler import WarmupStatus`
+- **Signature:** `class WarmupStatus`
+- **Summary:** Where an app's warmup is, as reported by ``warmup_start`` / ``warmup_state``.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 ### Functions
@@ -7518,9 +7539,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
+  - `tier: CheckTier | None` — Cost tier this check belongs to. ``None`` is treated as ``FAST`` and is
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
   - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
+  - `effective_tier: CheckTier` — The tier this check runs in: :attr:`tier`, or ``FAST`` when unset.
   - `resolved_message: str` — Message under the precedence rule: a failed check's ``error`` wins.
   - `resolved_suggested_action: str` — Suggested action from a failed check's ``error``; empty otherwise.
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -7537,6 +7560,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
   - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
+  - `tier: CheckTier | None` — Run only the checks in this cost tier. ``None`` (the default, and what
   - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
 - **Defined in:** `application_sdk/handler/contracts.py`
@@ -7584,6 +7608,18 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `bulk_max_messages: int` `= 100` — Maximum messages per bulk batch.
   - `bulk_max_await_ms: int` `= 40` — Maximum milliseconds to wait for a full bulk batch.
   - `dead_letter_topic: str | None` — Optional dead-letter topic for failed messages.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupState`
+
+- **Import:** `from application_sdk.handler.contracts import WarmupState`
+- **Summary:** An app's warmup state — the return type of ``warmup_start`` / ``warmup_state``.
+- **Fields:**
+  - `status: WarmupStatus` `= WarmupStatus.NOT_REQUIRED` — Where the warmup is. ``NOT_REQUIRED`` means the app has no warmup.
+  - `message: str` `= ''` — Human-readable progress line for the UI.
+  - `pending_checks: list[str]` `= []` — Names of the ``WARMUP``-tier checks that cannot run until this warmup is
+  - `estimated_duration_ms: float | None` — The app's estimate of how long the warmup takes end to end, so the UI
+  - `error: FailureDetails | None` — Typed reason for a ``FAILED`` warmup. A bare ``AppError`` is coerced.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 ### `application_sdk.templates.contracts`
