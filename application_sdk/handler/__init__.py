@@ -1,7 +1,7 @@
 """Handler framework for per-app HTTP services.
 
 Provides the Handler ABC and DefaultHandler for implementing auth,
-preflight, and metadata endpoints, plus the service factory for
+preflight, metadata, and optional warmup endpoints, plus the service factory for
 creating FastAPI applications.
 """
 
@@ -15,6 +15,7 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     BaseConnectionConfig,
     BaseMetadataConfig,
+    CheckTier,
     HandlerCredential,
     MetadataInput,
     MetadataOutput,
@@ -25,6 +26,8 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    WarmupState,
+    WarmupStatus,
 )
 from application_sdk.handler.service import (
     create_app_handler_service,
@@ -39,6 +42,7 @@ __all__ = [
     "AuthStatus",
     "BaseConnectionConfig",
     "BaseMetadataConfig",
+    "CheckTier",
     "DefaultHandler",
     "Handler",
     "HandlerContext",
@@ -53,6 +57,8 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "WarmupState",
+    "WarmupStatus",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

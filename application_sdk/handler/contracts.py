@@ -5,6 +5,9 @@ Provides Pydantic models for the three core handler operations:
 - Preflight checks (preflight_check)
 - Metadata discovery (fetch_metadata)
 
+plus the optional warmup that gates expensive preflight checks
+(warmup_start / warmup_state).
+
 Plus supporting types for credentials, log streaming, and file uploads.
 
 These are HTTP boundary types — Pydantic BaseModel gives boundary validation
@@ -409,6 +412,84 @@ class PreflightGateMode(SerializableEnum):
         return self is PreflightGateMode.HARD
 
 
+class CheckTier(SerializableEnum):
+    """Cost tier of a preflight check — when the UI can afford to run it.
+
+    ``FAST`` checks run on demand from ``/check`` with no preparation
+    (reachability, authentication, basic grants). ``WARMUP`` checks need a
+    warmup the app starts through :meth:`Handler.warmup_start
+    <application_sdk.handler.base.Handler.warmup_start>` first (a cold
+    warehouse to resume, a catalog to index) and run only once that warmup
+    reports :attr:`WarmupStatus.READY`.
+
+    A check with no tier (``PreflightCheck.tier is None``) is ``FAST``; see
+    :attr:`PreflightCheck.effective_tier`. Tiers are a UI scheduling hint only: the injected
+    preflight gate sends no tier and runs every check, as it does today.
+    """
+
+    FAST = "fast"
+    WARMUP = "warmup"
+
+
+class WarmupStatus(SerializableEnum):
+    """Where an app's warmup is, as reported by ``warmup_start`` / ``warmup_state``.
+
+    ``NOT_REQUIRED`` is the default handler's answer: the app has no warmup,
+    so there is nothing to start or wait for and every check is runnable now.
+    """
+
+    NOT_REQUIRED = "not_required"
+    NOT_STARTED = "not_started"
+    RUNNING = "running"
+    READY = "ready"
+    FAILED = "failed"
+
+    @property
+    def is_pending(self) -> bool:
+        """Whether warmup-tier checks must still wait on this warmup."""
+        return self in (
+            WarmupStatus.NOT_STARTED,
+            WarmupStatus.RUNNING,
+            WarmupStatus.FAILED,
+        )
+
+
+class WarmupState(BaseModel):
+    """An app's warmup state — the return type of ``warmup_start`` / ``warmup_state``."""
+
+    status: WarmupStatus = WarmupStatus.NOT_REQUIRED
+    """Where the warmup is. ``NOT_REQUIRED`` means the app has no warmup."""
+
+    message: str = ""
+    """Human-readable progress line for the UI."""
+
+    pending_checks: list[str] = []
+    """Names of the ``WARMUP``-tier checks that cannot run until this warmup is
+    ``READY``. ``/check`` reports them so the UI can render them as pending
+    rather than omit them. Empty once the warmup is ``READY``."""
+
+    estimated_duration_ms: float | None = None
+    """The app's estimate of how long the warmup takes end to end, so the UI
+    can tell the user what they are waiting for. ``None`` means no estimate."""
+
+    error: FailureDetails | None = None
+    """Typed reason for a ``FAILED`` warmup. A bare ``AppError`` is coerced.
+    Its ``message`` replaces :attr:`message` on a failed state."""
+
+    @field_validator("error", mode="before")
+    @classmethod
+    def _coerce_error(cls, value: Any) -> Any:
+        if isinstance(value, AppError):
+            return value.to_failure_details()
+        return value
+
+    @model_validator(mode="after")
+    def _error_message_wins(self) -> "WarmupState":
+        if self.error is not None and self.status is WarmupStatus.FAILED:
+            self.message = self.error.message
+        return self
+
+
 class PreflightCheck(BaseModel):
     """Result of a single preflight check."""
 
@@ -417,6 +498,11 @@ class PreflightCheck(BaseModel):
 
     passed: bool = False
     """Whether the check passed."""
+
+    tier: CheckTier | None = None
+    """Cost tier this check belongs to. ``None`` is treated as ``FAST`` and is
+    left off the wire, so an app that never sets a tier emits exactly the
+    payload it did before tiers existed."""
 
     message: str = ""
     """Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
@@ -446,6 +532,11 @@ class PreflightCheck(BaseModel):
         if isinstance(value, AppError):
             return value.to_failure_details()
         return value
+
+    @property
+    def effective_tier(self) -> CheckTier:
+        """The tier this check runs in: :attr:`tier`, or ``FAST`` when unset."""
+        return self.tier or CheckTier.FAST
 
     @property
     def resolved_message(self) -> str:
@@ -535,6 +626,15 @@ class PreflightInput(BaseModel):
 
     checks_to_run: list[str] = []
     """Specific checks to run (empty = run all)."""
+
+    tier: CheckTier | None = None
+    """Run only the checks in this cost tier. ``None`` (the default, and what
+    the injected gate always sends) runs every check, as before tiers existed.
+
+    A handler should skip checks outside the requested tier — the expensive
+    ``WARMUP`` probes are what ``tier="fast"`` exists to avoid. ``/check``
+    also drops any returned row outside the tier, so a handler that ignores
+    this field still answers with the right rows, only slower."""
 
     timeout_seconds: int = 60
     """Maximum seconds the handler has to run all checks.

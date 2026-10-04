@@ -66,6 +66,7 @@ class PreflightInput(BaseModel):
     credentials_by_name: dict[str, list[HandlerCredential]] = {}  # multi-credential apps: per named ref
     connection_config: dict[str, Any] = {}     # host, port, database, etc.
     checks_to_run: list[str] = []              # specific checks (empty = all)
+    tier: CheckTier | None = None              # run one cost tier (None = all; the gate always sends None)
     timeout_seconds: int = 60                  # on the gate path the SDK stamps the real per-attempt budget (~25s); advisory on HTTP/SDR
 
 class PreflightOutput(BaseModel):
@@ -151,6 +152,32 @@ key, a throttled vault, and an expired vault credential are indistinguishable to
 the SDK. That is why nothing here can be raised on: "resolved nothing" cannot be
 told apart from "nothing to resolve". Tracked in
 [#2995](https://github.com/atlanhq/application-sdk/issues/2995).
+
+#### Check tiers and warmup
+
+Some checks are too expensive to run every time the user clicks **Test**: resuming a suspended warehouse, indexing a large catalog. An app can mark those checks `tier=CheckTier.WARMUP` and implement two optional `Handler` methods:
+
+```python
+class MyHandler(Handler):
+    async def warmup_start(self, input: PreflightInput) -> WarmupState:
+        self._resume_task = self._resume_task or asyncio.create_task(resume(input))
+        return WarmupState(status=WarmupStatus.RUNNING, pending_checks=["catalogScan"])
+
+    async def warmup_state(self, input: PreflightInput) -> WarmupState:
+        ...  # READY once the resume has finished; FAILED with error=... if it raised
+```
+
+Both default to `WarmupStatus.NOT_REQUIRED`, so an app that does not override them behaves exactly as before. A check with no `tier` is `FAST`, and an untiered check is serialised without a `tier` key, so an app that never sets a tier emits byte-identical `/check` output.
+
+| Route | Body | Answer |
+| --- | --- | --- |
+| `POST /workflows/v1/warmup` | same as `/check` | `warmup_start`'s `WarmupState` under `data`; `202` while `not_started` / `running`, else `200`; `success` is `false` only for `failed` |
+| `POST /workflows/v1/warmup/state` | same as `/check` | `warmup_state`'s `WarmupState`, same status codes |
+| `POST /workflows/v1/check` with `tier` | `/check` body plus `"tier": "fast"` or `"warmup"` | only the checks in that tier; when the app has a warmup, its state under `preflight.warmup` (including `pending_checks`) |
+
+A `tier: "warmup"` request whose warmup is not `ready` does not run the handler. It answers `412` with the same unverified verdict a raise produces (`not_ready` plus a `preflightVerdict` row carrying a typed `PreconditionError` that names the actual state) and the state under `preflight.warmup`. A request with no `tier` never consults the warmup. That covers the injected gate and every caller written before tiers.
+
+`warmup_start` must return promptly and be idempotent. The UI polls `warmup/state`, so start the work and report it rather than awaiting it. The SDK also drops any returned row outside the requested tier, so a handler that ignores `input.tier` still answers with the right rows. It just runs slower.
 
 ### MetadataInput / MetadataOutput
 
@@ -324,6 +351,8 @@ from application_sdk.handler.context import HandlerContext
 async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
 async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
 async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
+async def warmup_start(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...  # optional
+async def warmup_state(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...  # optional
 ```
 
 These are **module-level `async` functions** taking `(input, ctx)` — not methods on the `Handler` class.
