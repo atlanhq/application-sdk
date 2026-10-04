@@ -3,10 +3,11 @@
 Everything below runs the generated workflow on the embedded Temporal dev server
 against a worker built by ``create_worker``, so the activities under test are
 the ones the worker really registers and the waits are real durable timers.
-The handler is :class:`WarmingFake`: a scripted source whose warmup reports
-whatever state sequence a test gives it, and which records every call the gate
-makes, so each test can assert both the run's outcome and the exact calls that
-led to it.
+The handler is :class:`~application_sdk.testing.WarmingSourceHandler` around a
+:class:`~application_sdk.testing.WarmingSource`: a scripted source whose warmup
+walks whatever state sequence a test gives it (``COLD`` until started, one state
+per call after), and which records every call the gate makes, so each test can
+assert both the run's outcome and the exact calls that led to it.
 
 Coverage is one test per way the wait can end: ``READY`` (after ``RUNNING`` and
 after ``NOT_STARTED``), ``NOT_REQUIRED``, ``FAILED``, a typed AUTH /
@@ -42,15 +43,12 @@ from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
 )
 from application_sdk.execution.retry import NO_RETRY
-from application_sdk.handler.base import DefaultHandler
-from application_sdk.handler.contracts import (
-    CheckTier,
-    PreflightCheck,
-    PreflightInput,
-    PreflightOutput,
-    PreflightStatus,
-    WarmupState,
-    WarmupStatus,
+from application_sdk.handler.contracts import WarmupState, WarmupStatus
+from application_sdk.testing import (
+    SourceState,
+    WarmingSource,
+    WarmingSourceHandler,
+    WarmingStep,
 )
 
 pytestmark = pytest.mark.integration
@@ -58,80 +56,18 @@ pytestmark = pytest.mark.integration
 CEILING_SECONDS = 5
 POLL_SECONDS = 1
 
-
-# ---------------------------------------------------------------------------
-# The warming fake
-# ---------------------------------------------------------------------------
-
-
-Step = WarmupState | BaseException
+COLD = SourceState.COLD
+WARMING = SourceState.WARMING
+READY = SourceState.READY
 
 
-class WarmingFake(DefaultHandler):
-    """A source whose warmup follows a script, recording every gate call.
-
-    ``start`` is what ``warmup_start`` returns (or raises). ``states`` is what
-    successive ``warmup_state`` polls return (or raise); the last entry repeats
-    once the script runs out, so ``[RUNNING]`` warms forever. ``preflight_check``
-    always returns one ``FAST`` and one ``WARMUP`` row — whatever tier it is
-    asked for — so the gate's own tier filter is exercised too.
-
-    Subclasses ``DefaultHandler`` for the auth/metadata no-ops only; the worker
-    sees a real handler because the type is not ``DefaultHandler`` itself.
-    """
-
-    def __init__(
-        self,
-        *,
-        start: Step = WarmupState(status=WarmupStatus.RUNNING),
-        states: list[Step] | None = None,
-        warmup_check_passes: bool = True,
-    ) -> None:
-        self._start = start
-        self._states = list(states or [WarmupState(status=WarmupStatus.READY)])
-        self._warmup_check_passes = warmup_check_passes
-        self.calls: list[str] = []
-
-    @property
-    def polls(self) -> int:
-        return self.calls.count("state")
-
-    @property
-    def check_tiers(self) -> list[str]:
-        return [c.split(":", 1)[1] for c in self.calls if c.startswith("check:")]
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        self.calls.append(f"check:{input.tier.value if input.tier else 'all'}")
-        warmup_ok = self._warmup_check_passes
-        return PreflightOutput(
-            status=PreflightStatus.READY
-            if warmup_ok or input.tier is CheckTier.FAST
-            else PreflightStatus.NOT_READY,
-            checks=[
-                PreflightCheck(name="reachable", passed=True, tier=CheckTier.FAST),
-                PreflightCheck(
-                    name="catalogScan",
-                    passed=warmup_ok,
-                    tier=CheckTier.WARMUP,
-                    message="" if warmup_ok else "catalog scan found no schemas",
-                ),
-            ],
-        )
-
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        self.calls.append("start")
-        return self._play(self._start)
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        self.calls.append("state")
-        step = self._states.pop(0) if len(self._states) > 1 else self._states[0]
-        return self._play(step)
-
-    @staticmethod
-    def _play(step: Step) -> WarmupState:
-        if isinstance(step, BaseException):
-            raise step
-        return step
+def warming_fake(
+    *script: WarmingStep, warmup_check_passes: bool = True
+) -> WarmingSourceHandler:
+    """A handler whose source starts cold and then walks ``script``."""
+    return WarmingSourceHandler(
+        WarmingSource([COLD, *script]), warmup_check_passes=warmup_check_passes
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -243,12 +179,7 @@ def _ran(result: Any) -> bool:
 
 class TestReadyRunsTheWarmupChecks:
     async def test_running_then_ready(self, run_worker, executor, reregister_app):
-        fake = WarmingFake(
-            states=[
-                WarmupState(status=WarmupStatus.RUNNING),
-                WarmupState(status=WarmupStatus.READY),
-            ]
-        )
+        fake = warming_fake(WARMING, WARMING, READY)
         result = await _run(run_worker, executor, reregister_app, HardWarmupApp, fake)
         assert _ran(result) is True
         assert fake.check_tiers == ["fast", "warmup"]
@@ -260,13 +191,7 @@ class TestReadyRunsTheWarmupChecks:
     async def test_not_started_is_polled_like_running(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(
-            start=WarmupState(status=WarmupStatus.NOT_STARTED),
-            states=[
-                WarmupState(status=WarmupStatus.NOT_STARTED),
-                WarmupState(status=WarmupStatus.READY),
-            ],
-        )
+        fake = warming_fake(COLD, COLD, READY)
         result = await _run(run_worker, executor, reregister_app, HardWarmupApp, fake)
         assert _ran(result) is True
         assert fake.polls == 2
@@ -275,7 +200,7 @@ class TestReadyRunsTheWarmupChecks:
     async def test_ready_at_start_needs_no_poll(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(start=WarmupState(status=WarmupStatus.READY))
+        fake = warming_fake(READY)
         result = await _run(run_worker, executor, reregister_app, HardWarmupApp, fake)
         assert _ran(result) is True
         assert fake.polls == 0
@@ -284,7 +209,7 @@ class TestReadyRunsTheWarmupChecks:
     async def test_not_required_runs_the_warmup_checks_at_once(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(start=WarmupState(status=WarmupStatus.NOT_REQUIRED))
+        fake = warming_fake(WarmupState(status=WarmupStatus.NOT_REQUIRED))
         result = await _run(run_worker, executor, reregister_app, HardWarmupApp, fake)
         assert _ran(result) is True
         assert fake.polls == 0
@@ -293,12 +218,11 @@ class TestReadyRunsTheWarmupChecks:
     async def test_a_transient_raise_is_polled_through(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(
-            states=[
-                DependencyUnavailableError(message="resume API returned 503"),
-                RuntimeError("socket reset"),
-                WarmupState(status=WarmupStatus.READY),
-            ]
+        fake = warming_fake(
+            WARMING,
+            DependencyUnavailableError(message="resume API returned 503"),
+            RuntimeError("socket reset"),
+            READY,
         )
         result = await _run(run_worker, executor, reregister_app, HardWarmupApp, fake)
         assert _ran(result) is True
@@ -307,7 +231,7 @@ class TestReadyRunsTheWarmupChecks:
     async def test_a_failing_warmup_check_blocks_on_that_check(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(warmup_check_passes=False)
+        fake = warming_fake(WARMING, READY, warmup_check_passes=False)
         primary, _ = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
@@ -321,22 +245,29 @@ class TestReadyRunsTheWarmupChecks:
 
 
 class TestTerminalStatesFailImmediately:
-    async def test_failed_blocks_on_the_first_poll(
-        self, run_worker, executor, reregister_app
-    ):
-        fake = WarmingFake(
-            states=[
+    @pytest.mark.parametrize(
+        ("failed", "message"),
+        [
+            (
                 WarmupState(
                     status=WarmupStatus.FAILED, message="warehouse is decommissioned"
-                )
-            ]
-        )
+                ),
+                "warehouse is decommissioned",
+            ),
+            (SourceState.UNAVAILABLE, "Source is unavailable and did not warm up."),
+        ],
+        ids=["untyped_failed", "unavailable"],
+    )
+    async def test_failed_blocks_on_the_first_poll(
+        self, run_worker, executor, reregister_app, failed, message
+    ):
+        fake = warming_fake(WARMING, failed)
         primary, took = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
         assert primary["code"] == "SOURCE_UNAVAILABLE"
         assert primary["audience"] == "USER"
-        assert primary["message"] == "warehouse is decommissioned"
+        assert primary["message"] == message
         assert fake.polls == 1
         assert took < CEILING_SECONDS
         assert fake.check_tiers == ["fast"]
@@ -353,7 +284,7 @@ class TestTerminalStatesFailImmediately:
     async def test_a_typed_raise_from_warmup_state_blocks_at_once(
         self, run_worker, executor, reregister_app, raised, code
     ):
-        fake = WarmingFake(states=[raised])
+        fake = warming_fake(WARMING, raised)
         primary, took = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
@@ -365,7 +296,7 @@ class TestTerminalStatesFailImmediately:
     async def test_a_typed_raise_from_warmup_start_blocks_without_polling(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(start=AuthError(message="token expired"))
+        fake = warming_fake(AuthError(message="token expired"))
         primary, took = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
@@ -383,7 +314,7 @@ class TestTheCeiling:
     async def test_still_warming_at_the_ceiling_is_warmup_exhausted(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(states=[WarmupState(status=WarmupStatus.RUNNING)])
+        fake = warming_fake(WARMING)
         primary, took = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
         )
@@ -391,7 +322,8 @@ class TestTheCeiling:
         assert primary["category"] == "SOURCE_UNAVAILABLE"
         assert primary["audience"] == "USER"
         assert f"wasn't ready within {CEILING_SECONDS}s" in primary["message"]
-        assert "last reported: running" in primary["message"]
+        # The hook's message, not its status: the source's own word for it.
+        assert "last reported: WARMING" in primary["message"]
         assert took >= CEILING_SECONDS
         # Polled on the timer, not in a loop: about one poll per interval.
         assert 2 <= fake.polls <= CEILING_SECONDS // POLL_SECONDS + 1
@@ -400,8 +332,8 @@ class TestTheCeiling:
     async def test_the_ceiling_names_the_last_transient_error(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(
-            states=[DependencyUnavailableError(message="resume API returned 503")]
+        fake = warming_fake(
+            WARMING, DependencyUnavailableError(message="resume API returned 503")
         )
         primary, _ = await _blocked(
             run_worker, executor, reregister_app, HardWarmupApp, fake
@@ -419,7 +351,7 @@ class TestPostureAndOptIn:
     async def test_soft_mode_reports_a_failed_warmup_and_proceeds(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(states=[AuthError(message="token expired")])
+        fake = warming_fake(WARMING, AuthError(message="token expired"))
         result = await _run(run_worker, executor, reregister_app, SoftWarmupApp, fake)
         assert _ran(result) is True
         assert fake.polls == 1
@@ -428,7 +360,7 @@ class TestPostureAndOptIn:
     async def test_an_app_without_a_warmup_never_calls_the_hooks(
         self, run_worker, executor, reregister_app
     ):
-        fake = WarmingFake(states=[WarmupState(status=WarmupStatus.RUNNING)])
+        fake = warming_fake(WARMING)
         result = await _run(run_worker, executor, reregister_app, NoWarmupApp, fake)
         assert _ran(result) is True
         assert fake.calls == ["check:all"]

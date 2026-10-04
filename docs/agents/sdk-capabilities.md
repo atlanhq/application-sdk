@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    bb1abedff61bd81e4612209e10959304bb43efdd
-source-date:   2026-10-04T22:58:33+01:00
+source-sha:    b1bc04acef38809f58d7a13f104f7a2ad978cad0
+source-date:   2026-10-04T23:25:34+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 407 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
 
 ## Subpackage Details
@@ -4702,6 +4702,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A setup route is broken, or the tenant could not be asked.
 - **Defined in:** `application_sdk/testing/setup_routes.py`
 
+#### `SourceState`
+
+- **Import:** `from application_sdk.testing import SourceState`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `class SourceState`
+- **Summary:** Where a warming source is, in the words a warehouse would use.
+- **Defined in:** `application_sdk/testing/warming.py`
+
 #### `SQLAppE2EFullTest`
 
 - **Import:** `from application_sdk.testing.full_dag import SQLAppE2EFullTest`
@@ -4912,6 +4920,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class WaitStalledError(*, ...)`
 - **Summary:** Work started, then stopped making observable progress.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WarmingSource`
+
+- **Import:** `from application_sdk.testing import WarmingSource`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `class WarmingSource(script: Sequence[WarmingStep], *, pending_checks: Sequence[str] = ())`
+- **Summary:** A source whose warmup follows a script. See the module docstring.
+- **Defined in:** `application_sdk/testing/warming.py`
+
+#### `WarmingSourceHandler`
+
+- **Import:** `from application_sdk.testing import WarmingSourceHandler`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `class WarmingSourceHandler(source: WarmingSource, ...)`
+- **Summary:** A handler around a :class:`WarmingSource`, for tests of the gate itself.
+- **Defined in:** `application_sdk/testing/warming.py`
 
 #### `WorkflowExecutionStatus`
 
@@ -6513,6 +6537,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `UNREADABLE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `WarmingStep`
+
+- **Import:** `from application_sdk.testing import WarmingStep`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `WarmingStep`
+- **Summary:** One entry in a :class:`WarmingSource` script.
+- **Defined in:** `application_sdk/testing/warming.py`
 
 ## `application_sdk.validation`
 
