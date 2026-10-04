@@ -6,10 +6,12 @@ description: >
   mandatory first activity of every extraction workflow and always reports the
   verdict; by default it is soft (every outcome is reported but the run
   proceeds), and blocking real runs is a per-app opt-in (preflight_gate_mode =
-  "hard"). Hard mode blocks on everything the gate can attribute to the source —
-  a NOT_READY verdict, anything the handler raises, a probe overrunning the
-  enforced budget, a running attempt Temporal had to kill, a provably absent
-  credential — while failures of the gate's own plumbing (its credential
+  "hard"). Hard mode applies to everything the gate can attribute to the
+  source — a NOT_READY verdict, anything the handler raises, a probe
+  overrunning the enforced budget, a running attempt Temporal had to kill, a
+  provably absent credential — but blocks only when the attributed failure's
+  category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, and
+  never on TIMEOUT or SOURCE_UNAVAILABLE; failures of the gate's own plumbing (its credential
   resolution, no worker) always fail open; a transient is returned as READY
   with a typed retryable advisory check, never raised. Classifies the app's
   rollout bucket, sizes the check budget
@@ -78,12 +80,13 @@ status. Read its `app/handler.py` before proposing changes.
   surfaces render, so a block belongs there. But raising is *not* a no-op, and
   the gate classifies by **who raised**, never by the error's type: anything
   that escapes `preflight_check` is the handler's statement about the source if
-  typed, or an app fault if untyped, and **blocks in hard mode** on the attempt
-  it happens. A handler cannot fail the gate open by raising `RateLimitedError`
-  or `DependencyUnavailableError`; only the gate's own frames (credential
-  resolution, the store probes) fail open. So an uncaught probe exception is a
-  run-aborting bug for a hard app, and a raised transient is a fail-closed on a
-  blip. A transient the extraction can cope with — a 429, a database still
+  typed, or an app fault if untyped, and hard mode decides on the attempt it
+  happens: it **blocks** when the category is `AUTH`, `PERMISSION`,
+  `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, and reports `would_block`
+  otherwise. Only the gate's own frames (credential resolution, the store
+  probes) are plumbing that fails open. So an uncaught probe exception
+  (`INTERNAL`) is a reported failure that loses every other check, never a
+  block. A transient the extraction can cope with — a 429, a database still
   resuming — is a failed advisory check on a `READY` output carrying the typed
   retryable leaf (`PARTIAL` is deprecated and proceeds exactly like `READY`):
   the run proceeds in both modes, the row names the check's
@@ -116,8 +119,11 @@ returns the honest verdict; the gate decides what to do with `NOT_READY`:
   `check_matrix`) on the gate outcome event. The verdict is always reported, so
   connector-pulse can rank apps by how often they *would* have blocked real
   runs; that list is the "your checks are ready to enforce" queue.
-- **hard**: raise `PreflightFailed`, run aborts on `NOT_READY`. The opt-in for
-  every app whose checks are trusted to gate real runs.
+- **hard**: raise `PreflightFailed`, run aborts on `NOT_READY` when the
+  primary failure is customer-actionable (`AUTH`, `PERMISSION`,
+  `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`; an untyped verdict counts as
+  `PRECONDITION`). The opt-in for every app whose checks are trusted to gate
+  real runs.
 
 Opting in is deliberately explicit and deliberately small:
 
@@ -153,7 +159,9 @@ frame is never a silent proceed. The outcome event carries `gate_classification`
 
 `Handler.preflight_check` gets `App.preflight_gate_timeout_seconds` (default 150,
 clamped 5-300) and the SDK **enforces** it: the gate cancels the handler when it
-elapses. In hard mode an overrun *blocks the run*, so this is not a formality.
+elapses. An overrun is a `TIMEOUT`, which hard mode reports and does not block,
+so a budget below the handler's real cost quietly turns a hard gate into a
+report. This is not a formality.
 
 It bounds the **whole handler call**, not each check — one slow probe can consume
 the budget and leave the rest unrun. And it is a **deadline, not a reservation**: a
@@ -213,7 +221,8 @@ Rules the skill enforces during adoption:
   fail *closed* on a blip. Never raise them either: until application-sdk
   3.40.0 a raised `RateLimitedError` / `DependencyUnavailableError` still fails
   open with a `DeprecationWarning` and a `deprecated_fail_open` row, and from
-  3.40.0 it blocks a hard gate and discards the other checks. Return `READY` with
+  3.40.0 it is reported as an unverifiable source — still never blocking — and
+  discards the other checks. Return `READY` with
   the failed advisory check carrying `RateLimitedError(...).to_failure_details()`
   (retryable); wait for a `Retry-After` only when it fits inside
   `input.timeout_seconds` with margin, and leave the checks that could not run
@@ -339,8 +348,9 @@ Run these detections and report the bucket(s) before changing anything:
    key read inside `preflight_check`, and cross-check each against the input
    contract's fields. On the gate path, metadata is rebuilt from the extraction
    input's `model_dump`; a UI-form-only key is **absent** — a hard `[...]` read
-   crashes, which is a handler crash and therefore **blocks every run in hard
-   mode**; a defensive `.get(..., default)` silently runs the check with wrong
+   crashes, which is a handler crash (`INTERNAL`) and therefore a
+   `would_block` row on every run in either mode, with every other check lost;
+   a defensive `.get(..., default)` silently runs the check with wrong
    config. Every unmatched key needs a decision in phase 2.
 7. **Multi-credential class** — an app that needs more than one credential to
    verify a source (e.g. an API token AND an object-store credential), whose
@@ -349,7 +359,7 @@ Run these detections and report the bucket(s) before changing anything:
    so the symptom on the gate path is the handler receiving `credentials=[]`,
    defaulting to one auth type, and raising missing-credential on every gated
    run — reported on every run in soft mode, and **aborting every run in hard
-   mode**. Detect by: multiple `*_credential_guid` fields on the
+   mode** when the raise is typed `NOT_FOUND` or `AUTH`. Detect by: multiple `*_credential_guid` fields on the
    input contract, or a handler that resolves guids itself (`CredentialResolver`
    / `get_credentials` called inside `preflight_check`). If found, the app
    adopts the SDK `preflight_credential_refs` primitive in phase 2 (see 2g) — it
@@ -890,15 +900,17 @@ embedded Dapr locally) — not a real verdict, re-run. `source_unverifiable` on 
 - `all(c.passed)` status logic → advisory checks silently promoted to
   run-blocking.
 - Raise-to-block → the verdict belongs in the returned status; anything the
-  handler raises blocks a hard gate on that attempt, typed or not, and the
-  checks already recorded are replaced by one synthetic row. Raising cannot
-  fail the gate open.
-- Returning `NOT_READY` for a transient (429, dependency outage) → makes a hard
-  gate fail *closed* on a blip. Raising the transient blocks it too. Return
+  handler raises is decided on that attempt by its category (only `AUTH`,
+  `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND` block a hard
+  gate; an untyped raise is `INTERNAL` and does not), and the checks already
+  recorded are replaced by one synthetic row.
+- Returning an untyped `NOT_READY` for a transient (429, dependency outage) →
+  attributed to `PRECONDITION`, so a hard gate fails *closed* on a blip.
+  Raising the transient loses the other checks. Return
   `PARTIAL` with the failed check carrying the typed retryable leaf.
 - Keeping the old `_FAIL_OPEN_ERRORS: raise` idiom from pre-3.33 exemplar apps
-  → reads as fail-open in the code and aborts every throttled run once the app
-  bumps. Convert the raise to the `PARTIAL` return; keep the tuple as the list
+  → reads as fail-open in the code, and every throttled run loses its other
+  checks to one synthetic row. Convert the raise to the `PARTIAL` return; keep the tuple as the list
   of transients.
 - Sizing checks to a budget the handler can't meet, or reading
   `input.timeout_seconds` and then overriding it (`max(input.timeout_seconds,

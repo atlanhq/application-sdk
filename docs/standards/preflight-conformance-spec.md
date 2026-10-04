@@ -49,7 +49,7 @@ The SDK deprecates PARTIAL, with removal in the first minor release after the re
 
 ### Target SDK enforcement
 
-Under PR #3685, a handler cannot request fail-open by raising `RateLimitedError`, `DependencyUnavailableError`, or another category. The SDK applies mode to handler-originated failures. Hard mode must prevent extraction after a rejected verdict, handler crash, handler deadline overrun, or a running gate attempt whose failure is classified as source-unverifiable by the workflow. Soft mode records `would_block` and proceeds.
+Under PR #3685, a handler cannot request fail-open by raising `RateLimitedError`, `DependencyUnavailableError`, or another category. The SDK applies mode to handler-originated failures. Hard mode must prevent extraction after a rejected verdict, handler crash, handler deadline overrun, or a running gate attempt whose failure is classified as source-unverifiable by the workflow — when the attributed failure's category is in `GATE_BLOCKING_CATEGORIES` (`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`; FND-3040). Every other category, including the `TIMEOUT` of an overrun and the `INTERNAL` of an untyped crash, records `would_block` and proceeds in hard mode too. Soft mode records `would_block` and proceeds.
 
 SDK infrastructure failures remain distinct. Credential-store transport failures and activity scheduling failures can produce typed no-verdict fail-open outcomes. A definitive credential absence is not equivalent to a credential-store outage. Optional storage verification can return a confirmed blocking verdict even though storage is SDK-owned; failure origin alone does not replace the distinction between a returned storage verdict and a plumbing exception.
 
