@@ -74,6 +74,12 @@ GATE_TIMEOUT_KEY = "gate_timeout_seconds"
 GATE_DURATION_KEY = "gate_duration_ms"
 GATE_ATTEMPTS_KEY = "gate_attempt"
 
+# Which check tier a gate row reports (``fast`` / ``warmup``). Only an app that
+# declares a warmup is dispatched per tier, and only its rows carry the key, so
+# every other app's row is unchanged. Two rows of one run then share a
+# ``gate_attempt``; dedupe on ``(workflow_run_id, gate_tier, gate_attempt)``.
+GATE_TIER_KEY = "gate_tier"
+
 # Which surface ran Handler.preflight_check on a "Preflight check outcome" row:
 # "http" (the setup form endpoint) or "sdr" (the interactive test-connection
 # activity). The gate's own rows use their distinct event body instead.
@@ -205,6 +211,7 @@ _KNOWN_EXTRA_KEYS = frozenset(
         GATE_TIMEOUT_KEY,
         GATE_DURATION_KEY,
         GATE_ATTEMPTS_KEY,
+        GATE_TIER_KEY,
         PREFLIGHT_SURFACE_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,

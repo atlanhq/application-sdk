@@ -609,13 +609,18 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        build_preflight_warmup_activities,
         gate_attempts,
         gate_budget_seconds,
+        gate_warmup_ceiling_seconds,
+        gate_warmup_poll_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
+        preflight_warmup_start_activity_name,
+        preflight_warmup_state_activity_name,
         resolve_gate_mode,
     )
-    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+    from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
@@ -635,8 +640,27 @@ def create_worker(
     gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
         resolved_app_name
     ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+
+    # Apps that declare a warmup (FND-3039) also get the two warmup activities;
+    # every other app gets none, so its registered set is exactly as before.
+    warmup_app_names = [
+        name
+        for name in gate_app_names
+        if gate_warmup_ceiling_seconds(
+            getattr(name_to_app_cls.get(name), "preflight_warmup_ceiling_seconds", None)
+        )[0]
+        is not None
+    ]
     gate_activity_names = [
         preflight_gate_activity_name(name) for name in gate_app_names
+    ] + [
+        activity_name
+        for name in warmup_app_names
+        for activity_name in (
+            preflight_warmup_start_activity_name(name),
+            preflight_warmup_state_activity_name(name),
+        )
     ]
 
     # Temporal's own duplicate-activity rejection is an opaque ValueError; surface
@@ -657,13 +681,12 @@ def create_worker(
                 f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
                 "reserves for the injected preflight gate. Rename the offending @task "
                 "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
-                "fold a readiness check into Handler.preflight_check). A worker cannot "
-                "register two activities with the same name."
+                "fold a readiness check into Handler.preflight_check; a warmup step into "
+                "Handler.warmup_start / warmup_state). A worker cannot register two "
+                "activities with the same name."
             ),
             field="task_name",
         )
-
-    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
 
     # ADR-0020 step 8. Deferred for the same reason activities.py defers it:
     # importing any `validation` submodule loads the package __init__, which pulls
@@ -751,6 +774,34 @@ def create_worker(
                 verify_storage=_resolve_verify_storage(app_cls),
             )
         )
+        if name in warmup_app_names:
+            ceiling_complaint = gate_warmup_ceiling_seconds(
+                getattr(app_cls, "preflight_warmup_ceiling_seconds", None)
+            )[1]
+            if ceiling_complaint:
+                logger.warning(
+                    "preflight_warmup_ceiling_seconds: %s; clamped", ceiling_complaint
+                )
+            poll_complaint = gate_warmup_poll_seconds(
+                getattr(app_cls, "preflight_warmup_poll_seconds", None)
+            )[1]
+            if poll_complaint:
+                logger.warning(
+                    "preflight_warmup_poll_seconds: %s; clamped", poll_complaint
+                )
+            if type(gate_handler).warmup_state is Handler.warmup_state:
+                # Not fatal: the default reports not_required, so the gate runs
+                # the WARMUP checks straight away. But a declared ceiling with no
+                # hook is almost always a half-finished adoption.
+                logger.warning(
+                    "App %r declares preflight_warmup_ceiling_seconds but its "
+                    "handler does not override warmup_state; the gate will run "
+                    "the warmup-tier checks without waiting",
+                    name,
+                )
+            gate_activities.extend(
+                build_preflight_warmup_activities(gate_handler, name)
+            )
     task_activities = [*task_activities, *gate_activities]
 
     # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)

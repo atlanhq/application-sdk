@@ -66,7 +66,7 @@ class PreflightInput(BaseModel):
     credentials_by_name: dict[str, list[HandlerCredential]] = {}  # multi-credential apps: per named ref
     connection_config: dict[str, Any] = {}     # host, port, database, etc.
     checks_to_run: list[str] = []              # specific checks (empty = all)
-    tier: CheckTier | None = None              # run one cost tier (None = all; the gate always sends None)
+    tier: CheckTier | None = None              # run one cost tier (None = all; the gate sends None unless the app declares a warmup)
     timeout_seconds: int = 60                  # on the gate path the SDK stamps the real per-attempt budget (~25s); advisory on HTTP/SDR
 
 class PreflightOutput(BaseModel):
@@ -175,7 +175,9 @@ Both default to `WarmupStatus.NOT_REQUIRED`, so an app that does not override th
 | `POST /workflows/v1/warmup/state` | same as `/check` | `warmup_state`'s `WarmupState`, same status codes |
 | `POST /workflows/v1/check` with `tier` | `/check` body plus `"tier": "fast"` or `"warmup"` | only the checks in that tier; when the app has a warmup, its state under `preflight.warmup` (including `pending_checks`) |
 
-A `tier: "warmup"` request whose warmup is not `ready` does not run the handler. It answers `412` with the same unverified verdict a raise produces (`not_ready` plus a `preflightVerdict` row carrying a typed `PreconditionError` that names the actual state) and the state under `preflight.warmup`. A request with no `tier` never consults the warmup. That covers the injected gate and every caller written before tiers.
+A `tier: "warmup"` request whose warmup is not `ready` does not run the handler. It answers `412` with the same unverified verdict a raise produces (`not_ready` plus a `preflightVerdict` row carrying a typed `PreconditionError` that names the actual state) and the state under `preflight.warmup`. A request with no `tier` never consults the warmup. That covers every caller written before tiers, and the injected gate for an app that declares no warmup.
+
+The injected gate uses the same two hooks once an app declares `App.preflight_warmup_ceiling_seconds`: it fires `warmup_start` at gate start alongside a `tier=fast` check, polls `warmup_state` on durable timers, and runs the `tier=warmup` checks once it reports `ready`. A typed AUTH, PERMISSION or NOT_FOUND raise from either hook ends the gate's wait at once; any other raise is polled again. See [Waiting for a warmup](apps.md#waiting-for-a-warmup-opt-in).
 
 `warmup_start` must return promptly and be idempotent. The UI polls `warmup/state`, so start the work and report it rather than awaiting it. The SDK also drops any returned row outside the requested tier, so a handler that ignores `input.tier` still answers with the right rows. It just runs slower.
 

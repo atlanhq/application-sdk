@@ -78,6 +78,7 @@ with workflow.unsafe.imports_passed_through():
         AppTimeoutError,
         DependencyUnavailableError,
         PreconditionError,
+        SourceUnavailableError,
     )
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
@@ -87,12 +88,15 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.handler.contracts import (
         BaseConnectionConfig,
         BaseMetadataConfig,
+        CheckTier,
         HandlerCredential,
         PreflightCheck,
         PreflightGateMode,
         PreflightInput,
         PreflightOutput,
         PreflightStatus,
+        WarmupState,
+        WarmupStatus,
         unverifiable_preflight_result,
     )
     from application_sdk.infrastructure.context import get_infrastructure
@@ -117,6 +121,7 @@ with workflow.unsafe.imports_passed_through():
         GATE_CLASSIFICATION_KEY,
         GATE_DURATION_KEY,
         GATE_MODE_KEY,
+        GATE_TIER_KEY,
         GATE_TIMEOUT_KEY,
         PREFLIGHT_SURFACE_KEY,
         AtlanLoggerAdapter,
@@ -534,6 +539,15 @@ class PreflightGateInput(BaseModel):
     entrypoint: str = ""
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
 
+    tier: CheckTier | None = None
+    """The check tier this dispatch runs, stamped on ``PreflightInput.tier``.
+
+    ``None`` runs every check, as before tiers, and is what an app with no
+    warmup always gets. An app that declares one
+    (``App.preflight_warmup_ceiling_seconds``) is dispatched twice: ``FAST`` at
+    gate start, ``WARMUP`` once its warmup reports ready. Set by the workflow,
+    never read off the extraction input."""
+
     workflow_slug: str = ""
     """AE's slug for the workflow being gated, copied from
     :attr:`~application_sdk.contracts.base.Input.workflow_slug`.
@@ -651,6 +665,28 @@ def preflight_gate_activity_name(app_name: str) -> str:
     return get_activity_name(app_name, "preflight")
 
 
+def preflight_warmup_start_activity_name(app_name: str) -> str:
+    """Activity name for the gate's warmup start: ``{app}:preflight_warmup_start``.
+
+    Registered only for an app that declares a warmup, and reserved against its
+    ``@task`` names by the same worker guard as ``{app}:preflight``.
+    """
+    from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
+        get_activity_name,
+    )
+
+    return get_activity_name(app_name, "preflight_warmup_start")
+
+
+def preflight_warmup_state_activity_name(app_name: str) -> str:
+    """Activity name for the gate's warmup poll: ``{app}:preflight_warmup_state``."""
+    from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
+        get_activity_name,
+    )
+
+    return get_activity_name(app_name, "preflight_warmup_state")
+
+
 # The handler's check budget, in seconds. Per-app via ``App.preflight_gate_timeout_seconds``
 # and clamped by ``gate_budget_seconds`` — a slow source is an app-specific
 # fact, so a fleet-wide bump is the wrong lever (it costs every app's
@@ -678,6 +714,38 @@ GATE_TIMEOUT_MAX_SECONDS = 300
 GATE_ATTEMPTS_DEFAULT = 2
 GATE_ATTEMPTS_MIN = 1
 GATE_ATTEMPTS_MAX = 3
+
+# The warmup phase (``App.preflight_warmup_ceiling_seconds``). The ceiling is
+# how long the workflow waits, across durable timers, for the warmup to report
+# ready before the source is called unavailable. It holds no worker slot while it
+# waits — only the short polls do — so it can be far longer than the handler
+# budget: an hour covers resuming the slowest suspended warehouse. The default
+# applies only to a declaration that is not a usable number; an undeclared
+# ceiling means no warmup at all.
+WARMUP_CEILING_DEFAULT_SECONDS = 600
+WARMUP_CEILING_MIN_SECONDS = 5
+WARMUP_CEILING_MAX_SECONDS = 3600
+
+# Gap between two ``warmup_state`` polls, per-app via
+# ``App.preflight_warmup_poll_seconds``. Each poll is a workflow task plus an
+# activity, so the floor keeps an app from turning the wait into a busy loop.
+WARMUP_POLL_DEFAULT_SECONDS = 15
+WARMUP_POLL_MIN_SECONDS = 1
+WARMUP_POLL_MAX_SECONDS = 300
+
+# What one ``warmup_start`` / ``warmup_state`` call gets. Both are documented to
+# return promptly — start the work, report its state — so this is a backstop for
+# a hook that forgot, not a budget anyone sizes to. An overrun is a poll that
+# saw nothing, and the next one tries again.
+WARMUP_CALL_BUDGET_SECONDS = 20
+WARMUP_ATTEMPTS = 2
+
+# Categories a warmup hook can raise that end the wait at once: no amount of
+# waiting fixes a wrong password, a missing grant or a missing object. Anything
+# else it raises is read as "not ready yet" and polled again, up to the ceiling.
+WARMUP_TERMINAL_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {FailureCategory.AUTH, FailureCategory.PERMISSION, FailureCategory.NOT_FOUND}
+)
 
 # Slack between the budget the handler gets and Temporal's start_to_close, so the
 # gate's own ``asyncio.wait_for`` always fires first. If Temporal won the race the
@@ -840,12 +908,15 @@ def gate_outcome_row(
     attempt: int,
     audience: str | None = None,
     primary: FailureDetails | None = None,
+    tier: CheckTier | None = None,
 ) -> dict[str, Any]:
     """The one ``Preflight gate outcome`` row shape, for the activity and the workflow.
 
     Both frames emit through this builder so a consumer parsing ``gate_mode`` or
     ``gate_duration_ms`` never finds a row missing the key it filters on.
     ``check_matrix`` is present on every row, ``[]`` where no check ran.
+    ``gate_tier`` is conditional, like ``failure.audience``: only the rows of an
+    app that declares a warmup carry it.
     """
     row: dict[str, Any] = {
         "app_name": app_name,
@@ -862,6 +933,8 @@ def gate_outcome_row(
     }
     if audience is not None:
         row[FAILURE_AUDIENCE_KEY] = audience
+    if tier is not None:
+        row[GATE_TIER_KEY] = tier.value
     row.update(_failure_fields(checks, primary))
     return row
 
@@ -980,6 +1053,36 @@ def gate_attempts(raw: object) -> tuple[int, str]:
         high=GATE_ATTEMPTS_MAX,
         default=GATE_ATTEMPTS_DEFAULT,
         unit="",
+    )
+
+
+def gate_warmup_ceiling_seconds(raw: object) -> tuple[int | None, str]:
+    """Clamp a declared ``App.preflight_warmup_ceiling_seconds``. Never raises.
+
+    ``None`` means the app declares no warmup: the gate dispatches no warmup
+    activity and sets no timer. A declared value that is not a usable number
+    still declares a warmup, so it falls back to the default ceiling rather than
+    silently turning the phase off.
+    """
+    if raw is None:
+        return None, ""
+    return _clamp_declared_int(
+        raw,
+        low=WARMUP_CEILING_MIN_SECONDS,
+        high=WARMUP_CEILING_MAX_SECONDS,
+        default=WARMUP_CEILING_DEFAULT_SECONDS,
+        unit="s",
+    )
+
+
+def gate_warmup_poll_seconds(raw: object) -> tuple[int, str]:
+    """Clamp a declared ``App.preflight_warmup_poll_seconds``. Never raises."""
+    return _clamp_declared_int(
+        raw,
+        low=WARMUP_POLL_MIN_SECONDS,
+        high=WARMUP_POLL_MAX_SECONDS,
+        default=WARMUP_POLL_DEFAULT_SECONDS,
+        unit="s",
     )
 
 
@@ -2216,6 +2319,54 @@ async def _resolve_gate_credentials(
     return HandlerCredential.list_from_raw(raw), {}
 
 
+def _gate_preflight_input(
+    input: PreflightGateInput,
+    credentials: list[HandlerCredential],
+    credentials_by_name: dict[str, list[HandlerCredential]],
+    timeout_seconds: int,
+) -> tuple[PreflightInput, list[HandlerCredential]]:
+    """The ``PreflightInput`` a gate activity hands the handler, and every secret in it.
+
+    One builder for the check and the warmup hooks, so ``warmup_start`` sees the
+    same credentials and form config the checks it gates will see. Form config
+    comes from the extraction-input snapshot here, in the activity frame, so app
+    field reads stay outside the deterministic workflow. The second element is
+    every resolved credential — the single-triple list and every named group —
+    for the redaction context.
+    """
+    metadata_dump = _config_from_snapshot(
+        input.extraction_snapshot, input.credential_ref_fields.values()
+    )
+    preflight_input = PreflightInput(
+        credentials=credentials,
+        credentials_by_name=credentials_by_name,
+        entrypoint=input.entrypoint,
+        metadata=BaseMetadataConfig(**metadata_dump),
+        connection_config=BaseConnectionConfig(**metadata_dump),
+        tier=input.tier,
+        timeout_seconds=timeout_seconds,
+    )
+    all_creds = [
+        *credentials,
+        *(c for group in credentials_by_name.values() for c in group),
+    ]
+    return preflight_input, all_creds
+
+
+def filter_checks_to_tier(result: PreflightOutput, tier: CheckTier) -> PreflightOutput:
+    """``result`` keeping only the checks in ``tier``.
+
+    One rule for ``/check`` and the gate: a handler that ignores
+    ``PreflightInput.tier`` still answers a tiered request with the right rows,
+    and a ``WARMUP`` probe it ran anyway cannot decide the ``FAST`` dispatch.
+    The aggregate status is the handler's own and is left alone.
+    """
+    kept = [check for check in result.checks if check.effective_tier is tier]
+    if len(kept) == len(result.checks):
+        return result
+    return result.model_copy(update={"checks": kept})
+
+
 def build_preflight_gate_activity(
     handler: Handler,
     app_name: str,
@@ -2344,6 +2495,7 @@ def build_preflight_gate_activity(
                 attempt=_current_attempt(),
                 audience=audience,
                 primary=primary,
+                tier=input.tier,
             )
             if exc_info is not None:
                 row["exc_info"] = exc_info
@@ -2516,28 +2668,12 @@ def build_preflight_gate_activity(
                 else 0.0
             )
             handler_budget = max(1, int(remaining - reserved))
-            # Build form config from the extraction-input snapshot in the activity
-            # frame so app field reads stay outside the deterministic workflow.
-            metadata_dump = _config_from_snapshot(
-                input.extraction_snapshot, input.credential_ref_fields.values()
+            # What is actually left, not the nominal budget: resolution above has
+            # already spent part of it. A handler sizing probes to this number is
+            # sizing to the deadline the wait below really enforces.
+            preflight_input, all_creds = _gate_preflight_input(
+                input, credentials, credentials_by_name, handler_budget
             )
-            preflight_input = PreflightInput(
-                credentials=credentials,
-                credentials_by_name=credentials_by_name,
-                entrypoint=input.entrypoint,
-                metadata=BaseMetadataConfig(**metadata_dump),
-                connection_config=BaseConnectionConfig(**metadata_dump),
-                # What is actually left, not the nominal budget: resolution above has
-                # already spent part of it. A handler sizing probes to this number is
-                # sizing to the deadline the wait_for below really enforces.
-                timeout_seconds=handler_budget,
-            )
-            # Redact every resolved secret from logs — the single-triple list and
-            # every named group, without assuming which path populated which.
-            all_creds = [
-                *credentials,
-                *(c for group in credentials_by_name.values() for c in group),
-            ]
             # _no_verdict raises in hard mode, so it must never be called from inside
             # this try — the raise would be re-caught below and _no_verdict would run
             # a second time, double-emitting the outcome row and reclassifying the
@@ -2559,6 +2695,8 @@ def build_preflight_gate_activity(
                     if done:
                         result = check.result()
                         warn_if_partial(result)
+                        if input.tier is not None:
+                            result = filter_checks_to_tier(result, input.tier)
                     else:
                         # Ask it to stop, but never await it — an uncooperative
                         # handler must not be able to hold the activity open.
@@ -2597,7 +2735,13 @@ def build_preflight_gate_activity(
             # Appends checks and may downgrade READY → NOT_READY, so it must run
             # before the verdict evaluation below. Never raises; see its docstring
             # for the fail-open/verdict taxonomy note.
-            if verify_storage and await _append_storage_checks(result, budget, started):
+            # Once per run: the FAST dispatch of a warmup app (or the only
+            # dispatch of any other app) probes storage; the WARMUP one does not.
+            if (
+                verify_storage
+                and input.tier is not CheckTier.WARMUP
+                and await _append_storage_checks(result, budget, started)
+            ):
                 # A failed probe only becomes a verdict once the app's retry
                 # attempts are exhausted — one flaky probe must not block a
                 # hard-mode run on its first attempt. Same deferral the handler
@@ -2647,6 +2791,180 @@ def build_preflight_gate_activity(
             )
 
     return preflight_gate
+
+
+def warmup_activity_timeouts() -> tuple[timedelta, timedelta]:
+    """``(start_to_close, schedule_to_close)`` for one warmup activity.
+
+    Same geometry as :func:`gate_timeouts`: headroom over the call budget so the
+    activity's own wait fires before Temporal's, and a schedule window that
+    fits every attempt plus backoff.
+    """
+    start_to_close = WARMUP_CALL_BUDGET_SECONDS + GATE_ACTIVITY_HEADROOM_SECONDS
+    return (
+        timedelta(seconds=start_to_close),
+        timedelta(seconds=WARMUP_ATTEMPTS * start_to_close + 10),
+    )
+
+
+def warmup_retry_policy() -> RetryPolicy:
+    """Retries for a warmup activity: the gate's own plumbing only.
+
+    A hook that raises never reaches this policy — the activity turns the raise
+    into a state — so a retry here is a lost worker or a refused credential
+    lookup, the same faults the check activity retries.
+    """
+    return RetryPolicy(maximum_attempts=WARMUP_ATTEMPTS, backoff_coefficient=2)
+
+
+def _warmup_raise_state(
+    exc: BaseException, app_name: str, operation: str
+) -> WarmupState:
+    """The state a warmup hook's raise is read as.
+
+    A typed AUTH, PERMISSION or NOT_FOUND leaf is ``FAILED``, carrying the leaf:
+    waiting cannot fix it. Anything else is ``RUNNING`` with the error attached,
+    so the workflow polls again and, if the ceiling arrives first, names the
+    last thing the hook said rather than a bare timeout. The error is rendered
+    by :func:`unverifiable_preflight_result`, the rendering every other
+    handler raise on the gate gets, so it never raises here.
+    """
+    details = unverifiable_preflight_result(exc, app_name).checks[0].error
+    if isinstance(exc, AppError) and exc.category in WARMUP_TERMINAL_CATEGORIES:
+        return WarmupState(status=WarmupStatus.FAILED, error=details)
+    return WarmupState(
+        status=WarmupStatus.RUNNING,
+        message=f"{operation} raised; polling again",
+        error=details,
+    )
+
+
+def build_preflight_warmup_activities(
+    handler: Handler, app_name: str
+) -> list[Callable[..., Awaitable[Any]]]:
+    """Build the gate's two warmup activities for one app (FND-3039).
+
+    ``{app}:preflight_warmup_start`` calls :meth:`Handler.warmup_start
+    <application_sdk.handler.base.Handler.warmup_start>` and
+    ``{app}:preflight_warmup_state`` calls ``warmup_state``, each with the
+    ``PreflightInput`` the gate's checks get. The worker registers them only
+    for an app that declares ``App.preflight_warmup_ceiling_seconds``.
+
+    The workflow owns the wait — durable timers between short polls, so a long
+    warmup holds no worker slot — and these activities own one call each. They
+    return a :class:`~application_sdk.handler.contracts.WarmupState` for
+    everything the *hook* does: a state it reports, a raise
+    (:func:`_warmup_raise_state`), a call that overran
+    :data:`WARMUP_CALL_BUDGET_SECONDS` (``RUNNING``, polled again). So anything
+    that leaves one of these activities as an error is the gate's own plumbing
+    (credential resolution, a lost worker), and the workflow fails that open,
+    exactly as it does for the check activity.
+    """
+
+    async def _call(input: PreflightGateInput, operation: str) -> WarmupState:
+        try:
+            credentials, credentials_by_name = await asyncio.wait_for(
+                _resolve_gate_credentials(input),
+                timeout=WARMUP_CALL_BUDGET_SECONDS,
+            )
+        except Exception as e:
+            raise _plumbing_error(e, app_name, _current_attempt()) from e
+        preflight_input, all_creds = _gate_preflight_input(
+            input, credentials, credentials_by_name, WARMUP_CALL_BUDGET_SECONDS
+        )
+        hook = (
+            handler.warmup_start
+            if operation == "warmup_start"
+            else handler.warmup_state
+        )
+        with bind_invocation_context(app_name, all_creds):
+            # Waited on, never wait_for'd, for the reason the check activity
+            # gives: a hook that swallows the cancel must not hold this open.
+            call = asyncio.ensure_future(hook(preflight_input))
+            done, _ = await asyncio.wait({call}, timeout=WARMUP_CALL_BUDGET_SECONDS)
+            if not done:
+                call.cancel()
+                call.add_done_callback(
+                    lambda f: None if f.cancelled() else f.exception()
+                )
+                return _warmup_raise_state(
+                    AppTimeoutError(
+                        message=(
+                            f"{operation} did not return within "
+                            f"{WARMUP_CALL_BUDGET_SECONDS}s"
+                        ),
+                        app_name=app_name,
+                        operation=operation,
+                        timeout_seconds=float(WARMUP_CALL_BUDGET_SECONDS),
+                    ),
+                    app_name,
+                    operation,
+                )
+            try:
+                state = call.result()
+            except Exception as e:
+                logger.warning(
+                    "Preflight %s raised for app %s; %s",
+                    operation,
+                    app_name,
+                    sanitize_cause_repr(e),
+                )
+                return _warmup_raise_state(e, app_name, operation)
+        logger.info(
+            "Preflight %s: app=%s entrypoint=%s status=%s",
+            operation,
+            app_name,
+            input.entrypoint or "<implicit>",
+            state.status.value,
+        )
+        return state
+
+    @activity.defn(name=preflight_warmup_start_activity_name(app_name))
+    async def preflight_warmup_start(input: PreflightGateInput) -> WarmupState:
+        return await _call(input, "warmup_start")
+
+    @activity.defn(name=preflight_warmup_state_activity_name(app_name))
+    async def preflight_warmup_state(input: PreflightGateInput) -> WarmupState:
+        return await _call(input, "warmup_state")
+
+    return [preflight_warmup_start, preflight_warmup_state]
+
+
+def warmup_unavailable_details(
+    state: WarmupState, app_name: str, *, ceiling_seconds: int | None = None
+) -> FailureDetails:
+    """What a warmup that ended the gate's wait is attributed to.
+
+    A ``FAILED`` state's own typed error when it carries one (an AUTH raise, a
+    hook that said why). Otherwise ``SourceUnavailableError`` — the source is
+    the customer's, and the warmup is the source getting ready — naming either
+    the ceiling it ran out (``ceiling_seconds`` set) or the hook's own line.
+    Pure: runs in the workflow, so it builds and never raises.
+    """
+    if ceiling_seconds is None and state.error is not None:
+        return _stamped(state.error, app_name)
+    if ceiling_seconds is not None:
+        last = f"; last reported: {state.status.value}" + (
+            f" ({state.error.message})" if state.error is not None else ""
+        )
+        message = (
+            f"Source warmup did not report ready within the {ceiling_seconds}s "
+            f"warmup ceiling{last}"
+        )
+        suggested = (
+            "Check that the source can start (a suspended warehouse resumes, a "
+            "queued job runs), or raise preflight_warmup_ceiling_seconds if it "
+            "is known to take longer."
+        )
+    else:
+        message = state.message or "Source warmup failed"
+        suggested = None
+    return SourceUnavailableError(
+        message=message,
+        suggested_action=suggested,
+        app_name=app_name,
+        retryable=False,
+    ).to_failure_details()
 
 
 # ---------------------------------------------------------------------------

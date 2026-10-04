@@ -911,6 +911,33 @@ class App(ABC):
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here: at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
+    preflight_warmup_ceiling_seconds: ClassVar[int | None] = None
+    """Declare a warmup, and how long the gate waits for it. ``None`` (default): no warmup.
+
+    For an app whose ``WARMUP``-tier checks need the source made ready first (a
+    suspended warehouse resumed, a catalog indexed) through
+    :meth:`Handler.warmup_start <application_sdk.handler.base.Handler.warmup_start>`
+    and ``warmup_state``. Declaring a ceiling makes the gate fire
+    ``warmup_start`` at gate start alongside the ``FAST`` checks, poll
+    ``warmup_state`` every :attr:`preflight_warmup_poll_seconds` on durable
+    timers, and run the ``WARMUP`` checks once it reports ``ready``. Clamped to
+    5-3600s, measured from gate start; reaching it without ``ready`` is
+    ``SOURCE_UNAVAILABLE``, attributed to the source, so
+    :attr:`preflight_gate_mode` decides whether it blocks. A ``failed`` state or
+    a typed AUTH / PERMISSION / NOT_FOUND raise from either hook ends the wait
+    at once.
+
+    The wait holds no worker slot — only each short poll does — so this can be
+    far longer than :attr:`preflight_gate_timeout_seconds`. Left ``None``, the
+    gate dispatches no warmup activity and sets no timer."""
+
+    preflight_warmup_poll_seconds: ClassVar[int] = 15
+    """Seconds between two ``warmup_state`` polls. Clamped to 1-300.
+
+    Read only when :attr:`preflight_warmup_ceiling_seconds` is set. Each poll
+    is a workflow task and a short activity, so poll about as often as the
+    warmup's state can usefully change."""
+
     preflight_verify_storage: ClassVar[bool] = False
     """Also verify the run's artifact object store(s) in the preflight gate.
 
@@ -2537,6 +2564,8 @@ async def _run_preflight_gate(
     budget_seconds: int | None = None,
     max_attempts: int | None = None,
     gate_mode: object = None,
+    warmup_ceiling_seconds: object = None,
+    warmup_poll_seconds: object = None,
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
@@ -2574,6 +2603,24 @@ async def _run_preflight_gate(
     ``gate_outcome_row`` the activity uses, so a consumer parsing ``gate_mode``
     or ``gate_attempt`` never drops the rows that prove a gate never ran or never
     returned.
+
+    **Warmup phase (FND-3039).** An app that declares
+    ``App.preflight_warmup_ceiling_seconds`` (``warmup_ceiling_seconds`` here)
+    gets a second phase, guarded by its own ``workflow.patched(
+    "preflight-gate-warmup")`` so a run started before it replays without it.
+    At gate start the workflow fires ``{app}:preflight_warmup_start`` and, at
+    the same time, the check activity with ``tier=FAST``. Once the ``FAST``
+    dispatch lets the run go on, it waits on the warmup: short
+    ``{app}:preflight_warmup_state`` polls separated by durable timers
+    (``warmup_poll_seconds`` apart), so the wait holds no worker slot. On
+    ``READY`` (or ``NOT_REQUIRED``) it dispatches the check activity again with
+    ``tier=WARMUP``. A ``FAILED`` state — including a typed AUTH, PERMISSION or
+    NOT_FOUND raise from either hook — ends the wait at once, and so does the
+    ceiling, measured from gate start, as ``SOURCE_UNAVAILABLE``. Either is
+    attributed to the source as ``source_unverifiable`` and the mode applies. A
+    warmup activity that itself fails is the gate's own plumbing and fails open
+    (``no_verdict`` / ``gate_broken``), like the check activity. An app with no
+    ceiling declared takes none of this: no patch marker, no activity, no timer.
     """
     with workflow.unsafe.imports_passed_through():
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -2600,12 +2647,22 @@ async def _run_preflight_gate(
             gate_outcome_row,
             gate_retry_policy,
             gate_timeouts,
+            gate_warmup_ceiling_seconds,
+            gate_warmup_poll_seconds,
             is_preflight_block,
             preflight_gate_activity_name,
+            preflight_warmup_start_activity_name,
+            preflight_warmup_state_activity_name,
             underlying_error_type,
+            warmup_activity_timeouts,
+            warmup_retry_policy,
+            warmup_unavailable_details,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CheckTier,
             PreflightCheck,
+            WarmupState,
+            WarmupStatus,
         )
 
     entry = entrypoint or "<implicit>"
@@ -2623,6 +2680,7 @@ async def _run_preflight_gate(
         audience: str | None = None,
         primary: FailureDetails | None = None,
         exc_info: bool = False,
+        tier: CheckTier | None = None,
     ) -> None:
         checks = checks or []
         row = gate_outcome_row(
@@ -2638,6 +2696,7 @@ async def _run_preflight_gate(
             attempt=attempt,
             audience=audience,
             primary=primary,
+            tier=tier,
         )
         if exc_info:
             row["exc_info"] = True
@@ -2664,35 +2723,34 @@ async def _run_preflight_gate(
         _emit_skipped("input_not_credential_resolvable")
         return
 
-    dispatched_at = workflow.now()
-    try:
-        # Inside the guard: an exception escaping here would become a workflow
-        # *task* failure, which Temporal retries indefinitely (see
-        # _validate_workflow_input). Nothing on the gate's own path may do that.
-        start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
-        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
-        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-        await workflow.execute_activity(
-            preflight_gate_activity_name(app_name),
-            gate_input,
-            schedule_to_close_timeout=schedule_to_close,
-            start_to_close_timeout=start_to_close,
-            heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
-            retry_policy=gate_retry_policy(max_attempts),
-        )
-    except Exception as e:
+    ceiling, _ = gate_warmup_ceiling_seconds(warmup_ceiling_seconds)
+    # Only an app that declares a warmup reaches the patch call, so every other
+    # app's history gains no marker; a run started before the phase existed
+    # replays without it.
+    warmup = ceiling is not None and workflow.patched("preflight-gate-warmup")
+    first_tier = CheckTier.FAST if warmup else None
+
+    def _elapsed_ms() -> float:
+        return round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
+
+    def _no_verdict(e: Exception, tier: CheckTier | None) -> None:
+        """Apply the mode to a check dispatch that returned no verdict.
+
+        Re-raises the activity's deliberate block unchanged; otherwise
+        classifies from the chain, fails open on the gate's own plumbing, and
+        blocks (hard) or reports (soft) anything attributed to the source.
+        """
         # The activity emits the blocked outcome event before it raises; the
         # workflow re-raises the deliberate block unchanged.
         if is_preflight_block(e):
-            raise
-        elapsed_ms = round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
+            raise e
         failure = classify_gate_failure(e)
         if failure.classification is PreflightClassification.GATE_BROKEN:
             _emit_row(
                 PreflightRowOutcome.NO_VERDICT,
                 underlying_error_type(e),
                 failure.classification,
-                elapsed_ms,
+                _elapsed_ms(),
                 attempt=failure.attempt,
                 audience=Audience.APP_OWNER.value,
                 # The plumbing error's own details[0], read off the chain by
@@ -2702,6 +2760,7 @@ async def _run_preflight_gate(
                 # and no sentence. Same ladder as the other two branches.
                 primary=failure.evidence,
                 exc_info=True,
+                tier=tier,
             )
             return
         evidence = failure.evidence or frame_death_details(e, app_name, budget)
@@ -2711,20 +2770,122 @@ async def _run_preflight_gate(
             else PreflightRowOutcome.WOULD_BLOCK,
             evidence.code,
             failure.classification,
-            elapsed_ms,
+            _elapsed_ms(),
             attempt=failure.attempt,
             checks=failure.checks,
             audience=evidence.audience.value,
             primary=evidence,
             exc_info=True,
+            tier=tier,
         )
         if mode.enforces:
             raise build_workflow_block(
                 evidence, failure.checks, app_name, failure.attempt
             ) from e
+
+    dispatched_at = workflow.now()
+    warmup_start: Any = None
+    try:
+        # Inside the guard: an exception escaping here would become a workflow
+        # *task* failure, which Temporal retries indefinitely (see
+        # _validate_workflow_input). Nothing on the gate's own path may do that.
+        start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
+        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+
+        async def _dispatch_checks(tier: CheckTier | None) -> None:
+            await workflow.execute_activity(
+                preflight_gate_activity_name(app_name),
+                gate_input.model_copy(update={"tier": tier}),
+                schedule_to_close_timeout=schedule_to_close,
+                start_to_close_timeout=start_to_close,
+                heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
+                retry_policy=gate_retry_policy(max_attempts),
+            )
+
+        warmup_s2c, warmup_sc2 = warmup_activity_timeouts()
+        if warmup:
+            # Fired first and not awaited: the warmup runs while the FAST
+            # checks do, which is the point of starting it at gate start.
+            warmup_start = workflow.start_activity(
+                preflight_warmup_start_activity_name(app_name),
+                gate_input,
+                result_type=WarmupState,
+                schedule_to_close_timeout=warmup_sc2,
+                start_to_close_timeout=warmup_s2c,
+                retry_policy=warmup_retry_policy(),
+            )
+        await _dispatch_checks(first_tier)
+    except Exception as e:
+        if warmup_start is not None and not warmup_start.done():
+            warmup_start.cancel()
+        _no_verdict(e, first_tier)
         return
 
     # Success: the activity already emitted the proceeded outcome event.
+    if warmup_start is None or ceiling is None:
+        return
+
+    poll, _ = gate_warmup_poll_seconds(warmup_poll_seconds)
+    deadline = dispatched_at + timedelta(seconds=ceiling)
+    try:
+        state: WarmupState = await warmup_start
+        while state.status in (WarmupStatus.NOT_STARTED, WarmupStatus.RUNNING):
+            remaining = (deadline - workflow.now()).total_seconds()
+            if remaining <= 0:
+                break
+            await workflow.sleep(timedelta(seconds=min(poll, remaining)))
+            state = await workflow.execute_activity(
+                preflight_warmup_state_activity_name(app_name),
+                gate_input,
+                result_type=WarmupState,
+                schedule_to_close_timeout=warmup_sc2,
+                start_to_close_timeout=warmup_s2c,
+                retry_policy=warmup_retry_policy(),
+            )
+    except Exception as e:
+        # The warmup activities turn everything the hook does into a state, so
+        # what reaches here is the gate's own plumbing: fail open.
+        _emit_row(
+            PreflightRowOutcome.NO_VERDICT,
+            underlying_error_type(e),
+            PreflightClassification.GATE_BROKEN,
+            _elapsed_ms(),
+            attempt=0,
+            audience=Audience.APP_OWNER.value,
+            exc_info=True,
+            tier=CheckTier.WARMUP,
+        )
+        return
+
+    if state.status in (WarmupStatus.READY, WarmupStatus.NOT_REQUIRED):
+        try:
+            await _dispatch_checks(CheckTier.WARMUP)
+        except Exception as e:
+            _no_verdict(e, CheckTier.WARMUP)
+        return
+
+    # FAILED, or still warming at the ceiling: the WARMUP checks cannot run, and
+    # the reason is the source's.
+    evidence = warmup_unavailable_details(
+        state,
+        app_name,
+        ceiling_seconds=None if state.status is WarmupStatus.FAILED else ceiling,
+    )
+    _emit_row(
+        PreflightRowOutcome.BLOCKED
+        if mode.enforces
+        else PreflightRowOutcome.WOULD_BLOCK,
+        evidence.code,
+        PreflightClassification.SOURCE_UNVERIFIABLE,
+        _elapsed_ms(),
+        attempt=0,
+        audience=evidence.audience.value,
+        primary=evidence,
+        tier=CheckTier.WARMUP,
+    )
+    if mode.enforces:
+        raise build_workflow_block(evidence, [], app_name, 0)
 
 
 def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
@@ -2977,6 +3138,8 @@ def generate_workflow_class(
                 getattr(app_cls, "preflight_gate_timeout_seconds", None),
                 getattr(app_cls, "preflight_gate_max_attempts", None),
                 getattr(app_cls, "preflight_gate_mode", None),
+                getattr(app_cls, "preflight_warmup_ceiling_seconds", None),
+                getattr(app_cls, "preflight_warmup_poll_seconds", None),
             )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)

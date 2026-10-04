@@ -601,6 +601,42 @@ reservation** — a handler returning in 3s holds its worker slot for 3s whateve
 A generous budget therefore costs nothing on a healthy run; it only changes the run that would
 otherwise have been cut short.
 
+#### Waiting for a warmup (opt-in)
+
+Some checks cannot run until the source is made ready — a suspended warehouse resumed, a catalog
+indexed. An app marks those checks `tier=CheckTier.WARMUP`, implements `Handler.warmup_start` /
+`warmup_state` (see [Check tiers and warmup](handlers.md#check-tiers-and-warmup)), and declares how
+long the gate may wait:
+
+```python
+class MyConnector(App):
+    preflight_gate_mode = "hard"
+    preflight_warmup_ceiling_seconds = 900   # a cold warehouse can take ~10 minutes to resume
+    preflight_warmup_poll_seconds = 20       # default 15, clamped 1-300
+```
+
+With a ceiling declared (clamped 5-3600s, measured from gate start) the gate runs in two phases:
+
+1. At gate start it fires `{app}:preflight_warmup_start` and, at the same time, the check activity
+   with `tier=fast`. A `fast` verdict is enforced exactly as an untiered one is.
+2. It then polls `{app}:preflight_warmup_state` — short activities separated by durable timers, so
+   the wait holds no worker slot. `not_started` / `running` waits and polls again; `ready` (or
+   `not_required`) dispatches the check activity again with `tier=warmup`.
+
+A `failed` state, or a typed AUTH, PERMISSION or NOT_FOUND raise from either hook, ends the wait at
+once; any other raise reads as "not ready yet" and is polled again. Reaching the ceiling still
+warming is `SOURCE_UNAVAILABLE` (audience `USER`), naming the last state the hook reported. Both are
+`source_unverifiable` rows carrying `gate_tier: "warmup"`, and `preflight_gate_mode` decides whether
+they block. A warmup activity that itself fails — a lost worker, a credential lookup the secret store
+refused — is the gate's own plumbing and fails open as `no_verdict` / `gate_broken`.
+
+Every row of a warmup app carries `gate_tier` (`fast` or `warmup`), so one run has up to two rows
+with the same `gate_attempt`; dedupe on `(workflow_run_id, gate_tier, gate_attempt)`. The storage
+probes (below) run once, with the `fast` dispatch. An app that declares no ceiling gets none of this:
+no warmup activity, no timer, no `gate_tier` key, and the check activity runs every check untiered.
+The two activity names are reserved: a `@task` named `preflight_warmup_start` or
+`preflight_warmup_state` on an app with a ceiling fails worker boot.
+
 #### Verifying artifact storage (opt-in)
 
 The handler certifies the *source*; nothing certifies the store the run will upload its
