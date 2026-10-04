@@ -2,7 +2,7 @@
 
 Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules, all static, with 4 BLOCK and 16 WARN (F017 and F018 are retired and never fire); the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
 
-Status: conformance implementation and remaining acceptance requirements, 2026-09-08; revised 2026-09-24 (FND-2746). F003, F006 and F007 join F001 at BLOCK; other preflight rules remain WARN. **Conformance and tests are separate measures:** no preflight rule executes tests. F016 checks statically that the required scenarios are *defined*; whether they *pass* is the test gate's measure. F016 is WARN until the fleet has registered its scenarios. F017 and F018 were SDK-scoped and are retired: the SDK owns both the gate and its tests, so their matrices below are an SDK test plan (FND-2747), not conformance rules. SDK production behavior is unchanged.
+Status: conformance implementation and remaining acceptance requirements, 2026-09-08; revised 2026-09-24 (FND-2746); check cost tiers and warmup added 2026-10-04 (FND-3042). F003, F006 and F007 join F001 at BLOCK; other preflight rules remain WARN. **Conformance and tests are separate measures:** no preflight rule executes tests. F016 checks statically that the required scenarios are *defined*; whether they *pass* is the test gate's measure. F016 is WARN until the fleet has registered its scenarios. F017 and F018 were SDK-scoped and are retired: the SDK owns both the gate and its tests, so their matrices below are an SDK test plan (FND-2747), not conformance rules. SDK production behavior is unchanged.
 
 The rules ship as the conformance F-series; F001–F005 were first published as P032–P035 and P047. The detector audit that validated them against connector snapshots is recorded on [CONNECT-812](https://linear.app/atlan-epd/issue/CONNECT-812) and in [PR #3710](https://github.com/atlanhq/application-sdk/pull/3710); its counts are tied to one connector revision and one detector build, so they are not kept in this repository.
 
@@ -55,12 +55,26 @@ SDK infrastructure failures remain distinct. Credential-store transport failures
 
 A Temporal timeout type is evidence about execution, not proof of a source root cause. Test running-attempt timeouts separately from never-started activities, credential-resolution stalls, store-probe failures, worker loss, and external cancellation. Preserve earlier typed evidence when present; without it, do not label an app deadline as a confirmed customer connectivity failure.
 
+### Check cost tiers and warmup
+
+This section's *cost tier* (`PreflightCheck.tier`: `FAST` or `WARMUP`) is a property of a check. It is unrelated to the WARN/BLOCK *enforcement tier* of a conformance rule used elsewhere in this document.
+
+A `FAST` check runs on demand and at gate start, with no preparation. A `WARMUP` check runs only once the app's warmup reports `READY`. A check with no tier is `FAST`. Assign the tier by one question: **can the source answer this check without starting, resuming, or queueing for compute it bills for?** Yes is `FAST`: login, token introspection, grant reads the metadata service answers, reachability. No is `WARMUP`: a query that executes on a suspended warehouse, a probe that waits for a job-queue slot, a scan of a catalog that must be indexed first. A check that is slow only because it fans out over the source's scope is a budget problem (F012) and stays `FAST`. Reachability and authentication are always `FAST`, so bad credentials fail at gate start and not after a resume. A `FAST` check must not resume the source as a side effect; the resume belongs in `Handler.warmup_start`.
+
+A `WARMUP` tier is a promise the app keeps in three places at once: `WARMUP`-tier checks, the `warmup_start` / `warmup_state` overrides, and `App.preflight_warmup_ceiling_seconds`. Without the ceiling the gate sends no tier and runs every check at gate start, so the cold-source check the tier was meant to defer runs anyway. Without the overrides the default `NOT_REQUIRED` answer releases the `WARMUP` checks at once on every surface. Either half on its own is a mistake: report it, don't infer intent from it.
+
+The hooks have a contract of their own. `warmup_start` returns promptly and is idempotent: a second call reports the running warmup instead of starting another. `warmup_state` reports and never starts. `FAILED` carries a typed `error`. A typed `AUTH`, `PERMISSION` or `NOT_FOUND` raise from either hook ends the gate's wait at once, and any other raise is polled again until the ceiling. Reaching the ceiling still pending is `SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED` (category `SOURCE_UNAVAILABLE`).
+
+**Blocking is the exception to the category rule above.** A warmup that ends `FAILED`, or that reaches its ceiling, blocks a hard-mode run on posture alone, although `SOURCE_UNAVAILABLE` is not in `GATE_BLOCKING_CATEGORIES`. The `WARMUP` checks could not run, and the reason is the source's. A `WARMUP`-tier *verdict* returned after `READY` is enforced like any other verdict, by category. A warmup activity that itself fails (lost worker, refused credential lookup) is gate plumbing and fails open as `no_verdict` / `gate_broken`.
+
+Test warmup behaviour against `application_sdk.testing.WarmingSource`, a scripted source (`COLD → WARMING → QUEUED → READY`, or `→ UNAVAILABLE`, or a raise at any step). Back the app's source-client fake with it, so the app's real hooks run. Do not replace `warmup_start` / `warmup_state` themselves, for the same reason app tests do not replace `preflight_check`. SDK gate tests use `WarmingSourceHandler`, the synthetic-handler form.
+
 ## Existing machinery to extend
 
 | Existing surface | Current behavior | Required change |
 | --- | --- | --- |
 | F001, reserved preflight activity | STATIC, BLOCK | Retain; cover supported decorator aliases and wrappers without treating an unrelated decorator as SDK `task`. |
-| F002, duplicate workflow preflight | STATIC, WARN | Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up. |
+| F002, duplicate workflow preflight | STATIC, WARN | Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up; the supported replacement is a declared warmup (see [Check cost tiers and warmup](#check-cost-tiers-and-warmup)). |
 | F003, untyped failed check | STATIC, BLOCK | Extend beyond literal `passed=False` where local data flow proves failure. Runtime assertions cover dynamic expressions, factories, and keyword expansion. |
 | F004, metadata/input parity | STATIC, WARN | Compare the selected entrypoint's contract, not the union of all contracts. Unresolved contracts must report incomplete analysis. |
 | F005, handler warning logs | STATIC, WARN | Retain its existing identity. A log statement cannot substitute for a typed result. Apply safe reachable-helper discovery. |
@@ -153,6 +167,16 @@ Run tests without production credentials or live customer systems. Isolate delib
 
 The adapter must explicitly mark unsupported scenario families with a reason. Skips, xfails, zero collected tests, missing adapters, or fixture setup failures cannot establish conformance. Measure evidence coverage per entrypoint and scenario rather than test-file presence.
 
+#### Warmup scenarios (recommended; not detected)
+
+An app that declares a warmup should also pin the rows below. They are **not** in `F016_SCENARIOS` (`packages/conformance/conformance/preflight_scenarios.py`), so F016 neither requires nor reports them. Adding them there would oblige every app, warmup or not, to register them, which needs an applicability rule first.
+
+| Scenario | Required observation |
+| --- | --- |
+| Cold source reaches READY | Against a scripted `WarmingSource` walking `COLD → WARMING → QUEUED → READY`: `warmup_start` starts once and is idempotent, `warmup_state` reports each state without starting one, `pending_checks` names the `WARMUP` checks until `READY`, and the `WARMUP` checks then run and return a truthful verdict. |
+| Source never warms | Scripted `→ UNAVAILABLE` (or a typed AUTH / PERMISSION / NOT_FOUND raise): the hook reports `FAILED` with a typed, actionable `error`, and no `WARMUP` check claims a pass. The hook does not turn a transient source error into `FAILED`: it raises it or keeps reporting `RUNNING`, and the gate polls again. |
+| Tier assignment | Reachability and authentication rows are `FAST`; a `FAST` request against a cold scripted source answers without calling the resume. |
+
 ### F017 SDK enforcement matrix
 
 Retained as the SDK's test plan for gate enforcement; the F017 rule is retired (FND-2747 maps it onto `tests/unit/app/test_preflight_gate.py`).
@@ -187,7 +211,7 @@ The registry's main table and comments reuse identifiers. This document qualifie
 | PF-02, PF-13, PF-14 | F010 and strengthened F004; F016 verifies entrypoint and credential routing. Arbitrary async credential derivation is not fixed by a connection-field validator. |
 | PF-03 | F001/F002 provenance improvements and F019 discovery coverage. |
 | PF-04 | Non-finding: absent interactive entrypoint remains legal; F010 must include it as a counterexample. |
-| PF-05, PF-06 | F016 cold-source and duplicate-removal scenarios. Old retry-warms-source advice is version-specific and must not be applied unchanged after #3685. |
+| PF-05, PF-06 | F016 cold-source and duplicate-removal scenarios; for an app that declares a warmup, the warmup scenarios run against a scripted `WarmingSource`. Old retry-warms-source advice is version-specific and must not be applied unchanged after #3685. |
 | PF-07 | F018 attempt/final-outcome evidence and consumer deduplication. |
 | PF-08, PF-15, PF-27, PF-30 | F016 checks actual discovery/authorization scope and rejects vacuous remote success. Fast duration is a telemetry signal, not proof. |
 | PF-09 | F018 evidence and sink tests; fleet storage/query coverage remains telemetry validation, not an app lint. |

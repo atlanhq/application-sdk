@@ -181,6 +181,37 @@ The injected gate uses the same two hooks once an app declares `App.preflight_wa
 
 `warmup_start` must return promptly and be idempotent. The UI polls `warmup/state`, so start the work and report it rather than awaiting it. The SDK also drops any returned row outside the requested tier, so a handler that ignores `input.tier` still answers with the right rows. It just runs slower.
 
+##### The tier model
+
+| Tier | Runs | When the gate runs it | Typical checks |
+| --- | --- | --- | --- |
+| `FAST` (or no tier) | on every `/check`, with no preparation | at gate start | DNS / TCP reachability, authentication, a grant read from a system catalog, server version |
+| `WARMUP` | only once the warmup reports `ready` | after the warmup wait, up to `preflight_warmup_ceiling_seconds` | a query that needs a running warehouse, a scan of a catalog that must be indexed first, a job that must leave a queue |
+
+A check is `FAST` unless you mark it. Leave it that way unless you have a reason to change it. The cost of a wrong `WARMUP` mark is real: the check stops running on the user's first **Test**, and the gate only reaches it after a wait.
+
+##### Does this check need source compute?
+
+Ask one question per check: **can the source answer it without starting, resuming, or queueing for compute it bills for?**
+
+- **Yes → `FAST`.** The source answers from its control plane or metadata service: login, a token introspection, `SHOW GRANTS`, an `information_schema` read the service handles without a running warehouse, a REST listing, the reachability of an endpoint. These answer in seconds whether or not the source is warm.
+- **No → `WARMUP`.** The answer only exists once compute is running: anything that executes on a suspended warehouse or cluster (`SELECT` against a table, even `SELECT 1` on engines that resume for it), a probe that has to wait for a slot in a job queue, a scan that needs an index built first.
+- **Not sure? Measure it.** Run the check against a source you have just suspended. If it either fails or takes far longer than it does against a warm source, it needs compute. A check that is only slow because it fans out over many schemas is a sizing problem, not a warmup. Bound it (see [Sizing the check budget](apps.md#sizing-the-check-budget)) rather than moving it to `WARMUP`.
+
+Two rules follow from this:
+
+1. **Never make the auth check `WARMUP`.** Bad credentials must fail on the first click and at gate start, not after a ten-minute resume. If the source can only authenticate by running a query, split the check: authenticate against the control plane in `FAST` and keep the query in `WARMUP`.
+2. **Do not resume the source from a `FAST` check.** A `FAST` check that quietly wakes the warehouse makes every **Test** click cost compute, and that cost is what the tiers exist to avoid. The resume belongs in `warmup_start`.
+
+##### The warmup methods
+
+| Method | Called by | Must | Must not |
+| --- | --- | --- | --- |
+| `warmup_start(input)` | `POST /workflows/v1/warmup`, and the gate once at gate start | start the resume (an asyncio task, a resume API call) and return its state at once; report the running warmup on a second call | await the resume, or start a second one |
+| `warmup_state(input)` | `POST /workflows/v1/warmup/state`, any `/check` that names a `tier`, and every gate poll | report where the warmup is, with `pending_checks` until `ready` | start a warmup |
+
+Return `WarmupStatus` values honestly. `not_started` and `running` keep the caller waiting, `ready` releases the `WARMUP` checks, and `not_required` says there is nothing to wait for (a source that is already warm may answer it). `failed` ends the wait, and it should carry `error=` with a typed leaf: `SourceUnavailableError` for a source that will not come back, or `AuthError` / `AppPermissionDeniedError` when the resume itself was refused. Put a short progress line in `message`, such as `RESUMING` or `QUEUED (3 ahead)`. The gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait.
+
 ### MetadataInput / MetadataOutput
 
 ```python
@@ -393,3 +424,32 @@ async def test_auth_success(infra):
     result = await handler.test_auth(AuthInput(credentials=[]))
     assert result.status == AuthStatus.SUCCESS
 ```
+
+### Testing a warmup without a warehouse
+
+`WarmingSource` plays a source that warms up from a script, so warmup tests need no real warehouse and no wait. The script is the sequence of states the source passes through: `COLD`, `WARMING`, `QUEUED`, `READY` or `UNAVAILABLE`, a literal `WarmupState`, or an exception to raise. The source stays on its first state until `start()` is called. `start()` moves one state on, and only once. Each `poll()` after that moves one more, and the last state repeats when the script runs out.
+
+Back your source-client fake with it, so the handler's real `warmup_start` / `warmup_state` run against the script. `start()` and `poll()` are synchronous, so wrap them for an async client:
+
+```python
+from unittest.mock import AsyncMock
+
+from application_sdk.handler.contracts import PreflightInput, WarmupStatus
+from application_sdk.testing import SourceState, WarmingSource
+
+async def test_warmup_reports_queued_then_ready(fake_client):
+    source = WarmingSource(
+        [SourceState.COLD, SourceState.WARMING, SourceState.QUEUED, SourceState.READY]
+    )
+    fake_client.resume_warehouse = AsyncMock(side_effect=source.start)
+    fake_client.warehouse_state = AsyncMock(side_effect=source.poll)
+    handler = MyHandler(client=fake_client)
+
+    assert (await handler.warmup_start(PreflightInput())).status is WarmupStatus.RUNNING
+    assert (await handler.warmup_state(PreflightInput())).status is WarmupStatus.RUNNING
+    assert (await handler.warmup_state(PreflightInput())).status is WarmupStatus.READY
+```
+
+`start()` and `poll()` return a `WarmupState`. If your client returns the source's own state instead, such as a warehouse status string, have the client fake translate it. The state's `message` is the `SourceState` name.
+
+To test the gate itself, pass `WarmingSourceHandler(source)` as the worker's handler. It answers one `FAST` and one `WARMUP` row and records every call the gate makes in `calls`. `tests/integration/test_preflight_warmup.py` runs the whole gate wait this way, ending at `ready`, `failed`, a typed raise or the ceiling.

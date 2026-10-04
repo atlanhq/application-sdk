@@ -60,6 +60,115 @@ Each check in `PreflightOutput.checks` is mapped to a key in `data` by lower-cas
 
 Delegates to `Handler.preflight_check(PreflightInput)`.
 
+**Check tiers (optional).** Add `"tier": "fast"` or `"tier": "warmup"` to the body to run one cost tier. A check with no tier counts as `fast`. A body with no `tier` runs every check and never consults the warmup, so its response is exactly what it was before tiers existed. See [Check tiers and warmup](../concepts/handlers.md#check-tiers-and-warmup) for which checks belong in which tier.
+
+| `tier` | Runs | Adds to the response |
+| --- | --- | --- |
+| absent | every check | nothing |
+| `fast` | only `fast` and untiered checks | `preflight.warmup`, the app's `WarmupState`, unless it is `not_required` |
+| `warmup` | only `warmup` checks, and only once the warmup reports `ready` or `not_required` | `preflight.warmup`, unless it is `not_required` |
+
+A tiered request calls `Handler.warmup_state` once before it runs any check. Rows outside the requested tier are dropped even when the handler returns them, and each kept row carries its `tier`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "reachable": { "success": true, "message": "", "successMessage": "", "failureMessage": "" }
+  },
+  "message": "Preflight check ready",
+  "preflight": {
+    "status": "ready",
+    "message": "",
+    "total_duration_ms": 0.0,
+    "checks": [{ "name": "reachable", "passed": true, "tier": "fast", "message": "" }],
+    "warmup": { "status": "running", "message": "QUEUED", "pending_checks": ["catalogScan"] }
+  }
+}
+```
+
+When a `warmup` request arrives before the warmup is ready (`not_started`, `running` or `failed`), the handler is not run. The answer is **HTTP 412**: the unverified verdict, one failed `preflightVerdict` row carrying a typed `PRECONDITION` error whose `evidence.actual_state` names the warmup's state, and the state itself under `preflight.warmup` so the caller can keep polling:
+
+```json
+{
+  "success": false,
+  "message": "Warmup is not_started; warmup checks run once it is ready.",
+  "preflight": {
+    "status": "not_ready",
+    "checks": [
+      {
+        "name": "preflightVerdict",
+        "passed": false,
+        "error": {
+          "category": "PRECONDITION",
+          "code": "PRECONDITION",
+          "audience": "USER",
+          "suggested_action": "Start the warmup with POST /workflows/v1/warmup and retry once POST /workflows/v1/warmup/state reports ready.",
+          "evidence": { "resource": "warmup", "expected_state": "ready", "actual_state": "not_started" }
+        }
+      }
+    ],
+    "warmup": { "status": "not_started", "message": "COLD", "pending_checks": ["catalogScan"] }
+  },
+  "error": { "category": "PRECONDITION", "code": "PRECONDITION" }
+}
+```
+
+(Abbreviated: `data`, `detail` and the repeated `message` fields follow the raised-error shape every `/check` failure uses.) An unknown `tier` value is a 422.
+
+---
+
+### `POST /workflows/v1/warmup`
+
+Start the warmup that `warmup`-tier checks wait on, such as resuming a suspended warehouse. Optional: an app that does not override `Handler.warmup_start` answers `not_required`.
+
+**Request body:** Same as `/check`, so the UI sends one payload to all three routes. The route does not act on `tier`.
+
+**Response:** the handler's `WarmupState` under `data`, with its `message` (or `Warmup <status>`) as the envelope message:
+
+```json
+{
+  "success": true,
+  "data": { "status": "running", "message": "WARMING", "pending_checks": ["catalogScan"] },
+  "message": "WARMING"
+}
+```
+
+| `data.status` | HTTP | `success` | Meaning |
+| --- | --- | --- | --- |
+| `not_started` / `running` | 202 | `true` | in progress; poll `/warmup/state` |
+| `ready` | 200 | `true` | `warmup`-tier checks can run |
+| `not_required` | 200 | `true` | nothing to wait for |
+| `failed` | 200 | `false` | the warmup will not finish; `data.error` carries the typed reason, without `cause_repr` |
+
+`data` may also carry `estimated_duration_ms`, the app's estimate of the whole warmup. A typed `AppError` raised by the handler maps to its HTTP status (an `AuthError` is 401). Any other raise is a 500 with no exception text.
+
+The handler must return at once and be idempotent. A second call while a warmup is running reports that warmup rather than starting another.
+
+Delegates to `Handler.warmup_start(PreflightInput)`, or to an entry point's `warmup_start` module hook when one exists.
+
+---
+
+### `POST /workflows/v1/warmup/state`
+
+Report the warmup's state. The handler must not start a warmup here.
+
+**Request body:** Same as `/check`.
+
+**Response:** same shape and status codes as `/warmup`:
+
+```json
+{
+  "success": true,
+  "data": { "status": "ready", "message": "READY", "pending_checks": [] },
+  "message": "READY"
+}
+```
+
+Delegates to `Handler.warmup_state(PreflightInput)`, or to an entry point's `warmup_state` module hook when one exists.
+
+**The UI sequence.** `POST /warmup` once, then `POST /check` with `"tier": "fast"` straight away. That answers the cheap checks and lists the pending ones under `preflight.warmup.pending_checks`. Poll `/warmup/state` while it answers 202. When it reports `ready`, `POST /check` with `"tier": "warmup"`. On `failed`, show `data.error` instead.
+
 ---
 
 ### `POST /workflows/v1/metadata`
