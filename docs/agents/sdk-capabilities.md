@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    907728ae1744976b2c6e3840441495f6c72f0f3d
-source-date:   2026-10-02T23:58:15Z
+source-sha:    bb1abedff61bd81e4612209e10959304bb43efdd
+source-date:   2026-10-04T22:58:33+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -24,7 +24,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 70 |
 | `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 26 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
@@ -1763,6 +1763,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Import:** `from application_sdk.errors import SourceUnavailableError`
 - **Signature:** `class SourceUnavailableError(*, ...)`
 - **Summary:** Customer-controlled source system is temporarily unreachable.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
+#### `SourceWarmupExhaustedError`
+
+- **Import:** `from application_sdk.errors import SourceWarmupExhaustedError`
+- **Signature:** `class SourceWarmupExhaustedError(*, ...)`
+- **Summary:** The source answered but did not finish warming up within the gate's ceiling.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
 #### `TaskStalledError`

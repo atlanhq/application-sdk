@@ -282,6 +282,20 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   to `app_id` — agreed with the `system-workflows` owners and rolled out in the
   order the bullet above demands: header added here, released, fleet bumped,
   *then* enforced at the receiver.
+- **A warmup app writes two rows per run, told apart by per-check `tier`.**
+  An app that declares `App.preflight_warmup_ceiling_seconds` dispatches the
+  gate once per tier, and each dispatch persists its own verdict over only that
+  tier's checks. `payload.preflight.checks[].tier` (`fast` / `warmup`) is
+  therefore on the wire — but only for a check whose handler set a tier, so an
+  untiered app's payload is byte-for-byte what it was. A reader that counts runs
+  must group on `workflow_slug` and the run, not count rows. The warmup phase's
+  own outcome, duration and observed transitions are deliberately **not** sent:
+  they describe the gate's wait, not the verdict, and live on the
+  `Preflight gate outcome` log row (`warmup_outcome`, `warmup_duration_ms`,
+  `warmup_transitions`). Adding `tier` relies on the receiver tolerating keys
+  it does not derive a column from inside `payload` — the relay contract this
+  entry already assumes for `payload`, but not separately verified against the
+  receiver here.
 - **The two enum vocabularies must stay in step.** `PreflightResultOrigin` and
   `ExtractionMethod` are validated against the receiver's own enums; a value it
   does not accept is a 422 and a dropped row, visible only as one WARNING

@@ -2641,9 +2641,13 @@ async def _run_preflight_gate(
         )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PREFLIGHT_OUTCOME_EVENT,
+            WARMUP_TRANSITIONS_MAX,
             PreflightClassification,
             PreflightGateInput,
             PreflightRowOutcome,
+            WarmupObservation,
+            WarmupOutcome,
+            WarmupTransition,
             build_workflow_block,
             classify_gate_failure,
             coerce_gate_mode,
@@ -2665,6 +2669,7 @@ async def _run_preflight_gate(
             warmup_activity_timeouts,
             warmup_retry_policy,
             warmup_unavailable_details,
+            warmup_waiting_details,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CheckTier,
@@ -2689,6 +2694,7 @@ async def _run_preflight_gate(
         primary: FailureDetails | None = None,
         exc_info: bool = False,
         tier: CheckTier | None = None,
+        warmup_seen: WarmupObservation | None = None,
     ) -> None:
         checks = checks or []
         row = gate_outcome_row(
@@ -2705,6 +2711,7 @@ async def _run_preflight_gate(
             audience=audience,
             primary=primary,
             tier=tier,
+            warmup=warmup_seen,
         )
         if exc_info:
             row["exc_info"] = True
@@ -2737,11 +2744,18 @@ async def _run_preflight_gate(
     # replays without it.
     warmup = ceiling is not None and workflow.patched("preflight-gate-warmup")
     first_tier = CheckTier.FAST if warmup else None
+    # The FAST row is written while the warmup is still in flight, so that is
+    # what it reports; a run that ends there reads as warming, not as no verdict.
+    first_warmup = WarmupObservation(outcome=WarmupOutcome.WARMING) if warmup else None
 
     def _elapsed_ms() -> float:
         return round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
 
-    def _no_verdict(e: Exception, tier: CheckTier | None) -> None:
+    def _no_verdict(
+        e: Exception,
+        tier: CheckTier | None,
+        warmup_seen: WarmupObservation | None = None,
+    ) -> None:
         """Apply the mode to a check dispatch that returned no verdict.
 
         Re-raises the activity's deliberate block unchanged; otherwise
@@ -2770,6 +2784,7 @@ async def _run_preflight_gate(
                 primary=failure.evidence,
                 exc_info=True,
                 tier=tier,
+                warmup_seen=warmup_seen,
             )
             return
         evidence = failure.evidence or frame_death_details(e, app_name, budget)
@@ -2785,6 +2800,7 @@ async def _run_preflight_gate(
             primary=evidence,
             exc_info=True,
             tier=tier,
+            warmup_seen=warmup_seen,
         )
         if blocks:
             raise build_workflow_block(
@@ -2801,10 +2817,12 @@ async def _run_preflight_gate(
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
 
-        async def _dispatch_checks(tier: CheckTier | None) -> None:
+        async def _dispatch_checks(
+            tier: CheckTier | None, warmup_seen: WarmupObservation | None
+        ) -> None:
             await workflow.execute_activity(
                 preflight_gate_activity_name(app_name),
-                gate_input.model_copy(update={"tier": tier}),
+                gate_input.model_copy(update={"tier": tier, "warmup": warmup_seen}),
                 schedule_to_close_timeout=schedule_to_close,
                 start_to_close_timeout=start_to_close,
                 heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
@@ -2823,11 +2841,11 @@ async def _run_preflight_gate(
                 start_to_close_timeout=warmup_s2c,
                 retry_policy=warmup_retry_policy(),
             )
-        await _dispatch_checks(first_tier)
+        await _dispatch_checks(first_tier, first_warmup)
     except Exception as e:
         if warmup_start is not None and not warmup_start.done():
             warmup_start.cancel()
-        _no_verdict(e, first_tier)
+        _no_verdict(e, first_tier, first_warmup)
         return
 
     # Success: the activity already emitted the proceeded outcome event.
@@ -2836,8 +2854,29 @@ async def _run_preflight_gate(
 
     poll, _ = gate_warmup_poll_seconds(warmup_poll_seconds)
     deadline = dispatched_at + timedelta(seconds=ceiling)
+    transitions: list[WarmupTransition] = []
+
+    def _observe(seen: WarmupState) -> None:
+        """Record *seen* if its status changed, and refresh the health line."""
+        if not transitions or transitions[-1].status is not seen.status:
+            transitions.append(
+                WarmupTransition(status=seen.status, at_ms=_elapsed_ms())
+            )
+        if seen.status in (WarmupStatus.NOT_STARTED, WarmupStatus.RUNNING):
+            _set_health_line(
+                warmup_waiting_details(seen, _elapsed_ms() / 1000),
+            )
+
+    def _seen(outcome: WarmupOutcome) -> WarmupObservation:
+        return WarmupObservation(
+            outcome=outcome,
+            duration_ms=_elapsed_ms(),
+            transitions=transitions[:WARMUP_TRANSITIONS_MAX],
+        )
+
     try:
         state: WarmupState = await warmup_start
+        _observe(state)
         while state.status in (WarmupStatus.NOT_STARTED, WarmupStatus.RUNNING):
             remaining = (deadline - workflow.now()).total_seconds()
             if remaining <= 0:
@@ -2851,9 +2890,11 @@ async def _run_preflight_gate(
                 start_to_close_timeout=warmup_s2c,
                 retry_policy=warmup_retry_policy(),
             )
+            _observe(state)
     except Exception as e:
         # The warmup activities turn everything the hook does into a state, so
         # what reaches here is the gate's own plumbing: fail open.
+        _set_health_line("")
         _emit_row(
             PreflightRowOutcome.NO_VERDICT,
             underlying_error_type(e),
@@ -2863,24 +2904,32 @@ async def _run_preflight_gate(
             audience=Audience.APP_OWNER.value,
             exc_info=True,
             tier=CheckTier.WARMUP,
+            warmup_seen=_seen(WarmupOutcome.BROKEN),
         )
         return
+    _set_health_line("")
 
     if state.status in (WarmupStatus.READY, WarmupStatus.NOT_REQUIRED):
+        ready = _seen(
+            WarmupOutcome.READY
+            if state.status is WarmupStatus.READY
+            else WarmupOutcome.NOT_REQUIRED
+        )
         try:
-            await _dispatch_checks(CheckTier.WARMUP)
+            await _dispatch_checks(CheckTier.WARMUP, ready)
         except Exception as e:
-            _no_verdict(e, CheckTier.WARMUP)
+            _no_verdict(e, CheckTier.WARMUP, ready)
         return
 
     # FAILED, or still warming at the ceiling: the WARMUP checks cannot run, and
     # the reason is the source's. Posture alone decides here, not gate_blocks: a
     # ceiling breach is SOURCE_UNAVAILABLE, which gate_blocks never blocks on, and
     # whether it blocks is the warmup posture's call (FND-3036).
+    failed = state.status is WarmupStatus.FAILED
     evidence = warmup_unavailable_details(
         state,
         app_name,
-        ceiling_seconds=None if state.status is WarmupStatus.FAILED else ceiling,
+        ceiling_seconds=None if failed else ceiling,
     )
     _emit_row(
         PreflightRowOutcome.BLOCKED
@@ -2893,9 +2942,24 @@ async def _run_preflight_gate(
         audience=evidence.audience.value,
         primary=evidence,
         tier=CheckTier.WARMUP,
+        warmup_seen=_seen(WarmupOutcome.FAILED if failed else WarmupOutcome.EXHAUSTED),
     )
     if mode.enforces:
         raise build_workflow_block(evidence, [], app_name, 0)
+
+
+def _set_health_line(text: str) -> None:
+    """Set the run's Temporal current details — the line its health view shows.
+
+    Best effort: the line is a courtesy, and anything escaping here would be a
+    workflow *task* failure, which Temporal retries indefinitely. Emits no
+    command, so it is replay-safe and needs no patch marker. ``""`` clears it.
+    """
+    try:
+        workflow.set_current_details(text)
+    # conformance: ignore[E004] a status line must never fail the gate; logged at DEBUG with exc_info=True
+    except Exception:
+        _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
 def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:

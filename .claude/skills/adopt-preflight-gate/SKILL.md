@@ -253,9 +253,18 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 | `gate_attempt` | the attempt that ran, on every row; `0` only when none did (skipped, or no worker ever started it) |
 | `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
 | `gate_timeout_seconds` | the budget in force, so headroom needs no join |
-| `check_matrix` | per-check name/passed/error_code/duration_ms; `[]` where no check ran |
+| `check_matrix` | per-check name/passed/error_code/duration_ms, plus `tier` on a check whose handler set one; `[]` where no check ran |
+| `gate_tier` | warmup apps only: `fast` / `warmup`, which dispatch wrote the row |
+| `warmup_outcome` | warmup apps only: `warming` on the `fast` row; on the `warmup` row `ready` / `not_required` / `failed` / `exhausted` / `broken` |
+| `warmup_duration_ms` / `warmup_transitions` | warmup apps, once the wait ended: workflow-clock wait, and the JSON list of observed statuses with offsets |
 
-Every key is present on **every** outcome, the workflow-emitted rows included, so
+**Splitting `warming` out of `no_verdict`.** A warmup app's run whose newest row
+is the `fast` one (`warmup_outcome = 'warming'`) ended while the source was still
+getting ready — cancelled, or its worker lost mid-wait. Count it in its own
+`warming` bucket, not in `no_verdict`; a `no_verdict` row with
+`warmup_outcome = 'broken'` is the gate's own warmup plumbing and stays there.
+
+Every key above the `gate_tier` row is present on **every** outcome, the workflow-emitted rows included, so
 parse unconditionally rather than branching on field presence — a branch
 mishandled in the dropping direction is how a gate that never reached a verdict
 vanishes from the numerator.

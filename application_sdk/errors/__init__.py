@@ -57,6 +57,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    SourceWarmupExhaustedError,
     TaskStalledError,
     UnimplementedError,
 )
@@ -157,6 +158,7 @@ __all__ = [
     "DiskFullError",
     "LocalVolumeUnwritableError",
     "SourceUnavailableError",
+    "SourceWarmupExhaustedError",
     "InternalError",
     "InvalidInputError",
     "InvalidInputValueError",
