@@ -388,18 +388,6 @@ def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     }
 
 
-def _filter_tier(result: PreflightOutput, tier: CheckTier) -> PreflightOutput:
-    """``result`` with only the checks in ``tier``.
-
-    Enforces the requested tier for handlers that ignore ``input.tier``. The
-    verdict is the handler's own and is left as returned.
-    """
-    kept = [check for check in result.checks if check.effective_tier is tier]
-    if len(kept) == len(result.checks):
-        return result
-    return result.model_copy(update={"checks": kept})
-
-
 def _warmup_summary(state: WarmupState) -> dict[str, Any]:
     """A warmup state as the HTTP caller sees it — no ``cause_repr``.
 
@@ -3100,6 +3088,7 @@ def create_app_handler_service(
                 PreflightSurface,
                 emit_preflight_check_outcome,
                 emit_preflight_crash_outcome,
+                filter_checks_to_tier,
             )
 
             def _crash_row(e: BaseException) -> None:
@@ -3155,7 +3144,7 @@ def create_app_handler_service(
                 else:
                     result = await handler.preflight_check(preflight_input)
                 if tier is not None:
-                    result = _filter_tier(result, tier)
+                    result = filter_checks_to_tier(result, tier)
                 emit_preflight_check_outcome(
                     logger,
                     app_name,

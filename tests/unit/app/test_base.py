@@ -1540,7 +1540,8 @@ class TestGenerateWorkflowClass:
     ) -> None:
         """When the gate returns (READY, PARTIAL, soft would_block, fail-open),
         extraction runs once, and the gate is handed the app's declared
-        budget, attempts and mode — the same ClassVars the worker reads."""
+        budget, attempts, mode and warmup ceiling/poll (undeclared ceiling:
+        ``None``, no warmup) — the same ClassVars the worker reads."""
         GatedApp, wf_cls = self._counting_gate_app()
         gate = mock.AsyncMock(return_value=None)
 
@@ -1559,7 +1560,7 @@ class TestGenerateWorkflowClass:
         assert isinstance(out, _BLDXOutput) and out.result == "extracted"
         assert GatedApp.calls == 1
         gate.assert_awaited_once()
-        assert gate.await_args.args[3:] == (42, 2, "hard")
+        assert gate.await_args.args[3:] == (42, 2, "hard", None, 15)
 
 
 # =============================================================================

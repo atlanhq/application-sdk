@@ -423,8 +423,10 @@ class CheckTier(SerializableEnum):
     reports :attr:`WarmupStatus.READY`.
 
     A check with no tier (``PreflightCheck.tier is None``) is ``FAST``; see
-    :attr:`PreflightCheck.effective_tier`. Tiers are a UI scheduling hint only: the injected
-    preflight gate sends no tier and runs every check, as it does today.
+    :attr:`PreflightCheck.effective_tier`. The injected preflight gate sends no
+    tier and runs every check, unless the app declares a warmup
+    (``App.preflight_warmup_ceiling_seconds``): then it runs ``FAST`` at gate
+    start and ``WARMUP`` once the warmup reports ``READY``.
     """
 
     FAST = "fast"
@@ -629,7 +631,8 @@ class PreflightInput(BaseModel):
 
     tier: CheckTier | None = None
     """Run only the checks in this cost tier. ``None`` (the default, and what
-    the injected gate always sends) runs every check, as before tiers existed.
+    the injected gate sends for an app with no warmup) runs every check, as
+    before tiers existed.
 
     A handler should skip checks outside the requested tier — the expensive
     ``WARMUP`` probes are what ``tier="fast"`` exists to avoid. ``/check``
