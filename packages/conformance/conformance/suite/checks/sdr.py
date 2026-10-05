@@ -1232,6 +1232,7 @@ def _check_p038(paths: list[Path], root: Path) -> list[Finding]:
 
 #: The class name the Pkl generator emits for the extract-input contract model.
 _GENERATED_INPUT_CLASS = "AppInputContract"
+_GENERATED_BUNDLE_INPUT_CLASS = re.compile(r"[A-Z][A-Za-z0-9]*AppInputContract")
 
 
 def _manifest_carries_agent_routing(manifest_path: Path) -> bool:
@@ -1333,10 +1334,13 @@ def _class_declares_agent_json(node: ast.ClassDef) -> bool:
     return False
 
 
-def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, bool]]:
-    """Analyse the ``AppInputContract`` class in a generated ``_input.py``.
+def _generated_input_contract_findings(
+    path: Path, rel: str
+) -> list[tuple[int, bool, str]]:
+    """Analyse the generated input contract class in a generated ``_input.py``.
 
-    Returns ``(lineno, unsafe)`` for each ``AppInputContract`` definition, where
+    That class is ``AppInputContract``, or ``<Entrypoint>AppInputContract`` in a
+    bundle. Returns ``(lineno, unsafe, name)`` for each such definition, where
     ``unsafe`` is True iff the model subclasses the bare ``Input`` base (not the
     ``*ExtractionInput`` family, which declares ``agent_json``), declares no
     ``agent_json`` field of its own, and does not accept extra fields — the shape
@@ -1346,9 +1350,12 @@ def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, 
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, ValueError):
         return []
-    results: list[tuple[int, bool]] = []
+    results: list[tuple[int, bool, str]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef) or node.name != _GENERATED_INPUT_CLASS:
+        if not isinstance(node, ast.ClassDef) or not (
+            node.name == _GENERATED_INPUT_CLASS
+            or _GENERATED_BUNDLE_INPUT_CLASS.fullmatch(node.name)
+        ):
             continue
         bases = _class_base_names(node)
         # The *ExtractionInput family (SDK templates) declares agent_json → safe.
@@ -1360,7 +1367,7 @@ def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, 
             or _class_allows_extra_fields(node)
         )
         unsafe = extends_bare_input and not safe
-        results.append((node.lineno, unsafe))
+        results.append((node.lineno, unsafe, node.name))
     return results
 
 
@@ -1401,7 +1408,9 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
                 rel = str(input_py.relative_to(root))
             except ValueError:
                 rel = str(input_py)
-            for lineno, unsafe in _generated_input_contract_findings(input_py, rel):
+            for lineno, unsafe, name in _generated_input_contract_findings(
+                input_py, rel
+            ):
                 if not unsafe:
                     continue
                 findings.append(
@@ -1412,7 +1421,7 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
                         column=1,
                         message=(
                             f"{rel}:{lineno}: the generated extract-input contract "
-                            "'AppInputContract' subclasses the bare Input base, "
+                            f"'{name}' subclasses the bare Input base, "
                             "declares no agent_json field, and rejects extra fields — "
                             "so the agent_json the platform forwards in SDR (agent) "
                             "mode is silently dropped by Pydantic. The extract input's "
