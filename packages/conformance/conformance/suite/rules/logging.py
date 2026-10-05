@@ -187,6 +187,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "reproducing it against their source system — often impossible without their "
             "data — so the incident stays open for days instead of being read off the trace."
         ),
+        rule_interactions=(
+            "ruff BLE001 and the sanitized form: BLE001 accepts a broad except "
+            "only when the handler logs with exc_info or re-raises, so the "
+            "sanitized no-exc_info log this rule prescribes at a credential catch "
+            "trips it. Narrow the except (E004) or mark a catch that must stay "
+            "broad with `# noqa: BLE001 — <reason>`; adding exc_info=True to "
+            "satisfy BLE001 would leak the credentials this exemption protects."
+        ),
         short_description="logger.warning/error in except block without exc_info=True",
         full_description=(
             "Logging an exception without ``exc_info=True`` produces a message with no\n"
@@ -200,6 +208,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
             "\n\n**Fixing it well**\n\n"
             '* At a catch around credential resolution, auth or a JDBC/driver call, raw ``exc_info=True`` can print a connection string or password held in the exception: log the sanitized traceback instead, as the reference apps do — ``logger.error("... failed: %s", safe_traceback(e))``, with ``sanitize_cause_repr(e)`` for the message.\n\n'
+            "* The sanitized form carries no ``exc_info``, so ruff BLE001 (in ruff's default rule set) flags it when the catch is a broad ``except Exception``. Narrow the catch to what the ``try`` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where the catch must stay broad, keep the sanitized log and mark the breadth with ``# noqa: BLE001 — <why it must be broad>``. Never add ``exc_info=True`` here to quiet BLE001, and never re-raise ``from e`` for the same reason: the chained cause carries the raw exception to whichever log prints it next. An app that selects ``TRY`` or ``ALL`` also gets TRY400 on the sanitized call, narrowed or not; name it in the same ``noqa``.\n\n"
             "* Everywhere else, ``exc_info=True`` on the existing log call is the fix.\n\n"
             '* A site that already logs a sanitized traceback (``redact_secrets("".join(traceback.format_exception(exc)))`` passed to the logger) delivers the rationale: leave it.\n\n'
         ),
@@ -676,6 +685,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "(empty/stale outside an active except block), and overlaps the explicit "
             "exc_info rules. Use logger.error(..., exc_info=True) instead."
         ),
+        rule_interactions=(
+            "ruff G201 is this rule's inverse: it rewrites logger.error(..., "
+            "exc_info=True) to logger.exception(...). L021 requires G201 off in the "
+            "app's ruff config, so the replacement this rule prescribes lints clean. "
+            "logger.warning(..., exc_info=True) satisfies G201 and this rule either way."
+        ),
         short_description="logger.exception() used — use logger.error(..., exc_info=True) instead",
         full_description=(
             "``logger.exception()`` is not a sanctioned logging method in this project.\n"
@@ -684,6 +699,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "``logger.exception()`` reads ``sys.exc_info()`` implicitly — capturing\n"
             "nothing (or a stale exception) when called outside an active except block.\n"
             "Replace every call site with ``logger.error(..., exc_info=True)``.\n"
+            "\n"
+            "ruff G201 flags that replacement and asks for ``logger.exception()``\n"
+            "back; it is in ruff's default rule set, so it is on in any config that\n"
+            "only extends the defaults.  The policy wins: L021 requires the app's\n"
+            'ruff config to turn it off with ``extend-ignore = ["G201"]``.\n'
             "\n"
             "Checker note: the ``AtlanLoggerAdapter``'s own ``exception()`` shim is\n"
             "exempt — it exists only to satisfy third-party Temporal callers and\n"
@@ -798,12 +818,15 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="L021",
         canonical_reference=(
-            'atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", '
-            '"G004", "T201", "LOG009"]`, which is the exact set this rule looks for. '
-            "atlan-metabase-app spells the same list one rule per line, with a comment on "
-            "why G002 is deliberately absent."
+            "atlan-metabase-app pyproject.toml — `select` lists G001, G003, G004, T201 "
+            "and LOG009 one per line, with a comment on why G002 is deliberately absent. "
+            "An explicit `select` replaces ruff's default rule set, so G201 is never on. "
+            'A config that keeps the defaults and only adds `extend-select = ["G001", '
+            '"G003", "G004", "T201", "LOG009"]` also needs `extend-ignore = ["G201"]`.'
         ),
         rule_interactions=(
+            "L017 is why G201 must be off: G201 demands logger.exception(...) over "
+            "logger.error(..., exc_info=True), the exact inverse of L017. "
             "L001 and L011 box in the order of this fix. G004 and G003 are the "
             "ruff twins of those rules, so enabling them while L001/L011 findings "
             "are still open makes the repo's pre-commit ruff hook fail on every "
@@ -834,7 +857,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description=(
             "pyproject.toml ruff config is missing logging lint rules (G001, G003, "
-            "G004, T201, LOG009)"
+            "G004, T201, LOG009) or leaves G201 on"
         ),
         full_description=(
             "The project's ``[tool.ruff.lint]`` ``select`` / ``extend-select`` must\n"
@@ -850,12 +873,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"
             "``extend-select`` and is not in ``ignore`` / ``extend-ignore``.\n"
             "\n"
-            "Pin the five rules individually. Selecting the bare ``G`` category\n"
-            "satisfies this check but also enables ``G201``, which demands\n"
-            "``.exception(...)`` over ``.error(..., exc_info=True)`` — the exact\n"
-            "inverse of conformance L017 (LoggerExceptionUsage). With ``G``\n"
-            "selected, ruff and the conformance suite contradict each other on\n"
-            "every except-block log call.\n"
+            "``G201`` must be off.  It demands ``.exception(...)`` over\n"
+            "``.error(..., exc_info=True)`` — the exact inverse of conformance L017\n"
+            "(LoggerExceptionUsage) — so with it on, ruff and the conformance suite\n"
+            "contradict each other on every except-block log call.  ruff's default\n"
+            "rule set includes ``G201``, so a config with no ``select`` key has it\n"
+            "on, as does any ``select`` reaching it through ``G``, ``G2`` or ``ALL``.\n"
+            'Add ``extend-ignore = ["G201"]`` (an ignore of ``G201`` or a prefix\n'
+            "of it in ``ignore`` / ``extend-ignore`` counts).  An explicit ``select``\n"
+            "that does not reach ``G201`` needs no ignore.\n"
             "\n"
             "Self-check exemption: ``pyproject.toml`` files whose\n"
             "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"

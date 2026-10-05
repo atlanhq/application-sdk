@@ -116,6 +116,18 @@ inspected, so a sanitizer used elsewhere in the handler does not exempt it.
 Never propose an inline `ignore[...]` here: a suppression records that the
 rule was skipped, the sanitized form records that the credential was handled.
 
+**ruff BLE001 at a broad credential catch.** BLE001 (in ruff's default rule
+set) accepts `except Exception` only when the handler logs with `exc_info`
+or re-raises, so the sanitized form above trips it at a broad catch.  Narrow
+the `except` to what the `try` actually raises (E004's fix), and the
+sanitized log stands as it is.  Where the catch must stay broad, keep the
+sanitized log and mark the breadth: `except Exception as exc:  # noqa: BLE001
+— <why it must be broad>`.  Do not add `exc_info=True` to quiet BLE001, and
+do not re-raise `from exc` for that reason either: the chained cause carries
+the raw exception to whichever log prints it next.  If the app selects `TRY`
+or `ALL`, TRY400 also flags the sanitized `logger.error(...)`, narrowed or
+not; name it in the same `noqa`.
+
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
 - **L004 ExceptBlockMissingExcInfoLog** — add `exc_info=True` as a keyword
@@ -147,6 +159,10 @@ rule was skipped, the sanitized form records that the credential was handled.
   `logger.exception("msg")` → `logger.error("msg", exc_info=True)`.
   If `exc_info=False` is already present, leave it (the caller intentionally
   suppressed the traceback); rename the method only.
+  ruff G201 flags the rewritten call and asks for `.exception(...)` back.  Do
+  not follow it: confirm the repo's `[tool.ruff.lint]` has
+  `extend-ignore = ["G201"]` (L021 requires it) and add it in the same change
+  if it is missing.
 
 - **L020 DeprecatedLoggingWarn** — simple rename: `.warn(` → `.warning(`.
   Also handles the module-level form: `logging.warn(` → `logging.warning(`.
@@ -214,13 +230,21 @@ rule was skipped, the sanitized form records that the credential was handled.
   If a category prefix already covers some rules (e.g. `"G"` covers all
   G-rules), add only the genuinely missing individual IDs.
 
-  **Never ADD the bare `"G"` category yourself.** `G` also enables `G201`,
-  which demands `.exception(...)` over `.error(..., exc_info=True)` — the
-  exact inverse of conformance L017 (LoggerExceptionUsage). Adding `"G"`
-  makes ruff and the conformance suite contradict each other on every
-  except-block log call. Always pin the five rules individually. If the repo
-  already selects `"G"` on its own, leave it and route the conflict to
-  residue for the owner.
+  **Turn `G201` off.** `G201` demands `.exception(...)` over
+  `.error(..., exc_info=True)` — the exact inverse of conformance L017
+  (LoggerExceptionUsage) — and ruff's default rule set includes it, so a
+  config with no `select` key has it on, as does a `select` with `"G"` or
+  `"ALL"`.  When the finding names G201, add it to the ignores:
+  ```toml
+  [tool.ruff.lint]
+  extend-select = ["G001", "G003", "G004", "T201", "LOG009"]
+  extend-ignore = ["G201"]
+  ```
+  Then run `ruff check --select G201 .` against the config: it must report
+  nothing.  Pin the five rules individually rather than adding `"G"`; a
+  repo that already selects `"G"` keeps it and gains the ignore.  Do not
+  replace `extend-select` with a narrow `select` to get rid of G201 — that
+  silently drops every default rule the repo lints with today.
 
   **Land it with or after the L001/L011 fixes, not before.** Enabling
   `G004`/`G003` while those findings are still open turns every one of

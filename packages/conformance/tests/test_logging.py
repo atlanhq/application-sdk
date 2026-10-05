@@ -1029,7 +1029,7 @@ def test_l021_silent_all_in_select(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["ALL"]\n'
-        'ignore = ["ANN"]\n'
+        'ignore = ["ANN", "G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
 
@@ -1040,6 +1040,7 @@ def test_l021_silent_category_prefix(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["E", "F", "G", "T2", "LOG"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
 
@@ -1075,6 +1076,78 @@ def test_l021_silent_extend_select(tmp_path: Path) -> None:
         'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
+
+
+# ---------------------------------------------------------------------------
+# L021 — G201 must be off, or ruff contradicts L017
+#
+# G201 rewrites logger.error(..., exc_info=True) to logger.exception(...),
+# the exact call L017 forbids.  ruff's default rule set includes G201, so a
+# config that only extends the defaults has it on, and a G or ALL selection
+# turns it on explicitly.
+# ---------------------------------------------------------------------------
+
+
+def test_l021_fires_when_extend_select_leaves_default_g201_on(
+    tmp_path: Path,
+) -> None:
+    """No ``select`` key means ruff's defaults apply, and they include G201."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    msg = findings[0].message
+    assert "G201" in msg
+    assert 'extend-ignore = ["G201"]' in msg
+    assert "G001" not in msg
+
+
+def test_l021_silent_extend_select_with_g201_ignored(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'extend-ignore = ["G201"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_g201_ignored_by_prefix(tmp_path: Path) -> None:
+    """Ignoring G2 turns G201 off as surely as naming it."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G2"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_fires_when_select_all_leaves_g201_on(tmp_path: Path) -> None:
+    toml = '[project]\nname = "my-app"\n[tool.ruff.lint]\nselect = ["ALL"]\n'
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert "G201" in findings[0].message
+
+
+def test_l021_fires_when_select_g_leaves_g201_on(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G", "T201", "LOG"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert "G201" in findings[0].message
+
+
+def test_l021_no_ruff_config_also_asks_for_g201_ignore(tmp_path: Path) -> None:
+    findings = _l021_findings(tmp_path, '[project]\nname = "my-app"\n')
+    assert findings
+    assert "G201" in findings[0].message
 
 
 def test_l021_silent_sdk_self_check_exempt(tmp_path: Path) -> None:
@@ -1648,35 +1721,36 @@ def test_l010_fires_when_rebound_via_type_alias() -> None:
 
 
 # ---------------------------------------------------------------------------
-# L021 — hint must recommend individual pins, never the bare "G" category
-# (FND-58: G201 in the "G" group is the exact inverse of L017)
+# L021 — the hint names the G201/L017 conflict and the ignore that ends it
 # ---------------------------------------------------------------------------
 
 
-def test_l021_message_warns_against_bare_g_category(tmp_path: Path) -> None:
+def test_l021_message_explains_g201_conflict(tmp_path: Path) -> None:
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
-    py.write_text(
-        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n'
-    )
+    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\n')
     findings = check_ruff_config(py, tmp_path)
     assert findings and findings[0].rule_id == "L021"
     msg = findings[0].message
     assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
+    assert 'extend-ignore = ["G201"]' in msg
     assert (
         "covers all rules in that group" not in msg
     ), "hint must not recommend category prefixes"
 
 
-def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None:
-    # Detection semantics unchanged: an existing bare "G" selection DOES cover
-    # G001/G003/G004 (the conflict with L017 is guidance, not a detection gap).
+def test_l021_bare_g_selection_covers_rules_once_g201_ignored(
+    tmp_path: Path,
+) -> None:
+    # A bare "G" selection covers G001/G003/G004; with G201 ignored it no
+    # longer contradicts L017, so nothing is left to report.
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
     py.write_text(
-        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n'
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\n'
+        'select = ["G", "LOG", "T201"]\nignore = ["G201"]\n'
     )
     assert check_ruff_config(py, tmp_path) == []
 
