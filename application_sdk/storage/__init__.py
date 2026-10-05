@@ -74,6 +74,7 @@ from application_sdk.storage.errors import (
     StorageBindingNotFoundError,
     StorageBucketRelocationError,
     StorageConfigError,
+    StorageDiskFullError,
     StorageError,
     StorageGatewayAuthUnavailableError,
     StorageIntegrityError,
@@ -132,6 +133,7 @@ __all__ = [
     "put_json",
     # Errors
     "StorageError",
+    "StorageDiskFullError",
     "StorageIntegrityError",
     "StorageNotFoundError",
     "StoragePermissionError",
