@@ -841,6 +841,14 @@ class TestDiskFullDuringDownload:
                     "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
                 )
 
+    def test_the_code_is_the_disk_full_code_both_classes_share(self) -> None:
+        """Consumers classify a full disk by this code, so the subclass must not drift from it."""
+        assert (
+            StorageDiskFullError.code
+            == DiskFullError.code
+            == "RESOURCE_EXHAUSTED_DISK_FULL"
+        )
+
     async def test_concurrent_downloads_surface_the_typed_error_not_a_group(
         self, tmp_path
     ) -> None:

@@ -840,6 +840,11 @@ class StorageDiskFullError(DiskFullError, StorageError):
         key: Object-store key being downloaded.
     """
 
+    # The same value as DiskFullError's, declared here as the typed-error
+    # prescription requires: consumers that classify a full disk by this code
+    # (alerting, RCA tooling) must match both classes.
+    code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
+
     def __init__(
         self,
         message: str,
