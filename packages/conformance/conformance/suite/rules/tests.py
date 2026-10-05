@@ -2222,7 +2222,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/tests.md#t025"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/tests.prose.md",
         ),
     ),
