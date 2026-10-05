@@ -3,9 +3,10 @@
 Both decisions used to live inline in the Endor jobs' ``run:`` blocks
 (build-and-scan.yaml and daily-security-scan.yml), where docs/standards/ci.md
 forbids branching. The behavioural tests pin every branch; the cross-file guards
-at the bottom pin the workflow wiring the review asked for: the retry-artifact
-glob, caller input travelling through ``env:`` rather than ``${{ }}``
-interpolation into shell, and the provenance-pinned script checkout.
+at the bottom pin the workflow wiring the review asked for: Endor reading the
+tarball its own job built (no image artifact), caller input travelling through
+``env:`` rather than ``${{ }}`` interpolation into shell, and the
+provenance-pinned script checkout.
 """
 
 from __future__ import annotations
@@ -28,11 +29,14 @@ HOURLY_SCAN = GITHUB_DIR / "workflows" / "daily-security-scan.yml"
 ACTIONLINT = GITHUB_DIR / "actionlint.yaml"
 SCRIPT_NAME = "endor_scan_prep.py"
 
-# The Endor jobs and the checkout path each one invokes the script from.
+# The jobs running an Endor scan and the checkout path each one invokes the
+# script from. In build-and-scan.yaml the scan is a block of `Endor: ...` steps
+# inside the build job (FND-3319), so the guards below look at those steps only.
 ENDOR_JOBS = [
-    (BUILD_AND_SCAN, "endor-scan", "_sdk"),
+    (BUILD_AND_SCAN, "build", "_sdk"),
     (HOURLY_SCAN, "endor-base-scan", "."),
 ]
+ENDOR_STEP_PREFIX = "Endor: "
 
 # Shell keywords that mean a `run:` block branches (docs/standards/ci.md).
 BRANCHING_SHELL = re.compile(
@@ -222,6 +226,17 @@ def _step(job: dict, step_id: str) -> dict:
     raise AssertionError(f"no step with id {step_id!r}")
 
 
+def _endor_steps(path: Path, job_id: str) -> list[dict]:
+    """The steps that make up the Endor scan: the whole hourly job, or the
+    `Endor: ...` block of build-and-scan's build job."""
+    steps = _steps(_job(path, job_id))
+    if path != BUILD_AND_SCAN:
+        return steps
+    endor = [s for s in steps if str(s.get("name", "")).startswith(ENDOR_STEP_PREFIX)]
+    assert endor, f"no `{ENDOR_STEP_PREFIX}` steps in {path.name} {job_id}"
+    return endor
+
+
 @pytest.mark.parametrize(("path", "job_id", "checkout_path"), ENDOR_JOBS)
 def test_endor_jobs_delegate_both_decisions_to_the_script(path, job_id, checkout_path):
     job = _job(path, job_id)
@@ -235,7 +250,7 @@ def test_endor_jobs_delegate_both_decisions_to_the_script(path, job_id, checkout
 def test_endor_jobs_have_no_inlined_conditional_shell(path, job_id, _):
     offenders = [
         s.get("name") or s.get("id")
-        for s in _steps(_job(path, job_id))
+        for s in _endor_steps(path, job_id)
         if isinstance(s.get("run"), str) and BRANCHING_SHELL.search(s["run"])
     ]
     assert not offenders, f"{path.name} {job_id}: branching shell in {offenders}"
@@ -246,62 +261,102 @@ def test_no_expression_is_interpolated_into_endor_run_blocks(path, job_id, _):
     """Inputs reach the shell through `env:`, never `${{ }}` in the body."""
     offenders = [
         s.get("name") or s.get("id")
-        for s in _steps(_job(path, job_id))
+        for s in _endor_steps(path, job_id)
         if isinstance(s.get("run"), str) and "${{" in s["run"]
     ]
     assert not offenders, f"{path.name} {job_id}: `${{{{` inside run: {offenders}"
 
 
 def test_caller_ref_travels_through_env():
-    env = _step(_job(BUILD_AND_SCAN, "endor-scan"), "image").get("env") or {}
+    env = _step(_job(BUILD_AND_SCAN, "build"), "image").get("env") or {}
     assert env.get("REF") == "${{ inputs.ref || github.sha }}"
     assert env.get("PREBUILT") == "${{ inputs.image }}"
     assert env.get("TARBALL") == "/tmp/image.tar"
 
 
-def test_endor_scan_consumes_the_retry_artifact_like_trivy_does():
-    """The CI finding: the build job's first upload is continue-on-error and its
-    retry lands as `docker-image-retry`. A bare `name:` misses it silently.
+def test_no_image_artifact_travels_between_jobs():
+    """FND-3319: the image is built and scanned in one job, so no step of
+    build-and-scan.yaml uploads or downloads a `docker-image*` artifact -- not
+    the first attempt, not the `-retry` copy, not a download of either."""
+    doc = yaml.safe_load(BUILD_AND_SCAN.read_text())
+    offenders = [
+        f"{job_id}: {s.get('name') or s.get('id')}"
+        for job_id, job in doc["jobs"].items()
+        for s in _steps(job)
+        if "-artifact@" in str(s.get("uses", ""))
+        and "docker-image"
+        in str((s.get("with") or {}).get("name", ""))
+        + str((s.get("with") or {}).get("pattern", ""))
+    ]
+    assert not offenders, offenders
 
-    Asserted over EVERY download attempt in both jobs, not just the first: the
-    download is itself retried now, and a retry that reverted to a bare `name:`
-    would reintroduce the miss in precisely the case the retry exists for.
-    """
-    downloads = {
-        job_id: [
-            s
-            for s in _steps(_job(BUILD_AND_SCAN, job_id))
-            if "actions/download-artifact" in str(s.get("uses", ""))
-        ]
-        for job_id in ("trivy-scan", "endor-scan")
+
+def test_endor_scans_the_tarball_its_own_job_built():
+    """Both scanners read byte-identical image content: Endor is handed the
+    same /tmp/image.tar the build step wrote and Trivy loaded, in that order."""
+    steps = _steps(_job(BUILD_AND_SCAN, "build"))
+    build = _step(_job(BUILD_AND_SCAN, "build"), "build-image")
+    assert build["with"]["outputs"] == "type=docker,dest=/tmp/image.tar"
+    scan = next(s for s in steps if "endorlabs/github-action" in str(s.get("uses")))
+    assert scan["with"]["image_tar"] == "/tmp/image.tar"
+    assert steps.index(build) < steps.index(
+        _step(_job(BUILD_AND_SCAN, "build"), "image")
+    )
+
+
+def test_endor_cannot_fail_the_required_build_check():
+    """The build job carries `scan / Build Image`, a required context. Endor is
+    report-only, so every one of its steps is continue-on-error, they all run
+    after the Trivy results are uploaded, and the scan has its own timeout so a
+    hang cannot eat the build's and Trivy's budget."""
+    job = _job(BUILD_AND_SCAN, "build")
+    steps = _steps(job)
+    endor = _endor_steps(BUILD_AND_SCAN, "build")
+    assert len(endor) == 4
+    assert all(s.get("continue-on-error") is True for s in endor), endor
+    assert steps.index(endor[0]) > steps.index(_step(job, "upload-trivy"))
+    assert all(steps.index(s) > steps.index(endor[0]) for s in endor[1:])
+    scan = next(s for s in endor if "endorlabs/github-action" in str(s.get("uses")))
+    assert isinstance(scan.get("timeout-minutes"), int)
+    assert scan["timeout-minutes"] < job["timeout-minutes"]
+
+
+def test_at_most_two_jobs_and_both_required_contexts_survive():
+    """FND-3319 budget: at most two billed jobs per run. The two names are the
+    required contexts fleet rulesets carry (`scan / Build Image`,
+    `scan / Security Gate`), so neither may be renamed or folded away."""
+    jobs = yaml.safe_load(BUILD_AND_SCAN.read_text())["jobs"]
+    assert len(jobs) <= 2
+    assert {job_id: job["name"] for job_id, job in jobs.items()} == {
+        "build": "Build Image",
+        "security-gate": "Security Gate",
     }
-    assert downloads["endor-scan"], "endor-scan must download the image"
-    assert downloads["trivy-scan"], "reference Trivy download disappeared"
-    # Same shape in both, so the two consumers cannot drift apart.
-    for job_id, steps in downloads.items():
-        for step in steps:
-            with_block = step.get("with") or {}
-            assert with_block.get("pattern") == "docker-image*", job_id
-            assert with_block.get("merge-multiple") is True, job_id
-            assert "name" not in with_block, job_id
+    assert "if" not in jobs["build"], "the build job must never skip"
+    assert jobs["security-gate"]["needs"] == ["build"]
 
 
 def test_endor_scan_script_checkout_is_provenance_pinned():
     """The reusable runs in the caller's repo, so the script comes from the SDK
     at the workflow's own SHA, never a caller-controlled ref, and into its own
     path so it cannot leave the workspace sparse."""
-    steps = _steps(_job(BUILD_AND_SCAN, "endor-scan"))
-    checkouts = [s for s in steps if "actions/checkout@" in str(s.get("uses", ""))]
+    job = _job(BUILD_AND_SCAN, "build")
+    steps = _steps(job)
+    checkouts = [
+        s
+        for s in steps
+        if "actions/checkout@" in str(s.get("uses", ""))
+        and (s.get("with") or {}).get("repository") == "atlanhq/application-sdk"
+    ]
     assert len(checkouts) == 1
     with_block = checkouts[0]["with"]
-    assert with_block["repository"] == "atlanhq/application-sdk"
     assert with_block["ref"] == "${{ job.workflow_sha }}"
     assert SCRIPT_NAME in str(with_block["sparse-checkout"])
     assert with_block["path"] == "_sdk"
     assert with_block["persist-credentials"] is False
-    assert steps.index(checkouts[0]) < steps.index(
-        _step(_job(BUILD_AND_SCAN, "endor-scan"), "creds")
-    )
+    assert steps.index(checkouts[0]) < steps.index(_step(job, "creds"))
+    # Fetched only after the image is built, so the SDK checkout can never end
+    # up inside the app's Docker build context.
+    assert steps.index(checkouts[0]) > steps.index(_step(job, "build-image"))
 
 
 def test_hourly_scan_checkout_is_sparse_and_credential_free():

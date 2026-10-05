@@ -92,9 +92,10 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    re-running a failed job 409s on the *first* attempt, hands the upload to the
    retry, and leaves both `<name>` (from the earlier attempt) and
    `<name>-retry` live. A `merge-multiple` consumer then flattens two files of
-   the same inner name in undefined order — for `docker-image` that means
-   scanning the previous attempt's image. Overwrite is what keeps **at most one
-   live artifact per name**, which is the invariant the globs below rest on.
+   the same inner name in undefined order — for `trivy-results` that means the
+   Security Gate judging the previous attempt's scan. Overwrite is what keeps
+   **at most one live artifact per name**, which is the invariant the globs
+   below rest on.
 
 4. **Consumers accept the retry name.** Three shapes, pick per call site:
    - same-run `download-artifact`: `pattern: <name>*` + `merge-multiple: true`,
