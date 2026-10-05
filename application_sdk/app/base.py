@@ -31,11 +31,7 @@ from uuid import UUID
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
-from application_sdk._runtime.offload import (
-    CancelHandle,
-    run_best_effort,
-    run_in_thread,
-)
+from application_sdk._runtime.offload import run_best_effort, run_in_thread
 from application_sdk.app._ep_registration import (
     _apply_app_registration,
     _build_entry_points,
@@ -1221,7 +1217,6 @@ class App(ABC):
         self,
         func: Callable[..., Any],
         *args: Any,
-        cancel_handle: CancelHandle | None = None,
         **kwargs: Any,
     ) -> Any:
         """Run a blocking function in a thread pool.
@@ -1236,11 +1231,12 @@ class App(ABC):
                 rows = await self.run_in_thread(cursor.execute, sql)
 
         Args:
-            func: Blocking function to run.
+            func: Blocking function to run. Bind a
+                :class:`~application_sdk.execution.heartbeat.CancelHandle` to it
+                (``handle.bind(func)``) to cancel the driver call when this task
+                is cancelled.
             *args: Positional arguments for func.
-            cancel_handle: Handle fired if this task is cancelled, so the driver call
-                can be cancelled too; see :class:`~application_sdk.execution.heartbeat.CancelHandle`.
-            **kwargs: Keyword arguments for func.
+            **kwargs: Keyword arguments for func, all passed through.
 
         Returns:
             Result of ``func(*args, **kwargs)``.
@@ -1252,9 +1248,7 @@ class App(ABC):
             raise AppContextError(
                 "run_in_thread() can only be called inside @task methods."
             )
-        return await self._task_context.run_in_thread(
-            func, *args, cancel_handle=cancel_handle, **kwargs
-        )
+        return await self._task_context.run_in_thread(func, *args, **kwargs)
 
     def holding_progress(
         self, label: str, *, timeout: float | None

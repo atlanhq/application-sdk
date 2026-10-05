@@ -879,7 +879,7 @@ class TestTaskExecutionContextRunInThread:
 
     @pytest.mark.asyncio
     async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
-        """Only ``cancel_handle`` is the SDK's; ``cancel=`` still reaches func."""
+        """No keyword is the SDK's: ``cancel=`` reaches func."""
         ctx = AppContext(app_name="a", app_version="1")
         tec = TaskExecutionContext(
             app_context=ctx,

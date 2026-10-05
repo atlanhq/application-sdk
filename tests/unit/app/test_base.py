@@ -595,16 +595,17 @@ class TestTaskOnlyMethods:
 
     @pytest.mark.asyncio
     async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
-        """``cancel=`` is func's; only ``cancel_handle=`` is the SDK's."""
+        """Every keyword is func's: ``cancel=`` and ``cancel_handle=`` both
+        pass through unchanged (lens F-b8aa2a)."""
         app = self._app()
         tc = mock.MagicMock()
         tc.run_in_thread = mock.AsyncMock(return_value="done")
         app._task_context = tc
         token = object()
-        await app.run_in_thread(print, "x", cancel=token)
+        await app.run_in_thread(print, "x", cancel=token, cancel_handle=token)
         assert tc.run_in_thread.await_args.kwargs == {
-            "cancel_handle": None,
             "cancel": token,
+            "cancel_handle": token,
         }
 
 

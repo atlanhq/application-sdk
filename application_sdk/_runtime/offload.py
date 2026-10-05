@@ -30,7 +30,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
-from typing import Any, TypeVar
+from typing import Any, Generic, ParamSpec, TypeVar
 
 from application_sdk._runtime.progress import (
     DEFAULT_MAX_NO_PROGRESS_SECONDS,
@@ -44,6 +44,7 @@ from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get
 logger = get_logger(__name__)
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -103,8 +104,10 @@ class CancelHandle:
             cursor.execute(sql)
             return cursor.fetchall()
 
-        rows = await run_in_thread(_query, cancel_handle=handle)
+        rows = await run_in_thread(handle.bind(_query))
 
+    :meth:`bind` attaches the handle to the callable rather than to
+    ``run_in_thread``'s own arguments, so every keyword still reaches ``func``.
     When the awaiting task is cancelled, ``run_in_thread`` calls
     :meth:`request`, which runs the registered action on a small dedicated
     ``sdk-cancel-`` pool — never on the event loop, and never on the
@@ -141,6 +144,16 @@ class CancelHandle:
         """
         return self._requested
 
+    def bind(self, func: Callable[P, T]) -> Callable[P, T]:
+        """*func*, carrying this handle to :func:`run_in_thread`.
+
+        The returned callable calls *func* with whatever it is given, so
+        ``run_in_thread(handle.bind(func), *args, **kwargs)`` passes every
+        argument through unchanged; ``run_in_thread`` only reads the handle off
+        it. Called directly, it behaves exactly like *func*.
+        """
+        return _BoundCall(func, self)
+
     def set(self, action: Callable[[], None]) -> None:
         """Register the driver-level cancel for the call in progress.
 
@@ -169,6 +182,27 @@ class CancelHandle:
             action, self._action = self._action, None
         if action is not None:
             _fire_cancel_action(action)
+
+
+class _BoundCall(Generic[P, T]):
+    """A callable carrying the :class:`CancelHandle` it was bound to."""
+
+    __slots__ = ("func", "handle")
+
+    def __init__(self, func: Callable[P, T], handle: CancelHandle) -> None:
+        self.func = func
+        self.handle = handle
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        return self.func(*args, **kwargs)
+
+
+def _bound_handle(func: Callable[..., Any]) -> CancelHandle | None:
+    """The handle *func* was bound to, looking through ``functools.partial``."""
+    target: Any = func
+    while isinstance(target, functools.partial):
+        target = target.func
+    return target.handle if isinstance(target, _BoundCall) else None
 
 
 def _fire_cancel_action(action: Callable[[], None]) -> None:
@@ -248,7 +282,7 @@ def _offloaded_callable_name(func: Callable[..., Any]) -> str:
     advertises is cheap to actually enforce.
     """
     target: Any = func
-    while isinstance(target, functools.partial):
+    while isinstance(target, (functools.partial, _BoundCall)):
         target = target.func
     for attribute in ("__qualname__", "__name__"):
         name = getattr(target, attribute, None)
@@ -323,7 +357,6 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
 async def run_in_thread(
     func: Callable[..., T],
     *args: Any,
-    cancel_handle: CancelHandle | None = None,
     **kwargs: Any,
 ) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
@@ -400,18 +433,18 @@ async def run_in_thread(
 
     **Cancelling at the driver.** Cancelling the awaiting task returns control
     at once, but the thread runs on. If the driver can stop the call from
-    another thread, pass a :class:`CancelHandle` as ``cancel_handle`` and register the
-    driver's cancel on it from inside ``func``; the handle is fired when the
-    awaiting task is cancelled, and ``CancelledError`` is re-raised as usual.
-    ``cancel_handle`` is consumed here and never passed to ``func``; it is
-    named so that a ``func`` taking its own ``cancel=`` keeps receiving it.
+    another thread, bind a :class:`CancelHandle` to ``func``
+    (``run_in_thread(handle.bind(func), ...)``) and register the driver's
+    cancel on it from inside ``func``; the handle is fired when the awaiting
+    task is cancelled, and ``CancelledError`` is re-raised as usual. The handle
+    travels on the callable, never in ``**kwargs``, so every keyword argument
+    still reaches ``func`` — no name is reserved.
 
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
+            A :meth:`CancelHandle.bind` result is cancelled at the driver too.
         *args: Positional arguments for ``func``.
-        cancel_handle: Handle to fire if the awaiting task is cancelled. ``None``
-            (the default) leaves cancellation behaving as it always has.
-        **kwargs: Keyword arguments for ``func``.
+        **kwargs: Keyword arguments for ``func``, all passed through.
 
     Returns:
         Result of ``func(*args, **kwargs)``.
@@ -443,6 +476,7 @@ async def run_in_thread(
     scopes = _OFFLOAD_SCOPES.get()
     if scopes:
         call = _tracked_offload(call, scopes, label)
+    cancel_handle = _bound_handle(func)
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
         if cancel_handle is None:
             return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
