@@ -381,8 +381,19 @@ usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or refe
 dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
 count: they are not installed by default.
 
-**Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
-`[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
+**Remediation:** first confirm the import site the finding names is live — that a
+production code path imports that module.  The check matches the import anywhere in the
+source and does not test reachability, so it also fires on dead code: a superseded
+transformer module nothing imports any more, or frozen reference code kept during a
+port.  Adding `[sql]` there ships an unused `duckdb` to production for no runtime
+benefit.
+
+* dead code (nothing imports the module): delete it.  The finding   clears because its
+cause is gone, with no dependency change; * code the repo keeps on purpose (e.g.
+reference code for an   in-progress port): suppress D010 inline on that import line, so
+the suppression leaves with the code and a later live import   still fails the check; *
+a live import: change the SDK reference to   `atlan-application-sdk[sql]` (or
+`[incremental]` for the   incremental analytics stack) in `[project.dependencies]` and
 relock (`uv lock`).  That is the fix.
 
 Declaring `duckdb` directly is a discouraged fallback, not a co-equal option: it clears
