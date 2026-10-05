@@ -176,12 +176,24 @@ class FakeGh:
             elif path.endswith("/pulls"):
                 out, rc = self._respond(self.commit_pulls)
             else:
-                out, rc = self._respond(self.meta)
+                out, rc = self._respond(self._next("meta"))
         elif args[:2] == ["pr", "checks"]:
-            rc = self.checks_exit
+            rc = self._next("checks_exit")
         elif args[:2] == ["pr", "review"]:
             self.approvals.append(cmd)
         return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+
+    def _next(self, attr):
+        """A list-valued ``meta``/``checks_exit`` is served one entry per call,
+        the last repeating — how a test makes state change across polls."""
+        value = getattr(self, attr)
+        if not isinstance(value, list):
+            return value
+        return value.pop(0) if len(value) > 1 else value[0]
+
+    @property
+    def checks_calls(self) -> int:
+        return sum(1 for c in self.calls if c[1:3] == ["pr", "checks"])
 
     @property
     def api_paths(self) -> list[str]:
@@ -209,8 +221,12 @@ def _defaults(**over):
     return base
 
 
-def run_main(monkeypatch, *, env=None, capsys=None, **gh_kwargs):
-    """Drive ``main`` end to end against a :class:`FakeGh`."""
+def run_main(monkeypatch, *, env=None, capsys=None, sleeps=None, **gh_kwargs):
+    """Drive ``main`` end to end against a :class:`FakeGh`.
+
+    ``sleeps`` collects every requested sleep instead of sleeping, so a test of
+    the fan-in wait runs instantly and can assert how long it would have waited.
+    """
     environ = {
         "REPO": REPO,
         "EVENT_NAME": "workflow_run",
@@ -222,7 +238,7 @@ def run_main(monkeypatch, *, env=None, capsys=None, **gh_kwargs):
     for key, value in environ.items():
         monkeypatch.setenv(key, value)
     fake = FakeGh(**_defaults(**gh_kwargs))
-    code = gate.main(fake)
+    code = gate.main(fake, sleep=(sleeps if sleeps is not None else []).append)
     log = capsys.readouterr().out if capsys else ""
     return code, fake, log
 
@@ -778,6 +794,117 @@ class TestResolvePrs:
         fake = FakeGh(**_defaults(meta=None))
         with pytest.raises(gate.GhError):
             gate.resolve_prs(REPO, "workflow_dispatch", "", "7", fake)
+
+
+# ---------------------------------------------------------------------------
+# Fan-in wait (FND-3317): one trigger per SHA waits out pending checks
+# ---------------------------------------------------------------------------
+
+
+class TestFanInWait:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("", 0),
+            ("  ", 0),
+            ("0", 0),
+            ("-3", 0),
+            ("1.5", 90),
+            ("5", 300),
+            ("100", gate.MAX_CHECKS_WAIT_SECONDS),
+            ("nan", 0),
+            ("inf", 0),
+        ],
+    )
+    def test_wait_minutes_parse_and_clamp(self, raw, expected):
+        assert gate.parse_wait_seconds(raw) == expected
+
+    def test_unreadable_wait_is_no_wait_with_a_warning(self, capsys):
+        assert gate.parse_wait_seconds("ten") == 0
+        assert "::warning::" in capsys.readouterr().out
+
+    def test_no_wait_configured_keeps_the_one_shot_behaviour(
+        self, monkeypatch, capsys
+    ):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch, capsys=capsys, sleeps=sleeps, checks_exit=8
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+        assert fake.checks_calls == 1
+
+    def test_pending_then_green_is_approved_after_waiting(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            checks_exit=[8, 8, 0],
+        )
+        assert len(fake.approvals) == 1
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        assert "still pending" in log
+
+    def test_budget_spent_while_pending_withholds(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "1"},
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        # 60s budget / 30s poll = 2 waits, then (e) judges the still-pending checks.
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        assert "wait budget spent" in log
+
+    def test_red_check_ends_the_wait_immediately(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            checks_exit=1,
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+
+    def test_head_moving_mid_wait_stops_waiting_and_withholds(
+        self, monkeypatch, capsys
+    ):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            # The initial read sees SHA; the re-read after the first sleep sees
+            # a new push. Checks would have gone green, but for the new HEAD.
+            meta=[pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=[8, 0],
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS]
+        assert fake.checks_calls == 1
+        assert "deadbeef" in log
+
+    def test_a_pr_that_cannot_qualify_never_waits(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            files=file_payload("uv.lock", "src/a.py"),
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+        assert fake.checks_calls == 0
 
 
 # ---------------------------------------------------------------------------
