@@ -2886,6 +2886,9 @@ async def _run_preflight_gate(
             transitions=transitions[:WARMUP_TRANSITIONS_MAX],
         )
 
+    # Set only by a poll: a READY that warmup_start reported was reported in
+    # time, however long the FAST checks then took to finish.
+    late_ready = False
     try:
         state: WarmupState = await warmup_start
         _observe(state)
@@ -2903,11 +2906,14 @@ async def _run_preflight_gate(
                 retry_policy=warmup_retry_policy(),
             )
             _observe(state)
-        # The deadline is checked again once the last poll returns: a poll that
-        # started inside the ceiling can finish outside it, and a READY that
-        # arrives late does not buy the WARMUP checks extra time. FAILED keeps
-        # its own reason.
-        overran = state.status is not WarmupStatus.FAILED and workflow.now() >= deadline
+            # The deadline is checked again when the poll returns: one that
+            # started inside the ceiling can finish outside it, and a READY that
+            # arrives late does not buy the WARMUP checks extra time.
+            # NOT_REQUIRED means there was nothing to wait for, so it is never
+            # late, and FAILED keeps its own reason.
+            late_ready = (
+                state.status is WarmupStatus.READY and workflow.now() >= deadline
+            )
     except Exception as e:
         # The warmup activities turn everything the hook does into a state, so
         # what reaches here is the gate's own plumbing: fail open.
@@ -2926,7 +2932,10 @@ async def _run_preflight_gate(
         return
     _set_health_line("")
 
-    if not overran and state.status in (WarmupStatus.READY, WarmupStatus.NOT_REQUIRED):
+    if not late_ready and state.status in (
+        WarmupStatus.READY,
+        WarmupStatus.NOT_REQUIRED,
+    ):
         ready = _seen(
             WarmupOutcome.READY
             if state.status is WarmupStatus.READY

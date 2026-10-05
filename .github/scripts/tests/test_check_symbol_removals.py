@@ -229,12 +229,35 @@ def test_pep562_lazy_reexport_is_surface():
     head = snap(
         "if TYPE_CHECKING:\n"
         "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'create_service'})\n"
         "def __getattr__(name):\n"
-        "    from application_sdk.thing import service\n"
-        "    return getattr(service, name)\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        from application_sdk.thing import service\n"
+        "        return getattr(service, name)\n"
+        "    raise AttributeError(name)\n"
         "__all__ = ['create_service']\n"
     )
     assert mod.compare(base, head) == []
+
+
+def test_a_getter_that_never_names_the_export_is_a_removal():
+    """Declared in `__all__` and `TYPE_CHECKING`, but the getter dropped it.
+
+    `from ... import create_service` fails at runtime, so the name is gone even
+    though the type-only import and the `__all__` entry survived.
+    """
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'run_service'})\n"
+        "def __getattr__(name):\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        return object()\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = ['create_service', 'run_service']\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
 
 
 def test_lazy_name_missing_from_all_is_still_a_removal():

@@ -197,3 +197,17 @@ def test_moved_names_resolve_to_the_same_objects_at_their_old_paths() -> None:
         "warn_if_partial",
     ):
         assert getattr(preflight_gate, name) is getattr(_preflight_outcome, name), name
+
+
+def test_every_declared_handler_name_resolves() -> None:
+    """``__all__`` and the lazy ``__getattr__`` allowlist must agree.
+
+    The Symbol Removal Check reads the getter statically; this is the runtime
+    half. A name kept in ``__all__`` (and the ``TYPE_CHECKING`` import) after the
+    getter stopped serving it would fail ``from application_sdk.handler import``
+    for every consumer while the static check still saw it declared.
+    """
+    import application_sdk.handler as handler
+
+    for name in handler.__all__:
+        assert getattr(handler, name, None) is not None, name

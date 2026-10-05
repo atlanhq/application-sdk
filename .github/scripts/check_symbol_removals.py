@@ -453,23 +453,64 @@ def _is_type_checking_guard(node: ast.stmt) -> bool:
     )
 
 
+def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
+    """The string literals a module ``__getattr__`` names, or ``None`` without one.
+
+    A literal counts when it appears in the ``__getattr__`` body itself, or in
+    a module-level assignment whose name that body reads (the
+    ``_SERVICE_NAMES = frozenset({...})`` allowlist ``handler/__init__``
+    keeps). A static scan cannot run the getter, but a name it never mentions
+    is a name it cannot be relied on to serve.
+    """
+    getter = next(
+        (
+            n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "__getattr__"
+        ),
+        None,
+    )
+    if getter is None:
+        return None
+
+    def _literals(node: ast.AST) -> set[str]:
+        return {
+            n.value
+            for n in ast.walk(node)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        }
+
+    served = _literals(getter)
+    read = {n.id for n in ast.walk(getter) if isinstance(n, ast.Name)}
+    for node in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        if any(isinstance(t, ast.Name) and t.id in read for t in targets):
+            served |= _literals(node.value)
+    return frozenset(served)
+
+
 def _lazy_reexports(
     tree: ast.Module, declared_all: frozenset[str] | None, package: str
 ) -> list[str]:
     """Names a package serves lazily through PEP 562 ``__getattr__``.
 
     The shape is ``if TYPE_CHECKING: from .impl import name`` for type
-    checkers, a module ``__getattr__`` that imports it on first access, and the
-    name listed in ``__all__``. All three must hold: the ``TYPE_CHECKING``
-    import alone binds nothing at runtime, and ``__getattr__`` alone serves
-    names this gate cannot enumerate. A name that passes all three was declared
-    as surface and is importable, so removing it is a removal like any other.
+    checkers, a module ``__getattr__`` that names it (see
+    :func:`_getattr_served`), and the name listed in ``__all__``. All three
+    must hold: the ``TYPE_CHECKING`` import alone binds nothing at runtime, and
+    a getter that never mentions a name gives no evidence it serves it. A name
+    that passes all three was declared as surface, so removing it is a removal
+    like any other.
     """
-    if declared_all is None or not any(
-        isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
-        and n.name == "__getattr__"
-        for n in tree.body
-    ):
+    served = _getattr_served(tree)
+    if declared_all is None or served is None:
         return []
     names: list[str] = []
     for guard in tree.body:
@@ -481,7 +522,7 @@ def _lazy_reexports(
             names.extend(
                 name
                 for name in _reexported_names(node, None, package)
-                if name in declared_all
+                if name in declared_all and name in served
             )
     return names
 

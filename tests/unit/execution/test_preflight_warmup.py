@@ -339,6 +339,35 @@ class TestTheCeilingRow:
         assert clock.slept == [10.0, 10.0, 10.0]
         assert _tiers(execute_mock) == [CheckTier.FAST]
 
+    @pytest.mark.parametrize("status", [WarmupStatus.READY, WarmupStatus.NOT_REQUIRED])
+    async def test_slow_fast_checks_do_not_overrun_an_answered_warmup(
+        self, clock, safe_log, status
+    ) -> None:
+        """warmup_start answered in time; the FAST checks then outlast the ceiling.
+
+        The ceiling bounds the wait on the warmup, not the FAST dispatch, so the
+        WARMUP checks still run with no poll and no exhausted row.
+        """
+
+        def _execute(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name == "myapp:preflight":
+                clock.now += timedelta(seconds=40)
+            return None
+
+        execute_mock, _, patches = _gate(
+            execute=_execute, start=_Handle(WarmupState(status=status))
+        )
+        with patches[0], patches[1], patches[2]:
+            await _run_preflight_gate(
+                _ResolvableInput(),
+                "myapp",
+                "crawl",
+                gate_mode=PreflightGateMode.HARD,
+                warmup_ceiling_seconds=30,
+            )
+        assert _tiers(execute_mock) == [CheckTier.FAST, CheckTier.WARMUP]
+        assert clock.slept == []
+
     @pytest.mark.parametrize(("poll_takes", "tiers"), [(2, 2), (10, 1)])
     async def test_a_ready_returned_past_the_ceiling_is_exhausted(
         self, clock, safe_log, poll_takes, tiers
