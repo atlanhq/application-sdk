@@ -12,8 +12,10 @@ PR head?
 
 The head tree is the base-branch checkout with the PR's changed package
 modules overlaid from their head text (read through the API as data, parsed,
-never imported or run), so only modules the PR touches are judged: drift on
-the base branch since the release is not this PR's doing.
+never imported or run). Only modules the PR touches are judged, and a name
+is listed only when the head breaks it relative to BOTH the release and the
+base branch: a removal the base branch already made since the release is not
+this PR's doing, even in a module the PR edits.
 
 The workflow checks out the base branch shallow and without tags. When no
 release tag is local, the newest stable one is listed with `git ls-remote`
@@ -147,29 +149,38 @@ def released_surface_removals(
     package module (no name can be removed, so there is nothing to say).
 
     Lists each public name in a module the PR touches that shipped in the
-    last release and is removed or narrowed at the head, without a deprecated
-    alias in that release. A name absent from the release (added earlier in
-    the PR, or on an unreleased branch) is never listed."""
+    last release, is still intact on the base branch, and is removed or
+    narrowed at the head, without a deprecated alias in that release. A name
+    absent from the release (added earlier in the PR, or on an unreleased
+    branch) is never listed, and neither is one the base branch already
+    removed or narrowed: that is not this PR's doing, even when the PR edits
+    the same module."""
     modules = touched_modules(files)
     if not modules:
         return ""
     try:
         tag = release_tag(root)
-        base = csr.snapshot_at_ref(root, tag, PACKAGE)
+        release = csr.snapshot_at_ref(root, tag, PACKAGE)
+        base = csr.build_snapshot(root, PACKAGE)  # the base-branch checkout
         with tempfile.TemporaryDirectory(prefix="lens-surface-") as tmp:
             build_head_tree(root, Path(tmp), files, head_text, fetch)
             head = csr.build_snapshot(Path(tmp), PACKAGE)
     except Exception as exc:  # noqa: BLE001 — advisory input: any failure falls back
         return f"{UNAVAILABLE}: {type(exc).__name__}: {str(exc)[:300]}"
     # No commit subject: a declared break is the card's own rule, judged by the
-    # reviewer; here `blocking` just means "the name is public".
+    # reviewer; here `blocking` just means "the name is public". A break is the
+    # PR's only if it is one against the release AND against the base branch.
+    by_pr = {f.key for f in csr.compare(base, head) if f.blocking}
     found = [
         f
-        for f in csr.compare(base, head)
-        if f.blocking and f.key.split(":", 1)[0] in modules
+        for f in csr.compare(release, head)
+        if f.blocking and f.key in by_pr and f.key.split(":", 1)[0] in modules
     ]
     if not found:
-        return f"baseline {tag}: none (no public name that shipped in {tag} is removed or narrowed by this PR)"
+        return (
+            f"baseline {tag}: none (no public name that shipped in {tag} and is "
+            "still on the base branch is removed or narrowed by this PR)"
+        )
     lines = [
         f"removed: {f.key}"
         if f.kind == "removed"

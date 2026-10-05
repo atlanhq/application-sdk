@@ -4457,8 +4457,8 @@ def test_a_name_added_and_reshaped_within_the_pr_is_not_a_released_removal(
     released = _released(released_checkout, files, head)
 
     assert released == (
-        "baseline v1.0.0: none (no public name that shipped in v1.0.0 is removed "
-        "or narrowed by this PR)"
+        "baseline v1.0.0: none (no public name that shipped in v1.0.0 and is still "
+        "on the base branch is removed or narrowed by this PR)"
     )
     user = _verify_input(repo, _removal_finding(), released)
     assert f"<released_surface_removals>\n{released}\n</released_surface_removals>" in (
@@ -4535,6 +4535,51 @@ def test_base_branch_drift_in_a_module_the_pr_does_not_touch_is_not_listed(
         released_checkout, files, {"application_sdk/testing/warming.py": "X = 1\n"}
     )
     assert "application_sdk.thing:shipped" not in released
+
+
+def _base_branch_removes_shipped(root: Path) -> None:
+    """A commit on the base branch after the tag: `shipped` is gone there."""
+    (root / "application_sdk" / "thing.py").write_text("def call(a, b=1): ...\n")
+    _git(
+        root,
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qam",
+        "drop",
+    )
+
+
+def test_a_removal_the_base_branch_made_is_not_the_prs_in_a_module_it_edits(
+    released_checkout: Path,
+):
+    """Release has thing.shipped; the base branch removed it after the tag; the
+    PR edits thing.py for an unrelated reason. The name is gone at the head, but
+    not by this PR, so nothing is listed."""
+    _base_branch_removes_shipped(released_checkout)
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.startswith("baseline v1.0.0: none"), released
+
+
+def test_a_released_name_still_on_the_base_branch_removed_by_the_pr_is_listed(
+    released_checkout: Path,
+):
+    """The converse: the base branch still has `shipped`; the PR removes it."""
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.splitlines() == [
+        "baseline v1.0.0",
+        "removed: application_sdk.thing:shipped",
+    ]
 
 
 def test_a_pr_that_changes_no_package_module_gets_no_block(tmp_path: Path):
