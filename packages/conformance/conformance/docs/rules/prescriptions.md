@@ -724,6 +724,11 @@ This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
 conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
 
+On a field already recorded in the contract ledger, retyping it to a model in place is a
+B005 break (the ledger keys a field's type by its name). Add the typed field under a new
+name and retire the old one, or keep the bounded container and suppress this warning
+with that reason.
+
 ---
 
 ## P016 — `EntryPointContractCodeDrift` {#p016}

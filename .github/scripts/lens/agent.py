@@ -56,6 +56,11 @@ class AgentLimits:
     context_limit_tokens: int = 60_000
     review_max_tokens: int = 24_000  # reasoning tokens count against this
     reflect_max_tokens: int = 8_000
+    # Verify re-checks still-open findings. Reasoning tokens count against it, so a
+    # long re-check can spend it all before answering; the run then says so and
+    # names the opt-in. The raised budget is used only on `/lens verify-budget`.
+    verify_max_tokens: int = 8_000
+    verify_max_tokens_opt_in: int = 24_000
     max_comments: int = 12
     max_nits: int = 5  # low-severity findings kept per bundle (REVIEW.md-style nit cap)
     max_unchanged: int = 2  # incomplete-fix suggestions on unchanged code, per bundle

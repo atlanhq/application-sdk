@@ -18,11 +18,11 @@ from conformance.suite.schema.findings import Finding
 # Ruff rules that complement the L-series AST checks.
 # Mapping: rule_id -> human label (used in the finding message).
 _REQUIRED_RULES: dict[str, str] = {
-    "G001": "logging.warn() deprecated",
+    "G001": "str.format() in log message",
     "G003": "string concat in log message",
     "G004": "f-string in log message",
     "T201": "print() statement",
-    "LOG009": "logging.warn() deprecated (LOG-series)",
+    "LOG009": "undocumented logging.WARN constant",
 }
 
 # Packages exempt from this check (they publish the ruff config, not consume it).

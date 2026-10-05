@@ -84,8 +84,8 @@ are preserved. The exceptions are `tests.yaml` and `renovate.json`, write-if-abs
 scaffolds a bare re-run never rewrites — pass `--resync` to pull their structure
 forward, which likewise preserves each file's recognized per-repo values (tests.yaml's
 app-name, app-image-name, enable-e2e, services-script, unit-coverage-fail-under,
-force-external-runtime, dataforge-hermetic-fallback and any explicit `secrets:` mapping;
-renovate.json's auto-merge mode).
+force-external-runtime, dataforge-hermetic-fallback, dataforge-lifecycle and any
+explicit `secrets:` mapping; renovate.json's auto-merge mode).
 
 A caveat `--resync` cannot express: the canonical template has no slot for per-repo
 *rationale*. Values survive, the comments explaining them do not. That matters where the

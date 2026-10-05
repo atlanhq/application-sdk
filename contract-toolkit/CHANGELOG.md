@@ -6,6 +6,17 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.28.0] - 2026-10-02
+
+### Features
+
+- render streaming dispatch config for the micro-batch shell (#4025) ([1b9d27c](https://github.com/atlanhq/application-sdk/commit/1b9d27c))
+
+### Bug fixes
+
+- keep metadataTemplateKey on an apitree ConditionalInput [FND-3199] (#4118) ([deef931](https://github.com/atlanhq/application-sdk/commit/deef931))
+- FND-2984 honour anyOfRequiredFields in the JDBC url group anyOf (#3992) ([4bdf7ad](https://github.com/atlanhq/application-sdk/commit/4bdf7ad))
+
 ## [0.27.0] - 2026-09-25
 
 ### Features

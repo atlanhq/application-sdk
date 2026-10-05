@@ -481,6 +481,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure.  Suppress with\n"
             "``# conformance: ignore[P015] <reason>`` when a typed replacement\n"
             "is not feasible.\n"
+            "\n"
+            "On a field already recorded in the contract ledger, retyping it to a\n"
+            "model in place is a B005 break (the ledger keys a field's type by its\n"
+            "name). Add the typed field under a new name and retire the old one, or\n"
+            "keep the bounded container and suppress this warning with that reason.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
         remediation_reference=RemediationReference(
@@ -686,7 +691,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "reference apps are copied, the bypass spreads."
         ),
         short_description=(
-            "Pyatlan asset serialized in app code without going through " "entity_bytes"
+            "Pyatlan asset serialized in app code without going through entity_bytes"
         ),
         full_description=(
             "App code under ``app/`` (``app/generated/`` excluded) turns a pyatlan\n"

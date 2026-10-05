@@ -2,6 +2,32 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.42.0] - 2026-10-02
+
+### Features
+
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) ([20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug fixes
+
+- E008 false positive on compliant code (1 repos) (#4095) ([dba9356](https://github.com/atlanhq/application-sdk/commit/dba9356))
+- carry dataforge-lifecycle through the tests.yaml scaffold [FND-3089] (#4077) ([2508834](https://github.com/atlanhq/application-sdk/commit/2508834))
+
+## [0.41.0] - 2026-09-30
+
+### Features
+
+- FND-3017 rename the first-party Renovate group to atlan framework dependencies (#4056) ([0b5caab](https://github.com/atlanhq/application-sdk/commit/0b5caab))
+
+### Bug fixes
+
+- E005 false positive on compliant code (1 repos) (#4088) ([1e9f30f](https://github.com/atlanhq/application-sdk/commit/1e9f30f))
+- T025 is not auto-fixable (#4092) ([9e7f811](https://github.com/atlanhq/application-sdk/commit/9e7f811))
+- L004 false positive on compliant code (1 repos) (#4090) ([7554098](https://github.com/atlanhq/application-sdk/commit/7554098))
+- E004 false positive on compliant code (1 repos) (#4085) ([410c1e4](https://github.com/atlanhq/application-sdk/commit/410c1e4))
+- correct L021's rule labels and document T005's no-raise marker (#4084) ([d4178ec](https://github.com/atlanhq/application-sdk/commit/d4178ec))
+- harden storage primitives and fix incremental state correctness (#4070) ([e738386](https://github.com/atlanhq/application-sdk/commit/e738386))
+
 ## [0.40.1] - 2026-09-29
 
 ### Bug fixes

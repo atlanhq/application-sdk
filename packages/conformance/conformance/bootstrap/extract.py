@@ -239,6 +239,7 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("dataforge_env_tier", "dataforge-env-tier", "plain"),
     ("dataforge_output_prefix", "dataforge-output-prefix", "plain"),
     ("dataforge_hermetic_fallback", "dataforge-hermetic-fallback", "bool"),
+    ("dataforge_lifecycle", "dataforge-lifecycle", "bool"),
 )
 
 # The two inputs whose real-world spelling is a ``>-`` folded scalar — a list of

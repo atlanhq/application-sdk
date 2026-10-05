@@ -1114,6 +1114,24 @@ def test_merged_date_windows_defaults_until_to_today():
     assert windows[-1].endswith(date.today().isoformat())
 
 
+def test_fetch_merged_prs_defaults_to_one_query_per_day():
+    # Every other test passes window_days explicitly, so none of them would
+    # notice the default widening back to a span that blew the cap: the fleet
+    # peaked at 884 merges in 2 days (2026-09-21..22), 471 in one.
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([], has_next=False)
+
+    rfs.fetch_merged_prs(
+        "tok", "org:atlanhq", "2026-09-21", "number", post=fake_post, until="2026-09-22"
+    )
+    assert sum("merged:2026-09-21..2026-09-21" in q for q in queries) == 2
+    assert sum("merged:2026-09-22..2026-09-22" in q for q in queries) == 2
+    assert len(queries) == 4
+
+
 def test_fetch_merged_prs_queries_each_window_once_per_author():
     queries = []
 
@@ -1223,5 +1241,6 @@ def test_run_uses_windowed_merged_queries(tmp_path):
 
     merged_queries = [q for q in queries if "is:merged" in q]
     assert not any("merged:>=" in q for q in merged_queries)
-    # 30 days at the 7-day default = 5 windows, x2 authors.
-    assert len(merged_queries) == 10
+    # today-30..today inclusive is 31 days; at the 1-day default that is 31
+    # windows, x2 authors.
+    assert len(merged_queries) == 62

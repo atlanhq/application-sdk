@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.41.0 (October 02, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.40.0...v3.41.0
+
+### Features
+
+- read memory limit from cgroup, repeat pressure warning (#4061) (by @SwarnadeepChatterjee in [1d43fb7](https://github.com/atlanhq/application-sdk/commit/1d43fb7))
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) (by @cmgrote in [20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug Fixes
+
+- exit when the worker teardown after a fatal error never finishes (#4057) (by @Lalit3716-atlan in [2093ddd](https://github.com/atlanhq/application-sdk/commit/2093ddd))
+- harden storage primitives and fix incremental state correctness (#4070) (by @cmgrote in [e738386](https://github.com/atlanhq/application-sdk/commit/e738386))
+- forward aws_external_id to STS AssumeRole in CloudStore S3 (#4108) (by @ashish-atlan in [9b3366a](https://github.com/atlanhq/application-sdk/commit/9b3366a))
+
+
 ## v3.40.0 (September 29, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.1...v3.40.0

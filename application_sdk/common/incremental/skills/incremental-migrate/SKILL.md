@@ -59,7 +59,7 @@ Run these in the main session before spawning any sub-agent:
 2. Run `cd <app_path> && uv sync --all-groups` -- stop if it fails
 3. Run `cd <app_path> && uv run pytest tests/unit/ -x -q 2>/dev/null` and record the baseline test count
 4. Classify connector type:
-   - Run `grep -r "BaseSQLMetadataExtractionActivities\|IncrementalSQLMetadataExtractionActivities" <app_path>/app/`
+   - Run `grep -rE "SqlMetadataExtractor|IncrementalSqlMetadataExtractor|SqlApp" <app_path>/app/`
    - If matches found: `connector_type = SQL`
    - Otherwise: `connector_type = REST`
 5. Verify `<sdk_sql_skill_dir>/SKILL.md` exists (already resolved in step 1)
@@ -216,9 +216,10 @@ Execute each brick fully before starting the next. Halt on failure and report.
    report embedded. The sub-agent follows the SDK skill's own instructions to:
    - Create `app/sql/extract_table_incremental.sql`
    - Create `app/sql/extract_column_incremental.sql`
-   - Modify the activities class to inherit from `IncrementalSQLMetadataExtractionActivities`
-   - Implement `build_incremental_column_sql()`
-   - Modify the workflow class to inherit from `IncrementalSQLMetadataExtractionWorkflow`
+   - Modify the App class to inherit from `IncrementalSqlMetadataExtractor`
+     (deprecated, removed in v4.0.0 — still the SDK's only built-in
+     incremental orchestration; v3 has no separate workflow class)
+   - Implement `build_incremental_column_sql()` and `execute_column_sql()`
    - Update models and dependencies
 5. Verify the SQL files and modified classes exist.
 
@@ -286,7 +287,7 @@ Execute each brick fully before starting the next. Halt on failure and report.
 4. Spawn a sub-agent. Instructions: add new activities and model fields.
 
    **New activities** in `<app_path>/app/activities/metadata_extraction.py`:
-   - `read_marker` -- calls SDK `fetch_marker_from_storage` with configurable prepone
+   - `read_marker` -- calls SDK `fetch_marker` with configurable prepone
    - `read_previous_<entity>_list` -- downloads previous scope from S3 via ObjectStore
    - `persist_incremental_state` -- writes marker + entity lists + cache to S3
      (GUARD-IMPL-01: this MUST be the last activity, after App.upload())
@@ -330,7 +331,8 @@ Execute each brick fully before starting the next. Halt on failure and report.
      - `backfill_unchanged_<entities>` after fresh extraction
    - Add short-circuit: if 0 entities changed, skip expensive extraction entirely
    - Add `persist_incremental_state` AFTER `App.upload()` (GUARD-IMPL-01)
-   - Register all new activities in `get_activities()`
+   - Declare each new step as an `@task` method (v3 registers tasks automatically;
+     there is no `get_activities()` list)
    - Update `<app_path>/app/templates/workflow.json` to add incremental UI toggles
 5. Verify the workflow modifications.
 
