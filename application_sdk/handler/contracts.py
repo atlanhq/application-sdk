@@ -465,7 +465,7 @@ class WarmupState(BaseModel):
     message: str = ""
     """Human-readable progress line for the UI."""
 
-    pending_checks: list[str] = []
+    pending_checks: list[str] = Field(default_factory=list)
     """Names of the ``WARMUP``-tier checks that cannot run until this warmup is
     ``READY``. ``/check`` reports them so the UI can render them as pending
     rather than omit them. Empty once the warmup is ``READY``."""

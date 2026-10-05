@@ -7,8 +7,6 @@ as ``would_block`` and the run proceeds, exactly as in soft mode.
 
 from __future__ import annotations
 
-from unittest import mock
-
 import pytest
 
 from application_sdk.errors.categories import FailureCategory
@@ -32,9 +30,6 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
 )
-from application_sdk.testing.preflight import single_outcome
-
-_GATE = "application_sdk.execution._temporal.preflight_gate"
 
 _ALL_CATEGORIES = list(FailureCategory)
 
@@ -115,7 +110,7 @@ class TestThePolicy:
 class TestAHardVerdictBlocksOnItsCategory:
     @pytest.mark.parametrize("category", _ALL_CATEGORIES, ids=_category_id)
     async def test_a_not_ready_verdict_blocks_only_on_a_blocking_category(
-        self, category: FailureCategory
+        self, category: FailureCategory, capture_preflight_outcomes
     ) -> None:
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
@@ -124,53 +119,62 @@ class TestAHardVerdictBlocksOnItsCategory:
             ],
         )
         gate = _hard_gate(verdict)
-        with mock.patch(f"{_GATE}.logger") as mock_logger:
-            if category in GATE_BLOCKING_CATEGORIES:
-                with pytest.raises(ApplicationError) as excinfo:
-                    await gate(PreflightGateInput())
-                assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
-                expected = "blocked"
-            else:
-                result = await gate(PreflightGateInput())
-                assert result.status is PreflightStatus.NOT_READY
-                expected = "would_block"
-        row = single_outcome(mock_logger)
+        if category in GATE_BLOCKING_CATEGORIES:
+            with pytest.raises(ApplicationError) as excinfo:
+                await gate(PreflightGateInput())
+            assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+            expected = "blocked"
+        else:
+            result = await gate(PreflightGateInput())
+            assert result.status is PreflightStatus.NOT_READY
+            expected = "would_block"
+        row = capture_preflight_outcomes.one
         assert row["outcome"] == expected
         assert row["reason"] == "SOURCE_CHECK"
 
-    async def test_an_untyped_not_ready_verdict_still_blocks(self) -> None:
+    async def test_an_untyped_not_ready_verdict_still_blocks(
+        self, capture_preflight_outcomes
+    ) -> None:
         """No typed error falls back to PRECONDITION, so an un-migrated handler's
         NOT_READY keeps blocking a hard gate."""
         verdict = PreflightOutput(
             status=PreflightStatus.NOT_READY,
             checks=[PreflightCheck(name="source", passed=False, message="no grant")],
         )
-        with mock.patch(f"{_GATE}.logger"):
-            with pytest.raises(ApplicationError):
-                await _hard_gate(verdict)(PreflightGateInput())
+        with pytest.raises(ApplicationError):
+            await _hard_gate(verdict)(PreflightGateInput())
+        assert capture_preflight_outcomes.one["outcome"] == "blocked"
 
-    async def test_the_aggregate_error_decides_not_a_later_check(self) -> None:
-        """The decision follows details[0], the failure the row's reason names:
-        an unreachable source attributed by the handler does not block because
-        another failed row happens to be an auth failure, and vice versa."""
-        unreachable = SourceUnavailableError(message="warehouse paused")
-        bad_password = AuthError(message="bad password")
-        checks = [
-            PreflightCheck(name="reach", passed=False, error=unreachable),
-            PreflightCheck(name="login", passed=False, error=bad_password),
-        ]
+    # The decision follows details[0], the failure the row's reason names: an
+    # unreachable source attributed by the handler does not block because
+    # another failed row happens to be an auth failure, and vice versa.
+    _UNREACHABLE = SourceUnavailableError(message="warehouse paused")
+    _BAD_PASSWORD = AuthError(message="bad password")
+    _CHECKS = [
+        PreflightCheck(name="reach", passed=False, error=_UNREACHABLE),
+        PreflightCheck(name="login", passed=False, error=_BAD_PASSWORD),
+    ]
+
+    async def test_an_unreachable_aggregate_proceeds_despite_a_later_auth_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         proceeds = PreflightOutput(
-            status=PreflightStatus.NOT_READY, error=unreachable, checks=checks
+            status=PreflightStatus.NOT_READY,
+            error=self._UNREACHABLE,
+            checks=self._CHECKS,
         )
-        with mock.patch(f"{_GATE}.logger") as mock_logger:
-            result = await _hard_gate(proceeds)(PreflightGateInput())
+        result = await _hard_gate(proceeds)(PreflightGateInput())
         assert result.status is PreflightStatus.NOT_READY
-        assert single_outcome(mock_logger)["outcome"] == "would_block"
+        assert capture_preflight_outcomes.one["outcome"] == "would_block"
 
+    async def test_an_auth_aggregate_blocks_despite_an_earlier_unreachable_row(
+        self, capture_preflight_outcomes
+    ) -> None:
         blocks = PreflightOutput(
-            status=PreflightStatus.NOT_READY, error=bad_password, checks=checks
+            status=PreflightStatus.NOT_READY,
+            error=self._BAD_PASSWORD,
+            checks=self._CHECKS,
         )
-        with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(ApplicationError):
-                await _hard_gate(blocks)(PreflightGateInput())
-        assert single_outcome(mock_logger)["outcome"] == "blocked"
+        with pytest.raises(ApplicationError):
+            await _hard_gate(blocks)(PreflightGateInput())
+        assert capture_preflight_outcomes.one["outcome"] == "blocked"

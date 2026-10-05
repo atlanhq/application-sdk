@@ -2407,6 +2407,8 @@ def build_preflight_gate_activity(
                         result = check.result()
                         warn_if_partial(result)
                         if input.tier is not None:
+                            # Re-derives a NOT_READY the dropped rows caused, so
+                            # a WARMUP failure cannot decide the FAST dispatch.
                             result = filter_checks_to_tier(result, input.tier)
                     else:
                         # Ask it to stop, but never await it — an uncooperative
@@ -2580,6 +2582,13 @@ def build_preflight_warmup_activities(
     """
 
     async def _call(input: PreflightGateInput, operation: str) -> WarmupState:
+        # One deadline for the whole call: credential resolution and the hook
+        # share WARMUP_CALL_BUDGET_SECONDS, so together they always finish inside
+        # the activity's start_to_close (budget + headroom). Separate budgets
+        # could add up past it, and Temporal would kill the activity before it
+        # reported a state.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + WARMUP_CALL_BUDGET_SECONDS
         try:
             credentials, credentials_by_name = await asyncio.wait_for(
                 _resolve_gate_credentials(input),
@@ -2587,8 +2596,9 @@ def build_preflight_warmup_activities(
             )
         except Exception as e:
             raise _plumbing_error(e, app_name, _current_attempt()) from e
+        hook_budget = max(0.0, deadline - loop.time())
         preflight_input, all_creds = _gate_preflight_input(
-            input, credentials, credentials_by_name, WARMUP_CALL_BUDGET_SECONDS
+            input, credentials, credentials_by_name, int(hook_budget)
         )
         hook = (
             transport.warmup_start
@@ -2599,7 +2609,7 @@ def build_preflight_warmup_activities(
             # Waited on, never wait_for'd, for the reason the check activity
             # gives: a hook that swallows the cancel must not hold this open.
             call = asyncio.ensure_future(hook(preflight_input))
-            done, _ = await asyncio.wait({call}, timeout=WARMUP_CALL_BUDGET_SECONDS)
+            done, _ = await asyncio.wait({call}, timeout=hook_budget)
             if not done:
                 call.cancel()
                 call.add_done_callback(

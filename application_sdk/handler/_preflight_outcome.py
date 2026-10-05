@@ -547,9 +547,48 @@ def filter_checks_to_tier(result: PreflightOutput, tier: CheckTier) -> Preflight
     One rule for ``/check`` and the gate: a handler that ignores
     ``PreflightInput.tier`` still answers a tiered request with the right rows,
     and a ``WARMUP`` probe it ran anyway cannot decide the ``FAST`` dispatch.
-    The aggregate status is the handler's own and is left alone.
+
+    So a ``NOT_READY`` aggregate is re-derived when the reason for it was a
+    dropped check. That is the case when the aggregate ``error`` describes a
+    dropped failed check (same ``code`` and ``message``), or when there is no
+    aggregate ``error`` and the ``message`` is empty or is a dropped failed
+    check's own line. The verdict then follows the kept rows: still
+    ``NOT_READY``, attributed to them, if any kept check failed, else
+    ``READY``. An aggregate reason that matches no dropped check is the
+    handler's own verdict about the source, so it stands. ``READY`` and
+    ``PARTIAL`` are left alone.
     """
     kept = [check for check in result.checks if check.effective_tier is tier]
     if len(kept) == len(result.checks):
         return result
-    return result.model_copy(update={"checks": kept})
+    update: dict[str, object] = {"checks": kept}
+    dropped_failed = [
+        c for c in result.checks if c.effective_tier is not tier and not c.passed
+    ]
+    if result.status is PreflightStatus.NOT_READY and _reason_is_among(
+        result, dropped_failed
+    ):
+        kept_failed = any(not c.passed for c in kept)
+        update.update(
+            status=PreflightStatus.NOT_READY if kept_failed else PreflightStatus.READY,
+            error=None,
+            message="",
+        )
+    return result.model_copy(update=update)
+
+
+def _reason_is_among(result: PreflightOutput, checks: list[PreflightCheck]) -> bool:
+    """Whether ``result``'s aggregate reason is one of ``checks``' failures."""
+    if not checks:
+        return False
+    if result.error is not None:
+        return any(
+            c.error is not None
+            and c.error.code == result.error.code
+            and c.error.message == result.error.message
+            for c in checks
+        )
+    return not result.message or any(
+        result.message in (c.message, c.error.message if c.error else None)
+        for c in checks
+    )

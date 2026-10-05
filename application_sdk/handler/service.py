@@ -3146,6 +3146,8 @@ def create_app_handler_service(
                 else:
                     result = await handler.preflight_check(preflight_input)
                 if tier is not None:
+                    # Re-derives a NOT_READY the dropped rows caused, so a
+                    # WARMUP failure cannot fail a tier=fast response.
                     result = filter_checks_to_tier(result, tier)
                 emit_preflight_check_outcome(
                     logger,

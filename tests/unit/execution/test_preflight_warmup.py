@@ -24,6 +24,7 @@ from application_sdk.app.base import App, _run_preflight_gate
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
     AuthError,
@@ -80,7 +81,6 @@ from application_sdk.observability.logger_adaptor import (
     WARMUP_OUTCOME_KEY,
     WARMUP_TRANSITIONS_KEY,
 )
-from application_sdk.testing.preflight import outcome_rows
 
 # ---------------------------------------------------------------------------
 # Workflow frame
@@ -339,6 +339,40 @@ class TestTheCeilingRow:
         assert clock.slept == [10.0, 10.0, 10.0]
         assert _tiers(execute_mock) == [CheckTier.FAST]
 
+    @pytest.mark.parametrize(("poll_takes", "tiers"), [(2, 2), (10, 1)])
+    async def test_a_ready_returned_past_the_ceiling_is_exhausted(
+        self, clock, safe_log, poll_takes, tiers
+    ) -> None:
+        """The deadline is checked when the last poll returns, not only before it.
+
+        The poll starts at 25s against a 30s ceiling. Returning READY at 27s
+        runs the WARMUP checks; returning it at 35s is a ceiling breach.
+        """
+
+        def _execute(name: str, *args: Any, **kwargs: Any) -> Any:
+            if name.endswith("warmup_state"):
+                clock.now += timedelta(seconds=poll_takes)
+                return WarmupState(status=WarmupStatus.READY)
+            return None
+
+        execute_mock, _, patches = _gate(
+            execute=_execute, start=_Handle(WarmupState(status=WarmupStatus.RUNNING))
+        )
+        with patches[0], patches[1], patches[2]:
+            await _run_preflight_gate(
+                _ResolvableInput(),
+                "myapp",
+                "crawl",
+                gate_mode=PreflightGateMode.SOFT,
+                warmup_ceiling_seconds=30,
+                warmup_poll_seconds=25,
+            )
+        assert len(_tiers(execute_mock)) == tiers
+        if tiers == 1:
+            (row,) = _rows(safe_log)
+            assert row["outcome"] == "would_block"
+            assert row[WARMUP_OUTCOME_KEY] == "exhausted"
+
 
 # ---------------------------------------------------------------------------
 # Warmup activities
@@ -428,6 +462,37 @@ class TestWarmupActivities:
         assert state.status is WarmupStatus.RUNNING
         assert state.error is not None
         assert state.error.code == "TIMEOUT"
+
+    async def test_resolution_and_the_hook_share_one_budget(self) -> None:
+        """Slow resolution leaves the hook only what remains of the budget.
+
+        Two separate budgets could add up past the activity's start_to_close
+        (budget + headroom), and Temporal would kill it before it reported.
+        """
+
+        async def _slow_resolution(
+            _input: object,
+        ) -> tuple[list[object], dict[str, list[object]]]:
+            await asyncio.sleep(1.5)
+            return [], {}
+
+        hooks = _Hooks(state="hang")
+        _, state_activity = _activities(hooks)
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        with (
+            mock.patch.object(preflight_gate, "WARMUP_CALL_BUDGET_SECONDS", 2),
+            mock.patch.object(
+                preflight_gate, "_resolve_gate_credentials", _slow_resolution
+            ),
+        ):
+            state = await state_activity(PreflightGateInput())
+        assert loop.time() - started < 2.5
+        assert state.status is WarmupStatus.RUNNING
+        assert state.error is not None
+        assert state.error.code == "TIMEOUT"
+        (seen,) = hooks.inputs
+        assert seen.timeout_seconds == 0
 
     async def test_a_credential_failure_leaves_as_plumbing(self) -> None:
         start, _ = _activities(_Hooks(start=WarmupState()))
@@ -694,7 +759,7 @@ class TestTheWarmupRowFields:
         assert WARMUP_TRANSITIONS_KEY not in row
 
     async def test_the_activity_row_carries_the_dispatched_observation(
-        self,
+        self, capture_preflight_outcomes
     ) -> None:
         seen = WarmupObservation(
             outcome=WarmupOutcome.READY,
@@ -705,9 +770,8 @@ class TestTheWarmupRowFields:
             ],
         )
         gate = build_preflight_gate_activity(_TwoTierHandler(), "myapp")
-        with mock.patch.object(preflight_gate, "logger") as log:
-            await gate(PreflightGateInput(tier=CheckTier.WARMUP, warmup=seen))
-        (row,) = outcome_rows(log)
+        await gate(PreflightGateInput(tier=CheckTier.WARMUP, warmup=seen))
+        row = capture_preflight_outcomes.one
         assert row[WARMUP_OUTCOME_KEY] == "ready"
         assert row[WARMUP_DURATION_KEY] == 12_000.0
         assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
@@ -771,26 +835,74 @@ class _TwoTierHandler(DefaultHandler):
         )
 
 
+class _ColdCatalogHandler(DefaultHandler):
+    """Ignores ``input.tier``: runs both tiers and fails on the WARMUP one."""
+
+    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
+        cold = NotFoundError(message="catalog not indexed yet")
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(name="reachable", passed=True),
+                PreflightCheck(
+                    name="catalogScan", passed=False, tier=CheckTier.WARMUP, error=cold
+                ),
+            ],
+            error=cold,
+        )
+
+
+def _two_tier_result(
+    *, fast_passed: bool, aggregate: AppError | None, message: str = ""
+) -> PreflightOutput:
+    fast_error = None if fast_passed else AuthError(message="token expired")
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[
+            PreflightCheck(name="reachable", passed=fast_passed, error=fast_error),
+            PreflightCheck(
+                name="catalogScan",
+                passed=False,
+                tier=CheckTier.WARMUP,
+                error=NotFoundError(message="catalog not indexed yet"),
+            ),
+        ],
+        error=aggregate,
+        message=message,
+    )
+
+
 class TestTheCheckActivityTier:
-    async def test_a_tiered_dispatch_keeps_only_its_tier(self) -> None:
+    async def test_a_tiered_dispatch_keeps_only_its_tier(
+        self, capture_preflight_outcomes
+    ) -> None:
         handler = _TwoTierHandler()
         gate = build_preflight_gate_activity(handler, "myapp")
-        with mock.patch.object(preflight_gate, "logger") as log:
-            result = await gate(PreflightGateInput(tier=CheckTier.WARMUP))
+        result = await gate(PreflightGateInput(tier=CheckTier.WARMUP))
         assert handler.tiers == [CheckTier.WARMUP]
         assert [c.name for c in result.checks] == ["catalogScan"]
-        (row,) = outcome_rows(log)
-        assert row[GATE_TIER_KEY] == "warmup"
+        assert capture_preflight_outcomes.one[GATE_TIER_KEY] == "warmup"
 
-    async def test_an_untiered_dispatch_is_unchanged(self) -> None:
+    async def test_an_untiered_dispatch_is_unchanged(
+        self, capture_preflight_outcomes
+    ) -> None:
         handler = _TwoTierHandler()
         gate = build_preflight_gate_activity(handler, "myapp")
-        with mock.patch.object(preflight_gate, "logger") as log:
-            result = await gate(PreflightGateInput())
+        result = await gate(PreflightGateInput())
         assert handler.tiers == [None]
         assert [c.name for c in result.checks] == ["reachable", "catalogScan"]
-        (row,) = outcome_rows(log)
-        assert GATE_TIER_KEY not in row
+        assert GATE_TIER_KEY not in capture_preflight_outcomes.one
+
+    async def test_a_dropped_warmup_failure_does_not_block_the_fast_dispatch(
+        self, capture_preflight_outcomes
+    ) -> None:
+        gate = build_preflight_gate_activity(
+            _ColdCatalogHandler(), "myapp", mode=PreflightGateMode.HARD
+        )
+        result = await gate(PreflightGateInput(tier=CheckTier.FAST))
+        assert result.status is PreflightStatus.READY
+        assert [c.name for c in result.checks] == ["reachable"]
+        assert capture_preflight_outcomes.one["outcome"] == "proceeded"
 
     def test_filter_returns_the_same_object_when_nothing_is_dropped(self) -> None:
         result = PreflightOutput(
@@ -798,6 +910,46 @@ class TestTheCheckActivityTier:
             checks=[PreflightCheck(name="reachable", passed=True)],
         )
         assert filter_checks_to_tier(result, CheckTier.FAST) is result
+
+    def test_a_verdict_caused_only_by_a_dropped_check_becomes_ready(self) -> None:
+        result = _two_tier_result(
+            fast_passed=True, aggregate=NotFoundError(message="catalog not indexed yet")
+        )
+        fast = filter_checks_to_tier(result, CheckTier.FAST)
+        assert fast.status is PreflightStatus.READY
+        assert fast.error is None
+        assert fast.message == ""
+
+    def test_an_untyped_verdict_naming_a_dropped_check_becomes_ready(self) -> None:
+        result = _two_tier_result(
+            fast_passed=True, aggregate=None, message="catalog not indexed yet"
+        )
+        assert (
+            filter_checks_to_tier(result, CheckTier.FAST).status
+            is PreflightStatus.READY
+        )
+
+    def test_a_kept_failure_keeps_the_verdict_and_takes_the_attribution(
+        self,
+    ) -> None:
+        result = _two_tier_result(
+            fast_passed=False,
+            aggregate=NotFoundError(message="catalog not indexed yet"),
+        )
+        fast = filter_checks_to_tier(result, CheckTier.FAST)
+        assert fast.status is PreflightStatus.NOT_READY
+        assert fast.error is None
+        assert [c.name for c in fast.checks if not c.passed] == ["reachable"]
+
+    def test_the_handlers_own_reason_stands(self) -> None:
+        """An aggregate reason that is no check's failure is about the source."""
+        result = _two_tier_result(
+            fast_passed=True, aggregate=AuthError(message="account locked")
+        )
+        fast = filter_checks_to_tier(result, CheckTier.FAST)
+        assert fast.status is PreflightStatus.NOT_READY
+        assert fast.error is not None
+        assert fast.error.message == "account locked"
 
     def test_the_row_carries_no_tier_key_unless_given_one(self) -> None:
         row = gate_outcome_row(
