@@ -66,15 +66,16 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.routing import find_prebuilt_credential_ref
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.base import (
-        AppError,
-        redact_secrets,
-        sanitize_cause_repr,
-    )
+    from application_sdk.errors.base import AppError
+    from application_sdk.errors.base import redact_and_cap as redact_and_cap
+    from application_sdk.errors.base import redact_secrets, sanitize_cause_repr
     from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import (
         AppTimeoutError,
         DependencyUnavailableError,
+    )
+    from application_sdk.errors.leaves import PreconditionError as PreconditionError
+    from application_sdk.errors.leaves import (
         SourceUnavailableError,
         SourceWarmupExhaustedError,
     )
@@ -86,6 +87,8 @@ with workflow.unsafe.imports_passed_through():
     # Handler-side since FND-3280 so ``/check`` can emit its row without
     # importing this module. ``X as X`` marks each as a deliberate re-export: the
     # names keep resolving here, where the gate and its tests have always used them.
+    # ``redact_and_cap`` and ``PreconditionError`` above are kept as ``X as X``
+    # for the same reason: every release before FND-3280 imported them here.
     from application_sdk.handler._preflight_outcome import (
         _CLIENT_FAULT_CATEGORIES as _CLIENT_FAULT_CATEGORIES,
     )
@@ -2066,7 +2069,7 @@ def _gate_preflight_input(
 
 
 def build_preflight_gate_activity(
-    transport: PreflightTransport,
+    handler: PreflightTransport,
     app_name: str,
     *,
     mode: PreflightGateMode | None = None,
@@ -2077,10 +2080,12 @@ def build_preflight_gate_activity(
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
-    ``transport`` is how the activity reaches the app's handler — the only way
+    ``handler`` is how the activity reaches the app's handler — the only way
     it does (:class:`~application_sdk.execution._temporal.preflight_transport.PreflightTransport`).
     The worker passes :class:`~application_sdk.execution._temporal.preflight_transport.InProcessPreflightTransport`;
-    a ``Handler`` satisfies the protocol too, so it may be passed directly.
+    a ``Handler`` satisfies the protocol too, so it may be passed directly. The
+    parameter keeps the name ``handler`` it shipped with, so ``handler=``
+    callers keep working; any ``PreflightTransport`` is accepted.
 
     ``verify_storage`` is the per-app opt-in (``App.preflight_verify_storage``)
     to also probe the run's artifact object store(s) after the handler's source
@@ -2395,7 +2400,7 @@ def build_preflight_gate_activity(
                     # defect this gate exists to fix). Waiting on the task instead
                     # lets us classify *at* the deadline, whatever the handler does.
                     check = asyncio.ensure_future(
-                        transport.preflight_check(preflight_input)
+                        handler.preflight_check(preflight_input)
                     )
                     done, _ = await asyncio.wait({check}, timeout=handler_budget)
                     if done:
