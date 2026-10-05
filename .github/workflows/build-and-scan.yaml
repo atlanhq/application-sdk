@@ -235,7 +235,12 @@ jobs:
         with:
           name: docker-image
           path: /tmp/image.tar
-          retention-days: 7
+          # One day, not seven. This ~0.5 GB tarball was ~97% of every connector
+          # repo's live artifact storage (FND-3313), and its only readers —
+          # trivy-scan and endor-scan — run in this same run minutes later.
+          # The cost: "re-run failed jobs" on a scan job more than a day later
+          # finds no tarball; "re-run all jobs" rebuilds it.
+          retention-days: 1
           # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
           # a run, so re-running a failed job would otherwise 409 here and burn the
           # retry on a conflict that has nothing to do with a finalize failure. It is
@@ -261,7 +266,7 @@ jobs:
           # Consumers resolve this artifact by `<name>*` glob, not exact name.
           name: docker-image-retry
           path: /tmp/image.tar
-          retention-days: 7
+          retention-days: 1
           overwrite: true
 
   # ── Trivy scan ──────────────────────────────────────────────────────────────
