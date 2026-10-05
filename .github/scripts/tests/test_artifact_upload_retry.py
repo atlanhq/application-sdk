@@ -400,7 +400,12 @@ def test_every_upload_sets_an_explicit_bounded_retention():
     for rel, scope, steps in _scopes():
         for step in (s for s in steps if _is_upload(s)):
             days = _with(step).get("retention-days")
-            if not isinstance(days, int) or not 1 <= days <= MAX_RETENTION_DAYS:
+            # bool is an int subclass, so `retention-days: true` would pass as 1.
+            if (
+                isinstance(days, bool)
+                or not isinstance(days, int)
+                or not 1 <= days <= MAX_RETENTION_DAYS
+            ):
                 problems.append(f"{_label(rel, scope, step)}: retention-days={days!r}")
     assert not problems, (
         f"Every `{UPLOAD_ACTION}` step must set an integer `retention-days` "

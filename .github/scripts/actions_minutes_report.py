@@ -93,6 +93,9 @@ SUITE_BATCH = 25
 CHECK_RUNS_PAGE = 100
 
 GH_RETRIES = 4
+# One `gh` call is a single API request; two minutes is far past any healthy
+# response, so a call still running then is a stalled connection.
+GH_TIMEOUT_SECONDS = 120
 
 WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
@@ -148,17 +151,37 @@ class JobRecord:
 
 
 def _run_gh(args: list, stdin: Optional[str] = None) -> tuple:
-    """Run `gh`, returning (returncode, stdout, stderr) uninterpreted."""
-    result = subprocess.run(["gh", *args], capture_output=True, text=True, input=stdin)
+    """Run `gh`, returning (returncode, stdout, stderr) uninterpreted.
+
+    A call that outlives GH_TIMEOUT_SECONDS is reported as a failed call whose
+    stderr says so, which gh_json treats as transient.
+    """
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            input=stdin,
+            timeout=GH_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return 124, "", f"gh timed out after {GH_TIMEOUT_SECONDS}s"
     return result.returncode, result.stdout, result.stderr
 
 
 def _is_transient(stderr: str) -> bool:
-    """A failure worth retrying: gateway errors and secondary rate limits."""
+    """A failure worth retrying: gateway errors, secondary rate limits and
+    stalled calls."""
     lowered = stderr.lower()
     return any(
         marker in lowered
-        for marker in ("http 502", "http 503", "http 504", "secondary rate limit")
+        for marker in (
+            "http 502",
+            "http 503",
+            "http 504",
+            "secondary rate limit",
+            "timed out",
+        )
     )
 
 
@@ -167,21 +190,54 @@ def _is_gateway(stderr: str) -> bool:
     return "http 502" in lowered or "http 504" in lowered
 
 
+# gh_json's default backoff sleeper. A module attribute so tests can stub this
+# module's waits without patching `time.sleep` for the whole process.
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _total_count(payload: dict, key: str, what: str) -> int:
+    """The response's result count. Paging stops on it, so a response without
+    one fails the report instead of being read as zero and truncated."""
+    if key not in payload:
+        raise ReportError(f"{what} is missing {key}")
+    return int(payload[key])
+
+
+def _is_primary_rate_limit(stderr: str) -> bool:
+    """The hourly quota is spent. Unlike a secondary limit, a backoff of
+    seconds can't outlast it, so it is reported rather than retried."""
+    return "api rate limit exceeded" in stderr.lower()
+
+
 def gh_json(
     args: list,
     run: RunFn,
     stdin: Optional[str] = None,
     sleep: Optional[Callable[[float], None]] = None,
     retries: int = GH_RETRIES,
+    retry_gateway: bool = True,
 ):
-    """`gh` call parsed as JSON, retrying transient failures with backoff."""
-    sleep = sleep or time.sleep
+    """`gh` call parsed as JSON, retrying transient failures with backoff.
+
+    With retry_gateway=False a 502/504 fails at once, so a caller that can
+    shrink the request can do that instead of resending it unchanged.
+    """
+    sleep = sleep or _sleep
     stderr = ""
     for attempt in range(retries):
         code, out, stderr = run(args, stdin)
         if code == 0:
             return json.loads(out)
-        if not _is_transient(stderr) or attempt == retries - 1:
+        if _is_primary_rate_limit(stderr):
+            raise ReportError(
+                f"gh {' '.join(args[:2])} hit the primary API rate limit; "
+                f"re-run after it resets (`gh api rate_limit`): {stderr.strip()}"
+            )
+        if (
+            not _is_transient(stderr)
+            or (not retry_gateway and _is_gateway(stderr))
+            or attempt == retries - 1
+        ):
             break
         sleep(2**attempt * 5)
     raise ReportError(f"gh {' '.join(args[:2])} failed: {stderr.strip()}")
@@ -271,7 +327,7 @@ def list_runs_window(repo: str, start: datetime, end: datetime, run: RunFn) -> l
     that cannot be split further and paging it would silently truncate.
     """
     first = _runs_page(repo, start, end, 1, run)
-    total = int(first.get("total_count", 0))
+    total = _total_count(first, "total_count", f"{repo}: runs response")
     if total > RUNS_RESULT_CAP:
         if end <= start:
             raise ReportError(
@@ -369,7 +425,8 @@ def _rest_jobs(repo: str, run_id: int, run: RunFn) -> list:
             }
             for j in batch
         )
-        if not batch or len(jobs) >= int(data.get("total_count", 0)):
+        total = _total_count(data, "total_count", f"{repo}: run {run_id} jobs response")
+        if not batch or len(jobs) >= total:
             return jobs
         page += 1
 
@@ -378,14 +435,14 @@ def _query_suites(ids: list, run: RunFn) -> dict:
     """{suite id: check-run payload}, halving the batch on a gateway error."""
     body = json.dumps({"query": _SUITES_QUERY, "variables": {"ids": ids}})
     try:
-        # A multi-suite batch that times out is split rather than retried: the
-        # gateway error is about the batch's size, so the same query would
-        # time out again.
+        # A multi-suite batch that hits a gateway error is split rather than
+        # retried: the error is about the batch's size, so the same query
+        # would fail again. Every other transient failure is retried as usual.
         data = gh_json(
             ["api", "graphql", "--input", "-"],
             run,
             stdin=body,
-            retries=1 if len(ids) > 1 else GH_RETRIES,
+            retry_gateway=len(ids) == 1,
         )
     except ReportError as exc:
         if len(ids) > 1 and _is_gateway(str(exc)):
@@ -409,7 +466,8 @@ def fetch_jobs(runs: list, run: RunFn) -> list:
         for suite_id, payload in payloads.items():
             owner = by_suite[suite_id]
             nodes = payload.get("nodes") or []
-            if int(payload.get("totalCount", 0)) > len(nodes):
+            total = _total_count(payload, "totalCount", f"check suite {suite_id}")
+            if total > len(nodes):
                 nodes = _rest_jobs(owner.repo, owner.run_id, run)
             jobs.extend(_job_record(owner, node) for node in nodes)
     return jobs

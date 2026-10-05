@@ -229,7 +229,7 @@ def test_jobs_come_from_batched_graphql(monkeypatch):
 
 def test_gateway_error_halves_the_batch(monkeypatch):
     monkeypatch.setattr(amr, "SUITE_BATCH", 8)
-    monkeypatch.setattr(amr.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(amr, "_sleep", lambda _s: None)
     runs = [
         amr.to_run_record("o/r", "private", _run(i, "2026-09-30T10:00:00Z"))
         for i in range(8)
@@ -283,6 +283,74 @@ def test_transient_failure_is_retried():
     assert amr.gh_json(
         ["api", "x"], lambda a, s=None: next(answers), sleep=lambda _s: None
     ) == {"ok": 1}
+
+
+def test_primary_rate_limit_fails_at_once_and_says_so():
+    calls = []
+
+    def run(args, stdin=None):
+        calls.append(args)
+        return 1, "", "gh: API rate limit exceeded for user ID 1. (HTTP 403)"
+
+    with pytest.raises(amr.ReportError, match="primary API rate limit"):
+        amr.gh_json(["api", "x"], run, sleep=lambda _s: None)
+    assert len(calls) == 1
+
+
+def test_stalled_gh_call_is_a_transient_failure(monkeypatch):
+    def hang(*_a, **kw):
+        assert kw["timeout"] == amr.GH_TIMEOUT_SECONDS
+        raise amr.subprocess.TimeoutExpired("gh", kw["timeout"])
+
+    monkeypatch.setattr(amr.subprocess, "run", hang)
+    code, _out, stderr = amr._run_gh(["api", "x"])
+    assert code != 0
+    assert amr._is_transient(stderr)
+
+
+def test_multi_suite_batch_retries_non_gateway_transient_failures(monkeypatch):
+    monkeypatch.setattr(amr, "SUITE_BATCH", 4)
+    monkeypatch.setattr(amr, "_sleep", lambda _s: None)
+    runs = [
+        amr.to_run_record("o/r", "private", _run(i, "2026-09-30T10:00:00Z"))
+        for i in range(4)
+    ]
+    checks = {
+        f"CS_{i}": [_check("j", "2026-09-30T10:00:00Z", "2026-09-30T10:00:30Z")]
+        for i in range(4)
+    }
+    gh = FakeGh({}, checks)
+    flaky = iter([(1, "", "gh: HTTP 503: Service Unavailable")])
+
+    def run(args, stdin=None):
+        if args[:2] == ["api", "graphql"]:
+            failure = next(flaky, None)
+            if failure:
+                return failure
+        return gh(args, stdin)
+
+    jobs = amr.fetch_jobs(runs, run)
+    assert len(jobs) == 4
+    # Retried whole, not split: a 503 says nothing about the batch's size.
+    batches = [json.loads(stdin)["variables"]["ids"] for _args, stdin in gh.calls]
+    assert batches == [[f"CS_{i}" for i in range(4)]]
+
+
+def test_runs_response_without_total_count_fails_instead_of_truncating():
+    def run(args, stdin=None):
+        return 0, json.dumps({"workflow_runs": [{"id": 1}]}), ""
+
+    start = amr.parse_ts("2026-09-30T00:00:00Z")
+    with pytest.raises(amr.ReportError, match="missing total_count"):
+        amr.list_runs_window("o/r", start, start + amr.timedelta(days=1), run)
+
+
+def test_jobs_response_without_total_count_fails_instead_of_truncating():
+    def run(args, stdin=None):
+        return 0, json.dumps({"jobs": [{"name": "a"}]}), ""
+
+    with pytest.raises(amr.ReportError, match="missing total_count"):
+        amr._rest_jobs("o/r", 9, run)
 
 
 # ── summary ─────────────────────────────────────────────────────────────────
