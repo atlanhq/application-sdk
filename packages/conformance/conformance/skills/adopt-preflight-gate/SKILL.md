@@ -616,7 +616,7 @@ Three tiers, lightest first — pick the lightest that fits:
    `audience` — those are ClassVars (fixed aggregation keys), and changing
    them is exactly what a subclass is for.
 
-Subclasses live in **`app/failures.py`** (same home the `/typed-failures`
+Subclasses live in **`app/failures.py`** (same home the [`typed-failures`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/SKILL.md)
 skill establishes — reuse the file if it exists). Pattern:
 
 ```python
@@ -667,8 +667,9 @@ checks *and* from extraction tasks — lives in `app/failures.py` (or whatever
 single module the app already uses; match it, don't add a second). Scattered
 definitions are how the same root cause ends up with two different codes
 depending on which surface hit it, which silently splits its aggregation in AE
-and the dashboards. If the app has untyped raise sites left over, run
-`/typed-failures` first — it owns the sweep and this skill assumes its output.
+and the dashboards. If the app has untyped raise sites left over, run the
+[`typed-failures`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/typed-failures/SKILL.md) skill first (in the `atlanhq/application-sdk` repo, not
+shipped with this package) — it owns the sweep and this skill assumes its output.
 
 **Pick the leaf by who must act, because that is what the SLA split reads.**
 `audience` is a ClassVar, so the leaf choice *is* the routing decision:

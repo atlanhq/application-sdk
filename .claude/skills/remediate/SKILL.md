@@ -410,8 +410,8 @@ Residue entries for migration rules carry `remediation_reference`
      holds only because the developer reviews each step.
   3. When it ends, run the orthogonal test gate, then
      `atlan-application-sdk-conformance detect --rule <ids>` for the rule ids
-     it names. A cleared finding leaves residue; a remaining one stays in
-     residue with the skill named.
+     it names. A cleared finding is removed from residue; a remaining one
+     stays in residue with the skill named.
   4. Record in residue every file the skill changed under `tests/` and any
      `uv.lock` change, for human review.
 - `kind = guide` — apply nothing. Report the rule ids with the guide path
