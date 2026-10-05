@@ -11,6 +11,7 @@ stage/commit the way that gate expects, which is why it imports
 
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -405,3 +406,79 @@ def test_no_dispatch_when_the_repo_does_not_auto_merge():
         result["approvalSkipped"]
         == "renovate.json is in soft mode (auto-merge disabled)"
     )
+
+
+# ── an unchanged PR must still be approvable to be left alone ────────────
+
+PARENT = "p" * 40
+AUTO_JSON = '{"extends": ["github>atlanhq/application-sdk//renovate/fleet"]}'
+SOFT_JSON = '{"automerge": false}'
+
+
+def _parent_runner(pin: str | None, renovate_json: str | None) -> FakeRunner:
+    lock = (
+        f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "{pin}"\n'
+        if pin
+        else ""
+    )
+    answers = {
+        (
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            f"repos/{REPO}/contents/uv.lock?ref={PARENT}",
+        ): subprocess.CompletedProcess([], 0 if pin else 1, stdout=lock),
+        (
+            "gh",
+            "api",
+            f"repos/{REPO}/contents/renovate.json?ref={PARENT}",
+            "-q",
+            ".content",
+        ): subprocess.CompletedProcess(
+            [],
+            0 if renovate_json else 1,
+            stdout=base64.b64encode(renovate_json.encode()).decode()
+            if renovate_json
+            else "",
+        ),
+    }
+    return FakeRunner(answers, default_rc=1)
+
+
+def test_unchanged_pr_on_a_bumped_suite_is_re_pushed():
+    # Renovate bumped 0.39.0 -> 0.40.0 on main; the templates did not change,
+    # so the PR content still matches but its parent pins the old suite.
+    ok, why = lane.unchanged_pr_approvable(
+        REPO, PARENT, "0.40.0", True, _parent_runner("0.39.0", AUTO_JSON)
+    )
+    assert not ok and "0.39.0" in why
+
+
+def test_unchanged_pr_whose_parent_is_soft_is_re_pushed_when_main_auto_merges():
+    ok, why = lane.unchanged_pr_approvable(
+        REPO, PARENT, "0.39.0", True, _parent_runner("0.39.0", SOFT_JSON)
+    )
+    assert not ok and "soft" in why
+
+
+def test_unchanged_pr_left_alone_when_the_parent_still_passes_the_gate():
+    assert lane.unchanged_pr_approvable(
+        REPO, PARENT, "0.39.0", True, _parent_runner("0.39.0", AUTO_JSON)
+    ) == (True, "")
+
+
+def test_soft_repo_does_not_require_an_auto_parent():
+    # No approval is dispatched in a soft repo, so the mode must not force a
+    # re-push on every run.
+    assert lane.unchanged_pr_approvable(
+        REPO, PARENT, "0.39.0", False, _parent_runner("0.39.0", SOFT_JSON)
+    ) == (True, "")
+
+
+def test_read_clone_file_reads_the_checkout_and_refuses_symlinks(tmp_path):
+    (tmp_path / "uv.lock").write_text("lock")
+    (tmp_path / "renovate.json").symlink_to(tmp_path / "uv.lock")
+    assert lane.read_clone_file(str(tmp_path), "uv.lock") == "lock"
+    assert lane.read_clone_file(str(tmp_path), "renovate.json") is None
+    assert lane.read_clone_file(str(tmp_path), "missing") is None

@@ -79,7 +79,9 @@ class FakeRunner:
         live_head=HEAD,
         renovate_json=None,
         renovate_json_missing=False,
+        parent_pin="0.39.0",
     ):
+        self.parent_pin = parent_pin
         self.commits = [commit()] if commits is None else commits
         self.live_head = live_head
         self.renovate_json = (
@@ -107,6 +109,16 @@ class FakeRunner:
             return subprocess.CompletedProcess(cmd, self.checks_rc, "", "")
         if "/commits" in joined and "pulls" in joined:
             return subprocess.CompletedProcess(cmd, 0, json.dumps([self.commits]), "")
+        if "/contents/uv.lock" in joined:
+            if f"ref={PARENT}" not in joined:
+                raise AssertionError(f"uv.lock must be read at the parent: {cmd}")
+            if self.parent_pin is None:
+                return subprocess.CompletedProcess(cmd, 1, "", "Not Found")
+            lock = (
+                '[[package]]\nname = "atlan-application-sdk-conformance"\n'
+                f'version = "{self.parent_pin}"\n'
+            )
+            return subprocess.CompletedProcess(cmd, 0, lock, "")
         if "/contents/renovate.json" in joined:
             if f"ref={PARENT}" not in joined:
                 raise AssertionError(f"renovate.json must be read at the parent: {cmd}")
@@ -467,3 +479,21 @@ def test_scoped_per_package_opt_out_still_approves():
     )
     approved, runner, _ = run(runner=FakeRunner(renovate_json=scoped))
     assert approved and runner.approved
+
+
+# ---------------------------------------------------------------------------
+# Parent preconditions (shared with the lane's leave-alone check)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("pin", ["0.40.0", None])
+def test_parent_pinning_another_suite_never_approves_and_skips_the_render(pin):
+    approved, runner, render = run(runner=FakeRunner(parent_pin=pin))
+    assert not approved and not runner.approved and render.calls == []
+
+
+def test_parent_preconditions_pass_for_matching_pin_and_auto_mode():
+    assert resync.parent_preconditions(REPO, PARENT, "0.39.0", FakeRunner()) == (
+        True,
+        "",
+    )

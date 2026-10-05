@@ -106,25 +106,12 @@ def _flatten(payload: object) -> list:
     return payload if isinstance(payload, list) else []
 
 
-def read_repo_file(repo: str, path: str, runner: Runner) -> str | None:
-    """``path`` off ``repo``'s default branch, or ``None`` if it does not exist."""
-    result = _run(
-        [
-            "gh",
-            "api",
-            "-H",
-            "Accept: application/vnd.github.raw",
-            f"repos/{repo}/contents/{path}",
-        ],
-        runner,
-    )
-    if result.returncode != 0:
-        if "HTTP 404" in (result.stderr or ""):
-            return None
-        raise LaneError(
-            f"reading {repo}/{path}: {(result.stderr or '').strip()[-300:]}"
-        )
-    return result.stdout
+def read_clone_file(work: str, path: str) -> str | None:
+    """``path`` in the checked-out clone at ``work``, or ``None`` if absent."""
+    target = pathlib.Path(work, path)
+    if target.is_symlink() or not target.is_file():
+        return None
+    return target.read_text(encoding="utf-8", errors="replace")
 
 
 def _git_env() -> dict[str, str]:
@@ -464,7 +451,9 @@ def withdraw_lane_pr(
     result["closed"] = keep.get("number")
 
 
-def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) -> bool:
+def lane_parent(repo: str, pr_number: int, head_sha: str, runner: Runner) -> str:
+    """The parent of the PR's single lane commit, or ``""`` when the PR is not
+    exactly one lane commit (``resync_approval_conditions.check_commits``)."""
     commits = _flatten(
         gh_json(
             ["api", f"repos/{repo}/pulls/{pr_number}/commits", "--paginate", "--slurp"],
@@ -472,8 +461,34 @@ def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) ->
             what="reading lane PR commits",
         )
     )
-    ok, _, _ = gate.check_commits(str(pr_number), commits, head_sha)
-    return ok
+    ok, _, parent_sha = gate.check_commits(str(pr_number), commits, head_sha)
+    return parent_sha if ok else ""
+
+
+def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) -> bool:
+    return bool(lane_parent(repo, pr_number, head_sha, runner))
+
+
+def unchanged_pr_approvable(
+    repo: str, parent_sha: str, pinned: str, repo_automerges: bool, runner: Runner
+) -> tuple[bool, str]:
+    """Whether an unchanged lane PR can still pass the gate's parent checks.
+
+    The gate re-renders at the version the PR parent's ``uv.lock`` pins, and
+    only approves when the parent's ``renovate.json`` auto-merges. A bump on
+    main that leaves the rendered files the same changes neither the PR nor
+    its parent, so leaving such a PR alone would strand it: never approvable,
+    re-dispatched every run. Re-pushing onto current main fixes both.
+
+    The mode is only required when main auto-merges. Otherwise no approval is
+    dispatched, and requiring it would re-push the PR on every run.
+    """
+    if repo_automerges:
+        return gate.parent_preconditions(repo, parent_sha, pinned, runner)
+    parent_pin = gate.parent_pinned_conformance(repo, parent_sha, runner)
+    if parent_pin != pinned:
+        return False, f"uv.lock at the parent pins {parent_pin}, main pins {pinned}"
+    return True, ""
 
 
 def checks_all_green(repo: str, pr_number: int, runner: Runner) -> bool:
@@ -561,27 +576,7 @@ def process_repo(
         step(f"Closed duplicate lane PR #{d['number']} ({would}closed).")
     result["duplicatesClosed"] = [d["number"] for d in dupes]
 
-    renovate_json = read_repo_file(repo, "renovate.json", runner)
-    uv_lock = read_repo_file(repo, "uv.lock", runner)
-    pinned = gate.pinned_conformance(uv_lock) if uv_lock else None
-    result["pinned"] = pinned
-
-    ok, why = resync_eligibility(pinned)
     pushed_this_run = False
-    if not ok:
-        step(why)
-        result.update(action="skipped", reason=why)
-        withdraw_lane_pr(repo, keep, why, dry_run, runner, result)
-        return result
-
-    resolved_at = choose_resolved_at(keep, pinned, resolved_now)
-    result["resolvedAt"] = resolved_at
-
-    repo_automerge = automerge_allowed(renovate_json)
-    automerge, automerge_reason = repo_automerge
-    if automerge and not automerge_enabled:
-        automerge, automerge_reason = False, "auto-merge is switched off for this lane"
-
     with tempfile.TemporaryDirectory(prefix="resync-") as tmp:
         work = os.path.join(tmp, "repo")
         os.makedirs(work)
@@ -595,6 +590,32 @@ def process_repo(
         git(["checkout", "-q", "-B", BASE_BRANCH, "FETCH_HEAD"], work, runner)
         base_sha = git(["rev-parse", "HEAD"], work, runner).strip()
         step(f"Cloned latest `{BASE_BRANCH}` at {base_sha[:12]}.")
+
+        # Read the pin and the auto-merge mode from the clone, not the API: a
+        # bump landing between an API read and the fetch would otherwise
+        # render one commit at another commit's version.
+        renovate_json = read_clone_file(work, "renovate.json")
+        uv_lock = read_clone_file(work, "uv.lock")
+        pinned = gate.pinned_conformance(uv_lock) if uv_lock else None
+        result["pinned"] = pinned
+
+        ok, why = resync_eligibility(pinned)
+        if not ok:
+            step(why)
+            result.update(action="skipped", reason=why)
+            withdraw_lane_pr(repo, keep, why, dry_run, runner, result)
+            return result
+
+        resolved_at = choose_resolved_at(keep, pinned, resolved_now)
+        result["resolvedAt"] = resolved_at
+
+        repo_automerge = automerge_allowed(renovate_json)
+        automerge, automerge_reason = repo_automerge
+        if automerge and not automerge_enabled:
+            automerge, automerge_reason = (
+                False,
+                "auto-merge is switched off for this lane",
+            )
 
         rc, out, err = run_bootstrap(work, pinned, resolved_at)
         manifest = gate.parse_manifest(out)
@@ -703,10 +724,20 @@ def process_repo(
                 runner,
             )
             same_content = pr_matches_render(repo, keep["number"], staged, work, runner)
-            if same_content and not lane_commits_ok(
-                repo, keep["number"], remote_sha, runner
-            ):
+            parent_sha = (
+                lane_parent(repo, keep["number"], remote_sha, runner)
+                if same_content
+                else ""
+            )
+            if not parent_sha:
                 same_content = False
+            if same_content:
+                approvable, why = unchanged_pr_approvable(
+                    repo, parent_sha, pinned, repo_automerge[0], runner
+                )
+                if not approvable:
+                    step(f"Re-pushing PR #{keep['number']}: {why}.")
+                    same_content = False
             if same_content:
                 detail = gh_json(
                     ["api", f"repos/{repo}/pulls/{keep['number']}"],

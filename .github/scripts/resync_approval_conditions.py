@@ -414,6 +414,46 @@ def parent_automerge_mode(repo: str, parent_sha: str, runner: Runner) -> str:
     return discover.automerge_mode(text)
 
 
+def parent_pinned_conformance(repo: str, parent_sha: str, runner: Runner) -> str | None:
+    """The conformance version ``uv.lock`` resolves at the render base, read
+    raw (``uv.lock`` routinely exceeds the contents API's 1 MB base64 cap)."""
+    result = runner(
+        [
+            "gh",
+            "api",
+            "-H",
+            "Accept: application/vnd.github.raw",
+            f"repos/{repo}/contents/uv.lock?ref={parent_sha}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0 or not (result.stdout or "").strip():
+        return None
+    return pinned_conformance(result.stdout)
+
+
+def parent_preconditions(
+    repo: str, parent_sha: str, suite: str, runner: Runner
+) -> tuple[bool, str]:
+    """The gate's checks on the render base that do not need a render: its
+    ``uv.lock`` pins ``suite`` (condition e, first half) and its
+    ``renovate.json`` is in auto-merge mode (condition e0).
+
+    The lane calls this too before leaving an unchanged PR alone. A PR whose
+    parent fails it can never be approved however often the approver is
+    dispatched, so the lane must re-push it onto current main instead.
+    """
+    pinned = parent_pinned_conformance(repo, parent_sha, runner)
+    if pinned != suite:
+        return False, f"uv.lock at the parent pins {pinned}, the PR marker says {suite}"
+    mode = parent_automerge_mode(repo, parent_sha, runner)
+    if mode != "auto":
+        return False, f"renovate.json at the parent is {mode}, not auto-merge"
+    return True, ""
+
+
 def render_and_compare(
     repo: str,
     parent_sha: str,
@@ -548,12 +588,9 @@ def process_resync_pr(
         print(f"PR #{pr}: its parent commit is not in {base_ref}'s history — skipping.")
         return False
 
-    mode = parent_automerge_mode(repo, parent_sha, runner)
-    if mode != "auto":
-        print(
-            f"PR #{pr}: renovate.json at the parent is {mode}, not auto-merge — "
-            "a person reviews resync PRs in this repo — skipping."
-        )
+    ok, why = parent_preconditions(repo, parent_sha, suite, runner)
+    if not ok:
+        print(f"PR #{pr}: {why} — skipping.")
         return False
 
     print(
