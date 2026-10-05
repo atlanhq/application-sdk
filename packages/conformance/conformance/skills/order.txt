@@ -1,2 +1,3 @@
 migrate-off-daft
+migrate-asset-modeling
 adopt-preflight-gate

@@ -114,7 +114,8 @@ populating writer) describes a structural fix — route the data through the typ
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
 constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
-gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
+performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
+the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
