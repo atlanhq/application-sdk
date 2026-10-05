@@ -401,6 +401,18 @@ These are **module-level `async` functions** taking `(input, ctx)` — not metho
 
 > The `entrypoint`/`entrypoint_ref` fields on the input contracts: `entrypoint` is the authoritative bare name used for routing; `entrypoint_ref` carries the legacy `connector` wire value (accepted via a validation alias, serialized back as `connector`) and is **informational only** — it is not parsed for dispatch. See [Entry Points — Per-entry-point handler & core modules](entry-points.md#per-entry-point-handler--core-modules) for the kebab→snake module-name rule.
 
+## The Handler Never Imports Worker Code
+
+Imports run **worker → handler only**. The worker may import and call the handler; the handler never imports, reuses or calls into worker code (`application_sdk.execution*`, `temporalio.worker*`, `temporalio.activity`). The handler is moving to a shared pod that serves every app, with no worker beside it, and has to stay movable into its own codebase.
+
+`tests/unit/handler/test_import_boundary.py` enforces this. It imports `application_sdk.handler`, `.contracts`, `.base`, `.service` and `application_sdk._runtime.offload` in a fresh interpreter and lists any worker module that loaded. When it fails, move the shared piece down into a neutral module (`handler/`, `contracts`, `errors`, `common`, `_runtime`) and have the worker import it from there. Don't import worker code lazily from the handler: that hides the edge from the test without removing it.
+
+- The `/check` route's outcome-row helpers (`PreflightSurface`, `emit_preflight_check_outcome`, `emit_preflight_crash_outcome`, `filter_checks_to_tier`) live in `application_sdk/handler/_preflight_outcome.py`. The gate and SDR import them from there.
+- `application_sdk.handler` serves `create_app_handler_service` and `run_app_handler_service` lazily, so importing a contract never loads the HTTP server.
+- **Temporary allowance:** `temporalio.client` and everything it imports (which includes `temporalio.activity`) are allowed, because the `/workflows/v1/start` route starts workflows with it. That route is expected to go away in the shared-server migration. Delete the allowance in the test together with the route.
+
+The gate reaches the handler through one seam, `PreflightTransport` (`application_sdk/execution/_temporal/preflight_transport.py`). It has three methods, `preflight_check`, `warmup_start` and `warmup_state`, each taking a `PreflightInput` and returning a `PreflightOutput` or a `WarmupState`. The worker uses `InProcessPreflightTransport(handler)`. Those contracts already serialise as JSON on the `/check` and `/warmup` routes, so an HTTP transport can implement the same protocol later without changing the gate's budgets, cancellation or failure attribution.
+
 ## Testing Handlers
 
 Test handlers by injecting mock infrastructure:

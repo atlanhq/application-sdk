@@ -58,18 +58,20 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.app._generated_tree import (
+from application_sdk.common._generated_tree import (
     MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
 )
-from application_sdk.app.build_identity import (
+from application_sdk.common.build_identity import (
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
-from application_sdk.app.entrypoint import canonical_workflow_type
-from application_sdk.common.dispatch import resolve_dispatch_workflow_id
+from application_sdk.common.dispatch import (
+    canonical_workflow_type,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -85,6 +87,12 @@ from application_sdk.errors import (
     sanitize_cause_repr,
 )
 from application_sdk.errors.categories import FailureCategory
+from application_sdk.handler._preflight_outcome import (
+    PreflightSurface,
+    emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
+    filter_checks_to_tier,
+)
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
 from application_sdk.handler.contracts import (
@@ -581,7 +589,7 @@ _storage: ObjectStore | None = None
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
 # The form-discovery exclusion vocabulary lives in
-# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
+# `application_sdk.common._generated_tree`, which is the authority: this endpoint is
 # what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
 # route check compares what this serves against the app's committed contract.
 # A second copy of "which sibling JSON is a form" would let the server serve one
@@ -3084,12 +3092,6 @@ def create_app_handler_service(
         ]
         context = _create_context(credentials)
         with bind_handler_context(context):
-            from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-                PreflightSurface,
-                emit_preflight_check_outcome,
-                emit_preflight_crash_outcome,
-                filter_checks_to_tier,
-            )
 
             def _crash_row(e: BaseException) -> None:
                 emit_preflight_crash_outcome(
