@@ -280,7 +280,7 @@ local inputClassNameGroups: Map<String, List<String>> =
 
 local _inputClassNameCheck: Any =
   let (invalid = contractEntrypointNames
-    .filter((n) -> !inputClassName(n).matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))))
+    .filter((n) -> !inputClassName(n).matches(Regex("[A-Za-z][A-Za-z0-9]*AppInputContract"))))
   let (clashes = inputClassNameGroups.filter((_, names) -> names.length > 1))
   if (!invalid.isEmpty)
     throw("Entrypoint name(s) \(invalid.join(", ")) do not yield a valid Python class name "

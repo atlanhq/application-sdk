@@ -4784,7 +4784,7 @@ local bundleInputClassNameGroups: Map<String, List<String>> =
 
 local _bundleInputClassNameCheck: Any =
   let (invalid = bundleContractEntrypointNames
-    .filter((n) -> !bundleInputClassName(n).matches(Regex("[A-Za-z_][A-Za-z0-9_]*"))))
+    .filter((n) -> !bundleInputClassName(n).matches(Regex("[A-Za-z][A-Za-z0-9]*AppInputContract"))))
   let (clashes = bundleInputClassNameGroups.filter((_, names) -> names.length > 1))
   if (!invalid.isEmpty)
     throw("Entrypoint name(s) \(invalid.join(", ")) do not yield a valid Python class name "

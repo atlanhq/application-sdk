@@ -15,10 +15,12 @@ Each entrypoint's Input and Output annotation is resolved through imports
 rebindings (``AppInputContract = CrawlerInputContract``) and string annotations
 to the in-repo ``ClassDef`` that declares it. A binding is visible to the ledger
 under two names: the import-de-aliased name the annotation refers to, and the
-declaring class's own name. A collision is one such name reached from two or
-more distinct declarations. SDK classes and anything not declared in the repo
-are never bindings: they are one class everywhere, and the ledger does not
-record them.
+declaring class's own name. The ledger also resolves a contract's in-repo base
+classes by bare name, so each base an entrypoint contract inherits from (directly
+or transitively) is a binding too, under the name the subclass refers to it by
+and its own name. A collision is one such name reached from two or more distinct
+declarations. SDK classes and anything not declared in the repo are never
+bindings: they are one class everywhere, and the ledger does not record them.
 """
 
 from __future__ import annotations
@@ -46,10 +48,7 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
     is_task_decorator,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
-    ClassRecord,
-    collect_classes,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _get_non_self_params,
@@ -83,10 +82,20 @@ class _Binding:
     ref_name: str
     decl_file: str
     decl_name: str
+    # The annotated contract class this binding was reached from.
+    root: tuple[str, str]
+    # The contract class whose base this is; None for the annotated class itself.
+    via: str | None = None
 
     @property
     def decl(self) -> tuple[str, str]:
         return (self.decl_file, self.decl_name)
+
+    def describe(self) -> str:
+        target = f"{_module_name(self.decl_file)[0]}.{self.decl_name}"
+        if self.via is None:
+            return f"{self.role} contract '{target}'"
+        return f"{self.role} contract '{self.via}' through its base class '{target}'"
 
 
 def _module_name(rel: str) -> tuple[str, bool]:
@@ -220,17 +229,22 @@ class _Resolver:
         if decl is None or decl in seen or len(seen) > _MAX_DEPTH:
             return False
         seen.add(decl)
-        info = self._by_rel[decl[0]]
-        node = next(
+        node = self.class_node(decl)
+        return node is not None and any(
+            self.reaches_sdk_app(decl[0], base, seen) for base in node.bases
+        )
+
+    def class_node(self, decl: tuple[str, str]) -> ast.ClassDef | None:
+        info = self._by_rel.get(decl[0])
+        if info is None:
+            return None
+        return next(
             (
                 s
                 for s in info.tree.body
                 if isinstance(s, ast.ClassDef) and s.name == decl[1]
             ),
             None,
-        )
-        return node is not None and any(
-            self.reaches_sdk_app(decl[0], base, seen) for base in node.bases
         )
 
     def resolve_expr(
@@ -283,8 +297,6 @@ def _ref_name(expr: ast.expr, aliases: dict[str, str]) -> str | None:
 def _entrypoint_methods(
     info: _ModuleInfo,
     resolver: _Resolver,
-    by_name: dict[str, ClassRecord],
-    app_cache: dict[str, bool | None],
     aliases: dict[str, str],
 ) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
     tree = info.tree
@@ -313,13 +325,45 @@ def _entrypoint_methods(
                 if bname is None:
                     continue
                 bname = aliases.get(bname, bname)
-                if (
-                    bname == "App"
-                    or resolve_ancestor(bname, "App", by_name, app_cache, set()) is True
-                    or resolver.reaches_sdk_app(info.rel, base)
-                ):
+                # Resolve through this module's own imports, not a bare-name
+                # registry: an unrelated same-named class elsewhere must not
+                # make this one an App.
+                if bname == "App" or resolver.reaches_sdk_app(info.rel, base):
                     found.append((func, "run"))
                     break
+    return found
+
+
+def _base_bindings(
+    direct: _Binding,
+    resolver: _Resolver,
+    aliases_by_rel: dict[str, dict[str, str]],
+) -> list[_Binding]:
+    """Bind each in-repo ancestor of *direct*'s contract under its referenced name."""
+    found: list[_Binding] = []
+    seen = {direct.decl}
+    stack = [direct.decl]
+    while stack and len(seen) <= _MAX_DEPTH:
+        decl = stack.pop()
+        node = resolver.class_node(decl)
+        if node is None:
+            continue
+        for base in node.bases:
+            ref = _ref_name(base, aliases_by_rel.get(decl[0], {}))
+            base_decl = resolver.resolve_expr(decl[0], base)
+            if ref is None or base_decl is None or base_decl in seen:
+                continue
+            seen.add(base_decl)
+            stack.append(base_decl)
+            found.append(
+                dataclasses.replace(
+                    direct,
+                    ref_name=ref,
+                    decl_file=base_decl[0],
+                    decl_name=base_decl[1],
+                    via=decl[1],
+                )
+            )
     return found
 
 
@@ -328,7 +372,6 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     modules: dict[str, _ModuleInfo] = {}
     directives: dict[str, dict[int, _IgnoreDirective]] = {}
     aliases_by_rel: dict[str, dict[str, str]] = {}
-    by_name: dict[str, ClassRecord] = {}
 
     for path in paths:
         try:
@@ -345,19 +388,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         _index_module(info)
         modules[module] = info
         directives[rel] = _parse_directives(text)
-        aliases = collect_import_aliases(tree)
-        aliases_by_rel[rel] = aliases
-        for rec in collect_classes(tree, rel, aliases):
-            by_name.setdefault(rec.name, rec)
+        aliases_by_rel[rel] = collect_import_aliases(tree)
 
     resolver = _Resolver(modules)
-    app_cache: dict[str, bool | None] = {}
     bindings: list[_Binding] = []
     for info in modules.values():
         aliases = aliases_by_rel[info.rel]
-        for func, entrypoint in _entrypoint_methods(
-            info, resolver, by_name, app_cache, aliases
-        ):
+        for func, entrypoint in _entrypoint_methods(info, resolver, aliases):
             annotations: list[tuple[str, ast.expr | None]] = []
             non_self = _get_non_self_params(func)
             annotations.append(("Input", non_self[0].annotation if non_self else None))
@@ -370,17 +407,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 decl = resolver.resolve_expr(info.rel, expr)
                 if ref is None or decl is None:
                     continue
-                bindings.append(
-                    _Binding(
-                        file=info.rel,
-                        node=func,
-                        entrypoint=entrypoint,
-                        role=role,
-                        ref_name=ref,
-                        decl_file=decl[0],
-                        decl_name=decl[1],
-                    )
+                direct = _Binding(
+                    file=info.rel,
+                    node=func,
+                    entrypoint=entrypoint,
+                    role=role,
+                    ref_name=ref,
+                    decl_file=decl[0],
+                    decl_name=decl[1],
+                    root=decl,
                 )
+                bindings.append(direct)
+                bindings.extend(_base_bindings(direct, resolver, aliases_by_rel))
 
     groups: dict[str, list[_Binding]] = {}
     for b in bindings:
@@ -397,14 +435,18 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             key = (b.file, b.node.lineno, name)
             if key in seen:
                 continue
-            seen.add(key)
+            # Only bindings reached from another contract count: a contract
+            # whose own base shares its name is one contract, not a collision.
             others = sorted(
                 {
-                    f"'{o.entrypoint}' ({o.role}: {_module_name(o.decl_file)[0]}.{o.decl_name})"
+                    f"'{o.entrypoint}' ({o.describe()})"
                     for o in group
-                    if o.decl != b.decl
+                    if o.decl != b.decl and o.root != b.root
                 }
             )
+            if not others:
+                continue
+            seen.add(key)
             findings.append(_make_finding(b, name, others, directives.get(b.file, {})))
     return findings
 
@@ -415,15 +457,14 @@ def _make_finding(
     others: list[str],
     directives: dict[int, _IgnoreDirective],
 ) -> Finding:
-    module = _module_name(b.decl_file)[0]
     return dataclasses.replace(
         make_finding(
             filename=b.file,
             rule_id=_RULE_ID,
             node=b.node,
             message=(
-                f"Entrypoint '{b.entrypoint}' binds {b.role} contract "
-                f"'{module}.{b.decl_name}' under the name '{name}'. A different class "
+                f"Entrypoint '{b.entrypoint}' binds {b.describe()} "
+                f"under the name '{name}'. A different class "
                 f"is bound under the same name by: {', '.join(others)}. "
                 "The contract ledger keys contracts by bare class name, so these "
                 "classes share one ledger identity and B005/B006 check each against "

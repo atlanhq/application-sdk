@@ -94,7 +94,10 @@ def test_two_entrypoints_same_name_different_modules_fires(tmp_path: Path) -> No
     assert not any(f.suppressed for f in findings)
 
 
-def test_unique_subclass_per_entrypoint_is_silent(tmp_path: Path) -> None:
+def test_subclass_of_a_shared_name_fires(tmp_path: Path) -> None:
+    # The ledger resolves MinerInputContract's base by the bare name
+    # AppInputContract, which also names the crawler's class, so the miner's
+    # ledger entry can carry the crawler's fields.
     files = _bundle_inputs()
     files["app/miner.py"] = (
         "from app.generated.miner._input import AppInputContract as _GeneratedMinerInput\n"
@@ -117,6 +120,73 @@ def test_unique_subclass_per_entrypoint_is_silent(tmp_path: Path) -> None:
         "    async def miner(self, input: MinerInputContract) -> Output:\n"
         "        return Output()\n"
     )
+    findings = _k027(tmp_path, files)
+    assert sorted(f.line for f in findings) == [9, 13]
+    assert {f.discriminator for f in findings} == {"AppInputContract"}
+
+
+def _regenerated_bundle_inputs() -> dict[str, str]:
+    files = {"app/__init__.py": "", "app/generated/__init__.py": ""}
+    for entrypoint, field in (("crawler", "a"), ("miner", "b")):
+        cls = f"{entrypoint.capitalize()}AppInputContract"
+        files[f"app/generated/{entrypoint}/__init__.py"] = ""
+        files[f"app/generated/{entrypoint}/_input.py"] = (
+            "from application_sdk.templates.contracts import ExtractionInput\n"
+            "\n"
+            "\n"
+            f"class {cls}(ExtractionInput):\n"
+            f"    {field}: int = 0\n"
+            "\n"
+            "\n"
+            f"AppInputContract = {cls}\n"
+        )
+    return files
+
+
+_WRAPPER_APP = (
+    _APP_HEADER + "from app.crawler import CrawlerInput\n"
+    "from app.miner import MinerInput\n"
+    "\n"
+    "\n"
+    "class MyApp(App):\n"
+    "    @entrypoint\n"
+    "    async def crawler(self, input: CrawlerInput) -> Output:\n"
+    "        return Output()\n"
+    "\n"
+    "    @entrypoint\n"
+    "    async def miner(self, input: MinerInput) -> Output:\n"
+    "        return Output()\n"
+)
+
+
+def _wrapper(entrypoint: str, base: str) -> str:
+    return (
+        f"from app.generated.{entrypoint}._input import {base}\n"
+        "\n"
+        "\n"
+        f"class {entrypoint.capitalize()}Input({base}):\n"
+        "    extra: int = 0\n"
+    )
+
+
+def test_unique_wrappers_of_the_shared_alias_fire(tmp_path: Path) -> None:
+    files = _regenerated_bundle_inputs()
+    files["app/crawler.py"] = _wrapper("crawler", "AppInputContract")
+    files["app/miner.py"] = _wrapper("miner", "AppInputContract")
+    files["app/app.py"] = _WRAPPER_APP
+    findings = _k027(tmp_path, files)
+    assert sorted((f.file, f.line) for f in findings) == [
+        ("app/app.py", 9),
+        ("app/app.py", 13),
+    ]
+    assert {f.discriminator for f in findings} == {"AppInputContract"}
+
+
+def test_unique_wrappers_of_unique_bases_are_silent(tmp_path: Path) -> None:
+    files = _regenerated_bundle_inputs()
+    files["app/crawler.py"] = _wrapper("crawler", "CrawlerAppInputContract")
+    files["app/miner.py"] = _wrapper("miner", "MinerAppInputContract")
+    files["app/app.py"] = _WRAPPER_APP
     assert _k027(tmp_path, files) == []
 
 
@@ -446,5 +516,68 @@ def test_run_on_local_class_named_like_a_template_is_silent(tmp_path: Path) -> N
         "    pass\n"
         "\n"
         "\n" + _RUN_ON_TEMPLATE_BODY.format(base="SqlMetadataExtractor")
+    )
+    assert _k027(tmp_path, files) == []
+
+
+def test_run_on_a_same_named_non_app_base_is_silent(tmp_path: Path) -> None:
+    # app/base.py's Base reaches App, but Utility subclasses the unrelated Base
+    # declared in util.py, so Utility.run is not an entrypoint.
+    files = _bundle_inputs()
+    files["app/base.py"] = (
+        "from application_sdk.app import App\n"
+        "\n"
+        "\n"
+        "class Base(App):\n"
+        "    pass\n"
+    )
+    files["app/util.py"] = (
+        "from application_sdk.contracts.base import Output\n"
+        "from app.generated.miner import _input as miner_input\n"
+        "\n"
+        "\n"
+        "class Base:\n"
+        "    pass\n"
+        "\n"
+        "\n"
+        "class Utility(Base):\n"
+        "    async def run(self, input: miner_input.AppInputContract) -> Output:\n"
+        "        return Output()\n"
+    )
+    files["app/app.py"] = (
+        _APP_HEADER + "from app.generated.crawler._input import AppInputContract\n"
+        "\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def crawler(self, input: AppInputContract) -> Output:\n"
+        "        return Output()\n"
+    )
+    assert _k027(tmp_path, files) == []
+
+
+def test_contract_named_like_its_own_base_is_silent(tmp_path: Path) -> None:
+    # One annotation reaching two declarations under one name (the contract and
+    # the generated base it shadows) is not two entrypoints colliding.
+    files = _bundle_inputs()
+    files["app/contracts.py"] = (
+        "from app.generated.crawler import _input\n"
+        "\n"
+        "\n"
+        "class AppInputContract(_input.AppInputContract):\n"
+        "    extra: int = 0\n"
+    )
+    files["app/app.py"] = (
+        _APP_HEADER + "from app.contracts import AppInputContract\n"
+        "\n"
+        "\n"
+        "class MyApp(App):\n"
+        "    @entrypoint\n"
+        "    async def crawler(self, input: AppInputContract) -> Output:\n"
+        "        return Output()\n"
+        "\n"
+        "    @entrypoint\n"
+        "    async def recrawl(self, input: AppInputContract) -> Output:\n"
+        "        return Output()\n"
     )
     assert _k027(tmp_path, files) == []

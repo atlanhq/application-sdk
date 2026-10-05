@@ -8,6 +8,7 @@ amends "pkl:test"
 import "../examples/bundle/app.pkl" as bundleApp
 import "../examples/minimal/app.pkl" as minimalApp
 import "../src/App.pkl" as App
+import "../src/NativeAppBundle.pkl" as NativeAppBundle
 import "fixtures/app_bundle_entrypoint_names.pkl" as namesBundle
 import "fixtures/native_app_bundle.pkl" as nativeBundle
 import "fixtures/native_app_pipeline.pkl" as nativePipeline
@@ -21,6 +22,13 @@ local function clashingBundle(a: String, b: String) = (namesBundle) {
   entrypoints = new Listing {
     new App.Entrypoint { name = a; contract = Miner }
     new App.Entrypoint { name = b; contract = Miner }
+  }
+}
+
+local function nativeBundleNamed(a: String, b: String) = (nativeBundle) {
+  entrypoints = new Listing {
+    new NativeAppBundle.Entrypoint { name = a; contract = nativePipeline }
+    new NativeAppBundle.Entrypoint { name = b; contract = nativePipeline }
   }
 }
 
@@ -57,6 +65,17 @@ facts {
 
   ["Entrypoint names that do not start with a letter are rejected"] {
     module.catch(() -> clashingBundle("2nd", "miner").output.files)
+      .contains("do not yield a valid Python class name")
+    module.catch(() -> nativeBundleNamed("2nd", "miner").output.files)
+      .contains("do not yield a valid Python class name")
+  }
+
+  // Without this, `---` PascalCases to an empty prefix: the class stays
+  // `AppInputContract` and the entrypoint silently gets no unique name.
+  ["Entrypoint names with no letters or digits are rejected"] {
+    module.catch(() -> clashingBundle("---", "miner").output.files)
+      .contains("do not yield a valid Python class name")
+    module.catch(() -> nativeBundleNamed("---", "miner").output.files)
       .contains("do not yield a valid Python class name")
   }
 
