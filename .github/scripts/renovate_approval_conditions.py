@@ -587,9 +587,11 @@ def resolve_prs(
 ) -> tuple[list[str], str]:
     """Return ``(pr_numbers, eval_sha)`` for the triggering event.
 
-    ``workflow_dispatch`` evaluates exactly the PR it was given, at that PR's
-    current HEAD. ``workflow_run`` evaluates every OPEN PR whose HEAD is the
-    completed run's SHA — a single commit can be the HEAD of several.
+    ``workflow_dispatch`` evaluates exactly the PR it was given: at
+    ``run_sha`` when the dispatch carries one (a fan-in follow-up, which must
+    judge the SHA its anchor judged, and shares that run's lock), otherwise at
+    the PR's current HEAD. ``workflow_run`` evaluates every OPEN PR whose HEAD
+    is the completed run's SHA — a single commit can be the HEAD of several.
 
     The two lookups fail differently, matching the original bash: the dispatch
     lookup raises (a manual re-evaluation of a PR that cannot be read is a
@@ -606,7 +608,7 @@ def resolve_prs(
             raise GhError(
                 f"resolving HEAD of dispatched PR #{dispatch_pr}: unexpected payload shape"
             )
-        eval_sha = str((meta.get("head") or {}).get("sha") or "")
+        eval_sha = run_sha or str((meta.get("head") or {}).get("sha") or "")
         return ([dispatch_pr] if dispatch_pr else []), eval_sha
 
     try:
@@ -727,14 +729,18 @@ def wait_for_pending_checks(
     before. A budget that runs out returns STILL_PENDING, and ``main`` then
     asks for one follow-up evaluation (see ``request_follow_up``).
 
-    Returns HEAD_MOVED when the PR's HEAD moved off ``eval_sha`` mid-wait:
-    the new HEAD has its own anchor run coming, and these checks no longer
-    describe the PR. HEAD is re-read after each sleep, so a push does not
-    cost the rest of the budget.
+    Returns HEAD_MOVED when the PR's HEAD moved off ``eval_sha``: the new
+    HEAD has its own anchor run coming, and these checks no longer describe
+    the PR. ``gh pr checks`` reads the checks of the PR's CURRENT head, so
+    HEAD is re-read after checks settle (a push since the last read would
+    otherwise pass off the new head's checks as ``eval_sha``'s) and after
+    each sleep (so a push does not cost the rest of the budget).
     """
     while True:
         result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
         if result.returncode != CHECKS_PENDING_EXIT:
+            if not _head_still_at(repo, pr, eval_sha, runner):
+                return WaitOutcome.HEAD_MOVED
             return WaitOutcome.SETTLED
         if budget.polls_left <= 0:
             print(f"PR #{pr}: wait budget spent with required checks still pending.")
@@ -745,12 +751,18 @@ def wait_for_pending_checks(
             f"{CHECKS_POLL_SECONDS}s ({budget.polls_left} poll(s) left this run)."
         )
         sleep(CHECKS_POLL_SECONDS)
-        meta = fetch_pr_meta(repo, pr, runner)
-        head_sha = str(((meta.get("head") or {}).get("sha")) or "")
-        ok, message = check_head_unchanged(pr, head_sha, eval_sha)
-        if not ok:
-            print(message)
+        if not _head_still_at(repo, pr, eval_sha, runner):
             return WaitOutcome.HEAD_MOVED
+
+
+def _head_still_at(repo: str, pr: str, eval_sha: str, runner: Runner) -> bool:
+    """Re-read the PR and confirm its HEAD is still ``eval_sha``."""
+    meta = fetch_pr_meta(repo, pr, runner)
+    head_sha = str(((meta.get("head") or {}).get("sha")) or "")
+    ok, message = check_head_unchanged(pr, head_sha, eval_sha)
+    if not ok:
+        print(message)
+    return ok
 
 
 def caller_workflow_file(workflow_ref: str) -> str:
@@ -771,6 +783,7 @@ def request_follow_up(
     event_name: str,
     workflow_ref: str,
     prs: list[str],
+    eval_sha: str,
     runner: Runner,
     *,
     enabled: bool,
@@ -780,8 +793,11 @@ def request_follow_up(
     The fan-in only fires on the anchor's completion, so a required check that
     finishes after the anchor's wait would otherwise never re-evaluate the PR:
     its own first-attempt completion is filtered out by the caller's ``if:``.
-    The follow-up is a workflow_dispatch of the caller with ``pr_number``, which
-    waits again with a fresh budget.
+    The follow-up is a workflow_dispatch of the caller with ``pr_number`` and
+    ``head_sha``, which waits again with a fresh budget. Carrying the SHA keeps
+    it in the reusable's per-SHA concurrency group, so it serialises with any
+    re-run evaluating the same commit and the two cannot both approve; and it
+    evaluates that SHA, so a push since then makes it stand down.
 
     Only an anchor (workflow_run) run asks for one. A follow-up that is itself
     still pending stops there, so a check stuck pending forever costs at most
@@ -808,7 +824,17 @@ def request_follow_up(
         return
     for pr in prs:
         result = _gh(
-            ["workflow", "run", workflow, "--repo", repo, "-f", f"pr_number={pr}"],
+            [
+                "workflow",
+                "run",
+                workflow,
+                "--repo",
+                repo,
+                "-f",
+                f"pr_number={pr}",
+                "-f",
+                f"head_sha={eval_sha}",
+            ],
             runner,
         )
         if result.returncode != 0:
@@ -972,6 +998,12 @@ def process_pr(
         )
         return False
 
+    # h. HEAD is still the evaluated SHA at the moment of approval. Everything
+    # above may have taken minutes (the fan-in wait), and an approval posted
+    # after a push would vouch for a commit no condition looked at.
+    if not _head_still_at(repo, pr, eval_sha, runner):
+        return False
+
     approve(repo, pr, runner)
     print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
@@ -1015,6 +1047,7 @@ def main(
                 event_name,
                 workflow_ref,
                 budget.still_pending,
+                eval_sha,
                 runner,
                 enabled=follow_up,
             )

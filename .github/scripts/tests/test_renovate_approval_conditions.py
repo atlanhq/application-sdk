@@ -916,7 +916,10 @@ class TestFanInWait:
         )
         assert fake.approvals == []
         assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
-        assert [d[-1] for d in fake.dispatches] == ["pr_number=7", "pr_number=8"]
+        assert [d[-3:] for d in fake.dispatches] == [
+            ["pr_number=7", "-f", f"head_sha={SHA}"],
+            ["pr_number=8", "-f", f"head_sha={SHA}"],
+        ]
 
     def test_still_pending_at_budget_end_dispatches_one_follow_up(
         self, monkeypatch, capsys
@@ -941,9 +944,57 @@ class TestFanInWait:
                 REPO,
                 "-f",
                 "pr_number=7",
+                "-f",
+                f"head_sha={SHA}",
             ]
         ]
         assert "dispatched one follow-up" in log
+
+    def test_a_follow_up_judges_the_sha_it_was_dispatched_for(
+        self, monkeypatch, capsys
+    ):
+        # The follow-up carries head_sha so it shares the anchor's per-SHA lock.
+        # It must also judge that SHA: after a push, it stands down.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EVENT_NAME": "workflow_dispatch", "RUN_SHA": SHA, "DISPATCH_PR": "7"},
+            meta=pr_payload(head="deadbeef"),
+        )
+        assert fake.approvals == []
+        assert "deadbeef" in log
+
+    def test_checks_settling_after_a_push_are_not_the_evaluated_shas(
+        self, monkeypatch, capsys
+    ):
+        # `gh pr checks` reads the PR's CURRENT head. Pending at SHA, then a
+        # push lands and the new head is green: that green is not SHA's.
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            # initial read, re-read after the sleep (still SHA), re-read once
+            # checks settle (moved).
+            meta=[pr_payload(), pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=[8, 0],
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS]
+        assert "deadbeef" in log
+
+    def test_head_moving_just_before_approval_withholds(self, monkeypatch, capsys):
+        # Every condition passed at SHA, then a push landed before the review
+        # was posted: approving now would vouch for an unexamined commit.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            # initial read, re-read once checks settle, re-read before approval.
+            meta=[pr_payload(), pr_payload(), pr_payload(head="deadbeef")],
+        )
+        assert fake.approvals == []
+        assert "deadbeef" in log
 
     def test_a_follow_up_never_dispatches_another(self, monkeypatch, capsys):
         _code, fake, log = run_main(

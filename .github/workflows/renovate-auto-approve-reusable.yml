@@ -195,7 +195,9 @@ jobs:
     timeout-minutes: 25
     # Serialize concurrent runs for the same SHA so the idempotency check
     # is reliable — two workflow completions for the same HEAD can't both
-    # pass the "no approval yet" guard in parallel. cancel-in-progress stays
+    # pass the "no approval yet" guard in parallel. A fan-in follow-up
+    # dispatch carries head_sha for exactly this reason: keyed on pr_number it
+    # would sit in a different group from a re-run of the same commit. cancel-in-progress stays
     # false: a cancelled run has already been billed, so it would save nothing,
     # and the run it cancels may be the one mid-way through approving.
     concurrency:

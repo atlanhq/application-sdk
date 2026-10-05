@@ -21,6 +21,12 @@ on:
         description: PR number to evaluate (for manual testing / re-approval)
         required: true
         type: string
+      head_sha:
+        description: >-
+          Commit to evaluate. Set by the fan-in follow-up so it shares the
+          anchor run's per-SHA lock; leave empty to evaluate the PR's HEAD.
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -47,7 +53,7 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/renovate-auto-approve-reusable.yml@main
     with:
       event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.workflow_run.head_sha }}
+      head_sha: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
       checks_wait_minutes: 15
       # A late first-attempt finish (e.g. Conformance after the Tests anchor's
