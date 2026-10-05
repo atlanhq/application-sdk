@@ -702,7 +702,7 @@ T008-adjacent confusion).
 moved: T003 retires it, and moving it only carries the T003 finding to the new path.
 
 * Otherwise move the file into the tier the reference apps use (`tests/unit`,
-`tests/integration`, `tests/e2e`) and update anything that imports it.
+`tests/integration`, `tests/e2e`, `tests/ui`) and update anything that imports it.
 
 ---
 
@@ -1210,12 +1210,12 @@ names a `tests/e2e` path (a bespoke pytest step, a `test-paths:` input, an sdr-e
 legacy `marketplace-releases/.github/workflows/e2e-app-test.yaml` path). The rule fires
 when none of those hold:
 
-* no caller exists and no workflow reaches the tier at all, or * the caller sets
-`enable-e2e: false` (skips the e2e job entirely), or
+* no caller exists and no workflow reaches the tier at all, or
 
-* the caller leaves `app-image-name` empty, which disables the GHCR
+* the caller sets `enable-e2e: false` (skips the e2e job entirely), or
 
-  image build — the e2e job has no connector image to start the worker   container from.
+* the caller leaves `app-image-name` empty, which disables the GHCR image build — the
+e2e job has no connector image to start the worker container from.
 
 **Fix:** add or repair the caller in `.github/workflows/tests.yaml`:
 

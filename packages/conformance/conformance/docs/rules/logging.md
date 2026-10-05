@@ -640,13 +640,9 @@ The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the follo
 rules (or their category prefixes, or `ALL`):
 
 * `G001` — `logging.warn()` deprecated (overlaps L020) * `G003` — string concatenation
-in log message (overlaps L011)
-
-* `G004` — f-string in log message (overlaps L001)
-
-* `T201` — `print()` statement (overlaps L005)
-
-* `LOG009` — `logging.warn()` deprecated (overlaps L020)
+in log message (overlaps L011) * `G004` — f-string in log message (overlaps L001) *
+`T201` — `print()` statement (overlaps L005) * `LOG009` — `logging.warn()` deprecated
+(overlaps L020)
 
 A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed rules),
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /

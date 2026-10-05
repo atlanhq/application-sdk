@@ -312,8 +312,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "name. To change a type deliberately, either revert it, or retire the\n"
             "field (``sunset``) and add a new field under a new name with the new\n"
             "type, moving producers to it. Replacing an untyped object\n"
-            "(``dict[str, Any]``) with a model is such a retype — the model requires\n"
-            "keys that payloads already in flight may lack — and not the in-place\n"
+            "(``dict[str, Any]``) with a model is such a retype — a model can require\n"
+            "keys or value types that payloads already in flight do not carry — and\n"
+            "not the in-place\n"
             "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",

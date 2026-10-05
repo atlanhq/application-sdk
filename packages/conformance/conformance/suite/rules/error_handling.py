@@ -379,7 +379,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "A cause-preserving re-raise on every path (including a typed error raised\n"
             "from the ImportError) surfaces the failure and does not need a duplicate log.\n"
             "\n**Fixing it well**\n\n"
-            "* Fix it at the existing ``except ImportError`` site: log it (``logger.warning`` or ``logger.error`` with the module name and ``exc_info=True``) before falling back or re-raising, as the reference apps do.\n\n"
+            "* Fix it at the existing ``except ImportError`` site, in the shape this rule describes: "
+            "an optional module the code falls back from is logged at ``DEBUG`` with the module "
+            "name; a required one is re-raised with its cause on every path "
+            "(``raise ... from exc``), which needs no log of its own.\n\n"
             "* Keep the import where it is: moving it to module level or into a function changes when the app loads its drivers, and the repo's ruff rules then reject the new shape.\n\n"
             "* Never add ``noqa`` to get past ruff; if ruff objects, the shape is wrong — log at the original site.\n\n"
         ),

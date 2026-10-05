@@ -352,9 +352,10 @@ need a duplicate log.
 
 **Fixing it well**
 
-* Fix it at the existing `except ImportError` site: log it (`logger.warning` or
-`logger.error` with the module name and `exc_info=True`) before falling back or
-re-raising, as the reference apps do.
+* Fix it at the existing `except ImportError` site, in the shape this rule describes: an
+optional module the code falls back from is logged at `DEBUG` with the module name; a
+required one is re-raised with its cause on every path (`raise ... from exc`), which
+needs no log of its own.
 
 * Keep the import where it is: moving it to module level or into a function changes when
 the app loads its drivers, and the repo's ruff rules then reject the new shape.
