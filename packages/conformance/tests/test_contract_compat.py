@@ -962,6 +962,79 @@ def test_b005_pre_rename_rows_left_to_the_main_pass_when_the_class_exists(
     assert [f.file for f in b005] == ["legacy/_input.py"]
 
 
+@pytest.mark.parametrize(
+    ("ledger_type", "live_type", "fires"),
+    [("str | None", "str", True), ("str", "str | None", False)],
+    ids=["narrowed", "widened"],
+)
+def test_b005_pre_rename_rows_are_type_checked(
+    tmp_path: Path, ledger_type: str, live_type: str, fires: bool
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "miner_only", ledger_type, "active")
+    )
+    files = _renamed_bundle("crawler_only", "miner_only")
+    files["miner/_input.py"] = files["miner/_input.py"].replace(
+        'miner_only: str = ""', f'miner_only: {live_type} = ""'
+    )
+    legacy = [
+        f
+        for f in _scan(tmp_path, files, ledger)
+        if f.rule_id == "B005" and "'AppInputContract.miner_only'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [("miner_only", []), ("gone", ["legacy/_input.py"])],
+    ids=["field-on-a-renamed-class", "field-nowhere"],
+)
+def test_b005_pre_rename_rows_with_a_class_still_named_app_input_contract(
+    tmp_path: Path, field: str, expected: list[str]
+) -> None:
+    ledger = _make_ledger(ContractField("AppInputContract", field, "str", "active"))
+    files = {
+        **_renamed_bundle("crawler_only", "miner_only"),
+        "legacy/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A,
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [f.file for f in b005] == expected
+
+
+_GENERATED_RENAMED_INPUT = """\
+class CrawlerAppInputContract:
+    kept: str = ""
+
+AppInputContract = CrawlerAppInputContract
+"""
+
+_APP_BINDING_RENAMED_INPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Output
+from app.generated.crawler._input import CrawlerAppInputContract
+
+class MyApp(App):
+    @entrypoint
+    {directive}async def crawl(self, input: CrawlerAppInputContract) -> Output:
+        return Output()
+"""
+
+
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_b005_pre_rename_row_finding_lands_outside_generated_code(
+    tmp_path: Path, suppressed: bool
+) -> None:
+    ledger = _make_ledger(ContractField("AppInputContract", "gone", "str", "active"))
+    directive = "# conformance: ignore[B005] no consumers\n    " if suppressed else ""
+    files = {
+        "app/generated/crawler/_input.py": _GENERATED_RENAMED_INPUT,
+        "app/app.py": _APP_BINDING_RENAMED_INPUT.format(directive=directive),
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [(f.file, f.suppressed) for f in b005] == [("app/app.py", suppressed)]
+
+
 # ── B005: the four changes that are not breaks ────────────────────────────────
 
 
