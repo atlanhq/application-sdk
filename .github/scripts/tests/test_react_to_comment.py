@@ -453,7 +453,9 @@ EXPECTED_CALLERS = {
     ("sdk-review.yml", "react-on-skip", "React to skipped trigger"),
     ("sdk-review.yml", "sdk-review-dispatch", "React to comment"),
     ("sdk-review.yml", "sdk-review-dispatch", "React to skipped re-trigger"),
+    ("sdk-review.yml", "redirect-to-lens", "React to disabled trigger"),
     ("sdk-resolve.yml", "sdk-resolve-dispatch", "Acknowledge with a reaction"),
+    ("sdk-resolve.yml", "redirect-to-lens", "React to disabled trigger"),
     ("auto-fix-vulnerabilities.yaml", "auto-fix", "React to comment"),
     ("capability-manifest-regen.yaml", "regen", "React to comment"),
 }

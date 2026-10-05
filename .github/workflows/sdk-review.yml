@@ -1,6 +1,8 @@
 # SDK Review — mothership Rover-based reviewer.
 #
-# Triggered by the @sdk-review mention on a PR.
+# Triggered by an @sdk-review comment from the automated lanes (atlan-ci,
+# mothership-ai[bot]) or by workflow_dispatch. A human @sdk-review comment no
+# longer starts a review — the `redirect-to-lens` job points them to /lens.
 #
 # All SDK-specific review behavior (orchestration, agents, rules, severity
 # rubric, guardrails, modes) lives in application-sdk/.mothership/pr-review/
@@ -10,7 +12,7 @@
 # clone, GitHub token injection.
 # This repo provides: every detail of how to review SDK PRs.
 #
-# Trigger surface:
+# Trigger surface (automated lanes and workflow_dispatch only):
 #   @sdk-review                       → Standard review. There is a single
 #                                            mode. The orchestration scopes
 #                                            the review to the files changed
@@ -108,10 +110,7 @@ jobs:
         github.event.issue.pull_request
         && startsWith(github.event.comment.body, '@sdk-review')
         && (
-          github.event.comment.author_association == 'OWNER'
-          || github.event.comment.author_association == 'MEMBER'
-          || github.event.comment.author_association == 'COLLABORATOR'
-          || github.event.comment.user.login == 'atlan-ci'
+          github.event.comment.user.login == 'atlan-ci'
           || github.event.comment.user.login == 'mothership-ai[bot]'
         )
       )
@@ -166,6 +165,53 @@ jobs:
                 ``,
                 `Please retry by commenting \`@sdk-review\` again. If it keeps failing, reach out to the platform team.`,
               ].join('\n'),
+            });
+
+  # Human `@sdk-review` comments no longer start a review — reviews are asked
+  # for with `/lens` (lens.yml). The bot lanes above (atlan-ci, mothership-ai)
+  # and workflow_dispatch are unchanged. A human tag is answered here with a 😕
+  # (the reaction sdk_resolve_push_guard.py reads as "seen and declined", so a
+  # refused tag never looks like a review still in flight) and a pointer to
+  # `/lens`. The comment must not start with `@sdk-review` or `/lens`, or it
+  # would read as a trigger. Posted with GITHUB_TOKEN, which starts no workflow.
+  redirect-to-lens:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '@sdk-review')
+      && github.event.comment.user.login != 'atlan-ci'
+      && github.event.comment.user.login != 'mothership-ai[bot]'
+      && (
+        github.event.comment.author_association == 'OWNER'
+        || github.event.comment.author_association == 'MEMBER'
+        || github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout reaction helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+
+      - name: React to disabled trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: confused
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Point to /lens
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `Hi @${context.payload.comment.user.login} — \`@sdk-review\` can no longer be triggered from a PR comment. Pls use \`/lens\` instead.`,
             });
 
   # When the gate skips a bot-trigger, react to the original comment so the

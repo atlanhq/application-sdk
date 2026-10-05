@@ -1,7 +1,8 @@
 # SDK Resolve — mothership Rover-based PR resolver (the WRITE counterpart to @sdk-review).
 #
-# Triggered by `@sdk-resolve` on a PR (OWNER/MEMBER/COLLABORATOR only), or
-# manually via workflow_dispatch with a PR number. Dispatches a Cloudflare
+# Triggered by `@sdk-resolve` from atlan-ci, or manually via workflow_dispatch
+# with a PR number. A human `@sdk-resolve` comment no longer starts a run — the
+# `redirect-to-lens` job points them to /lens. Dispatches a Cloudflare
 # sandbox that drives the PR to MERGE-READY: fixes CI + every @sdk-review
 # finding (nits included, unless proven false), looping review->fix->push until
 # zero findings + green CI + READY_TO_MERGE — then STOPS. It never merges; a
@@ -50,18 +51,57 @@ permissions:
   issues: write
 
 jobs:
+  # Human `@sdk-resolve` comments no longer start a run — PR reviews are asked
+  # for with `/lens` (lens.yml). The atlan-ci lane and workflow_dispatch below
+  # are unchanged. Answered with a 😕 and a pointer to `/lens`, posted with
+  # GITHUB_TOKEN (which starts no workflow); the comment must not start with
+  # `@sdk-review`, `@sdk-resolve` or `/lens`, or it would read as a trigger.
+  redirect-to-lens:
+    if: >-
+      github.event_name == 'issue_comment'
+      && github.event.issue.pull_request
+      && startsWith(github.event.comment.body, '@sdk-resolve')
+      && github.event.comment.user.login != 'atlan-ci'
+      && (
+        github.event.comment.author_association == 'OWNER'
+        || github.event.comment.author_association == 'MEMBER'
+        || github.event.comment.author_association == 'COLLABORATOR'
+      )
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Checkout reaction helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts/react_to_comment.py
+          sparse-checkout-cone-mode: false
+
+      - name: React to disabled trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: confused
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Point to /lens
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              body: `Hi @${context.payload.comment.user.login} — \`@sdk-resolve\` can no longer be triggered from a PR comment. Pls use \`/lens\` instead.`,
+            });
+
   sdk-resolve-dispatch:
     if: >-
       github.event_name == 'workflow_dispatch'
       || (
         github.event.issue.pull_request
         && startsWith(github.event.comment.body, '@sdk-resolve')
-        && (
-          github.event.comment.author_association == 'OWNER'
-          || github.event.comment.author_association == 'MEMBER'
-          || github.event.comment.author_association == 'COLLABORATOR'
-          || github.event.comment.user.login == 'atlan-ci'
-        )
+        && github.event.comment.user.login == 'atlan-ci'
       )
     runs-on: ubuntu-latest
     # The sandbox loops for up to 2h (max_timeout_seconds: 7200); the dispatch
