@@ -4692,6 +4692,168 @@ def test_run_survives_a_checkout_with_no_release(repo: Path):
     )
 
 
+# ---- compatibility is judged against the base branch (FND-3344) ------------------------
+
+
+def _verify_user(ws: Workspace, f: Finding, verdicts: list[dict] | None = None):
+    script = Script(response([tool_call("verdicts", {"items": verdicts or []})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+    return script.requests[0]["messages"][1]["content"], got
+
+
+def test_verify_sees_the_enclosing_symbol_as_it_is_on_the_base_branch(repo: Path):
+    """The checkout is the base branch: `fetch` there has no decode. Verify sees
+    that next to the PR-head site, so it can tell a break against what shipped
+    from one against an earlier commit of this PR."""
+    ws, _ = _ws(repo)
+    f = Finding(
+        "application_sdk/storage/fetch.py",
+        4,
+        "high",
+        "compatibility",
+        "Replay of a run started on an earlier commit fails",
+        "A history recorded before decode() was added replays differently.",
+        "return data.decode()",
+    )
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "def fetch(client, key):" in block
+    assert "return client.get(key)" in block
+    assert "decode" not in block  # the base copy, not the head's
+
+
+def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
+    files = parse_unified_diff(DIFF)
+    head = {
+        "application_sdk/storage/fetch.py": SRC_V2
+        + "\n\ndef fetch_many(client, keys):\n    return list(map(fetch, keys))\n",
+        "application_sdk/storage/new.py": "def brand_new():\n    return 1\n",
+    }
+    ws = Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+    in_new_symbol = Finding(
+        "application_sdk/storage/fetch.py",
+        12,
+        "high",
+        "bug",
+        "t",
+        "b",
+        "return list(map(fetch, keys))",
+    )
+    in_new_file = Finding(
+        "application_sdk/storage/new.py", 2, "high", "bug", "t", "b", "return 1"
+    )
+
+    user, _ = _verify_user(ws, in_new_symbol)
+    assert (
+        "<at_base_branch>\nabsent on base: fetch_many in "
+        "application_sdk/storage/fetch.py\n</at_base_branch>"
+    ) in user
+    user, _ = _verify_user(ws, in_new_file)
+    assert "<at_base_branch>\nabsent on base: application_sdk/storage/new.py" in user
+
+
+def _base_and_head_ws(tmp_path: Path, rel: str, base: str, head: str) -> Workspace:
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(base)
+    overlay = {rel: head}
+    return Workspace(
+        root=tmp_path,
+        head_text=overlay,
+        diffs={},
+        index=build_index(tmp_path, overrides=overlay),
+    )
+
+
+def test_a_module_level_finding_gets_the_base_lines_around_its_quote(tmp_path: Path):
+    rel = "application_sdk/keys.py"
+    ws = _base_and_head_ws(
+        tmp_path,
+        rel,
+        "A = 1\nKEY = 'v1'\n\n\ndef f():\n    return KEY\n",
+        "A = 1\nKEY = 'v2'\n\n\ndef f():\n    return KEY\n",
+    )
+    f = Finding(rel, 1, "medium", "compatibility", "t", "b", "A = 1")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == f"{rel}: module level"
+    assert "KEY = 'v1'" in block and "'v2'" not in block
+
+    pr_only = Finding(rel, 2, "medium", "compatibility", "t", "b", "KEY = 'v2'")
+    user, _ = _verify_user(ws, pr_only)
+    assert f"absent on base: the quoted code is not in {rel}" in user
+
+
+def test_a_pr_only_quote_in_a_long_base_symbol_gets_the_matching_window(
+    tmp_path: Path,
+):
+    """The quote exists only at the head, so it cannot be found in the base
+    copy; the window is taken at the same offset into the symbol, not its top."""
+    rel = "application_sdk/long.py"
+    body = "".join(f"    x_{i} = {i}\n" for i in range(200))
+    base = f"def long():\n{body}    return 0\n"
+    head = base.replace("    x_150 = 150\n", "    x_150 = 'new'\n")
+    ws = _base_and_head_ws(tmp_path, rel, base, head)
+    f = Finding(rel, 152, "medium", "compatibility", "t", "b", "x_150 = 'new'")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert "x_150 = 150" in block
+    assert "def long():" not in block
+
+
+def test_the_prompts_state_the_base_branch_rule():
+    for prompt in (review_mod.prompts.REVIEW_SYSTEM, review_mod.prompts.VERIFY_SYSTEM):
+        flat = " ".join(prompt.split())
+        assert "Commits in an open PR are unreleased" in flat
+        assert "against the base branch and the last release" in flat
+        assert "only an intermediate commit of this PR could have produced" in flat
+    assert "<at_base_branch>" in review_mod.prompts.VERIFY_SYSTEM
+    card = (
+        Path(__file__).resolve().parents[2] / "lens" / "cards" / "v3-architecture.md"
+    ).read_text()
+    assert "only an earlier commit of this PR could have produced" in card
+
+
+def test_a_moot_verdict_closes_the_finding_and_is_not_a_spiral(repo: Path):
+    ws, _ = _ws(repo)
+    f = Finding(
+        "application_sdk/storage/fetch.py",
+        4,
+        "high",
+        "compatibility",
+        "t",
+        "b",
+        "return data.decode()",
+    )
+
+    _, got = _verify_user(ws, f, [{"id": f.id, "status": "moot"}])
+
+    assert got.fixed == [f.id] and got.moot == [f.id]
+    assert f.status == "fixed"
+    earlier = [
+        Finding("d.py", r, "high", "bug", f"t{r}", "b", f"e{r}", round=r)
+        for r in (1, 2)
+    ]
+    new = [Finding("d.py", 9, "high", "bug", "t3", "b", "e3", round=3)]
+    st = PRState(round=3, findings=earlier + new)
+    assert review_mod.spiral_paths(st, new, 3) == [("d.py", [1, 2, 3])]
+    for e in earlier:
+        e.status, e.fixed_by = "fixed", "pr-history"
+    assert review_mod.spiral_paths(st, new, 3) == []
+
+
 # ---- verify that runs out of output budget ------------------------------------------------------------------------
 
 
