@@ -28,7 +28,9 @@ here and requiring a byte-identical result:
   e. re-render: check out the parent, read the conformance version its
      ``uv.lock`` resolves (must equal the marker), run ``bootstrap --resync
      --json`` at exactly that version with the marker's ``resolved-at``
-     resolution fence (:func:`resync_command`), stage exactly what the lane stages, and
+     resolution fence (:func:`resync_command`) inside the pinned container
+     (:func:`sandboxed_render` — the render is third-party code and this
+     process holds the atlan-ci PAT), stage exactly what the lane stages, and
      require the resulting git tree to EQUAL the PR head's tree — any extra,
      missing or altered byte anywhere withholds the approval
   f. the re-render dropped no per-repo setting (``.bak`` set-compare)
@@ -52,6 +54,7 @@ import json
 import os
 import pathlib
 import re
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -119,6 +122,156 @@ def resync_command(suite: str, resolved_at: str) -> list[str]:
         "--resync",
         "--json",
     ]
+
+
+# The render runs third-party PyPI code, so it never runs on the host. Same
+# uv as setup-uv pins in the workflows; bump both together.
+RENDER_IMAGE = (
+    "ghcr.io/astral-sh/uv:0.12.18-python3.12-trixie-slim"
+    "@sha256:38f41574703989d6e5f02be80a3d687b00f98744cce86908097bcd34bcb7eb98"
+)
+
+
+def render_argv(
+    scratch: str, suite: str, resolved_at: str, name: str, uid: int, gid: int
+) -> list[str]:
+    """``docker run`` for :func:`resync_command`, with nothing from the host
+    but the scratch copy of the tree.
+
+    On a hosted runner the host user has passwordless sudo and the runner
+    process holds every secret the job references, so dropping ``GH_TOKEN``
+    from a child's env protects nothing: a same-host child can read the
+    parent's ``/proc/<pid>/environ`` or the runner's memory. A container has
+    its own PID namespace, gets no host env, and sees only ``/w``.
+    """
+    return [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--user",
+        f"{uid}:{gid}",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,exec,size=2g",
+        "-e",
+        "HOME=/tmp",
+        "-e",
+        "UV_CACHE_DIR=/tmp/uv-cache",
+        "-e",
+        "UV_PYTHON_DOWNLOADS=never",
+        "-v",
+        f"{scratch}:/w",
+        "-w",
+        "/w",
+        RENDER_IMAGE,
+        *resync_command(suite, resolved_at),
+    ]
+
+
+def _unsafe_rel(path: str) -> bool:
+    parts = pathlib.PurePosixPath(path).parts
+    return (
+        not path
+        or path.startswith("/")
+        or ".." in parts
+        or not parts
+        or parts[0] == ".git"
+    )
+
+
+def _via_symlink(root: pathlib.Path, rel: str) -> bool:
+    cur = root
+    for part in pathlib.PurePosixPath(rel).parts[:-1]:
+        cur = cur / part
+        if cur.is_symlink():
+            return True
+    return False
+
+
+def copy_back(scratch: pathlib.Path, work: pathlib.Path, manifest: dict) -> list[str]:
+    """Bring the render's output from ``scratch`` into the trusted clone.
+
+    Only the manifest's ``touched`` paths and the ``.bak`` backups come back,
+    as regular files with their exec bit; a path the render deleted is
+    deleted here. Nothing under ``.git`` ever comes back: a render able to
+    write ``.git/config`` or a hook would run code at the next host-side
+    ``git`` call, which holds the token. Returns the refused paths; any
+    refusal fails the render closed.
+    """
+    wanted = {p for p in manifest.get("touched") or [] if isinstance(p, str)}
+    for bak in scratch.rglob("*.bak"):
+        rel = bak.relative_to(scratch)
+        if rel.parts and rel.parts[0] != ".git":
+            wanted.add(rel.as_posix())
+    refused: list[str] = []
+    for rel in sorted(wanted):
+        src, dest = scratch / rel, work / rel
+        if _unsafe_rel(rel) or _via_symlink(work, rel) or _via_symlink(scratch, rel):
+            refused.append(rel)
+            continue
+        if src.is_symlink() or (src.exists() and not src.is_file()):
+            refused.append(rel)
+            continue
+        if dest.is_symlink() or dest.is_file():
+            dest.unlink()
+        elif dest.exists():
+            refused.append(rel)
+            continue
+        if not src.exists():
+            continue  # the render deleted it
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(src.read_bytes())
+        dest.chmod(0o755 if src.stat().st_mode & 0o111 else 0o644)
+    return refused
+
+
+def sandboxed_render(
+    work: str, suite: str, resolved_at: str, runner: Runner
+) -> tuple[int, str, str]:
+    """Run :func:`resync_command` against a copy of ``work`` (without
+    ``.git``) inside :data:`RENDER_IMAGE`, then :func:`copy_back` its output.
+    ``(returncode, stdout, stderr)``; the lane and this gate both use it."""
+    name = f"resync-render-{os.urandom(6).hex()}"
+    with tempfile.TemporaryDirectory(prefix="resync-render-") as tmp:
+        scratch = pathlib.Path(tmp, "w")
+        shutil.copytree(
+            work,
+            scratch,
+            symlinks=True,
+            ignore=lambda d, names: [".git"]
+            if pathlib.Path(d) == pathlib.Path(work)
+            else [],
+        )
+        try:
+            proc = runner(
+                render_argv(
+                    str(scratch), suite, resolved_at, name, os.getuid(), os.getgid()
+                ),
+                capture_output=True,
+                text=True,
+                timeout=BOOTSTRAP_TIMEOUT,
+                check=False,
+            )
+        except subprocess.TimeoutExpired:
+            runner(["docker", "rm", "-f", name], capture_output=True, check=False)
+            return 124, "", f"render timed out after {BOOTSTRAP_TIMEOUT}s"
+        stdout, stderr = proc.stdout or "", proc.stderr or ""
+        manifest = parse_manifest(stdout)
+        if proc.returncode != 0 or manifest is None or manifest.get("skipped"):
+            return proc.returncode, stdout, stderr
+        refused = copy_back(scratch, pathlib.Path(work), manifest)
+        if refused:
+            return (
+                1,
+                stdout,
+                f"render wrote paths that are never copied back: {refused}",
+            )
+        return 0, stdout, stderr
 
 
 RESYNC_APPROVAL_BODY = (
@@ -486,23 +639,11 @@ def render_and_compare(
                 pinned,
                 note=f"base uv.lock pins {pinned}, PR marker says {suite}",
             )
-        # bootstrap only renders templates onto disk; it gets no credential.
-        env = {
-            k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}
-        }
-        proc = runner(
-            resync_command(suite, resolved_at),
-            cwd=work,
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=BOOTSTRAP_TIMEOUT,
-            check=False,
-        )
-        manifest = parse_manifest(proc.stdout or "")
-        if proc.returncode != 0 or manifest is None or manifest.get("skipped"):
+        rc, stdout, _ = sandboxed_render(work, suite, resolved_at, runner)
+        manifest = parse_manifest(stdout)
+        if rc != 0 or manifest is None or manifest.get("skipped"):
             return RenderResult(
-                False, suite, note=f"bootstrap render failed (exit {proc.returncode})"
+                False, suite, note=f"bootstrap render failed (exit {rc})"
             )
         lost = stage_like_the_lane(work, manifest, runner)
         rendered_tree = _git(["write-tree"], work, runner).strip()

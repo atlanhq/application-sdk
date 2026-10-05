@@ -497,3 +497,108 @@ def test_parent_preconditions_pass_for_matching_pin_and_auto_mode():
         True,
         "",
     )
+
+
+# ---------------------------------------------------------------------------
+# Render sandbox: third-party code never runs on the token-holding host
+# ---------------------------------------------------------------------------
+
+
+def test_render_argv_runs_the_pinned_image_with_no_host_env():
+    argv = resync.render_argv("/s/w", "0.39.0", RESOLVED_AT, "n", 1001, 121)
+    assert argv[:2] == ["docker", "run"]
+    assert "@sha256:" in resync.RENDER_IMAGE and resync.RENDER_IMAGE in argv
+    assert argv[argv.index("-v") + 1] == "/s/w:/w"
+    assert argv[argv.index("--user") + 1] == "1001:121"
+    env = [argv[i + 1] for i, a in enumerate(argv) if a == "-e"]
+    assert env and not any("TOKEN" in e for e in env)
+    assert "--env-file" not in argv and "--privileged" not in argv
+    assert argv[argv.index(resync.RENDER_IMAGE) + 1 :] == resync.resync_command(
+        "0.39.0", RESOLVED_AT
+    )
+
+
+def _tree(root, files):
+    for rel, text in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+
+def test_copy_back_brings_touched_files_and_backups_with_exec_bit(tmp_path):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    _tree(scratch, {"a.yaml": "new", "a.yaml.bak": "old", "run.sh": "#!"})
+    (scratch / "run.sh").chmod(0o755)
+    _tree(work, {"a.yaml": "old", "untouched": "keep"})
+    _tree(scratch, {"untouched": "changed by the render"})
+    refused = resync.copy_back(scratch, work, {"touched": ["a.yaml", "run.sh"]})
+    assert refused == []
+    assert (work / "a.yaml").read_text() == "new"
+    assert (work / "a.yaml.bak").read_text() == "old"
+    assert (work / "run.sh").stat().st_mode & 0o111
+    assert (work / "untouched").read_text() == "keep"
+
+
+def test_copy_back_deletes_what_the_render_deleted(tmp_path):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    scratch.mkdir()
+    _tree(work, {"retired.sh": "x"})
+    assert resync.copy_back(scratch, work, {"touched": ["retired.sh"]}) == []
+    assert not (work / "retired.sh").exists()
+
+
+@pytest.mark.parametrize(
+    "touched", [".git/hooks/post-checkout", ".git/config", "../escape", "/abs"]
+)
+def test_copy_back_never_writes_git_internals_or_escapes(tmp_path, touched):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    scratch.mkdir()
+    work.mkdir()
+    (work / ".git").mkdir()
+    assert resync.copy_back(scratch, work, {"touched": [touched]}) == [touched]
+    assert list((work / ".git").iterdir()) == []
+
+
+def test_copy_back_refuses_a_symlink_the_render_wrote(tmp_path):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    scratch.mkdir()
+    work.mkdir()
+    (scratch / "a.yaml").symlink_to("/etc/passwd")
+    assert resync.copy_back(scratch, work, {"touched": ["a.yaml"]}) == ["a.yaml"]
+    assert not (work / "a.yaml").exists()
+
+
+def test_sandboxed_render_never_copies_git_into_the_sandbox(tmp_path):
+    work = tmp_path / "w"
+    _tree(work, {"a.yaml": "old", ".git/config": "[core]"})
+    seen = {}
+
+    def runner(cmd, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            scratch = Path(cmd[cmd.index("-v") + 1].split(":")[0])
+            seen["git"] = (scratch / ".git").exists()
+            seen["env"] = kwargs.get("env")
+            (scratch / "a.yaml").write_text("new")
+            return subprocess.CompletedProcess(cmd, 0, '{"touched": ["a.yaml"]}\n', "")
+        raise AssertionError(cmd)
+
+    rc, _, _ = resync.sandboxed_render(str(work), "0.39.0", RESOLVED_AT, runner)
+    assert rc == 0 and seen["git"] is False
+    assert (work / "a.yaml").read_text() == "new"
+
+
+def test_sandboxed_render_timeout_kills_the_container(tmp_path):
+    work = tmp_path / "w"
+    work.mkdir()
+    calls = []
+
+    def runner(cmd, **kwargs):
+        calls.append(cmd)
+        if cmd[:2] == ["docker", "run"]:
+            raise subprocess.TimeoutExpired(cmd, 1)
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    rc, _, err = resync.sandboxed_render(str(work), "0.39.0", RESOLVED_AT, runner)
+    name = calls[0][calls[0].index("--name") + 1]
+    assert rc == 124 and "timed out" in err
+    assert calls[-1] == ["docker", "rm", "-f", name]

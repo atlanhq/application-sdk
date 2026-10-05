@@ -68,7 +68,6 @@ BASE_BRANCH = "main"
 RESYNC_LABEL = "conformance-resync"
 APPROVE_WORKFLOW = "renovate-auto-approve.yml"
 REQUEST_TIMEOUT = 60
-BOOTSTRAP_TIMEOUT = 600
 _REPO_RE = re.compile(r"^atlanhq/[A-Za-z0-9._-]+$")
 
 
@@ -522,17 +521,9 @@ def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> str:
 
 
 def run_bootstrap(workdir: str, version: str, resolved_at: str) -> tuple[int, str, str]:
-    env = {k: v for k, v in os.environ.items() if k not in {"GH_TOKEN", "GITHUB_TOKEN"}}
-    proc = subprocess.run(
-        gate.resync_command(version, resolved_at),
-        cwd=workdir,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=BOOTSTRAP_TIMEOUT,
-        check=False,
-    )
-    return proc.returncode, proc.stdout, proc.stderr
+    """The render runs in the gate's container sandbox, never on this host:
+    this process holds the fleet-wide workflows-write App token."""
+    return gate.sandboxed_render(workdir, version, resolved_at, subprocess.run)
 
 
 def process_repo(

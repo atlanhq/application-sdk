@@ -25,6 +25,11 @@ name: Conformance Resync
 #     the resync itself, so without this dispatch nothing would ever ask the
 #     approver to look at these PRs at all.
 #
+# The render itself (third-party PyPI code) runs in a pinned uv container,
+# resync_approval_conditions.RENDER_IMAGE, never on the runner host: this job
+# holds a fleet-wide workflows-write token, and on a hosted runner a same-host
+# child can read any process's environment or the runner's memory.
+#
 # The independent byte-for-byte proof that a lane PR is safe to approve is
 # .github/scripts/resync_approval_conditions.py (the atlan-ci code-owner
 # gate), which this lane's script imports its shared constants and
@@ -85,11 +90,6 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.12.18"
 
       - name: Mint atlan-conformance-sync App token
         id: app-token

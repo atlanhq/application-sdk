@@ -146,8 +146,10 @@ jobs:
   renovate-auto-approve:
     runs-on: ubuntu-latest
     # 10, not 5: a conformance-resync PR is verified by re-rendering
-    # `bootstrap --resync` (uvx install + render), which the Renovate path
-    # never pays for. See .github/scripts/resync_approval_conditions.py.
+    # `bootstrap --resync` (image pull + uvx install + render), which the
+    # Renovate path never pays for. The render runs in a pinned uv container
+    # (resync_approval_conditions.RENDER_IMAGE), never on this host, because
+    # this job holds the atlan-ci PAT. See resync_approval_conditions.py.
     timeout-minutes: 10
     # Serialize concurrent runs for the same SHA so the idempotency check
     # is reliable — two workflow completions for the same HEAD can't both
@@ -182,14 +184,6 @@ jobs:
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
           path: .sdk-scripts
-
-      # uvx runs the independent `bootstrap --resync` render that proves a
-      # conformance-resync PR (resync_approval_conditions.py). Renovate PRs
-      # never invoke it.
-      - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
-        with:
-          version: "0.12.18"
 
       - name: Auto-approve if Renovate dep-only PR and all required checks are green
         env:
