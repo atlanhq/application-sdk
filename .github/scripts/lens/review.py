@@ -20,6 +20,7 @@ The round rules that make the loop converge are here, in code:
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import time
@@ -43,7 +44,7 @@ from .diff import (
 )
 from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
 from .github import GitHub, bot_login
-from .index import build_index
+from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
 from .select import DEFAULT_EXCLUDE, select_files
@@ -590,7 +591,8 @@ def run(
             res.resolved_verified = [i for i in fixed if not _CONCERN_ID.match(i)]
             for f in to_verify:
                 if f.id in res.resolved_verified:
-                    f.fixed_round, f.fixed_by = round_no, "verified"
+                    f.fixed_round = round_no
+                    f.fixed_by = "pr-history" if f.id in verified.moot else "verified"
             addressed = {i for i in fixed if _CONCERN_ID.match(i)}
             for cid, c in concerns:
                 if cid in addressed:
@@ -946,6 +948,73 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
 
 
+BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
+
+
+def at_base_branch(
+    ws: Workspace, f: Finding, head_sym: Symbol | None, head_line: int = 0
+) -> str:
+    """The finding's enclosing function or class as it is on the BASE branch.
+
+    The checkout is the base branch; `ws.text` overlays the PR head, so the
+    base copy is read from disk. Verify needs it to tell a break against what
+    shipped from one against an intermediate commit of this PR: without it
+    the call sees only the PR head and the round's diff. The symbol is found
+    at the head (enclosing the finding's line), then looked up in the base
+    file by its dotted name, which survives a rename of the file. A finding
+    outside any function or class (a module constant) gets the base lines
+    around its quoted code instead."""
+    fd = ws.diffs.get(f.path)
+    rel = (
+        fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
+    ) or ""
+    root = ws.root.resolve()
+    path = (root / rel).resolve()
+    if not rel or root not in path.parents or not path.is_file():
+        return f"absent on base: {rel or f.path} (the file does not exist there)"
+    try:
+        text = path.read_text(encoding="utf-8")
+        ast.parse(text)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return f"(the base copy of {rel} could not be read or parsed)"
+    lines = text.splitlines()
+
+    def window(lo: int, hi: int) -> str:
+        return "\n".join(
+            f"{i:>5} {lines[i - 1]}" for i in range(max(lo, 1), min(hi, len(lines)) + 1)
+        )
+
+    if head_sym is None:
+        # Module level: no symbol to look up, so the quote locates the site.
+        at = locate_in_text(text, f.evidence)
+        if not at:
+            return f"absent on base: the quoted code is not in {rel}"
+        return f"{rel}: module level\n{window(at - 15, at + 15)}"
+    dotted = head_sym.qualname.split(":", 1)[1]
+    idx = Index(root=str(root))
+    index_source(idx, rel, text)
+    base_sym = next(
+        (
+            idx.symbols[q]
+            for q in idx.by_path.get(rel, [])
+            if q.split(":", 1)[1] == dotted
+        ),
+        None,
+    )
+    if base_sym is None:
+        return f"absent on base: {dotted} in {rel}"
+    lo, hi = base_sym.start, base_sym.end
+    if hi - lo >= BASE_EXCERPT_LINES:
+        at = locate_in_text(text, f.evidence)
+        if not lo <= at <= hi:
+            # The quote is PR-only: take the same offset into the base symbol
+            # as the finding has into the head symbol, not the symbol's top.
+            at = lo + max(head_line - head_sym.start, 0)
+        mid = min(at, hi)
+        lo, hi = max(mid - 15, lo), min(mid + 15, hi)
+    return f"{rel}: {dotted}\n{window(lo, hi)}"
+
+
 VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
 
 
@@ -970,6 +1039,9 @@ class Verified:
     fixed: list[str] = field(default_factory=list)  # judged fixed: F-… and A…
     # Sent to a call that spent its whole output budget before answering.
     cut_off: list[str] = field(default_factory=list)
+    # Of `fixed`, the findings judged moot: never a defect, because the failure
+    # needs history only an earlier commit of this PR could have produced.
+    moot: list[str] = field(default_factory=list)
 
 
 def _verify(
@@ -1005,6 +1077,7 @@ def _verify(
         )
         out.fixed += got.fixed
         out.cut_off += got.cut_off
+        out.moot += got.moot
     return out
 
 
@@ -1054,7 +1127,8 @@ def _verify_batch(
         items.append(
             f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
-            f"<code_now>\n{code}\n</code_now>\n</finding>"
+            f"<code_now>\n{code}\n</code_now>\n"
+            f"<at_base_branch>\n{at_base_branch(ws, f, sym, at)}\n</at_base_branch>\n</finding>"
         )
     messages = [
         {"role": "system", "content": prompts.VERIFY_SYSTEM},
@@ -1078,6 +1152,7 @@ def _verify_batch(
             cut_off=[f.id for f in open_] + [cid for cid, _ in concerns or []]
         )
     fixed: list[str] = []
+    moot: list[str] = []
     by_id = {f.id: f for f in open_}
     concern_ids = {cid for cid, _ in concerns or []}
     for tc in comp.tool_calls:
@@ -1085,14 +1160,17 @@ def _verify_batch(
             parse_args((tc.get("function") or {}).get("arguments") or "").get("items")
             or []
         ):
-            iid, ok = str(it.get("id")), it.get("status") == "fixed"
+            verdict = it.get("status")
+            iid, ok = str(it.get("id")), verdict in ("fixed", "moot")
             f = by_id.get(iid)
             if f and ok:
                 f.status = "fixed"
                 fixed.append(f.id)
+                if verdict == "moot":
+                    moot.append(f.id)
             elif iid in concern_ids and ok:
                 fixed.append(iid)
-    return Verified(fixed=fixed)
+    return Verified(fixed=fixed, moot=moot)
 
 
 def _out_of_output_budget(comp: Any, max_tokens: int) -> bool:
@@ -1116,6 +1194,7 @@ _SEV_LABEL = {
 _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
+    "pr-history": "closed: needed history only this PR's own earlier commits could produce",
 }
 _CLOSE_HINT = (
     "Fix them and comment `/lens`, or close one the team won't fix with "
@@ -1214,7 +1293,9 @@ def spiral_paths(
             {
                 f.round
                 for f in state.findings
-                if f.path == path and f.severity in BLOCKING
+                if f.path == path
+                and f.severity in BLOCKING
+                and f.fixed_by != "pr-history"  # never a defect: not a spiral
             }
         )
         if len(rounds) >= SPIRAL_ROUNDS:

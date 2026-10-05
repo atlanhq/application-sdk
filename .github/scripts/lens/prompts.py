@@ -37,6 +37,10 @@ Evidence
 - <released_surface_removals>, when present, lists the public names that shipped in the last release
   and that the PR head removes or narrows. A removed or renamed public name is a break only if listed
   there; one absent from it never shipped. If it says "release baseline unavailable", judge as usual.
+- Commits in an open PR are unreleased. Judge compatibility (workflow replay and determinism, persisted
+  state, stored data, wire values) against the base branch and the last release, never against this PR's
+  own earlier commits: a failure that needs history, state or data only an intermediate commit of this
+  PR could have produced is not a finding.
 - existing_code must be copied VERBATIM from the diff or <changed_functions> (1-6 lines, without the
   line-number column or the + marker).
 
@@ -135,9 +139,15 @@ on one of them still existing can no longer occur. <released_surface_removals> l
 names that shipped in the last release (`baseline vX.Y.Z`) and that the PR head removes or narrows:
 a finding that a public name was removed or narrowed without deprecation is fixed when that name
 is not listed there (it never shipped, or still exists), unless the block says
-"release baseline unavailable". Answer by calling verdicts once, with one verdict
-per finding and concern id.
-fixed: the defect can no longer occur. open: it still can. Do not raise new issues.
+"release baseline unavailable". Commits in an open PR are unreleased: compatibility (workflow
+replay and determinism, persisted state, stored data, wire values) is judged against the base branch
+and the last release, never against this PR's own earlier commits. <at_base_branch> in each finding
+shows the enclosing function or class of its site as it is on the base branch, or says it is absent
+there. A finding whose failure needs history, state or data that only an intermediate commit of this
+PR could have produced (the base-branch code never did it) is moot. Answer by calling verdicts once,
+with one verdict per finding and concern id.
+fixed: the defect can no longer occur. moot: it was never a defect under the rule above.
+open: it still can occur. Do not raise new issues.
 """
 
 VERIFY_TOOLS = [
@@ -155,7 +165,10 @@ VERIFY_TOOLS = [
                             "type": "object",
                             "properties": {
                                 "id": {"type": "string"},
-                                "status": {"type": "string", "enum": ["fixed", "open"]},
+                                "status": {
+                                    "type": "string",
+                                    "enum": ["fixed", "moot", "open"],
+                                },
                                 "reason": {"type": "string"},
                             },
                             "required": ["id", "status"],
