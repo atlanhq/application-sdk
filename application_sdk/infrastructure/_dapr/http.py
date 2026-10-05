@@ -454,22 +454,23 @@ class AsyncDaprClient:
                 # Pin the retried transport errors to httpx-retries' own default
                 # set, stated explicitly so it can't silently narrow/widen if the
                 # library changes its default. These three base classes cover
-                # connect/read/WRITE/close/pool + protocol errors alike, so
-                # POST/DELETE calls (save_state/publish_event/invoke_binding/
-                # delete_state) keep the exact retry coverage they had before —
-                # listing leaf classes like ConnectError/ReadError would have
+                # connect/read/WRITE/close/pool + protocol errors alike.
+                # Listing leaf classes like ConnectError/ReadError would have
                 # narrowed it and dropped WriteError/WriteTimeout/CloseError.
-                # NOTE: these errors were already retried by default; what the
-                # original fix changed was the *budget* above (raising
-                # backoff_factor to 1.0) to bridge a daprd cold start. See
-                # _DEFAULT_RETRY_TOTAL for the ladder arithmetic and why the
-                # accompanying total=5 was later cut back to 3.
+                # The default allowed methods deliberately exclude POST. The
+                # idempotent binding ``get`` operation opts in below with a
+                # per-request policy; state writes and event publishing do not.
+                # See _DEFAULT_RETRY_TOTAL for the ladder arithmetic and why
+                # the accompanying total=5 was later cut back to 3.
                 retry_on_exceptions=[
                     httpx.TimeoutException,
                     httpx.NetworkError,
                     httpx.RemoteProtocolError,
                 ],
             ),
+        )
+        self._binding_get_retry = transport.retry.copy_with(
+            allowed_methods=transport.retry.allowed_methods | {"POST"}
         )
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
@@ -608,13 +609,17 @@ class AsyncDaprClient:
         }
         if data:
             body["data"] = self._encode_payload(data, binding_name)
+        retry_extensions = (
+            {"retry": self._binding_get_retry} if operation == "get" else None
+        )
         resp = await self._client.post(
             BINDING_PATH.format(binding_name=binding_name),
             json=body,
+            extensions=retry_extensions,
         )
         resp.raise_for_status()
         return BindingResult(
-            data=resp.content if resp.content else None,
+            data=resp.content or None,
             metadata={
                 k: v
                 for k, v in resp.headers.items()
