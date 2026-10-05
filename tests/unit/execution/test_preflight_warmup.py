@@ -247,6 +247,49 @@ _PROBE = "myapp:preflight_warmup"
 _CHECK = "myapp:preflight"
 
 
+class TestTheReplayGuard:
+    async def test_a_pre_warmup_history_replays_its_one_check_dispatch(
+        self, clock, safe_log, health
+    ) -> None:
+        """A run recorded before the warmup phase (no ``preflight-gate-warmup``
+        marker, e.g. migrated by AUTO_UPGRADE) replays the sequence it recorded:
+        one check dispatch with every tier, and no probe (F-8e0099)."""
+        activities = _Activities(clock, polls=[_poll(WarmupState.COLD)])
+        with (
+            mock.patch(
+                "application_sdk.app.base.workflow.patched",
+                side_effect=lambda patch_id: patch_id != "preflight-gate-warmup",
+            ),
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity", new=activities
+            ),
+        ):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert activities.order == [_CHECK]
+        assert activities.tiers == [None]
+        assert activities.checks[0].warmup is None
+
+    async def test_a_new_run_records_the_marker_before_the_probe(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(clock, polls=[_poll(WarmupState.READY)])
+        seen: list[str] = []
+
+        def _patched(patch_id: str) -> bool:
+            seen.append(patch_id)
+            return True
+
+        with (
+            mock.patch("application_sdk.app.base.workflow.patched", new=_patched),
+            mock.patch(
+                "application_sdk.app.base.workflow.execute_activity", new=activities
+            ),
+        ):
+            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
+        assert "preflight-gate-warmup" in seen
+        assert activities.order == [_PROBE, _CHECK]
+
+
 class TestTheFirstProbe:
     async def test_it_is_its_own_activity_before_the_checks(
         self, clock, safe_log, health

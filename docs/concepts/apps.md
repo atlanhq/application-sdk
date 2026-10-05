@@ -702,12 +702,12 @@ observed, oldest first, capped at 32. Each check in `check_matrix` carries `tier
 handler's answer at run time, not a declaration. The name is reserved: a `@task` named
 `preflight_warmup` fails worker boot, on every app.
 
-No `workflow.patched` guard covers this phase. App workers are PINNED
-(`default_versioning_behavior`), so a run drains on the build that started it. A run started on a
-build without this phase does **not** replay on this one: its first gate command was the check
-activity, and this build's is the probe activity. Only a deployment with no `ATLAN_APP_BUILD_ID`
-(local, self-deployed) can hit that, the same exposure the hard-mode block on a dead gate frame
-accepts. If app workers ever move off PINNED, this phase needs a `workflow.patched` guard.
+`workflow.patched("preflight-gate-warmup")` guards this phase. PINNED workers drain a run on the
+build that started it, but an app can opt into `AUTO_UPGRADE` (`TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR`),
+which migrates in-flight runs onto a new build, and a deployment with no `ATLAN_APP_BUILD_ID` is
+unversioned. A run started before this phase recorded the check activity as its first gate command,
+so on replay it takes the unpatched branch: one check dispatch with every tier and no probe, exactly
+what it recorded. Every new run records the patch marker.
 
 #### Verifying artifact storage (opt-in)
 

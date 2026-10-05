@@ -633,6 +633,26 @@ def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
     return None, []
 
 
+def generated_entrypoints() -> list[str]:
+    """The entry points the generated tree serves a setup form for.
+
+    Each subdirectory of ``CONTRACT_GENERATED_DIR`` holding an eligible form is
+    one entry point (the multi-entry-point layout). With none, a flat form makes
+    the app's single entry point, reported as ``""`` (the app-level handler).
+    Read from disk so the handler process never imports the app registry.
+    """
+    if not CONTRACT_GENERATED_DIR.is_dir():
+        return []
+    nested = sorted(
+        d.name
+        for d in CONTRACT_GENERATED_DIR.iterdir()
+        if d.is_dir() and eligible_form_configmaps(d)
+    )
+    if nested:
+        return nested
+    return [""] if eligible_form_configmaps(CONTRACT_GENERATED_DIR) else []
+
+
 SAGE_V2_WIDGET = "sageV2"
 """The ``ui.widget`` value of the setup form's preflight widget."""
 
@@ -694,7 +714,7 @@ def warn_on_warmup_flag_drift(
                 "the warmup-tier checks, so missing grants on them surface "
                 "only on a real run. Set warmup: true on the SageV2 widget in "
                 "the app's contract.",
-                entrypoint,
+                entrypoint or "<app>",
                 target.name,
             )
         else:
@@ -704,7 +724,7 @@ def warn_on_warmup_flag_drift(
                 "and there is no module warmup hook): the setup UI makes a "
                 "/warmup round trip that always answers ready. Remove warmup "
                 "from the SageV2 widget, or implement Handler.warmup.",
-                entrypoint,
+                entrypoint or "<app>",
                 target.name,
             )
     return drifted
@@ -3664,22 +3684,11 @@ def create_app_handler_service(
 
     # FND-3334: the setup form's SageV2 warmup flag and the handler must agree.
     # Reported once at startup; never allowed to break the service.
+    # Entry points come from the generated tree, not the app registry:
+    # importing the registry loads execution code, which the handler process
+    # must never do (FND-3280).
     try:
-        from application_sdk.app.registry import (  # noqa: PLC0415 — cold path: one read at startup
-            AppNotFoundError,
-            AppRegistry,
-        )
-
-        try:
-            app_meta = AppRegistry.get_instance().get(app_name) if app_name else None
-        except AppNotFoundError:
-            # A service for an app this process did not register (a test, a
-            # handler-only pod) has no entry points to compare.
-            app_meta = None
-        if app_meta is not None:
-            eps = sorted(app_meta.entry_points.values(), key=lambda e: e.name)
-            explicit = [ep.name for ep in eps if not ep.implicit]
-            warn_on_warmup_flag_drift(explicit or [ep.name for ep in eps], _has_warmup)
+        warn_on_warmup_flag_drift(generated_entrypoints(), _has_warmup)
     except Exception:
         logger.warning(
             "Could not compare setup forms' warmup flags with the handler",

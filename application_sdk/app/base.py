@@ -2648,14 +2648,14 @@ async def _run_preflight_gate(
     ``warmup_outcome=broken``); a later one fails open as ``no_verdict`` /
     ``gate_broken``.
 
-    **Replay.** No ``workflow.patched`` guards this phase: app workers are
-    PINNED (``default_versioning_behavior``), so a run drains on the build that
-    started it. A run started on a build without this phase does *not* replay
-    on this one — its first command was the check activity, this frame's is the
-    warmup probe — so only a deployment with no ``ATLAN_APP_BUILD_ID`` (local,
-    self-deployed) can hit that, the same exposure the hard-mode block above
-    accepts. If app workers ever move off PINNED, this phase needs a
-    ``workflow.patched`` guard.
+    **Replay.** ``workflow.patched("preflight-gate-warmup")`` guards this
+    phase. PINNED workers drain a run on the build that started it, but an app
+    can opt into ``AUTO_UPGRADE`` (``TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR``),
+    which migrates in-flight runs onto a new build, and a deployment with no
+    ``ATLAN_APP_BUILD_ID`` is unversioned. A run started before the phase
+    recorded the check activity as its first command, so on replay it takes the
+    unpatched branch: one check dispatch with every tier and no probe, exactly
+    the sequence it recorded. Every new run records the patch marker.
     """
     with workflow.unsafe.imports_passed_through():
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -2914,6 +2914,17 @@ async def _run_preflight_gate(
             heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
             retry_policy=gate_retry_policy(max_attempts),
         )
+
+    # A run started before the warmup phase existed recorded the check activity
+    # as its first command. An AUTO_UPGRADE app (TEMPORAL_DEFAULT_VERSIONING_
+    # BEHAVIOR) migrates such a run onto this build, so it must replay the old
+    # sequence: one check dispatch with every tier, no probe.
+    if not workflow.patched("preflight-gate-warmup"):
+        try:
+            await _dispatch_checks(None, None)
+        except Exception as e:
+            _no_verdict(e, None, None)
+        return
 
     # The first warmup probe is its own activity, ahead of the checks, so it
     # never spends the check budget. READY — what every app that does not

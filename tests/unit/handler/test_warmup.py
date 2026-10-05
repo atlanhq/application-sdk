@@ -282,9 +282,11 @@ class TestContracts:
         with pytest.raises(ValidationError):
             WarmupObservation.model_validate({"state": "warming", field: -1})
 
-    def test_observation_requires_a_state(self) -> None:
-        with pytest.raises(ValidationError):
-            WarmupObservation.model_validate({})
+    def test_an_observation_without_a_state_reads_as_ready(self) -> None:
+        """A payload naming no state reports nothing to wait for (F-3ab1c2):
+        the same answer ``Handler.warmup``'s default gives."""
+        assert WarmupObservation.model_validate({}).state is WarmupState.READY
+        assert WarmupObservation().state is WarmupState.READY
 
     def test_rows_outside_tiers_names_the_strays(self) -> None:
         result = PreflightOutput(

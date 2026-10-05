@@ -93,6 +93,37 @@ def test_the_handler_imports_no_worker_code() -> None:
     )
 
 
+def test_creating_the_handler_service_imports_no_worker_code() -> None:
+    """Building the service runs startup code (the SageV2 warmup drift check)
+    that importing the module does not; it must stay worker-free too (F-b20a23).
+
+    Fails if a startup path reaches the app registry, whose package imports
+    execution code.
+    """
+    excused = _loaded_after_importing(_ALLOWED_FOR_START_ROUTE)
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys\n"
+            "from application_sdk.handler.base import DefaultHandler\n"
+            "from application_sdk.handler.service import create_app_handler_service\n"
+            "create_app_handler_service(DefaultHandler(), app_name='boundary-app')\n"
+            "print('\\n'.join(sys.modules))",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    loaded = {line for line in result.stdout.splitlines() if line}
+    offenders = sorted(name for name in loaded - excused if _is_worker_module(name))
+    assert not offenders, (
+        "Creating the handler service loaded worker module(s):\n  "
+        + "\n  ".join(offenders)
+    )
+
+
 def test_the_start_route_allowance_is_still_needed() -> None:
     """The ``temporalio.client`` allowance excuses only what the client loads.
 

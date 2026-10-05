@@ -469,8 +469,11 @@ class WarmupObservation(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    state: WarmupState
-    """Where the source's compute is."""
+    state: WarmupState = WarmupState.READY
+    """Where the source's compute is. Defaults to ``READY``, what
+    ``Handler.warmup`` itself answers for an app with no warmup: an observation
+    that names no state reports nothing to wait for, so the gate goes on as it
+    would without a warmup rather than rejecting the payload."""
 
     source_state: str = ""
     """The source's own label for its state (e.g. Snowflake ``RESUMING``).
