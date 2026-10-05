@@ -2,6 +2,23 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.42.1] - 2026-10-05
+
+### Bug fixes
+
+- B005/P015/D009 guidance, and the lane's per-rule fix guidance folded into E004/E008/L004/T003/T013 (#4137) ([15477d5](https://github.com/atlanhq/application-sdk/commit/15477d5))
+
+## [0.42.0] - 2026-10-02
+
+### Features
+
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) ([20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug fixes
+
+- E008 false positive on compliant code (1 repos) (#4095) ([dba9356](https://github.com/atlanhq/application-sdk/commit/dba9356))
+- carry dataforge-lifecycle through the tests.yaml scaffold [FND-3089] (#4077) ([2508834](https://github.com/atlanhq/application-sdk/commit/2508834))
+
 ## [0.41.0] - 2026-09-30
 
 ### Features

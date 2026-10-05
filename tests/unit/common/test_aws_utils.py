@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk.common.aws_utils import (
+    _normalize_external_id,
     create_aws_client,
     create_aws_session,
     create_engine_url,
@@ -134,7 +135,7 @@ class TestAWSUtils:
         ParamValidationError. Trust policies that don't require an external
         ID are valid; the SDK must not force one. Regression test for HYP-1445.
         """
-        for blank in (None, ""):
+        for blank in (None, "", "   "):
             mock_client.reset_mock()
             mock_sts = MagicMock()
             mock_rds = MagicMock()
@@ -187,6 +188,45 @@ class TestAWSUtils:
 
         kwargs = mock_sts.assume_role.call_args.kwargs
         assert kwargs.get("ExternalId") == "my-external-id"
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_strips_external_id(self, mock_client):
+        """A padded external ID reaches STS trimmed (STS admits no whitespace)."""
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "test_key",
+                "SecretAccessKey": "test_secret",
+                "SessionToken": "test_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            external_id="  my-external-id\n",
+        )
+
+        kwargs = mock_sts.assume_role.call_args.kwargs
+        assert kwargs.get("ExternalId") == "my-external-id"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("ext-id-123", "ext-id-123"),
+            ("  ext-id-123\t", "ext-id-123"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    def test_normalize_external_id(self, raw: str | None, expected: str | None):
+        """The one rule every AssumeRole call site applies to ExternalId."""
+        assert _normalize_external_id(raw) == expected
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_passes_explicit_credentials(

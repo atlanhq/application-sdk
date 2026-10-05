@@ -1,21 +1,13 @@
-"""Characterization tests for the known incremental-state lifecycle bugs.
+"""Regression tests for the incremental-state lifecycle bugs FND-3061 pinned.
 
-Each test here pins one latent bug in today's incremental state handling. While
-a bug exists its test is ``xfail(strict=True)``, so the suite stays green and
-turns red — XPASS — the moment a fix lands, forcing whoever lands it to delete
-the marker. The ``reason`` names the issue that owns the flip:
+Each test here reproduces one latent bug in the pre-FND-3064 incremental state
+handling. They were written as ``xfail(strict=True)`` characterizations and
+flipped to plain tests when FND-3064's ``CurrentStateStore`` (manifest commit,
+run-scoped state directories) fixed them; #5, #6 and #8 were flipped earlier by
+FND-3063 (not-found handling, backfill wiring, blocking walks).
 
-* FND-3064 — ``CurrentStateStore``: manifest commit and run-scoped state
-  directories.
-
-Tests without a marker (#5, #6, #8) were flipped by FND-3063 (not-found
-handling, backfill wiring, blocking walks) and now guard those fixes.
-
-``raises=AssertionError`` on every marker is deliberate: each test converts its
-bug into an assertion, so an incidental error (a fixture typo, an import
-failure, a changed signature) is reported as a real failure instead of being
-absorbed by the xfail. Setup checks go through ``_require`` (``pytest.fail``)
-rather than ``assert`` for the same reason.
+Setup checks go through ``_require`` (``pytest.fail``) rather than ``assert`` so
+a broken setup reads as a setup failure, not as the bug.
 
 Scenario #1 (stale-key accumulation across two runs) lives in
 ``tests/integration/test_incremental_pipeline.py`` alongside the other
@@ -38,12 +30,17 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from obstore.store import LocalStore
 
+from application_sdk.app.context import AppContext
+from application_sdk.common._listing import has_internal_component
 from application_sdk.common.incremental import helpers
 from application_sdk.common.incremental.marker import fetch_marker_from_storage
-from application_sdk.common.incremental.state.state_reader import download_current_state
 from application_sdk.common.incremental.state.state_writer import (
     create_current_state_snapshot,
-    prepare_previous_state,
+    materialize_previous_state,
+)
+from application_sdk.common.incremental.state.store import (
+    CurrentStateStore,
+    RunStateDirs,
 )
 from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
 from application_sdk.infrastructure.context import (
@@ -57,6 +54,7 @@ from application_sdk.storage.factory import create_local_store
 from application_sdk.templates.contracts.incremental_sql import (
     IncrementalRunContext,
     PrepareColumnQueriesInput,
+    ReadCurrentStateInput,
     WriteCurrentStateInput,
 )
 from application_sdk.templates.incremental_sql_metadata_extractor import (
@@ -70,8 +68,6 @@ DB = f"{CONN_QN}/EXAMPLE_DB"
 SCHEMA = f"{DB}/EXAMPLE_SCHEMA"
 T1 = f"{SCHEMA}/TABLE_ONE"
 T2 = f"{SCHEMA}/TABLE_TWO"
-
-M3_STORE = "FND-3064"
 
 
 # ---------------------------------------------------------------------------
@@ -114,12 +110,21 @@ def _write_jsonl(path: Path, entities: list[dict]) -> None:
 
 
 def _tree(root: Path) -> dict[str, bytes]:
-    """Every data file under *root*, keyed by its path relative to *root*."""
+    """Every data file under *root*, keyed by its path relative to *root*.
+
+    SDK working directories (a sync's ``.sdk-sync`` index, staging dirs) are
+    bookkeeping, not state, so they are left out.
+    """
     return {
-        p.relative_to(root).as_posix(): p.read_bytes()
+        rel: p.read_bytes()
         for p in sorted(root.rglob("*"))
         if p.is_file()
+        and not has_internal_component(rel := p.relative_to(root).as_posix())
     }
+
+
+def _store() -> CurrentStateStore:
+    return CurrentStateStore.for_connection(CONN_QN, APP)
 
 
 # ---------------------------------------------------------------------------
@@ -173,20 +178,22 @@ with warnings.catch_warnings():
 
 
 def _require(condition: bool, precondition: str) -> None:
-    """Fail — outside the xfail — when a test's setup did not hold.
-
-    Every marker here is ``raises=AssertionError``, so a bare ``assert`` on a
-    precondition would be absorbed as the expected failure and hide a broken
-    setup. ``pytest.fail`` raises ``Failed``, which the marker does not accept,
-    so only the bug assertion itself can xfail.
-    """
+    """Fail as a setup failure when a test's precondition did not hold."""
     if not condition:
         pytest.fail(f"precondition: {precondition}")
 
 
-def _extractor() -> _Extractor:
-    """An extractor instance without App registration (tasks are plain calls)."""
-    return _Extractor.__new__(_Extractor)
+def _extractor(run_id: str = "run") -> _Extractor:
+    """An extractor instance without App registration (tasks are plain calls).
+
+    *run_id* stands in for the Temporal run ID the worker puts on the app
+    context, which ``write_current_state`` stamps and keys by.
+    """
+    extractor = _Extractor.__new__(_Extractor)
+    extractor._context = AppContext(
+        app_name=APP, app_version="0.1.0", run_id=run_id, workflow_id="wf"
+    )
+    return extractor
 
 
 # ---------------------------------------------------------------------------
@@ -194,15 +201,6 @@ def _extractor() -> _Extractor:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M3_STORE}: current-state is uploaded file-by-file over the committed "
-        "snapshot, so a partial failure leaves a mixed state the retry diffs "
-        "against"
-    ),
-)
 async def test_retry_after_partial_upload_sees_a_consistent_previous_state(
     tmp_path: Path, store: LocalStore, staging: Path
 ) -> None:
@@ -230,10 +228,8 @@ async def test_retry_after_partial_upload_sees_a_consistent_previous_state(
         transformed / "column" / "chunk-1.json", [_column(T2, "B", run="run-2")]
     )
 
-    current_state_dir = helpers.get_persistent_artifacts_path(
-        CONN_QN, "current-state", APP
-    )
-    previous = await prepare_previous_state(CONN_QN, True, current_state_dir, APP)
+    dirs = RunStateDirs.for_output_path(tmp_path / "run-2")
+    previous = await materialize_previous_state(_store(), dirs.previous_state)
 
     # The first current-state object lands, every later one fails: the shape
     # of a pod killed or a store outage part-way through step 6.
@@ -255,19 +251,19 @@ async def test_retry_after_partial_upload_sees_a_consistent_previous_state(
                 connection_qualified_name=CONN_QN,
                 transformed_dir=transformed,
                 previous_state_dir=previous,
-                current_state_dir=current_state_dir,
+                current_state_dir=dirs.current_state,
                 s3_prefix=STATE_PREFIX.removesuffix("/current-state"),
                 run_id="run-2",
                 application_name=APP,
                 upload_concurrency=1,
+                incremental_diff_dir=dirs.diff,
             )
     _require(landed, "the injected failure must hit mid-upload")
 
     # The retry's view of the previous state must be one committed snapshot —
-    # run 1 whole, since run 2 never committed.
-    retry_previous = await prepare_previous_state(CONN_QN, True, current_state_dir, APP)
-    if retry_previous is None:
-        pytest.fail("precondition: the retry must find a previous state")
+    # run 1 whole, since run 2 never committed. Same run, same directory: the
+    # retry re-syncs it rather than starting from scratch.
+    retry_previous = await materialize_previous_state(_store(), dirs.previous_state)
     assert _tree(retry_previous) == committed, (
         "retry downloaded a previous state mixing run 1 and a failed run 2: "
         f"{sorted(k for k, v in _tree(retry_previous).items() if committed.get(k) != v)}"
@@ -280,35 +276,24 @@ async def test_retry_after_partial_upload_sees_a_consistent_previous_state(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M3_STORE}: the local current-state directory is fixed per "
-        "connection, so a retry shares it with the previous attempt's "
-        "still-running (uncancellable) offloaded thread"
-    ),
-)
 async def test_retry_is_isolated_from_a_live_writer_in_current_state(
     tmp_path: Path, store: LocalStore, staging: Path
 ) -> None:
     await _seed_state(tmp_path, {"table/chunk-0.json": [_table(T1)]})
 
-    current_state_dir = helpers.get_persistent_artifacts_path(
-        CONN_QN, "current-state", APP
-    )
-    (current_state_dir / "column").mkdir(parents=True)
+    # The directory every attempt of every run of the connection used to
+    # share — where an abandoned attempt's uncancellable offloaded copy (or an
+    # older SDK on the same worker) may still be writing.
+    shared_dir = helpers.get_persistent_artifacts_path(CONN_QN, "current-state", APP)
+    (shared_dir / "column").mkdir(parents=True)
 
-    # A cancelled activity's run_in_thread copy keeps running after the
-    # attempt is abandoned — asyncio cannot cancel the thread. Model it with a
-    # real thread writing into the same directory the retry is about to use.
     stop = threading.Event()
     started = threading.Event()
 
     def _abandoned_attempt_copy() -> None:
         i = 0
         while not stop.is_set():
-            dest = current_state_dir / "column"
+            dest = shared_dir / "column"
             try:
                 dest.mkdir(parents=True, exist_ok=True)
                 (dest / f"stale-attempt-{i}.json").write_text("{}", encoding="utf-8")
@@ -320,29 +305,37 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
     writer = threading.Thread(target=_abandoned_attempt_copy, daemon=True)
     writer.start()
     try:
-        # Without a live writer the retry trivially finds no foreign files and
-        # XPASSes, which would read as "fixed" rather than "never raced".
+        # Without a live writer the retry trivially finds no foreign files,
+        # which would read as "isolated" rather than "never raced".
         _require(
             started.wait(timeout=5), "the abandoned-attempt writer must be running"
         )
-        try:
-            state_dir, _, exists, _ = await download_current_state(CONN_QN, APP)
-        except OSError as exc:
-            raise AssertionError(
-                f"retry could not clear the state directory under a live writer: {exc!r}"
-            ) from exc
+        # The retry's read only probes; the files land in its own directory.
+        read = await _extractor().read_current_state(
+            ReadCurrentStateInput(
+                connection_qualified_name=CONN_QN,
+                application_name=APP,
+                output_path=str(tmp_path / "run-2"),
+            )
+        )
+        state_dir = await materialize_previous_state(
+            CurrentStateStore(read.current_state_s3_prefix),
+            RunStateDirs.for_output_path(tmp_path / "run-2").previous_state,
+        )
         # Let the abandoned attempt keep writing past the retry's download.
         await asyncio.sleep(0.05)
     finally:
         stop.set()
         writer.join(timeout=5)
 
-    _require(exists, "the retry must download the seeded state")
+    _require(read.current_state_available, "the retry must find the seeded state")
+    assert read.current_state_path == "", "the probe must not download anything"
     foreign = sorted(p.name for p in state_dir.rglob("stale-attempt-*.json"))
     assert not foreign, (
         f"retry's state directory holds {len(foreign)} files written by the "
         "abandoned attempt"
     )
+    assert _tree(state_dir) == {"table/chunk-0.json": json.dumps(_table(T1)).encode()}
 
 
 # ---------------------------------------------------------------------------
@@ -350,51 +343,24 @@ async def test_retry_is_isolated_from_a_live_writer_in_current_state(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M3_STORE}: current-state and its .previous temp directory are "
-        "derived from the connection alone, so concurrent runs collide"
-    ),
-)
 async def test_concurrent_runs_of_one_connection_use_distinct_directories(
     tmp_path: Path, store: LocalStore, staging: Path
 ) -> None:
-    await _seed_state(tmp_path, {"table/chunk-0.json": [_table(T1)]})
+    seeded = _tree(await _seed_state(tmp_path, {"table/chunk-0.json": [_table(T1)]}))
 
-    async def _both(a, b):
-        # The collision shows up one of two ways depending on how the race
-        # interleaves: one run's rmtree hits the directory the other is
-        # downloading into (ENOTEMPTY on Linux), or both finish and share a
-        # path. Either is the bug, so both become the assertion. The OSError
-        # may arrive wrapped (prepare_previous_state raises StateDownloadError),
-        # so the cause chain is walked.
-        results = await asyncio.gather(a, b, return_exceptions=True)
-        for r in results:
-            if not isinstance(r, BaseException):
-                continue
-            cause: BaseException | None = r
-            while cause is not None and not isinstance(cause, OSError):
-                cause = cause.__cause__
-            if cause is not None:
-                raise AssertionError(
-                    f"concurrent runs clobbered one shared directory: {cause!r}"
-                ) from r
-            raise r
-        return results
-
-    (dir_a, *_), (dir_b, *_) = await _both(
-        download_current_state(CONN_QN, APP),
-        download_current_state(CONN_QN, APP),
-    )
-    prev_a, prev_b = await _both(
-        prepare_previous_state(CONN_QN, True, dir_a, APP),
-        prepare_previous_state(CONN_QN, True, dir_b, APP),
+    dirs_a = RunStateDirs.for_output_path(tmp_path / "run-a")
+    dirs_b = RunStateDirs.for_output_path(tmp_path / "run-b")
+    prev_a, prev_b = await asyncio.gather(
+        materialize_previous_state(_store(), dirs_a.previous_state),
+        materialize_previous_state(_store(), dirs_b.previous_state),
     )
 
-    assert dir_a != dir_b, f"both runs read and rewrite {dir_a}"
     assert prev_a != prev_b, f"both runs download previous state into {prev_a}"
+    assert dirs_a.current_state != dirs_b.current_state
+    assert dirs_a.diff != dirs_b.diff
+    # Neither run's download disturbed the other's.
+    assert _tree(prev_a) == seeded
+    assert _tree(prev_b) == seeded
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +386,7 @@ async def test_marker_read_failure_other_than_not_found_propagates(
     store: LocalStore, staging: Path
 ) -> None:
     outage = StorageError("injected: store unavailable")
-    with patch.object(helpers, "download_file", AsyncMock(side_effect=outage)):
+    with patch.object(helpers, "_get_bytes", AsyncMock(side_effect=outage)):
         try:
             marker, _next = await fetch_marker_from_storage(CONN_QN, APP)
         except StorageError:
@@ -455,10 +421,9 @@ async def test_write_current_state_diff_includes_backfill_tables(
     with patch.object(
         state_writer, "download_transformed_data", AsyncMock(return_value=transformed)
     ):
-        out = await _extractor().write_current_state(
+        out = await _extractor("run-2").write_current_state(
             WriteCurrentStateInput(
                 workflow_id="wf",
-                workflow_run_id="run-2",
                 connection=ConnectionRef(
                     attributes=ConnectionAttributes(qualified_name=CONN_QN, name="c")
                 ),
@@ -512,16 +477,9 @@ async def _prepare_column_queries(tmp_path: Path, output_path: Path) -> tuple[in
     return out.backfill_tables, out.changed_tables
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        f"{M3_STORE}: prepare_column_extraction_queries treats any table file "
-        "in the fixed local current-state as a complete cached download"
-    ),
-)
+@pytest.mark.parametrize("partial_in", ["connection-dir", "run-dir"])
 async def test_partial_local_state_from_killed_attempt_is_not_trusted(
-    tmp_path: Path, store: LocalStore, staging: Path
+    tmp_path: Path, store: LocalStore, staging: Path, partial_in: str
 ) -> None:
     # The committed snapshot knows both tables, split across two files.
     await _seed_state(
@@ -538,8 +496,13 @@ async def test_partial_local_state_from_killed_attempt_is_not_trusted(
     )
 
     # A previous attempt on this worker was killed after downloading only the
-    # first file into the fixed local current-state directory.
-    local_state = helpers.get_persistent_artifacts_path(CONN_QN, "current-state", APP)
+    # first file: into the old fixed per-connection directory, or into this
+    # run's own previous-state directory (a same-run retry).
+    local_state = (
+        helpers.get_persistent_artifacts_path(CONN_QN, "current-state", APP)
+        if partial_in == "connection-dir"
+        else RunStateDirs.for_output_path(tmp_path / "run-2").previous_state
+    )
     _write_jsonl(local_state / "table" / "chunk-0.json", [_table(T1)])
 
     backfill, changed = await _prepare_column_queries(tmp_path, tmp_path / "run-2")
@@ -600,7 +563,9 @@ async def test_state_tree_walks_run_off_the_event_loop(
         [_table(f"{SCHEMA}/T{i}") for i in range(20)],
     )
 
-    await download_current_state(CONN_QN, APP)
+    await _extractor().read_current_state(
+        ReadCurrentStateInput(connection_qualified_name=CONN_QN, application_name=APP)
+    )
     await _prepare_column_queries(tmp_path, tmp_path / "run-2")
 
     assert not loop_thread_walks, (

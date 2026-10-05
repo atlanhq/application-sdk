@@ -367,8 +367,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "needs human judgement."
         ),
         short_description=(
-            "Subclasses the deprecated BaseSDRIntegrationTest harness (removed in "
-            "v4.0)"
+            "Subclasses the deprecated BaseSDRIntegrationTest harness (removed in v4.0)"
         ),
         full_description=(
             "``BaseSDRIntegrationTest`` (``application_sdk.testing.sdr.base``) is\n"
@@ -434,6 +433,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Suppress with ``# conformance: ignore[T003] <reason>`` on the class\n"
             "definition line for a legitimate exception (e.g. a shim that\n"
             "intentionally keeps the legacy harness during migration).\n"
+            "\n**Fixing it well**\n\n"
+            "* Delete the whole SDR test folder (``tests/sdr/``, with its ``__init__.py``, conftest and helpers) once its scenarios have a home; never leave a docstring-only or empty stub where the harness was.\n\n"
+            "* Before deleting, move each scenario where the rationale puts it: auth, preflight and credential resolution to the handler unit tests; the full DAG to the generated E2E base (``tests/e2e/``), which the reference apps extend.\n\n"
+            "* Update anything under ``tests/`` or the docs that points at the deleted path.\n\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
@@ -1048,6 +1051,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "first line for intentional non-tier test infrastructure that happens to\n"
             "match the collection glob (rare — prefer a filename that doesn't match\n"
             "the glob for pure helpers, which also avoids T008-adjacent confusion).\n"
+            "\n**Fixing it well**\n\n"
+            "* A test that subclasses the deprecated SDR harness (``BaseSDRIntegrationTest``) is not moved: T003 retires it, and moving it only carries the T003 finding to the new path.\n\n"
+            "* Otherwise move the file into the tier the reference apps use (``tests/unit``, ``tests/integration``, ``tests/e2e``, ``tests/ui``) and update anything that imports it.\n\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
@@ -1710,10 +1716,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "rule fires when none of those hold:\n"
             "\n"
             "* no caller exists and no workflow reaches the tier at all, or\n"
+            "\n"
             "* the caller sets ``enable-e2e: false`` (skips the e2e job entirely), or\n"
+            "\n"
             "* the caller leaves ``app-image-name`` empty, which disables the GHCR\n"
-            "  image build — the e2e job has no connector image to start the worker\n"
-            "  container from.\n"
+            "image build — the e2e job has no connector image to start the worker\n"
+            "container from.\n"
             "\n"
             "**Fix:** add or repair the caller in ``.github/workflows/tests.yaml``::\n"
             "\n"

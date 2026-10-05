@@ -164,6 +164,194 @@ entrypoint renders its own manifest.
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
+### Streaming Dispatch on Event Triggers
+
+By default an event trigger fires a **fresh top-level workflow run** per ingest batch,
+and that run reads its events back out of the workflow's Iceberg events table. For a
+genuinely continuous, high-volume, seconds-level-latency workload that round trip is
+the cost — so AE offers a second dispatch shell: one short run per Kafka micro-batch,
+handed its events directly, with no Iceberg write on the path at all.
+
+Opt in per trigger via `EventTriggerConfig`:
+
+**`EventTriggerConfig`:**
+
+`EventTriggerConfig` separates two categories. **Contract** — what this app consumes
+and what it asserts about delivery (`maxRetries`, `ackPaths`) — survives any change to
+how AE dispatches. **Dispatch mechanics** — which AE execution shell to use — lives
+under `streaming` and is meaningless outside AE's current implementation.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maxRetries` | `Int` (≥ 0) | `3` | Redelivery bound for the batch path. **Inert under `streaming.enabled`, and suppressed from the rendered manifest** — the streaming path reads neither it nor `ack_paths`; a run's retries are Temporal's, set by AE. |
+| `ackPaths` | `Listing<String>` | `new Listing {}` | JSONPaths to the ack parquet. Empty renders AE's fire-and-forget `[""]`, never `[]` — and `[""]` is still rendered under streaming, because AE rejects a workflow whose event trigger has no `ack_paths` at all. **Declaring a real path alongside `streaming.enabled` is refused at eval time** — see Caveats. |
+| `streaming.enabled` | `Boolean` | `false` | Route this trigger to the streaming shell instead of a per-batch top-level run. |
+
+`enabled` is the whole surface. There is deliberately **no size or timing knob**: AE
+bounds a micro-batch by BYTES, not by a count the contract picks, and the unit of work
+is one Dapr bulk delivery split to fit the object it writes. A per-trigger count would
+not survive that split, and would describe a queue this shell does not have.
+
+The entrypoint also needs **`streamingWorkflowType`** — the workflow type the
+DAG dispatches when any of its triggers stream:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `streamingWorkflowType` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+
+Streaming is a different execution, not a faster one: the batch shell's workflow reads
+the entrypoint's Iceberg events table, while the streaming shell hands the run its
+events directly and never writes that table. Those are two different workflow types in
+the app, so one `workflowType` (or `workflowTypeOverride` on NativeApp.pkl) cannot
+serve both.
+
+#### Your streaming workflow must handle both delivery forms
+
+When streaming is on, the extract node renders the streaming type and gains **two**
+args:
+
+| Arg | Value | When |
+|---|---|---|
+| `args.batch` | `$.event.batch` | the events inline (a list of `{id, topic, data}`) when the serialised micro-batch fits AE's inline cap — otherwise `null` |
+| `args.batch_key` | `$.event.batch_key` | **always** — the object-store key the batch can be read from |
+
+Read the key whenever `batch` is null. A workflow that only ever reads `batch` works
+perfectly in testing and then applies **nothing, silently**, the first time a batch
+goes over the cap — and because AE acks Kafka once the run starts, those events are
+gone. Both args are rendered together for exactly this reason; there is no contract
+shape that yields one without the other.
+
+**In an SDK app, only `batch_key` reaches your code.** The generated
+`AppInputContract` (`app/generated/_input.py`) declares `batch_key: str` while
+streaming is on, and does **not** declare `batch`. The SDK's `Input` drops undeclared
+keys, so the inline `batch` never arrives; the SDK logs it as an unknown key once per
+run. Read the events from `batch_key` every time.
+
+`batch` is left out on purpose. Its envelope (`{id, topic, data}`, with an arbitrary
+`data` payload) has no typed contract yet, and an untyped `list[dict[str, Any]]`
+fails the SDK's payload-safety check (`AAF-CTR-002`) even with `MaxItems`, because
+the inner dict is unbounded too. Declaring it would mean opting the whole input class
+out of that check. For `batch` to reach an SDK app, the envelope first needs a real
+typed definition.
+
+**Both directions are refused at eval time**, because both leave a contract saying one
+thing while the node renders the other:
+
+| Declared | Refused because |
+|---|---|
+| triggers stream, no `streamingWorkflowType` | the node dispatches the **batch** workflow, which starts with no events in its arguments |
+| `streamingWorkflowType` set, nothing streams | the node renders the batch type and the declared streaming type is dropped |
+
+The first was observed end to end on a tenant before the refusal existed: AE dispatched
+the run, the batch workflow started with nothing to apply, and nothing reported an
+error — streaming was on in name only. The second is its mirror and fails just as
+quietly, which is why a declared-but-inert value is refused here the same way it is
+for `ackPaths`.
+
+Streaming is declared **per entrypoint**, like `schedules` and `artifactSchemas`. A
+trigger binds to an entrypoint by containment — `events` lives in that entrypoint's
+`contract` — so for a **multi-entrypoint** app, declare `events` and
+`streamingWorkflowType` on each [entrypoint's `contract`](#multi-entrypoint-bundle),
+since each entrypoint renders its own manifest. Declaring either on a bundle root is
+refused at eval time: the root renders no manifest, so both would be dropped silently.
+
+An app may therefore have as many streaming entrypoints as it likes, each with its own
+topics and its own workflow type. One entrypoint has exactly one
+`streamingWorkflowType`, because the extract node it names is per-entrypoint.
+
+### A streaming entrypoint holds streaming triggers and nothing else
+
+An entrypoint renders **one** extract node, and every trigger on it — each schedule,
+each event trigger — starts that same node. Its `workflow_type` is therefore a
+property of the entrypoint, not of the trigger that fired, and it has only two
+possible shapes: the batch type, which reads the Iceberg events table, or the
+streaming type, which reads `args.batch`. They are mutually exclusive.
+
+So a streaming entrypoint may not also carry a schedule or a non-streaming event
+trigger. Both are refused at eval time, because both fail silently otherwise:
+
+| On a streaming entrypoint | What happens without the refusal |
+|---|---|
+| a non-streaming event trigger | starts the streaming workflow with `args.batch` resolving to nothing; applies nothing |
+| a schedule | same, and a scheduled run carries no events at all |
+
+Put the streaming triggers on their own entrypoint — `examples/streaming` is that
+shape, and `examples/scheduled` is the batch-plus-schedules shape.
+
+```pkl
+// Required whenever any trigger below streams.
+streamingWorkflowType = "example-app:cdc-stream"
+
+events {
+  // Streaming: one short run per Kafka micro-batch.
+  new EventTriggerSpec {
+    name = "cdc-user-realtime"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // A second topic on the same shell — same declaration, no knobs to tune.
+  new EventTriggerSpec {
+    name = "cdc-audit"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.audit" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
+```
+
+Renders into each trigger's `trigger_config`:
+
+```json
+{
+  "ack_paths": [""],
+  "streaming_enabled": true
+}
+```
+
+Note the absence of `max_retries`: it is inert on this path, so it is not rendered
+rather than shipped as a key AE will not act on. AE defaults it to `3` when absent.
+
+**Writing the DAG.** A streaming DAG does not read the Iceberg events table — it reads
+its events inline from the `$.event.*` jsonpath namespace:
+
+| Path | Shape |
+|---|---|
+| `$.event.batch_key` | **Always set.** The object-store key holding the batch as a list of `{id, topic, data}` envelopes. Read it whenever `batch` is null. |
+| `$.event.batch` | The same list inline when the batch fits AE's inline cap — **`null` when it does not**. |
+| `$.event.event_count` | Always set: how many events the batch holds. |
+| `$.event.topic` | Always set: the Kafka topic the batch came from. Not derivable from the payload — a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
+
+These four are the whole namespace. AE builds the event context in one place
+(`automation_engine/workflows/streaming_batch.py`) and sends nothing else, so a DAG
+reading any other `$.event.*` path fails its node with `did not match any value`.
+
+**Caveats.**
+
+- The streaming keys are emitted **only** when `streaming.enabled` is true, so a trigger
+  that does not opt in renders byte-identically to before this feature existed.
+- **`ackPaths` together with `streaming.enabled` is refused at eval time.** Declaring an
+  ack path is an explicit at-least-once durability assertion, and the streaming path
+  writes no acks and has no watchdog backstop — so the contract would read as "acked once
+  the DAG produced its output" and behave as fire-and-forget. That costs events, not
+  latency, so it is refused rather than silently voided. Drop `ackPaths`, or drop
+  `streaming`.
+- **Handle `batch = null`.** Over AE's inline cap only the key is sent. A workflow that
+  reads `batch` alone applies nothing and reports success, and Kafka is already acked
+  by then — see *Your streaming workflow must handle both delivery forms* above. An
+  SDK app's generated input model carries only `batch_key`, so it reads the key every
+  time.
+- There is no watchdog backstop on this path. A run that exhausts its Temporal retries
+  is not recovered: its events were acked to Kafka when the run started.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) when they fit
+  inline, and otherwise reads `args.batch_key` (`$.event.batch_key`), which is always
+  set. It must not expect to read the Iceberg events table — the streaming path never
+  writes it.
+
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
 ### Legacy Workflow Type Aliases
 
 A migration renames an app's Temporal workflow type, but external callers keep
@@ -3001,7 +3189,7 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"connection"`, `"radio"`, etc.) |
+| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"apitree"`, `"connection"`, `"radio"`, etc.) |
 | `baseEnum` | Listing<String>? | null | Base enum values (for radio/select base widgets) |
 | `baseEnumNames` | Listing<String>? | null | Base enum display names |
 | `default` | Any? | null | Default value |
@@ -3011,14 +3199,18 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 | `uiType` / `content` / `iconName` / `hideWidgetIcon` / `linkConfig` | mixed | null | Generic base UI props used by widgets such as `InfoBanner`. |
 | `widgetConfig` | Any? | null | Generic base UI config object used by widgets such as `dsnTreeMap`. |
 | `sqlQuery` | String? | null | SQL query (when `baseWidgetType = "sqltree"`) |
-| `credentialRef` | String? | null | Credential variable name (when sqltree) |
-| `connectorConfig` | String? | null | Connector config name (when sqltree) |
+| `credentialRef` | String? | null | Credential variable name; emits `credential` (when sqltree or apitree) |
+| `connectorConfig` | String? | null | Connector config name; emits `connectorConfigName` (when sqltree or apitree) |
 | `schemaExcludePatterns` | List<String>? | null | Schema exclude patterns (when sqltree) |
 | `databaseExcludePatterns` | List<String>? | null | Database exclude patterns (when sqltree) |
 | `desc` | String? | null | Description text (when sqltree) |
-| `multiSelect` | Boolean? | null | Multi-select (when sqltree) |
+| `multiSelect` | Boolean? | null | Multi-select. Emits `isMultiple` when `baseWidgetType = "apitree"`, `multiple` otherwise |
 | `dependsOn` | String? | null | Sibling form field whose value scopes the sqltree branch; emits `dependentConnectionField` |
 | `databasesUnselectable` | Boolean? | null | Lock database-level selection in sqltree branch; emits `areDatabasesUnselectable` |
+| `metadataTemplateKey` | String? | null | Routing key sent with the apitree's metadata request, e.g. `"folders"` — a short name, not a template body. Native SDK apps receive it as `MetadataInput.metadata_template_key` and the metadata handler picks what to list from it. Legacy REST connectors use it to select an entry in the credential configmap's `restMetadataTemplate`. Emitted as `metadataTemplateKey` (when apitree). |
+| `metadataTransformerTemplateKey` | String? | null | Routing key for the output transformer. Only legacy REST connectors use it (selects an entry in `restMetadataOutputTransformerTemplate`); native SDK apps ignore it. Emitted as `metadataTransformerTemplateKey` (when apitree). |
+| `flatten` | Boolean? | null | Flatten values retrieved via API; emits `flattenValue` (when apitree) |
+| `strict` | Boolean? | null | Strictly check the tree returned via API; emits `treeCheckStrictly` (when apitree) |
 | `connOptions` | Boolean? | null | Show connection options (when `baseWidgetType = "connection"`) |
 
 ### Condition
@@ -3067,6 +3259,56 @@ Each `Config.Condition` in a `conditions` listing (used by `ConditionalInput` an
 ```
 
 Generates `type: "conditional"` with `ui.widget: "sqltree"` as the base, and a condition that switches to a plain text input when `extraction-method = "agent"`.
+
+### Example: APITree with Agent Mode Fallback
+
+In agent (SDR) mode the Atlan UI cannot reach the source credentials, so an
+API-backed tree cannot load. Wrap the apitree in a `ConditionalInput` and swap in
+a text input when `extraction-method = "agent"`:
+
+```pkl
+["include-folders"] = new ConditionalInput {
+  title = "Include Folders"
+  helpText = "Only selected folders will be crawled."
+  baseWidgetType = "apitree"
+  connectorConfig = "atlan-connectors-example"
+  credentialRef = "credential-guid"
+  metadataTemplateKey = "folders"
+  width = 4
+  default = new Mapping {}
+  additionalProperties = new Dynamic { type = "array" }
+  conditions {
+    new Condition {
+      property = "extraction-method"
+      value = "agent"
+      overrideUi = new Mapping<String, Any> {
+        ["widget"] = "input"
+        ["label"] = "Include Folders"
+        ["placeholder"] = #"{"^folder1$": [], "^folder2$": []}"#
+        ["grid"] = 4
+      }
+    }
+  }
+}
+```
+
+The base (direct-mode) `ui` carries the same keys a plain `APITree` emits:
+`widget: "apitree"`, `connectorConfigName`, `credential`, and
+`metadataTemplateKey`. `metadataTransformerTemplateKey`, `flatten`,
+`strict`, and `multiSelect` emit `metadataTransformerTemplateKey`,
+`flattenValue`, `treeCheckStrictly`, and `isMultiple` only when set.
+
+`metadataTemplateKey` is a routing key, not a template. The frontend sends it
+with the tree's metadata request. A native SDK app receives it as
+`MetadataInput.metadata_template_key` (also mirrored onto `object_filter`), and
+its metadata handler decides what to list, e.g. folders vs. projects. The key
+names here match the emitted `ui` keys; `APITree` keeps its older
+`metadataTemplate` / `metadataTransformer` names. Unlike `APITree`,
+`ConditionalInput` does not default `credentialRef`, `default`, or
+`additionalProperties`; set them as shown. Other base widget types are
+unchanged: a sqltree `multiSelect` still emits `multiple`. Both
+`Widgets.ConditionalInput` (App.pkl) and `Config.ConditionalInput`
+(NativeApp.pkl) support these properties.
 
 ---
 

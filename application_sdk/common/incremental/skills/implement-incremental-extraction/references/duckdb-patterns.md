@@ -66,28 +66,16 @@ def get_tables_needing_column_extraction(transformed_dir, backfill_qns):
 
 def get_backfill_tables(current_transformed_dir, previous_current_state_dir):
     """Find tables needing backfill via DuckDB set comparison."""
-    if not previous_current_state_dir:
+    if not previous_current_state_dir or not previous_current_state_dir.exists():
         return None
 
-    conn = get_duckdb_connection()  # File-backed DuckDB
-
-    # Current tables from transformed output
-    current_tables = conn.sql(f"""
-        SELECT DISTINCT json_extract_string(attributes, '$.qualifiedName') AS qn
-        FROM read_json_auto('{current_transformed_dir}/table/*.json')
-    """).fetchall()
-
-    # Previous tables from current-state
-    previous_tables = conn.sql(f"""
-        SELECT DISTINCT json_extract_string(attributes, '$.qualifiedName') AS qn
-        FROM read_json_auto('{previous_current_state_dir}/table/*.json')
-    """).fetchall()
-
-    current_set = {row[0] for row in current_tables}
-    previous_set = {row[0] for row in previous_tables}
-
-    # Tables in current but not in previous = need backfill
-    return current_set - previous_set
+    with DuckDBConnectionManager() as conn_manager:  # file-backed DuckDB
+        conn = conn_manager.connection
+        # Load {dir}/table/*.json from each side into a DuckDB table
+        _load_tables_to_duckdb(conn, current_transformed_dir, "current_tables")
+        _load_tables_to_duckdb(conn, previous_current_state_dir, "previous_tables")
+        # Tables in current but not in previous = need backfill
+        ...  # SELECT qn FROM current_tables EXCEPT SELECT qn FROM previous_tables
 ```
 
 ### DuckDB Connection Management
@@ -114,7 +102,7 @@ Key points:
 ### What It Does
 
 RocksDB (via `rocksdict` / `Rdict`) provides disk-backed key-value storage for
-table states during ancestral merge. This is important for connectors with
+table states while building the current-state snapshot and diff. This is important for connectors with
 millions of tables where keeping all states in memory would cause OOM.
 
 ```python
@@ -141,13 +129,13 @@ def create_states_db(db_path=None):
 
 class TableScope(BaseModel):
     table_qualified_names: Set[str] = Field(default_factory=set)
-    table_states: Any = Field(  # Rdict type (RocksDB)
+    table_states: SkipValidation[StatesStore] = Field(  # Rdict (RocksDB) in production
         default_factory=create_states_db,
         exclude=True,
     )
 
 # Usage in table_scope.py:
-scope.table_states[qualified_name] = "CREATED"  # Write to RocksDB
+scope.table_states[qualified_name] = TableState.CREATED  # Write to RocksDB
 state = scope.table_states.get(qualified_name)    # Read from RocksDB
 ```
 

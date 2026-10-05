@@ -32,7 +32,7 @@ Usage::
 Credential format (standard ``csa-connectors-objectstore``)::
 
     S3:   authType="s3",   username=access_key, password=secret_key,
-          extra={s3_bucket, region, aws_role_arn?}
+          extra={s3_bucket, region, aws_role_arn?, aws_external_id?}
     GCS:  authType="gcs",  username=project_id,  password=service_account_json,
           extra={gcs_bucket}
     ADLS: authType="adls", username=client_id,   password=client_secret,
@@ -590,6 +590,9 @@ def _create_s3_store(
             base_session_token=(creds.get("token") or None)
             if base_access_key
             else None,
+            # Required when the role's trust policy has an sts:ExternalId
+            # condition; the provider drops a blank one.
+            external_id=extra.get("aws_external_id"),
         )
         _log().debug("S3 cross-account assume-role auth configured")
     elif access_key and secret_key:

@@ -19,9 +19,10 @@
 #     1. Remove `sdk-review-approved`, `sdk-review-needs-human`, and
 #        `sdk-review-needs-rebase` labels if present. Their semantics
 #        ("the bot reviewed THIS head") no longer hold.
-#     2. Set `sdk-review` commit status on the new HEAD to `pending`
-#        with description "Awaiting @sdk-review trigger on new commit"
-#        so the PR check surface reflects "needs a fresh review".
+#
+#   It no longer sets a pending `sdk-review` commit status on the new HEAD:
+#   sdk-review is retired (reviews are `/lens`), so nothing would ever
+#   complete that status and it would sit "waiting" on every PR forever.
 
 name: SDK Review — reset state on new commit
 
@@ -32,7 +33,6 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  statuses: write
 
 jobs:
   sdk-review-reset:
@@ -56,25 +56,3 @@ jobs:
             gh pr edit "${PR_NUMBER}" --repo "${REPO}" --remove-label "${label}" 2>/dev/null || true
           done
           echo "Stripped stale sdk-review-* labels from PR #${PR_NUMBER} (if present)."
-
-      - name: Reset sdk-review commit status on new HEAD
-        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
-        with:
-          script: |
-            // The `sdk-review` context lives on a specific SHA. When a new
-            // commit lands, the new SHA has no status under that context.
-            // Branch protection treats "missing" as "not yet run" — which
-            // is technically correct, but doesn't surface a visible
-            // "needs review" signal to the author. Setting `pending` with
-            // a clear description gives the PR's check surface a row that
-            // reads "Awaiting @sdk-review trigger on new commit" instead
-            // of silently dropping the previous verdict.
-            await github.rest.repos.createCommitStatus({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              sha: context.payload.pull_request.head.sha,
-              state: 'pending',
-              context: 'sdk-review',
-              description: 'Awaiting @sdk-review trigger on new commit',
-              target_url: `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/pull/${context.payload.pull_request.number}`,
-            });

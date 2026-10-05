@@ -22,7 +22,6 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -31,7 +30,6 @@ import sdk_review_dispatch as sd  # noqa: E402  (needs the sys.path bootstrap)
 import sdk_review_verdict_gate as vg  # noqa: E402  (sys.path bootstrap)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = REPO_ROOT / ".github/workflows/sdk-review.yml"
 
 
 def _stream(*lines: str, now=None) -> sd.SSEState:
@@ -801,121 +799,9 @@ def test_step_summary_surfaces_the_error_detail():
 # ---------------------------------------------------------------------------
 
 
-def dispatch_step() -> dict:
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    for step in workflow["jobs"]["sdk-review-dispatch"]["steps"]:
-        if step.get("id") == "dispatch":
-            return step
-    raise AssertionError("no `dispatch` step in sdk-review-dispatch")
-
-
-def test_the_workflow_calls_this_script_and_inlines_no_logic():
-    run = dispatch_step()["run"]
-    assert run.strip() == "python3 .github/scripts/sdk_review_dispatch.py"
-
-
-def test_the_step_is_handed_every_variable_the_script_requires():
-    env = dispatch_step()["env"]
-    for key in (
-        "MOTHERSHIP_URL",
-        "HARNESS_TOKEN",
-        "GH_TOKEN",
-        "SESSION_ID",
-        "PR_NUMBER",
-        "PR_URL",
-        "HEAD_SHA",
-        "HEAD_REF",
-        "BASE_REF",
-        "REPO_FULL_NAME",
-        "COMMENTER",
-        "COMMENTER_INTENT",
-        "COMMENT_ID",
-        "STARTER_STARTED_AT",
-        "GHA_RUN_URL",
-    ):
-        assert key in env, f"dispatch step no longer supplies {key}"
-
-
-def test_the_session_id_comes_from_the_step_the_terminator_also_reads():
-    """Two derivations would drift, and a stale id stops nothing on cancel."""
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
-    terminator = next(
-        s for s in steps if s.get("name") == "Terminate mothership sandbox on cancel"
-    )
-    assert (
-        dispatch_step()["env"]["SESSION_ID"]
-        == terminator["env"]["SESSION_ID"]
-        == "${{ steps.session.outputs.session_id }}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # the sandbox-name budget (FND-677)
 # ---------------------------------------------------------------------------
-
-# Worst case, deliberately past anything GitHub has handed this repo: 6-digit
-# PR numbers, a 13-digit run id (they are 11 today), and a 2-digit run attempt.
-# The budget has to survive growth, not just today's values.
-WORST_CASE_SESSION_VARS = {
-    "PR_NUMBER": "999999",
-    "HEAD_SHA_SHORT": "0cab6b6e",
-    "RUN_ID": "9999999999999",
-    "RUN_ATTEMPT": "99",
-}
-
-
-def session_step() -> dict:
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
-    for step in steps:
-        if step.get("id") == "session":
-            return step
-    raise AssertionError("no `session` step in sdk-review-dispatch")
-
-
-def worst_case_base_session_id() -> str:
-    """The id the workflow would emit for the worst-case inputs.
-
-    Read out of the YAML rather than restated here: a test that hardcodes the
-    format cannot fail when the format is what drifts.
-    """
-    step = session_step()
-    template = re.search(r'session_id=(\S+)" >> "\$GITHUB_OUTPUT"', step["run"])
-    assert template, f"no session_id assignment in the `session` step: {step['run']!r}"
-    fmt = template.group(1)
-    referenced = set(re.findall(r"\$\{(\w+)", fmt))
-    assert referenced == set(WORST_CASE_SESSION_VARS), (
-        "the session id format changed which variables it interpolates — "
-        f"{referenced} vs {set(WORST_CASE_SESSION_VARS)}; re-check the budget "
-        "before updating this list"
-    )
-    for name, value in WORST_CASE_SESSION_VARS.items():
-        assert name in step["env"], f"session step no longer supplies {name}"
-        fmt = fmt.replace(f"${{{name}}}", value)
-    assert "$" not in fmt, f"unsubstituted shell in {fmt!r}"
-    return fmt
-
-
-def test_every_id_in_the_ladder_fits_the_sandbox_name_untruncated():
-    """The bug that made every re-dispatch unbootable, asserted at the source.
-
-    Mothership names the sandbox after the session id and rejects anything over
-    63 chars, so the base id has to leave room for the LONGEST suffix the ladder
-    can append — not merely fit on its own. It used to carry the repo name,
-    which put the base at 62 and `-retry1` at 69: attempt 1 booted and every
-    retry died on `/sandbox/create`.
-
-    Asserting equality, not just length, is the point: a `len() <= 63` check
-    would pass just as happily on an id `fit_sandbox_id()` had silently
-    replaced with a digest, which is a backstop and not a state to ship in.
-    """
-    base = worst_case_base_session_id()
-    for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1):
-        expected = f"{base}{sd.attempt_suffix(attempt)}"
-        assert len(expected) <= sd.SANDBOX_ID_MAX_CHARS, (
-            f"attempt {attempt} id is {len(expected)} chars, over mothership's "
-            f"{sd.SANDBOX_ID_MAX_CHARS}-char sandbox name: {expected}"
-        )
-        assert sd.attempt_session_id(base, attempt) == expected
 
 
 def test_a_short_id_is_handed_through_unchanged():

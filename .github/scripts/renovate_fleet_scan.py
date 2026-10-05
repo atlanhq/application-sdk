@@ -70,11 +70,13 @@ OPEN_PAGE_SIZE = 25
 MERGED_PAGE_SIZE = 100
 # Width of one merged-search date window (see fetch_merged_prs). Page size is a
 # cost knob; this is a CAP knob — it bounds how many results ONE query can match,
-# which pagination cannot help with. Sized from the live fleet on 2026-09-17:
-# app/atlan-app-fleet merged 1366 PRs in 30 days, ~320 in any 7, so a week sits
-# at roughly a third of the 1000-result cap and leaves room for the fleet to
-# grow before the guard fires again.
-MERGED_WINDOW_DAYS = 7
+# which pagination cannot help with. First sized at 7 days on 2026-09-17 (~320
+# merges in any 7). Re-sized 2026-10-02 after the fleet outgrew it: the guard
+# fired on every hourly run from 2026-09-28 (1871 merges in 09-16..09-22), which
+# also skipped the auto-merge re-arm step that reads this scan. Measured over
+# 09-02..10-02 the peak was 1986 in any 7 days, 884 in any 2, 471 in any 1 —
+# so only a single day keeps release fan-out days under half the cap.
+MERGED_WINDOW_DAYS = 1
 # Back-compat alias for callers/tests that predate the split.
 PAGE_SIZE = OPEN_PAGE_SIZE
 # Safety backstop, not a real ceiling: 50 pages x 100 = 5000 PRs in one search window,

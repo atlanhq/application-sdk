@@ -2,6 +2,9 @@
   "type_aliases": {
     "application_sdk.app.task.TaskMethod": "Callable[..., Any]",
     "application_sdk.common.filter_matching.FilterInput": "str | list[str] | dict[str, object] | None",
+    "application_sdk.common.incremental.state.incremental_diff.DuckDBConnection": "DuckDBConnectionLike | None",
+    "application_sdk.common.incremental.state.table_scope.DuckDBConnection": "DuckDBConnectionLike | None",
+    "application_sdk.common.incremental.storage.duckdb_utils.DuckDBConnection": "DuckDBConnectionLike | None",
     "application_sdk.common.spillable_dict.SpillableKey": "str | int | float | bool | bytes",
     "application_sdk.common.sql_filters.FilterValue": "list[str] | str | dict[str, dict[str, Any]]",
     "application_sdk.contracts.BoundedDict": "Annotated[dict[K, V], MaxItems]",
