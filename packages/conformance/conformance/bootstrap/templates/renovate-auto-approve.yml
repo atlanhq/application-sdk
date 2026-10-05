@@ -18,7 +18,9 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: PR number to evaluate (for manual testing / re-approval)
+        description: >-
+          PR number to evaluate (for manual testing / re-approval). The fan-in
+          follow-up passes several, comma-separated, together with head_sha.
         required: true
         type: string
       head_sha:

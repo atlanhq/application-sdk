@@ -167,7 +167,9 @@ class FakeGh:
         self.calls.append(cmd)
         args = cmd[1:]
         out, rc = "", 0
-        if args[0] == "api":
+        if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/reviews"):
+            self.approvals.append(cmd)
+        elif args[0] == "api":
             path = args[1]
             if path.endswith("/files"):
                 out, rc = self._respond(self.files, slurp=True)
@@ -196,6 +198,11 @@ class FakeGh:
     @property
     def checks_calls(self) -> int:
         return sum(1 for c in self.calls if c[1:3] == ["pr", "checks"])
+
+    @property
+    def approved_prs(self) -> list[str]:
+        """PR numbers approved, read from ``repos/<o>/<r>/pulls/<n>/reviews``."""
+        return [c[4].split("/")[-2] for c in self.approvals]
 
     @property
     def dispatches(self) -> list[list[str]]:
@@ -916,9 +923,10 @@ class TestFanInWait:
         )
         assert fake.approvals == []
         assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        # ONE follow-up for the SHA: the reusable's per-SHA group holds a single
+        # pending run, so a second same-SHA dispatch would evict the first.
         assert [d[-3:] for d in fake.dispatches] == [
-            ["pr_number=7", "-f", f"head_sha={SHA}"],
-            ["pr_number=8", "-f", f"head_sha={SHA}"],
+            ["pr_number=7,8", "-f", f"head_sha={SHA}"],
         ]
 
     def test_still_pending_at_budget_end_dispatches_one_follow_up(
@@ -949,6 +957,23 @@ class TestFanInWait:
             ]
         ]
         assert "dispatched one follow-up" in log
+
+    def test_a_follow_up_for_several_prs_evaluates_each(self, monkeypatch, capsys):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={
+                "EVENT_NAME": "workflow_dispatch",
+                "RUN_SHA": SHA,
+                "DISPATCH_PR": "7,8",
+            },
+        )
+        assert fake.approved_prs == ["7", "8"]
+
+    def test_a_multi_pr_dispatch_without_a_sha_is_refused(self):
+        fake = FakeGh(**_defaults())
+        with pytest.raises(gate.GhError):
+            gate.resolve_prs(REPO, "workflow_dispatch", "", "7,8", fake)
 
     def test_a_follow_up_judges_the_sha_it_was_dispatched_for(
         self, monkeypatch, capsys
@@ -1211,7 +1236,7 @@ class TestOrchestration:
                 {"state": "open", "number": 8},
             ],
         )
-        assert [c[3] for c in fake.approvals] == ["7", "8"]
+        assert fake.approved_prs == ["7", "8"]
         assert "--- Evaluating PR #7 ---" in log and "--- Evaluating PR #8 ---" in log
 
     def test_one_pr_failing_a_condition_does_not_abort_the_rest(
@@ -1250,7 +1275,7 @@ class TestOrchestration:
         log = capsys.readouterr().out
         assert code == 0
         assert "PR #7: HEAD moved" in log
-        assert [c[3] for c in fake.approvals] == ["8"]
+        assert fake.approved_prs == ["8"]
 
     def test_conditions_short_circuit_before_paying_for_later_calls(
         self, monkeypatch, capsys
@@ -1270,7 +1295,7 @@ class TestOrchestration:
         _code, fake, _log = run_main(monkeypatch, capsys=capsys)
         joined = [" ".join(c) for c in fake.calls]
         status_at = next(i for i, c in enumerate(joined) if c.endswith("/status"))
-        review_at = next(i for i, c in enumerate(joined) if "pr review" in c)
+        review_at = next(i for i, c in enumerate(joined) if "event=APPROVE" in c)
         assert status_at < review_at
 
     def test_no_open_prs_exits_clean_without_touching_anything(
@@ -1286,9 +1311,15 @@ class TestOrchestration:
     ):
         _code, fake, _log = run_main(monkeypatch, capsys=capsys)
         cmd = fake.approvals[0]
-        assert cmd[:6] == ["gh", "pr", "review", "7", "--repo", REPO]
-        assert "--approve" in cmd
-        assert cmd[cmd.index("--body") + 1] == gate.APPROVAL_BODY
+        assert cmd[:5] == ["gh", "api", "-X", "POST", f"repos/{REPO}/pulls/7/reviews"]
+        assert "event=APPROVE" in cmd
+        assert f"body={gate.APPROVAL_BODY}" in cmd
+
+    def test_approval_is_bound_to_the_evaluated_sha(self, monkeypatch, capsys):
+        # `gh pr review` approves whatever the head is when it lands; a push
+        # after the last HEAD read would get an unexamined commit approved.
+        _code, fake, _log = run_main(monkeypatch, capsys=capsys)
+        assert f"commit_id={SHA}" in fake.approvals[0]
 
     def test_dispatch_path_evaluates_the_named_pr(self, monkeypatch, capsys):
         _code, fake, log = run_main(

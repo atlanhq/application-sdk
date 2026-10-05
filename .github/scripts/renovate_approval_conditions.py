@@ -587,10 +587,11 @@ def resolve_prs(
 ) -> tuple[list[str], str]:
     """Return ``(pr_numbers, eval_sha)`` for the triggering event.
 
-    ``workflow_dispatch`` evaluates exactly the PR it was given: at
-    ``run_sha`` when the dispatch carries one (a fan-in follow-up, which must
-    judge the SHA its anchor judged, and shares that run's lock), otherwise at
-    the PR's current HEAD. ``workflow_run`` evaluates every OPEN PR whose HEAD
+    ``workflow_dispatch`` evaluates exactly the PR(s) it was given, as a
+    comma-separated ``pr_number``: at ``run_sha`` when the dispatch carries one
+    (a fan-in follow-up, which must judge the SHA its anchor judged, and shares
+    that run's lock), otherwise at the PR's current HEAD, which needs exactly
+    one PR. ``workflow_run`` evaluates every OPEN PR whose HEAD
     is the completed run's SHA — a single commit can be the HEAD of several.
 
     The two lookups fail differently, matching the original bash: the dispatch
@@ -599,6 +600,13 @@ def resolve_prs(
     candidates and the step exits cleanly. Both approve nothing.
     """
     if event_name == "workflow_dispatch":
+        prs = [p.strip() for p in dispatch_pr.split(",") if p.strip()]
+        if run_sha:
+            return prs, run_sha
+        if len(prs) > 1:
+            raise GhError(
+                f"a dispatch naming several PRs ({dispatch_pr}) must also name head_sha"
+            )
         meta = _gh_json(
             ["api", f"repos/{repo}/pulls/{dispatch_pr}"],
             runner,
@@ -793,11 +801,14 @@ def request_follow_up(
     The fan-in only fires on the anchor's completion, so a required check that
     finishes after the anchor's wait would otherwise never re-evaluate the PR:
     its own first-attempt completion is filtered out by the caller's ``if:``.
-    The follow-up is a workflow_dispatch of the caller with ``pr_number`` and
-    ``head_sha``, which waits again with a fresh budget. Carrying the SHA keeps
-    it in the reusable's per-SHA concurrency group, so it serialises with any
-    re-run evaluating the same commit and the two cannot both approve; and it
-    evaluates that SHA, so a push since then makes it stand down.
+    The follow-up is ONE workflow_dispatch of the caller per SHA, with every
+    pending PR in ``pr_number`` (comma-separated) and ``head_sha``; it waits
+    again with a fresh budget. Carrying the SHA keeps it in the reusable's
+    per-SHA concurrency group, so it serialises with any re-run evaluating the
+    same commit and the two cannot both approve; and it evaluates that SHA, so
+    a push since then makes it stand down. One dispatch, not one per PR: that
+    group holds a single pending run, so a second same-SHA dispatch would
+    evict the first.
 
     Only an anchor (workflow_run) run asks for one. A follow-up that is itself
     still pending stops there, so a check stuck pending forever costs at most
@@ -822,29 +833,29 @@ def request_follow_up(
             f"CALLER_WORKFLOW_REF={workflow_ref!r} does not name a workflow file."
         )
         return
-    for pr in prs:
-        result = _gh(
-            [
-                "workflow",
-                "run",
-                workflow,
-                "--repo",
-                repo,
-                "-f",
-                f"pr_number={pr}",
-                "-f",
-                f"head_sha={eval_sha}",
-            ],
-            runner,
+    pr_list = ",".join(prs)
+    result = _gh(
+        [
+            "workflow",
+            "run",
+            workflow,
+            "--repo",
+            repo,
+            "-f",
+            f"pr_number={pr_list}",
+            "-f",
+            f"head_sha={eval_sha}",
+        ],
+        runner,
+    )
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        print(
+            f"::warning::PR(s) {pr_list}: could not dispatch a follow-up "
+            f"evaluation of {workflow}: {detail}"
         )
-        if result.returncode != 0:
-            detail = (result.stderr or result.stdout or "").strip()
-            print(
-                f"::warning::PR #{pr}: could not dispatch a follow-up evaluation "
-                f"of {workflow}: {detail}"
-            )
-        else:
-            print(f"PR #{pr}: dispatched one follow-up evaluation ({workflow}).")
+    else:
+        print(f"PR(s) {pr_list}: dispatched one follow-up evaluation ({workflow}).")
 
 
 def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
@@ -876,19 +887,30 @@ def fetch_reviews(repo: str, pr: str, runner: Runner) -> list[Any]:
     return payload
 
 
-def approve(repo: str, pr: str, runner: Runner) -> None:
-    """Post the atlan-ci code-owner approval. A failure aborts the step."""
+def approve(repo: str, pr: str, eval_sha: str, runner: Runner) -> None:
+    """Post the atlan-ci code-owner approval ON ``eval_sha``. A failure aborts
+    the step.
+
+    Posted through the reviews API with ``commit_id``, not ``gh pr review``,
+    which reviews whatever the head is when the request lands. A push between
+    the last HEAD check and this call would then get a commit no condition
+    examined approved. Bound to ``eval_sha``, such an approval sits on the old
+    commit, and the ruleset's dismiss-stale-reviews does not count it for the
+    new head.
+    """
     runner(
         [
             "gh",
-            "pr",
-            "review",
-            pr,
-            "--repo",
-            repo,
-            "--approve",
-            "--body",
-            APPROVAL_BODY,
+            "api",
+            "-X",
+            "POST",
+            f"repos/{repo}/pulls/{pr}/reviews",
+            "-f",
+            f"commit_id={eval_sha}",
+            "-f",
+            "event=APPROVE",
+            "-f",
+            f"body={APPROVAL_BODY}",
         ],
         check=True,
     )
@@ -998,13 +1020,13 @@ def process_pr(
         )
         return False
 
-    # h. HEAD is still the evaluated SHA at the moment of approval. Everything
-    # above may have taken minutes (the fan-in wait), and an approval posted
-    # after a push would vouch for a commit no condition looked at.
+    # h. HEAD is still the evaluated SHA. Everything above may have taken
+    # minutes (the fan-in wait), so stand down cleanly on a push; the approval
+    # itself is also bound to eval_sha, which closes the window after this read.
     if not _head_still_at(repo, pr, eval_sha, runner):
         return False
 
-    approve(repo, pr, runner)
+    approve(repo, pr, eval_sha, runner)
     print(f"✅ Approved PR #{pr} as atlan-ci (Renovate auto-approval).")
     return True
 
