@@ -52,7 +52,6 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
-    "auto-fix.yml",
     "generated-freshness.yaml",
 )
 
@@ -71,9 +70,17 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
 # shim's shape was wrong outright.  Every call therefore failed at startup:
 # conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
 # than repointed — the check is not wanted on connectors.
+#
+# ``auto-fix.yml``: an ``issue_comment`` shim gated on a ``/fix-vulnerabilities``
+# comment. Every PR comment (mostly Renovate's) queued a run that the job-level
+# ``if`` then skipped — hundreds of skipped runs per repo, no real invocations.
+# Retired as noise; the reusable workflow it called is left in place here.
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, not only a workflow.
-RETIRED_FILES: tuple[str, ...] = (".github/workflows/docstring-coverage.yaml",)
+RETIRED_FILES: tuple[str, ...] = (
+    ".github/workflows/docstring-coverage.yaml",
+    ".github/workflows/auto-fix.yml",
+)
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")
     for path in RETIRED_FILES
