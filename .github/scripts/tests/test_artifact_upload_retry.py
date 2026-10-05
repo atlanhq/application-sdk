@@ -383,6 +383,67 @@ def test_no_retry_reuses_its_first_attempts_artifact_name():
     )
 
 
+# Longest retention any upload here may ask for. Codeql's 30 days is the current
+# high-water mark; nothing in this repo reads an artifact a month later.
+MAX_RETENTION_DAYS = 30
+
+
+def test_every_upload_sets_an_explicit_bounded_retention():
+    """No upload may fall back to the repo default (FND-3313).
+
+    Without `retention-days` an artifact lives for the repo/org default, which
+    is 90 days. The conformance SARIF uploads shipped that way: 12 per run, every
+    one of them held for three months in each connector repo. Exempt uploads are
+    checked too; the retry exemption is about gating, not storage.
+    """
+    problems = []
+    for rel, scope, steps in _scopes():
+        for step in (s for s in steps if _is_upload(s)):
+            days = _with(step).get("retention-days")
+            if not isinstance(days, int) or not 1 <= days <= MAX_RETENTION_DAYS:
+                problems.append(f"{_label(rel, scope, step)}: retention-days={days!r}")
+    assert not problems, (
+        f"Every `{UPLOAD_ACTION}` step must set an integer `retention-days` "
+        f"between 1 and {MAX_RETENTION_DAYS}:\n  " + "\n  ".join(problems)
+    )
+
+
+def test_a_retry_keeps_its_first_attempts_retention():
+    """A retry is the same artifact under another name; it must not outlive it."""
+    problems = []
+    for rel, scope, steps in _scopes():
+        first_attempts, retries = _classify(steps)
+        for first in first_attempts:
+            for companion in retries.get(first.get("id"), []):
+                want = _with(first).get("retention-days")
+                got = _with(companion).get("retention-days")
+                if got != want:
+                    problems.append(
+                        f"{_label(rel, scope, companion)}: retention-days={got!r}, "
+                        f"first attempt has {want!r}"
+                    )
+    assert not problems, "\n  ".join(problems)
+
+
+def test_the_image_tarball_is_kept_for_one_day():
+    """`docker-image` was ~97% of each connector repo's live artifact bytes.
+
+    Its readers (trivy-scan, endor-scan) are jobs of the same run, so a day is
+    enough. Measured over three connector repos (FND-3313): 50-76 tarballs of
+    ~0.55-0.65 GB each live under the old 7-day retention, 27-49 GB per repo.
+    """
+    found = []
+    for rel, scope, steps in _scopes():
+        for step in (s for s in steps if _is_upload(s)):
+            if _artifact_path(step) == "/tmp/image.tar":
+                found.append(
+                    (_label(rel, scope, step), _with(step).get("retention-days"))
+                )
+    assert len(found) >= 2, f"image tarball uploads not found: {found}"
+    too_long = [f"{label}: {days!r}" for label, days in found if days != 1]
+    assert not too_long, "\n  ".join(too_long)
+
+
 def _guards_on(step: dict, step_id: str) -> bool:
     return step_id in OUTCOME_GUARD_RE.findall(str(step.get("if", "")))
 
