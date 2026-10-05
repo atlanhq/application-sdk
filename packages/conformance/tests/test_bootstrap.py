@@ -14,6 +14,7 @@ import re
 import subprocess
 
 import pytest
+import yaml
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
@@ -882,6 +883,46 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
         content = render(name)
         assert "<< " not in content, f"Unresolved jinja2 placeholder in {name}"
         assert " >>" not in content, f"Unresolved jinja2 placeholder in {name}"
+
+
+_SUPERSEDING_CALLERS = {
+    "conformance.yaml": "conformance-",
+    "release-gate.yaml": "release-gate-",
+    "connector-review-gate.yaml": "connector-review-",
+    "generated-freshness.yaml": "generated-freshness-caller-",
+}
+
+
+@pytest.mark.parametrize(("name", "prefix"), sorted(_SUPERSEDING_CALLERS.items()))
+def test_caller_supersedes_only_on_a_new_pr_commit(name: str, prefix: str) -> None:
+    """FND-3314: a new commit on a PR cancels the previous commit's run.
+
+    The group is shared only on a PR ref and run-unique everywhere else, so a
+    merge_group entry never evicts another (FND-218). Only `synchronize`
+    cancels: a same-SHA event (labeled, review, reopened) that cancelled would
+    leave a `cancelled` check on the head SHA, which Renovate never merges past.
+    """
+    concurrency = yaml.safe_load(render(name))["concurrency"]
+    assert concurrency == {
+        "group": prefix
+        + "${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
+        "github.event.action == 'synchronize' }}",
+    }
+
+
+def test_generated_freshness_caller_group_differs_from_reusable() -> None:
+    """Caller and called workflow sharing a workflow-level group string is a
+    deadlock GitHub resolves by cancelling the call."""
+    reusable = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".github/workflows/generated-freshness.yaml"
+    )
+    reusable_group = yaml.safe_load(reusable.read_text())["concurrency"]["group"]
+    caller_group = yaml.safe_load(render("generated-freshness.yaml"))["concurrency"][
+        "group"
+    ]
+    assert reusable_group.split("$")[0] != caller_group.split("$")[0]
 
 
 # ---------------------------------------------------------------------------
