@@ -116,6 +116,24 @@ def test_every_autofixable_rule_names_a_remediation_reference() -> None:
     )
 
 
+def _BULLET_RE(rule_id: str) -> re.Pattern[str]:
+    """A ``**<ID> Name**`` entry at the start of a line, optionally as a list
+    item; a bare ``**<ID>**`` mention elsewhere does not count."""
+    named = r"\*\*[A-Z]\d{3} [^*\n]+\*\*"
+    return re.compile(
+        rf"(?m)^\s*(?:-\s+)?(?:{named}\s*/\s*)*\*\*{re.escape(rule_id)} [^*\n]+\*\*"
+    )
+
+
+def test_bullet_pattern_rejects_a_bare_id_mention() -> None:
+    assert _BULLET_RE("C001").search("**C001 PinActionsToSha** — ...")
+    assert _BULLET_RE("B006").search("- **B006 StaleContractLedger** (writes ...)")
+    assert _BULLET_RE("T012").search(
+        "- **T011 MissingIntegrationTestSuite** / **T012 MissingE2ETestSuite** — no"
+    )
+    assert not _BULLET_RE("C001").search("see **C001** for pinning")
+
+
 def test_every_prescription_reference_names_the_rules_bullet() -> None:
     """The reference must be the file the lane actually reads for the rule: its
     series area, carrying the rule's ``**<ID> Name**`` bullet."""
@@ -126,9 +144,8 @@ def test_every_prescription_reference_names_the_rules_bullet() -> None:
             continue
         expected = f"programs/areas/{SERIES_AREA[r.id[0]]}.prose.md"
         path = PACKAGE_ROOT / ref.target
-        if ref.target != expected or not re.search(
-            r"\*\*" + r.id + r"\b", path.read_text() if path.is_file() else ""
-        ):
+        text = path.read_text() if path.is_file() else ""
+        if ref.target != expected or not _BULLET_RE(r.id).search(text):
             broken.append(f"{r.id}->{ref.target}")
     assert (
         not broken
