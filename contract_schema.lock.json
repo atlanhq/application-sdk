@@ -535,6 +535,90 @@
       "type": "str"
     },
     {
+      "contract": "Input",
+      "field": "app_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "Input",
+      "field": "correlation_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "Input",
+      "field": "workflow_id",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "Input",
+      "field": "workflow_slug",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "Output",
+      "field": "artifacts",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "Output",
+      "field": "metrics",
+      "status": "active",
+      "type": "dict[str, Any] | None"
+    },
+    {
+      "contract": "Output",
+      "field": "status",
+      "status": "active",
+      "type": "OutputStatus"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "connection_qualified_name",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "current_state_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "output_path",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "output_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "publish_state_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "staging_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
+      "contract": "PublishInputMixin",
+      "field": "transformed_data_prefix",
+      "status": "active",
+      "type": "str"
+    },
+    {
       "contract": "QueryExtractionInput",
       "field": "app_name",
       "status": "active",

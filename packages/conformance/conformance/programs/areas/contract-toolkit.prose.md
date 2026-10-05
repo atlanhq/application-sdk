@@ -815,6 +815,24 @@ test-suite gate.
 the depth it was sent at, and the `Input` class. Read the actual class at
 `finding.line` in `finding.file` before proposing an edit.
 
+The `Input` class is the entrypoint's first parameter annotation: an `@entrypoint`
+method, or an undecorated `async def run` on a class that subclasses, directly or
+through in-repo bases in any file, `App` or an SDK App template (`SqlApp`,
+`BaseMetadataExtractor`, ...) imported from `application_sdk`. An app that writes
+no `run()` and inherits it unchanged from a template that defines one (`SqlApp`,
+`SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`, `SqlQueryExtractor`)
+is paired with that template's `run()` input, because the runtime validates
+against exactly that model; the finding is then anchored on the app class, and
+the message names any in-repo contract (typically a generated
+`AppInputContract`) that declares the key but is bound to no entrypoint. The fix
+there is to override `run()` with an `Input` that subclasses the template input
+and declares the key — editing the unbound contract changes nothing at runtime.
+Only an app with no visible entrypoint at all (`BaseMetadataExtractor` defines no
+`run()`) falls back to its sole live `ExtractionInput` descendant. If `finding.file` is still a generated
+`app/generated/_input.py` while the app overrides `run` with a hand-written
+`Input` (for example through a base the scan cannot resolve), the pairing is wrong — route to residue instead of editing either
+class.
+
 *Procedure:*
 
 1. **Check whether an SDK contract base already supplies the key(s).**

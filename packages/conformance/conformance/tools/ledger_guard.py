@@ -121,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ledger-path",
         required=True,
-        help="Repo-relative path to the ledger file (e.g. packages/conformance/conformance/data/contract_schema.lock.json).",
+        help="Repo-relative path to the ledger file (e.g. contract_schema.lock.json).",
     )
     args = parser.parse_args(argv)
 

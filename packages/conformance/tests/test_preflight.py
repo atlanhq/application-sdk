@@ -391,6 +391,28 @@ def test_p035_fires_on_key_absent_from_contract(tmp_path: Path) -> None:
     assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["F004"]
 
 
+_SDK_TEMPLATE_INPUT_APP = (
+    "from application_sdk.templates import SqlApp\n"
+    "from application_sdk.templates.contracts.sql_metadata import ExtractionInput\n"
+    "class A(SqlApp):\n"
+    "    async def run(self, input: ExtractionInput) -> None: ...\n"
+)
+
+
+def test_f004_reads_sdk_template_input_fields_from_the_static_table(
+    tmp_path: Path,
+) -> None:
+    """An SDK template input is resolved, not reported as unresolved (F019)."""
+    files = {
+        "app.py": _SDK_TEMPLATE_INPUT_APP,
+        "h.py": _handler_reading(
+            'x = input.metadata.get("credential_guid")',
+            'y = input.metadata.get("unknown_key")',
+        ),
+    }
+    assert sorted(f.rule_id for f in _scan(tmp_path, files)) == ["F004"]
+
+
 def test_p035_silent_on_declared_field(tmp_path: Path) -> None:
     files = {
         "app.py": _app_with_input("    include_filter: dict = {}\n"),

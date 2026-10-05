@@ -123,7 +123,10 @@ human audit):
      If either holds this is a **defect in the rule, not in the app**: take the
      `false-positive` path in `remediate-finding` step 5 so
      `report-rule-defect` raises it against the suite.  Never suppress it
-     silently.
+     silently.  A field the SDK itself retired from a template the contract
+     inherits never reaches this list: B005 excuses it when the SDK's bundled
+     ledger records it `sunset` on that template, so do not hand-edit the
+     app's ledger for it.
   2. **Restore the field** when the removal was unintentional and the ledger
      entry gives its type — re-declare it on the contract class with that type.
      Report `classification = "mechanical"` only when the finding names the
