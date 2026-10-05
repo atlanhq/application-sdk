@@ -28,7 +28,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
-
 from conformance.suite.checks._ast_common._sdk_app import SDK_APP_BASE_NAMES
 from conformance.suite.checks._entrypoint_contract_fields import (
     _ASSET_ARTIFACT_RE,
