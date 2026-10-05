@@ -2753,6 +2753,33 @@ async def cancel_work():
     )
 
 
+def test_p018_no_finding_dotted_asyncio_exceptions_import() -> None:
+    _none(
+        """\
+import asyncio.exceptions
+
+async def cancel_work():
+    raise asyncio.exceptions.CancelledError()
+"""
+    )
+
+
+def test_p018_rebound_asyncio_name_is_not_trusted() -> None:
+    # The name was rebound after the import, so it no longer names the stdlib module.
+    _single(
+        """\
+import asyncio
+import domain_errors
+
+asyncio = domain_errors
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
 def test_p018_sdk_cancelled_error_still_flagged() -> None:
     _single(
         """\

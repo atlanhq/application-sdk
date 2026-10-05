@@ -4,11 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import (
-    _IgnoreDirective,
-    collect_import_origins,
-    make_finding,
-)
+from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
 from .exception_chaining import ExceptionChainingMixin
@@ -16,6 +12,38 @@ from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin
+
+
+def import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Each name an import binds, mapped to the module or object it names.
+
+    ``import a.b`` binds ``a`` to the package ``a`` (``a.b`` is reached through
+    it), unlike ``import a.b as c``, which binds ``c`` to ``a.b``. A name the
+    module also assigns, defines or rebinds anywhere is left out: after
+    ``asyncio = domain_errors`` the name no longer names the stdlib module.
+    """
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bound[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".")[0]
+                    bound[root] = root
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                bound[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    rebound = {
+        n.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store | ast.Del)
+    } | {
+        n.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    }
+    return {name: origin for name, origin in bound.items() if name not in rebound}
 
 
 class Checker(
@@ -70,7 +98,7 @@ class Checker(
     # ── Context management ────────────────────────────────────────────────────
 
     def visit_Module(self, node: ast.Module) -> None:
-        self._import_origins = collect_import_origins(node)
+        self._import_origins = import_bindings(node)
         self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
