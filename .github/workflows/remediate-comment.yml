@@ -1,0 +1,14 @@
+# `/remediate` on application-sdk's own PRs. The lane treats this repo as SDK
+# scope: the rules themselves (packages/conformance/) are never edited by a
+# remediation unit, only through the lane's separate rule-fix track.
+name: Remediate
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  remediate:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+    uses: ./.github/workflows/remediate-dispatch.yaml
+    secrets: inherit

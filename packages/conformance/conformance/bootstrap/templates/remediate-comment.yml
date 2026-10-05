@@ -1,0 +1,11 @@
+name: Remediate
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  remediate:
+    if: github.event.issue.pull_request && startsWith(github.event.comment.body, '/remediate')
+    uses: atlanhq/application-sdk/.github/workflows/remediate-dispatch.yaml@main
+    secrets: inherit
