@@ -167,12 +167,14 @@ Residue entries for migration rules carry `remediation_reference`
   2. Read `$SKILLS/<target>/SKILL.md` and follow it, stop points included.
      While it runs, the skill's declared `outputs` replace this loop's write
      scope: it may edit `tests/`, `uv.lock` and other files the loop never
-     touches. This is the only exception to the write-scope constraint, and it
-     holds only because the developer reviews each step.
+     touches. This exception to the write-scope constraint holds only while
+     the skill runs, and only because the developer reviews each step.
   3. When it ends, run the orthogonal test gate, then
      `atlan-application-sdk-conformance detect --rule <ids>` for the rule ids
      it names. A cleared finding is removed from residue; a remaining one
-     stays in residue with the skill named.
+     stays in residue with the skill named. If the test gate fails, do not
+     revert the skill's changes: show the developer the failing tests, let
+     them decide, and keep the skill's findings in residue with the failure.
   4. Record in residue every file the skill changed under `tests/` and any
      `uv.lock` change, for human review.
 - `kind = guide` — apply nothing. Report the rule ids with the guide path

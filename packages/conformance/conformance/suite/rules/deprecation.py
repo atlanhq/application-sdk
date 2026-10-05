@@ -422,7 +422,8 @@ RULES: tuple[RuleDefinition, ...] = (
         remediation_reference=RemediationReference(
             kind=RemediationKind.COMMAND,
             target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
-            note="run the pinned command from the finding message verbatim (FND-607)",
+            note="<version> is the version of the checker that raised the finding; "
+            "copy the pinned command from the finding message verbatim (FND-607)",
         ),
     ),
     RuleDefinition(
