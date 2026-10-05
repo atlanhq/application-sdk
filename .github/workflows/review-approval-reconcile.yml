@@ -78,7 +78,6 @@ on:
   workflow_run:
     workflows:
       - lens
-      - "SDK Review — approve on verdict comment"
     types: [completed]
   workflow_dispatch:
     inputs:

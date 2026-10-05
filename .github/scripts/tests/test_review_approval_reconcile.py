@@ -1317,17 +1317,14 @@ def _workflow(name: str) -> dict:
     return yaml.safe_load((WORKFLOWS / name).read_text())
 
 
-def test_the_reconciler_runs_when_either_review_source_completes():
+def test_the_reconciler_runs_when_the_review_source_completes():
     """`workflow_run` matches on the source workflow's `name:`, so a rename of
-    either source would silently turn this back into cron-only recovery."""
+    lens would silently turn this back into cron-only recovery."""
     wf = _workflow("review-approval-reconcile.yml")
     on = wf.get(True, wf.get("on"))
     listened = set(on["workflow_run"]["workflows"])
     assert on["workflow_run"]["types"] == ["completed"]
-    assert listened == {
-        _workflow("lens.yml")["name"],
-        _workflow("sdk-review-approve-on-verdict.yml")["name"],
-    }
+    assert listened == {_workflow("lens.yml")["name"]}
 
 
 def test_skipped_source_runs_do_not_start_a_sweep():
