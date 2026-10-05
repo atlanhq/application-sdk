@@ -3591,6 +3591,44 @@ def test_e005_silent_for_sanitize_helper_attribute() -> None:
     assert "E005" not in _findings(src)
 
 
+def test_e005_silent_for_sanitized_cause_with_qualified_error_code() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s (%s)', failure.qualified_code,\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_classified_error_with_status_code() -> None:
+    src = (
+        "try:\n    request()\nexcept Exception as failure:\n"
+        "    logger.warning('request failed (%s): %s', failure.status_code,\n"
+        "                   sanitize_cause_repr(classify_failure(failure)))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+@pytest.mark.parametrize("field", ["message", "payload", "response"])
+def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
+    field: str,
+) -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        f"    logger.warning('operation failed: %s %s', failure.{field},\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_for_typed_code_without_sanitizer() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s', failure.qualified_code)\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_without_sanitizer() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed: %s', e)\n"
     assert "E005" in _findings(src)

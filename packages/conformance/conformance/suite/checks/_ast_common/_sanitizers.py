@@ -204,14 +204,29 @@ def _is_type_projection(node: ast.AST, exception_name: str) -> bool:
     )
 
 
+_SAFE_EXCEPTION_METADATA_ATTRIBUTES = frozenset({"qualified_code", "status_code"})
+
+
+def _is_safe_exception_metadata_projection(node: ast.AST, exception_name: str) -> bool:
+    """True for stable typed-code/status fields, not exception message text."""
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr in _SAFE_EXCEPTION_METADATA_ATTRIBUTES
+        and isinstance(node.value, ast.Name)
+        and node.value.id == exception_name
+    )
+
+
 def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
     """True when *call* also reads the caught exception outside a sanitizer.
 
     A sanitized alias only marks a redaction boundary when it is the sole route
     by which the exception reaches the log: ``logger.error("%s %s", safe, e)``
     still formats the raw exception, so there is no boundary to protect.
-    Reads nested inside a recognised sanitizer call (``redact(e)``) and
-    type-only projections (``type(e).__name__``) are fine.
+    Reads nested inside a recognised sanitizer call (``redact(e)``), type-only
+    projections (``type(e).__name__``), and stable metadata projections
+    (``e.qualified_code`` / ``e.status_code``) are fine. Arbitrary exception
+    fields such as ``e.message`` remain raw.
     """
     exception_name = handler.name
     if exception_name is None:
@@ -221,7 +236,9 @@ def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
         node = pending.pop()
         if isinstance(node, ast.Call) and is_sanitizer_call(node):
             continue
-        if _is_type_projection(node, exception_name):
+        if _is_type_projection(
+            node, exception_name
+        ) or _is_safe_exception_metadata_projection(node, exception_name):
             continue
         if (
             isinstance(node, ast.Name)
