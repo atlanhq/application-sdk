@@ -654,7 +654,7 @@ def test_check_resolved_at_bounds():
 
 def test_red_checks_skip_the_render():
     approved, runner, render = run(runner=FakeRunner(checks_rc=1))
-    assert not approved and render.calls == []
+    assert not approved and not runner.approved and render.calls == []
 
 
 def test_already_approved_head_skips_the_render():
