@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import pytest
+
 from conformance.suite.checks._ast_common._sdk_app import SDK_APP_BASE_NAMES
 from conformance.suite.checks._entrypoint_contract_fields import (
     _ASSET_ARTIFACT_RE,
@@ -38,6 +39,7 @@ from conformance.suite.checks._sdk_contract_mixins import (
     MODEL_BACKED_FIELDS_AHEAD_OF_PIN,
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_BASES,
     SDK_TEMPLATE_CONTRACT_FIELDS,
     SDK_TEMPLATE_RUN_CONTRACTS,
     SdkField,
@@ -452,3 +454,26 @@ def test_model_backed_registry_is_well_formed() -> None:
     assert SDK_MODEL_BACKED_ARTIFACT_FIELDS
     for name in SDK_MODEL_BACKED_ARTIFACT_FIELDS:
         assert name and isinstance(name, str)
+
+
+@_requires_sdk
+def test_template_bases_registry_matches_live_sdk_source() -> None:
+    sources = _sdk_sources()
+    known = set(SDK_CONTRACT_BASE_FIELDS) | set(SDK_TEMPLATE_CONTRACT_FIELDS)
+
+    def ancestors(name: str, seen: frozenset[str] = frozenset()) -> set[str]:
+        record = sources.by_name.get(name)
+        if record is None or name in seen:
+            return set()
+        found: set[str] = set()
+        for base in record.bases:
+            if base in known:
+                found.add(base)
+            found |= ancestors(base, seen | {name})
+        return found
+
+    live = {name: frozenset(ancestors(name)) for name in SDK_TEMPLATE_CONTRACT_FIELDS}
+    assert live == SDK_TEMPLATE_CONTRACT_BASES, (
+        "SDK_TEMPLATE_CONTRACT_BASES drifted from the SDK source — update it in "
+        f"_sdk_contract_mixins.py to {live}"
+    )

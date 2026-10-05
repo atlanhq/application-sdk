@@ -660,6 +660,64 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
 }
 
 
+SDK_TEMPLATE_CONTRACT_BASES: dict[str, frozenset[str]] = {
+    "ExecuteColumnBatchInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "ExecuteColumnBatchOutput": frozenset({"Output"}),
+    "ExtractionInput": frozenset({"Input"}),
+    "ExtractionOutput": frozenset({"Output", "PublishInputMixin"}),
+    "ExtractionTaskInput": frozenset({"Input"}),
+    "ExtractionTaskOutput": frozenset({"Output"}),
+    "FetchColumnsIncrementalInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "FetchColumnsInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchColumnsOutput": frozenset({"Output"}),
+    "FetchDatabasesInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchDatabasesOutput": frozenset({"Output"}),
+    "FetchIncrementalMarkerInput": frozenset({"Input"}),
+    "FetchIncrementalMarkerOutput": frozenset({"Output"}),
+    "FetchProceduresInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchProceduresOutput": frozenset({"Output"}),
+    "FetchSchemasInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchSchemasOutput": frozenset({"Output"}),
+    "FetchTablesIncrementalInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "FetchTablesInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchTablesOutput": frozenset({"Output"}),
+    "FetchViewsInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchViewsOutput": frozenset({"Output"}),
+    "IncrementalExtractionInput": frozenset({"ExtractionInput", "Input"}),
+    "IncrementalExtractionOutput": frozenset(
+        {"ExtractionOutput", "Output", "PublishInputMixin"}
+    ),
+    "IncrementalTaskInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "PrepareColumnQueriesInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "PrepareColumnQueriesOutput": frozenset({"Output"}),
+    "PrimeAuthOutput": frozenset({"Output"}),
+    "QueryBatchInput": frozenset({"Input"}),
+    "QueryBatchOutput": frozenset({"Output"}),
+    "QueryExtractionInput": frozenset({"Input"}),
+    "QueryExtractionOutput": frozenset({"Output"}),
+    "QueryFetchInput": frozenset({"Input"}),
+    "QueryFetchOutput": frozenset({"Output"}),
+    "ReadCurrentStateInput": frozenset({"Input"}),
+    "ReadCurrentStateOutput": frozenset({"Output"}),
+    "TransformInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "TransformOutput": frozenset({"Output"}),
+    "UpdateMarkerInput": frozenset({"Input"}),
+    "UpdateMarkerOutput": frozenset({"Output"}),
+    "WriteCurrentStateInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "WriteCurrentStateOutput": frozenset({"Output"}),
+}
+
+
 class TemplateRunContract(NamedTuple):
     """The Input and Output type names of an SDK template's ``run()``."""
 

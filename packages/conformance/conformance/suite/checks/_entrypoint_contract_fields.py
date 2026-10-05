@@ -40,6 +40,7 @@ from typing import NamedTuple
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_BASES,
     SDK_TEMPLATE_CONTRACT_FIELDS,
 )
 from conformance.suite.checks.prescriptions._boundary_methods import (
@@ -484,6 +485,7 @@ def sdk_contract_ancestors(
             return
         elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
             found.add(name)
+            found.update(SDK_TEMPLATE_CONTRACT_BASES.get(name, ()))
 
     candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
     own_foreign = next(

@@ -1743,6 +1743,41 @@ def test_b005_sdk_retired_inherited_field_is_not_this_apps_break(
     assert "B005" not in _ids(findings)
 
 
+_SDK_TASK_INPUT_APP = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Output
+from application_sdk.templates.contracts.sql_metadata import {base}
+
+class MyInput({base}):
+    mine: str = ""
+
+class MyApp(App):
+    @entrypoint
+    async def go(self, input: MyInput) -> Output:
+        return Output()
+"""
+
+
+@pytest.mark.parametrize(
+    ("base", "retired_on", "exempt"),
+    [
+        ("FetchTablesInput", "Input", True),
+        ("ExtractionTaskInput", "Input", True),
+        ("IncrementalExtractionInput", "ExtractionInput", True),
+        ("FetchTablesInput", "Output", False),
+    ],
+)
+def test_b005_sdk_retired_field_on_a_template_base_is_exempt(
+    tmp_path: Path, base: str, retired_on: str, exempt: bool
+) -> None:
+    ledger = _make_ledger(ContractField("MyInput", "gone", "str", "active"))
+    sdk_ledger = _make_ledger(ContractField(retired_on, "gone", "str", "sunset"))
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TASK_INPUT_APP.format(base=base)}, ledger, sdk_ledger
+    )
+    assert ("B005" not in _ids(findings)) is exempt
+
+
 def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(
     tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
 ) -> None:
