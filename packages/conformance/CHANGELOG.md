@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.42.1] - 2026-10-05
+
+### Bug fixes
+
+- B005/P015/D009 guidance, and the lane's per-rule fix guidance folded into E004/E008/L004/T003/T013 (#4137) ([15477d5](https://github.com/atlanhq/application-sdk/commit/15477d5))
+
 ## [0.42.0] - 2026-10-02
 
 ### Features

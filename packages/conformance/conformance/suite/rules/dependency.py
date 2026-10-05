@@ -462,7 +462,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "dirs_exist_ok=True)``. This requires application-sdk to already "
             "be installed into the venv before the task runs (true both "
             "locally and in the Docker build, where ``uv sync`` precedes "
-            "``poe download-components``). Inline suppression: "
+            "``poe download-components``). Copy the whole folder and name no "
+            "files: the set the wheel ships changes between versions (an early "
+            "``secretstore.yaml`` ships as ``secretstore.yaml.example`` later), "
+            "so a copy of named files fails against the SDK the app locks. "
+            "Inline suppression: "
             "``# conformance: ignore[D009] <reason>`` on the line above the "
             "offending entry."
         ),

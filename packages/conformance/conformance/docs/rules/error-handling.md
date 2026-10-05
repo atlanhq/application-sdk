@@ -210,6 +210,22 @@ The three exemptions are one principle: the exception must leave the frame in so
 inspectable form — re-raised with its trace, re-raised with a redacted cause, or
 returned as typed data.
 
+**Fixing it well**
+
+* Before narrowing, read what the `try` body and its callees raise today, driver and
+bridge errors included (JDBC/JPype exceptions reach app code raw unless a client
+converts them). Narrow to those types and keep handling them the same way: the same
+classifier, the same check rows, the same log.
+
+* Never narrow to `AppError` at a catch that raw driver errors reach: they would escape
+and turn a reported failure into a crash.
+
+* Keep a shared helper a helper: change the helper's `except`; do not inline it into
+each caller.
+
+* Tests keep asserting the old behaviour (a raw driver error still becomes a failed
+check); never change a fake so it stops raising what the real client raises.
+
 ---
 
 ## E005 — `ExceptBlockMissingExcInfo` {#e005}
@@ -330,9 +346,22 @@ signal in the observability stack.
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
 preferred but not required.  Flag if the module is expected to be present (will fail
-later with a confusing AttributeError).
-A cause-preserving re-raise on every path (including a typed error raised from the
-ImportError) surfaces the failure and does not need a duplicate log.
+later with a confusing AttributeError). A cause-preserving re-raise on every path
+(including a typed error raised from the ImportError) surfaces the failure and does not
+need a duplicate log.
+
+**Fixing it well**
+
+* Fix it at the existing `except ImportError` site, in the shape this rule describes: an
+optional module the code falls back from is logged at `DEBUG` with the module name; a
+required one is re-raised with its cause on every path (`raise ... from exc`), which
+needs no log of its own.
+
+* Keep the import where it is: moving it to module level or into a function changes when
+the app loads its drivers, and the repo's ruff rules then reject the new shape.
+
+* Never add `noqa` to get past ruff; if ruff objects, the shape is wrong — log at the
+original site.
 
 ---
 
