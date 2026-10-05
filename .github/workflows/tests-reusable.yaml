@@ -3136,8 +3136,18 @@ jobs:
           overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
+  #
+  # Job-level `if`, not an early exit in the script: a job that starts and then
+  # passes at once is still billed a full runner minute, and before FND-3320
+  # this one started on every PR, push and merge-group run in every app repo
+  # just to see a non-Renovate head ref. `github.head_ref` is empty off the
+  # pull_request event, so the filter is exactly the script's own pass-at-once
+  # rule. The skip is not a gap: the `Enforce Renovate artifacts` step in
+  # tests-passed accepts `skipped`, and this job is not itself a required
+  # context — Tests Gate is.
   renovate-artifacts:
     name: Renovate artifacts
+    if: startsWith(github.head_ref, 'renovate/')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -3322,8 +3332,12 @@ jobs:
 
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".
+      # `skipped` is the non-Renovate path (the job's own `if`), so only a
+      # failed or cancelled check holds the gate.
       - name: Enforce Renovate artifacts
-        if: always() && needs.renovate-artifacts.result != 'success'
+        if: >-
+          always() && needs.renovate-artifacts.result != 'success' &&
+          needs.renovate-artifacts.result != 'skipped'
         shell: bash
         run: exit 1
 

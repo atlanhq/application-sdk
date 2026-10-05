@@ -68,16 +68,19 @@ concurrency:
 jobs:
   connector-review:
     name: Connector Review
+    # `github.event.pull_request` does not exist on `merge_group`, and the gate
+    # has already run on the PR itself. The skip is at JOB level: a job that
+    # starts only to skip every step is billed a runner minute on every queue
+    # entry (FND-3320), while a skipped job bills nothing and still files its
+    # `Connector Review` check run with conclusion `skipped` — which a required
+    # check counts as a pass, so the queue still drains. The ruleset merges one
+    # entry at a time, so a group is always exactly one PR and there is nothing
+    # extra to re-check.
+    if: github.event_name != 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      # `github.event.pull_request` does not exist on `merge_group`, and the
-      # gate has already run on the PR itself. A skipped step leaves the job
-      # successful, and that success is what reports the green context to the
-      # queue. The ruleset merges one entry at a time, so a group is always
-      # exactly one PR and there is nothing extra to re-check.
       - name: Checkout
-        if: github.event_name != 'merge_group'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -90,7 +93,6 @@ jobs:
       # EMPTY file — which is precisely the "could not check" signal the
       # script passes on. A partial write parses as bad JSON and passes too.
       - name: Fetch PR reviews
-        if: github.event_name != 'merge_group'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -101,7 +103,6 @@ jobs:
           gh api "repos/${REPO}/pulls/${PR}/reviews" --paginate --slurp > reviews.json
 
       - name: Verify connector review
-        if: github.event_name != 'merge_group'
         env:
           AUTHOR: ${{ github.event.pull_request.user.login }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}

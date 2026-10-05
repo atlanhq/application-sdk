@@ -44,15 +44,18 @@
 # `types: [edited]` matters: without it, re-titling a flagged PR does not
 # re-run the check and the PR stays red until an unrelated push.
 #
-# A `merge_group` (or any other non-`pull_request`) event is a passing no-op:
-# there is no PR title to inspect and the title was already validated at PR
-# time. Running rather than skipping keeps the conclusion "success", so this
-# can be a REQUIRED check without leaving the merge queue permanently pending.
+# A `merge_group` (or any other non-`pull_request`) event skips the job via its
+# job-level `if:`: there is no PR title to inspect and the title was already
+# validated at PR time. A skipped job still files its check run, with conclusion
+# `skipped`, and GitHub counts `skipped` as a pass for a required check (see
+# docs/standards/ci.md) — so this stays safe as a REQUIRED check in a queued
+# repo, without the billed runner minute a started-then-no-op job costs
+# (FND-3320).
 #
-# That no-op only helps if the CALLER declares `merge_group:` — an undispatched
-# workflow produces no conclusion at all, and a required check with no
-# conclusion wedges the queue entry rather than failing it. The shim template
-# declares it; a caller written by hand must too.
+# That only helps if the CALLER declares `merge_group:` — an undispatched
+# workflow files no check run at all, and a required check with no check run
+# wedges the queue entry rather than failing it. The shim template declares it;
+# a caller written by hand must too.
 #
 # The decision logic lives in .github/scripts/conventional_pr_title.py
 # (unit-tested in .github/scripts/tests/test_conventional_pr_title.py), per
@@ -123,6 +126,10 @@ concurrency:
 jobs:
   conventional-commits:
     name: Validate PR title
+    # Job level, not per step: a job that starts only to skip every step is
+    # still billed a runner minute. See the header for why the skip is safe
+    # for a required check.
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -132,7 +139,6 @@ jobs:
       # application-sdk is public, so this needs no auth even from a private
       # caller.
       - name: Checkout SDK helper scripts
-        if: github.event_name == 'pull_request'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -143,7 +149,6 @@ jobs:
 
       - name: Validate PR title
         id: detect
-        if: github.event_name == 'pull_request'
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
           HEAD_REF: ${{ github.head_ref }}
@@ -164,8 +169,7 @@ jobs:
       # — the pass/fail verdict above still runs and still gates.
       - name: Post sticky comment on violation
         if: >-
-          github.event_name == 'pull_request'
-          && steps.detect.outputs.violation == 'true'
+          steps.detect.outputs.violation == 'true'
           && github.event.pull_request.head.repo.fork == false
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
@@ -174,8 +178,7 @@ jobs:
 
       - name: Clear sticky comment when resolved
         if: >-
-          github.event_name == 'pull_request'
-          && steps.detect.outputs.violation == 'false'
+          steps.detect.outputs.violation == 'false'
           && github.event.pull_request.head.repo.fork == false
         uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
@@ -189,8 +192,3 @@ jobs:
         run: |
           echo "::error title=Invalid PR title::${ERROR_MESSAGE}"
           exit 1
-
-      - name: Non-PR event no-op
-        if: github.event_name != 'pull_request'
-        run: |
-          echo "${{ github.event_name }} event — no PR title to inspect; passing."
