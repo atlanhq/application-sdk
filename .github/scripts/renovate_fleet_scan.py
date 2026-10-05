@@ -162,7 +162,10 @@ def _is_rate_limited(status: int, headers, body: str) -> bool:
         or headers.get("x-ratelimit-remaining") == "0"
     ):
         return True
-    return "rate limit" in body.lower()
+    # GitHub's older wording for the same burst limit; _gh_refs.py and
+    # e2e_dispatch_guard.py classify it the same way.
+    lowered = body.lower()
+    return "rate limit" in lowered or "abuse detection" in lowered
 
 
 _OPEN_PR_FIELDS = """

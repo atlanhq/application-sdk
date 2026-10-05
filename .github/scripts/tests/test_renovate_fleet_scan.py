@@ -854,6 +854,17 @@ def test_retries_a_secondary_rate_limit_after_a_minute(monkeypatch):
     assert slept == [60.0]
 
 
+def test_retries_an_abuse_detection_403(monkeypatch):
+    # GitHub's older wording for the same limit carries no "rate limit" text.
+    body = b'{"message": "You have triggered an abuse detection mechanism."}'
+    urlopen = _ScriptedUrlopen([_http_error(403, body)])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert slept == [60.0]
+
+
 def test_rate_limit_backoff_grows_exponentially(monkeypatch):
     urlopen = _ScriptedUrlopen(
         [_http_error(403, _SECONDARY_LIMIT_BODY) for _ in range(3)]
