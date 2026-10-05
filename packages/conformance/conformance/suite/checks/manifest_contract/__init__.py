@@ -22,6 +22,10 @@
 * ``K019`` FormKeyMissingFromManifestArgs (WARE-1323) — a ``uiConfig`` form key
   with no ``{{...}}`` placeholder in any manifest never reaches the run *and*
   never persists, because the args template doubles as the persistence schema.
+* ``K027`` EntrypointContractClassNameCollision (FND-3140) — two entrypoints
+  bind different Input/Output contract classes under one bare class name, so
+  the contract ledger (keyed by bare name) conflates them. Code-only: it needs
+  no ``app/generated/`` tree.
 * ``K020`` ManifestArgsLegacyNestedEnvelope — the ``extract`` node still emits
   the legacy ``args.metadata{}`` envelope instead of flat top-level args, either
   because the contract opts out via ``flatManifestArgs = false`` or because the
@@ -42,6 +46,7 @@ from conformance.suite.checks._ast_common import discover, make_cli_main
 from conformance.suite.schema.findings import Finding
 
 from ._check import scan_all as _scan_field_mismatch
+from ._entrypoint_class_names import scan_all as _scan_entrypoint_class_names
 from ._filter_string_acceptance import scan_all as _scan_filter_string_acceptance
 from ._form_keys import scan_all as _scan_form_keys
 from ._input_fields import scan_all as _scan_input_fields
@@ -72,6 +77,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         *_scan_filter_string_acceptance(paths, root),
         *_scan_form_keys(paths, root),
         *_scan_nested_envelope(paths, root),
+        *_scan_entrypoint_class_names(paths, root),
     ]
 
 
@@ -86,7 +92,8 @@ main = make_cli_main(
         "uiConfig form keys are wired into the args template (WARE-1323); "
         "K020 flags a manifest still nesting args under metadata; "
         "K021 flags a filter field that rejects the AE's flat JSON string "
-        "(CONNECT-1333 / CONNECT-1389)."
+        "(CONNECT-1333 / CONNECT-1389); K027 flags entrypoint contract classes "
+        "that share a bare class name (FND-3140)."
     ),
 )
 

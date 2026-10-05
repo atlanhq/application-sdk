@@ -46,6 +46,11 @@ description: >
   K021 is a Python edit -- union the field with str, mix in ExtractionInput
   without redeclaring a strict dict, or add a mode="before" validator -- verified
   by the test-suite gate.
+  K027 (two entrypoints bind different Input/Output contract classes under one
+  bare class name, so the contract ledger conflates them) is a mechanical Python
+  rename -- regenerate with a toolkit that names bundle classes per entrypoint and
+  import or subclass the unique name -- followed by a ledger regenerate, verified by
+  the test-suite gate.
   K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
@@ -70,7 +75,7 @@ the fingerprint-set also includes the unsuppressed WARNING results
 (K004/K005/K007/K008/K010/K014/K016/K017/K018/K019/K020/K021), which is where the rest
 of K-series remediation runs.
 
-The active scope decides which rules can appear: K001–K021 are all `scope=APP`,
+The active scope decides which rules can appear: K001–K021 and K027 are all `scope=APP`,
 so they surface only on consumer app repos.  The runner auto-detects scope, so
 the SDK repo sees 0 findings.
 
@@ -144,7 +149,7 @@ additionally whenever the applied fix touched a `.pkl` or a generated artifact.
 **K017 is either too**: its declared `orthogonal_gate` is `pkl-eval` because the
 contract edit is the usual fix, but the writer-side fix is plain Python — use the
 test-suite gate additionally whenever the applied fix touched only `.py`.
-**K018 and K021 are Python edits**, verified by the test-suite gate.
+**K018, K021, and K027 are Python edits**, verified by the test-suite gate.
 
 The freshness rules (K003/K004/K005) are remediated by running a pkl command
 (`pkl project resolve` and/or `pkl eval -m . contract/app.pkl`), so they are
@@ -978,6 +983,41 @@ an edit.
    route to residue. There is **no per-field form** — one suppression covers
    every filter field on that class.
 
+**K027 EntrypointContractClassNameCollision** — two or more entrypoints bind
+Input or Output contract classes that are declared in different places but
+reach the contract ledger under one bare class name (the import-de-aliased name
+the annotation uses, or the declaring class's own name). The ledger and B005/B006
+key contracts by that name, so the classes share one ledger identity (FND-3140).
+`classification = "mechanical"`. **Does not require `pkl`** unless the chosen fix
+is a regenerate.
+
+The finding anchors on each colliding entrypoint method. `finding.discriminator`
+is the colliding name; `finding.message` names the entrypoints, the declaring
+modules, and the role (Input or Output).
+
+*Procedure:*
+
+1. **Generated bundle classes.** If the classes come from
+   `app/generated/<entrypoint>/_input.py`, make sure the app's toolkit names them
+   `<Entrypoint>AppInputContract` (bump it and regenerate with
+   `pkl eval -m . contract/app.pkl`, then the `pkl-eval` gate, if it is older).
+   Import that unique name, not the `AppInputContract` alias, wherever an
+   entrypoint annotation or an app subclass uses it. A subclass of the alias
+   (`from app.generated.miner._input import AppInputContract as _Gen` then
+   `class MinerInputContract(_Gen)`) still resolves its base by the shared bare
+   name, so its ledger entry can carry another entrypoint's fields.
+2. **Hand-written classes.** Rename each class the app owns under a unique name and
+   annotate the entrypoint with it. Never hand-edit `app/generated/`.
+3. **Regenerate the contract ledger** (`gen-contract-ledger`) so its keys follow the
+   new names, and commit it with the rename. A field the old shared name recorded
+   but the contract never had now reports as B005: mark it `sunset` in the ledger.
+4. **Verification is the standard test-suite gate.** Re-running
+   `atlan-application-sdk-conformance detect --series K` confirms no name is
+   reached from two declarations.
+5. If the collision is understood and deliberately deferred, suppress with
+   `# conformance: ignore[K027] <reason>` on each entrypoint method definition and
+   route to residue.
+
 ---
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
@@ -985,7 +1025,7 @@ propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
 (K001–K005, K007, K008, K010; `//` comments) or `# conformance: ignore[Kxxx]
 <8–40 word justification>` for the artifact/Python-anchored rules (K006, K016 and
-K017 Python, K018, K021,
+K017 Python, K018, K021, K027,
 K009 text artifact, K014 `atlan.yaml`; `#` comments) — on the violating line or
 the comment-only
 line directly above it when a legitimate exception exists (e.g. a K001 finding on
