@@ -588,10 +588,10 @@ def scan_contract_compat(
     for f in ledger.fields:
         ledger_by_contract.setdefault(f.contract, []).append(f)
 
-    sdk_retired: dict[str, set[str]] = {}
+    sdk_retired: dict[str, set[tuple[str, str]]] = {}
     for f in (sdk_ledger if sdk_ledger is not None else load_sdk_ledger()).fields:
         if f.status == "sunset":
-            sdk_retired.setdefault(f.contract, set()).add(f.field)
+            sdk_retired.setdefault(f.contract, set()).add((f.field, f.type))
 
     regen = regen_command(scope)
     has_ambiguous_names = any(len(v) > 1 for v in by_name_all.values())
@@ -649,11 +649,11 @@ def scan_contract_compat(
                     )
 
             retired_upstream = {
-                field
+                retired
                 for ancestor in sdk_contract_ancestors(
                     class_node, aliases, by_name, by_name_all=by_name_all
                 )
-                for field in sdk_retired.get(ancestor, ())
+                for retired in sdk_retired.get(ancestor, ())
             }
 
             # B005: every ledger field must still exist with its recorded type
@@ -668,7 +668,7 @@ def scan_contract_compat(
                     # A sunset field is withdrawn by decision; 'deprecated'
                     # still means shipped-but-discouraged and must stay present.
                     continue
-                if live is None and lf.field in retired_upstream:
+                if live is None and (lf.field, lf.type) in retired_upstream:
                     continue
                 if live is None:
                     findings.append(

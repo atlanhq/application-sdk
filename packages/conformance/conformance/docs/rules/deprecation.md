@@ -186,8 +186,10 @@ they hit with zero changes on their side.
   retirement marker — `deprecated` still requires the field to be present), an INHERITED
   field the SDK retired (absent because an SDK contract the class still inherits from,
   directly or through in-repo bases, dropped it and the SDK's own bundled ledger records
-  it `sunset` on that contract — a field the app or an in-repo base declared, or one
-  lost by leaving the SDK base, still fires), a type that was WIDENED (including nested
+  it `sunset` on that contract with the same name and type — a field the app or an
+  in-repo base declared under another type, or one lost by leaving the SDK base, still
+  fires; a removed app field with the SDK field's exact name and type cannot be told
+  apart from it and is excused too), a type that was WIDENED (including nested
   containers), an INHERITED field whose base class changed the type, and a move OFF
   `Any` that keeps the same outer shape (`Any` replaced in place; a type alias declared
   at the top level of the same module, including a chain of such aliases, or a public

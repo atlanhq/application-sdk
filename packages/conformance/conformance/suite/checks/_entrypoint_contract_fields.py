@@ -462,12 +462,13 @@ def sdk_contract_ancestors(
     Walks the same base chain as :func:`resolve_contract_fields` and returns the
     ancestors it resolves from the static SDK registries rather than from repo
     source. A name declared in the scanned repo is never included, so an SDK
-    self-scan (where the templates are in-repo) yields an empty set.
+    self-scan (where the templates are in-repo) yields an empty set, and
+    neither is a base its defining module imports from a non-SDK module.
     """
     found: set[str] = set()
     seen: set[str] = {classdef.name}
 
-    def walk(name: str) -> None:
+    def walk(name: str, foreign: frozenset[str]) -> None:
         if name in seen:
             return
         seen.add(name)
@@ -478,14 +479,21 @@ def sdk_contract_ancestors(
         if recs:
             for rec in recs:
                 for base_name in rec.bases:
-                    walk(base_name)
+                    walk(base_name, rec.non_sdk_bases)
+        elif name in foreign:
+            return
         elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
             found.add(name)
 
+    candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
+    own_foreign = next(
+        (r.non_sdk_bases for r in candidates if r is not None and r.node is classdef),
+        frozenset(),
+    )
     for base in classdef.bases:
         bname = _base_name(base)
         if bname is not None:
-            walk(aliases.get(bname, bname))
+            walk(aliases.get(bname, bname), own_foreign)
     return frozenset(found)
 
 

@@ -175,37 +175,75 @@ def inherited_run_base(name: str, by_name: Mapping[str, ClassRecord]) -> str | N
     """The SDK ``App``-family base whose ``run`` the in-repo class *name* inherits.
 
     Mirrors the ``cls.run`` lookup ``_collect_implicit_ep`` does for a class
-    with no ``run`` of its own: bases are searched depth-first in declaration
-    order, and the first SDK ``App``-family base reached (per
+    with no ``run`` of its own: the class's C3 linearization (its MRO) is
+    walked, and the first SDK ``App``-family base reached (per
     :attr:`ClassRecord.sdk_app_bases`) is returned by its SDK name. ``None``
-    when *name* or an in-repo base on the way defines ``run`` itself, when a
-    base cannot be resolved (it might define ``run``), or when no base reaches
-    the SDK ``App`` family.
+    when an in-repo class before it defines ``run``, when a base before it
+    cannot be resolved (it might define ``run``), when the bases admit no
+    consistent MRO, or when no base reaches the SDK ``App`` family.
     """
-    found = _run_owner(name, by_name, set())
-    return found if isinstance(found, str) else None
+    mro = _linearize(("repo", name), by_name, set())
+    if mro is None:
+        return None
+    for kind, entry in mro:
+        if kind == "sdk":
+            return entry
+        if kind == "unknown":
+            return None
+        if _defines_run(by_name[entry].node):
+            return None
+    return None
 
 
-def _run_owner(
-    name: str, by_name: Mapping[str, ClassRecord], visiting: set[str]
-) -> str | bool | None:
-    """SDK base name, ``False`` for a branch with no ``App`` base, ``None`` to stop."""
+_MroEntry = tuple[str, str]
+
+
+def _linearize(
+    key: _MroEntry, by_name: Mapping[str, ClassRecord], visiting: set[str]
+) -> list[_MroEntry] | None:
+    kind, name = key
+    if kind != "repo":
+        return [key]
     rec = by_name.get(name)
-    if rec is None or name in visiting or _defines_run(rec.node):
+    if rec is None:
+        return [("unknown", name)]
+    if name in visiting:
         return None
     visiting.add(name)
     try:
+        parents: list[_MroEntry] = []
         for base in rec.bases:
             if base in rec.sdk_app_bases:
-                return base
-            if base == name:
+                parents.append(("sdk", base))
+            elif base == name:
                 return None
-            found = _run_owner(base, by_name, visiting)
-            if found is not False:
-                return found
-        return False
+            else:
+                parents.append(("repo", base))
+        seqs: list[list[_MroEntry]] = []
+        for parent in parents:
+            seq = _linearize(parent, by_name, visiting)
+            if seq is None:
+                return None
+            seqs.append(seq)
+        merged = _c3_merge([*seqs, parents])
+        return None if merged is None else [key, *merged]
     finally:
         visiting.discard(name)
+
+
+def _c3_merge(seqs: list[list[_MroEntry]]) -> list[_MroEntry] | None:
+    seqs = [list(seq) for seq in seqs if seq]
+    result: list[_MroEntry] = []
+    while seqs:
+        head = next(
+            (seq[0] for seq in seqs if not any(seq[0] in other[1:] for other in seqs)),
+            None,
+        )
+        if head is None:
+            return None
+        result.append(head)
+        seqs = [rest for seq in seqs if (rest := [e for e in seq if e != head])]
+    return result
 
 
 def _defines_run(class_node: ast.ClassDef) -> bool:

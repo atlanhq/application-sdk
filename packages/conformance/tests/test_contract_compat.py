@@ -1773,6 +1773,48 @@ def test_b005_app_declared_field_removed_still_fires_after_sdk_retirement(
     assert _contract_fields_reported(findings, "B005") == {"DbtExtractInput.own_flag"}
 
 
+def test_b005_app_field_retyped_from_the_sdk_field_still_fires_after_retirement(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Same name as the field the SDK retired, but the app's own type: the app's removal."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "int", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+_NON_SDK_TEMPLATE_INPUT = _SDK_TEMPLATE_INPUT.replace(
+    "from application_sdk.templates.contracts.sql_metadata import (\n"
+    "    ExtractionInput,\n",
+    "from thirdparty.models import ExtractionInput\n"
+    "from application_sdk.templates.contracts.sql_metadata import (\n",
+)
+
+
+def test_b005_lookalike_base_from_a_non_sdk_module_is_not_exempt(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """A base named like an SDK contract but imported from elsewhere is not the SDK's."""
+    assert "from thirdparty.models import ExtractionInput" in _NON_SDK_TEMPLATE_INPUT
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"app.py": _NON_SDK_TEMPLATE_INPUT},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
 def test_b005_in_repo_base_field_removed_still_fires(
     tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
 ) -> None:

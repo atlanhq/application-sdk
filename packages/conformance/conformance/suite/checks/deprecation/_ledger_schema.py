@@ -180,15 +180,16 @@ def load_sdk_ledger() -> ContractLedger:
     longer lists the field. Unlike :func:`load_ledger`, neither the env override
     nor the app's own ledger may stand in for it.
 
-    An installed package reads the copy its build hook packaged from the SDK's
-    root ``contract_schema.lock.json``.  Run from an SDK source tree (an
-    editable install, ``PYTHONPATH``), there is no packaged copy, so the root
-    file it would have been built from is read instead.  A package with neither
+    Run from an SDK source tree (an editable install, ``PYTHONPATH``), the
+    root ``contract_schema.lock.json`` is read, so a stale untracked packaged
+    copy left in the checkout never stands in for it.  An installed package
+    reads the copy its build hook packaged from that root file.  A package with
+    neither
     is a broken build: the exemption is then disabled, and stderr says so
     rather than letting every SDK-retired field resurface as B005 unexplained.
     """
     packaged = _ir.files("conformance").joinpath(*_LEDGER_RELPATH)
-    source = packaged if packaged.is_file() else _source_tree_sdk_ledger()
+    source = _source_tree_sdk_ledger() or (packaged if packaged.is_file() else None)
     if source is None:
         print(
             "warning: this conformance package carries no SDK contract ledger "
@@ -199,9 +200,16 @@ def load_sdk_ledger() -> ContractLedger:
         return ContractLedger(version=LEDGER_VERSION, fields=[])
     try:
         return _parse(json.loads(source.read_text(encoding="utf-8")))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        KeyError,
+        TypeError,
+        AttributeError,
+    ) as exc:
         print(
-            f"warning: the SDK contract ledger is unreadable ({exc}); B005 "
+            f"warning: the SDK contract ledger is unreadable ({exc!r}); B005 "
             "cannot recognise SDK-retired contract fields.",
             file=sys.stderr,
         )

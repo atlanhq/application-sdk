@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
 from conformance.suite.checks.prescriptions._boundary_methods import (
     BoundaryScope,
     classify_boundary_method,
@@ -549,7 +550,10 @@ def coverage_findings(reg: Registry):
                 )
     for src, func in sites:
         contracts = contracts_for_site(reg, src)
-        if contracts and any(name not in reg.by_name for name in contracts):
+        if contracts and any(
+            name not in reg.by_name and name not in SDK_TEMPLATE_CONTRACT_FIELDS
+            for name in contracts
+        ):
             findings.append(
                 make_finding(
                     filename=src.rel,

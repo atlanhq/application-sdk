@@ -259,7 +259,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         if outfile.read_text(encoding="utf-8") != content:
             print(
-                f"STALE: {outfile}\nRun `{regen_command(scope)}` " "to update.",
+                f"STALE: {outfile}\nRun `{regen_command(scope)}` to update.",
                 file=sys.stderr,
             )
             sys.exit(1)

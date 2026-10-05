@@ -933,6 +933,41 @@ def test_k018_in_repo_run_on_a_base_is_not_the_template_run(tmp_path: Path) -> N
     assert _only(scan_all(paths, tmp_path), "K018") == []
 
 
+def test_k018_inherited_run_follows_the_mro_not_depth_first(tmp_path: Path) -> None:
+    """``MyApp(A, B)`` takes ``run`` from ``B``'s mixin before the template both share."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "\n"
+                "class RunMixin:\n"
+                "    async def run(self, input):\n"
+                "        pass\n"
+                "\n"
+                "class A(SqlApp):\n"
+                "    pass\n"
+                "\n"
+                "class B(RunMixin, SqlApp):\n"
+                "    pass\n"
+                "\n"
+                "class MyApp(A, B):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert not any(
+        "inherits run()" in f.message for f in _only(scan_all(paths, tmp_path), "K018")
+    )
+
+
 def test_k018_local_class_named_like_a_template_keeps_the_fallback(
     tmp_path: Path,
 ) -> None:

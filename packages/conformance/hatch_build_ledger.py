@@ -10,8 +10,8 @@ Two build paths reach this hook:
 * a build from the repository checkout (``uv build`` in ``packages/conformance``,
   a ``git+...#subdirectory=packages/conformance`` install, or the root
   project's path dependency) reads the root ledger two directories up;
-* a wheel built from the sdist reads the copy the sdist carries (the sdist's
-  ``force-include`` in ``pyproject.toml`` puts it there).
+* a build from an unpacked sdist (a wheel, or another sdist) reads the copy the
+  sdist carries, which this hook put there.
 
 Anything else fails the build: a wheel without the ledger silently disables the
 SDK-retirement exemption for every consumer.
@@ -35,13 +35,20 @@ class LedgerBuildHook(BuildHookInterface):
         if version == "editable":
             return
         root = Path(self.root)
+        sdk_root = root.parent.parent
         if (root / "PKG-INFO").is_file():
             source = root / PACKAGED_LEDGER
+        elif (sdk_root / "application_sdk").is_dir():
+            source = sdk_root / LEDGER_NAME
         else:
-            source = root.parent.parent / LEDGER_NAME
+            raise FileNotFoundError(
+                f"{root} is neither an unpacked sdist nor packages/conformance "
+                "inside an application-sdk checkout; the conformance package "
+                "must ship the repository-root contract_schema.lock.json."
+            )
         if not source.is_file():
             raise FileNotFoundError(
                 f"SDK contract ledger not found at {source}; the conformance "
-                "wheel must ship the repository-root contract_schema.lock.json."
+                "package must ship the repository-root contract_schema.lock.json."
             )
         build_data["force_include"][str(source)] = PACKAGED_LEDGER

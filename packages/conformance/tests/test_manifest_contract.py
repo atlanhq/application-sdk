@@ -618,6 +618,9 @@ _RECOGNISED = {f"template-{b}": _template_run_app(b) for b in _TEMPLATE_BASES} |
             "import BaseMetadataExtractor"
         ),
     ),
+    "star-import": _template_run_app(
+        "SqlApp", imports="from application_sdk.templates import *"
+    ),
 }
 
 _NOT_RECOGNISED = {
@@ -636,6 +639,10 @@ _NOT_RECOGNISED = {
     ),
     "relative-import": _template_run_app(
         "SqlApp", imports="from .templates import SqlApp"
+    ),
+    "star-import-beside-non-sdk-star": _template_run_app(
+        "SqlApp",
+        imports="from application_sdk.templates import *\nfrom other_sdk import *",
     ),
     "same-name-attribute-of-other-module": _template_run_app(
         "other_sdk.SqlApp",

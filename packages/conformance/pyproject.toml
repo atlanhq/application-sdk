@@ -56,12 +56,12 @@ packages = ["conformance"]
 
 # The SDK's contract ledger is committed once, at the repository root, and
 # shipped as package data by a build hook (FND-3108). The sdist carries a copy
-# so a wheel built from it still has one.
+# so a build from it still has one.
 [tool.hatch.build.targets.wheel.hooks.custom]
 path = "hatch_build_ledger.py"
 
-[tool.hatch.build.targets.sdist.force-include]
-"../../contract_schema.lock.json" = "conformance/data/contract_schema.lock.json"
+[tool.hatch.build.targets.sdist.hooks.custom]
+path = "hatch_build_ledger.py"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

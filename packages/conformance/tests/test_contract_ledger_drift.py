@@ -128,8 +128,11 @@ def test_installed_package_ships_the_root_ledger_byte_identical(
 
 def test_no_ledger_copy_is_committed_inside_the_package(sdk_root: Path) -> None:
     """The packaged copy is a build output; a second committed ledger drifts (FND-3108)."""
+    import shutil
     import subprocess
 
+    if shutil.which("git") is None:
+        pytest.skip("git is not installed")
     tracked = subprocess.run(
         ["git", "-C", str(sdk_root), "ls-files", "--", f"*{_LEDGER_NAME}"],
         capture_output=True,
@@ -246,6 +249,48 @@ def test_load_sdk_ledger_warns_when_the_package_carries_none(
     monkeypatch.setattr(_ledger_schema, "_source_tree_sdk_ledger", lambda: None)
     assert load_sdk_ledger().fields == []
     assert "carries no SDK contract ledger" in capsys.readouterr().err
+
+
+def test_load_sdk_ledger_prefers_the_source_tree_root_over_a_packaged_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A stale untracked packaged copy in a checkout never shadows the root ledger."""
+    root_ledger = tmp_path / _LEDGER_NAME
+    root_ledger.write_text(
+        serialize(
+            ContractLedger(
+                version=LEDGER_VERSION,
+                fields=[ContractField("Input", "workflow_slug", "str", "sunset")],
+            )
+        ),
+        encoding="utf-8",
+    )
+    stale = tmp_path / "stale.json"
+    stale.write_text(
+        serialize(ContractLedger(version=LEDGER_VERSION, fields=[])), encoding="utf-8"
+    )
+    monkeypatch.setattr(_ledger_schema, "_LEDGER_RELPATH", (str(stale),))
+    monkeypatch.setattr(_ledger_schema, "_source_tree_sdk_ledger", lambda: root_ledger)
+    assert load_sdk_ledger().fields == [
+        ContractField("Input", "workflow_slug", "str", "sunset")
+    ]
+
+
+@pytest.mark.parametrize(
+    "payload", ['{"version": 1, "fields": [{"contract": "X"}]}', "[]"]
+)
+def test_load_sdk_ledger_warns_on_a_malformed_ledger(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    payload: str,
+) -> None:
+    """A ledger of the wrong shape disables the exemption with a warning, not a crash."""
+    bad = tmp_path / _LEDGER_NAME
+    bad.write_text(payload, encoding="utf-8")
+    monkeypatch.setattr(_ledger_schema, "_source_tree_sdk_ledger", lambda: bad)
+    assert load_sdk_ledger().fields == []
+    assert "SDK contract ledger is unreadable" in capsys.readouterr().err
 
 
 def test_load_sdk_ledger_ignores_the_env_override(
