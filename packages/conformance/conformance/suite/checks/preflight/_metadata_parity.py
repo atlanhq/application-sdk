@@ -17,6 +17,7 @@ import ast
 
 from conformance.suite.checks._ast_common import make_finding
 from conformance.suite.checks._entrypoint_contract_fields import resolve_contract_fields
+from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
 from conformance.suite.checks.prescriptions._error_code_prefix import ClassRecord
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _get_non_self_params,
@@ -38,6 +39,11 @@ def scan(reg: Registry) -> list[Finding]:
         unresolved = False
         for name in input_contracts:
             rec = reg.by_name.get(name)
+            if rec is None and name in SDK_TEMPLATE_CONTRACT_FIELDS:
+                allowed.update(
+                    norm_key(f.name) for f in SDK_TEMPLATE_CONTRACT_FIELDS[name]
+                )
+                continue
             if rec is None or _opts_into_extra_keys(name, reg, set()):
                 unresolved = True
                 break

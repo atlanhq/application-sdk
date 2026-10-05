@@ -377,6 +377,20 @@ the bytes free. A bare `OSError` is what this replaces: it carries no category,
 so it lands in whatever broad `except` is in the call stack and the run reports
 some unrelated downstream symptom instead.
 
+This includes a download: `download_file` (and `download_file_chunked` below its
+chunking threshold) raises `StorageDiskFullError` when the local volume runs out
+of space (`ENOSPC` / `EDQUOT`), or has less free space than the store declared
+for the object. It is a `DiskFullError` (code `RESOURCE_EXHAUSTED_DISK_FULL`),
+so it names the volume to resize, and also a `StorageError`, so existing
+`except StorageError:` blocks and the concurrent-download unwrapping keep
+working. Any other failure writing the downloaded file is still a plain
+`StorageError`.
+
+The classification depends on object size today: above the chunking threshold,
+`download_file_chunked` still reports the same `ENOSPC` as a plain `StorageError`
+(tracked in FND-3279), and `download_prefix` routes every file
+through that entry point, so one prefix download can fail as either type.
+
 **This error is the signal that a deployment needs more ephemeral storage.**
 Requests and limits are deployment configuration and are deliberately not
 requested from the SDK or from app code — neither can know the number. The error

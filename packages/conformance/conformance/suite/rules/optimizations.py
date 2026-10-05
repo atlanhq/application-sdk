@@ -8,7 +8,11 @@ earns mandatory status graduates into a category series or the P-series.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -97,6 +101,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "app, is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O002",
@@ -148,6 +156,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O003",
@@ -193,6 +205,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "intentional.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O004",
@@ -248,6 +264,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O006",
@@ -315,6 +335,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "does not provide).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O005",
@@ -403,5 +427,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "caller in a different file than the one being scanned.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
 )

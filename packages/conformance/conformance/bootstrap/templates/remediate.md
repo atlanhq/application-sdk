@@ -135,8 +135,9 @@ impact analysis and verification*):
 `autofixable = true` rules (the **auto-fixable** ruleset) are applied this
 way. `autofixable = false` rules (the **migration** ruleset) are never applied
 by the loop: steps 1–2 still run, and the result is a `migration_brief` in
-residue — target state in the reference app, files that would change, the
-external skill to run — for the connector's per-rule sub-issue.
+residue — target state in the reference app, files that would change, and the
+rule's `remediation_reference` — for the connector's per-rule sub-issue. See
+*After the loop — migration hand-off*.
 
 ## Phase 1+ — run the loop
 
@@ -147,6 +148,43 @@ Only after Phase 0 has converged (or been recorded as residue):
    - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
 2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
 3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.
+
+## After the loop — migration hand-off
+
+Residue entries for migration rules carry `remediation_reference`
+(`kind`, `target`, `note`). Group them by reference, then:
+
+- `kind = skill` — interactive sessions only (a developer is present).
+  Resolve the skills directory the same way as the programs directory:
+  `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
+  connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
+  anywhere else. Run the skills one at a time, in the order of
+  `$SKILLS/order.txt` and never another: an earlier skill can be a
+  precondition of a later one (`migrate-off-daft` must cross the daft cliff
+  before any skill that bumps the SDK). For each skill:
+  1. Tell the developer which rule ids and how many findings it covers, and
+     ask before starting it.
+  2. Read `$SKILLS/<target>/SKILL.md` and follow it, stop points included.
+     While it runs, the skill's declared `outputs` replace this loop's write
+     scope: it may edit `tests/`, `uv.lock` and other files the loop never
+     touches. This exception to the write-scope constraint holds only while
+     the skill runs, and only because the developer reviews each step.
+  3. When it ends, run the orthogonal test gate, then
+     `atlan-application-sdk-conformance detect --rule <ids>` for the rule ids
+     it names. A cleared finding is removed from residue; a remaining one
+     stays in residue with the skill named. If the test gate fails, do not
+     revert the skill's changes: show the developer the failing tests, let
+     them decide, and keep the skill's findings in residue with the failure.
+  4. Record in residue every file the skill changed under `tests/` and any
+     `uv.lock` change, for human review.
+- `kind = guide` — apply nothing. Report the rule ids with the guide path
+  `$(dirname "$PROGRAMS")/<target>`.
+- `kind = decision` — apply nothing. Report the rule ids, who decides
+  (`target`) and the choice (`note`).
+
+Headless runs — the caller's prompt says the run is non-interactive, as in the
+remediation lane, so no developer is present — skip the hand-off: the residue
+report lists each reference and nothing is started.
 
 ## Arguments → program inputs
 

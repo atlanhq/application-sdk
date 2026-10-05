@@ -10,6 +10,11 @@ missing junit → an empty, zero-scored tier, so a missing integration suite
 still counts against the grade); e2e is scored only when ``--e2e-junit``
 resolves to at least one file — otherwise the e2e tier is marked not-applicable.
 
+``--integration-result failure`` separates "the integration job crashed" from
+"there is no integration suite".  Both leave the junit empty, but only the
+caller knows which happened: the job runs only once a suite was detected, so a
+``failure`` with no executed tests is a present, failing tier (FND-3299).
+
 ``--e2e-junit`` is repeatable and each value may be a **glob**, because the e2e
 matrix emits one artifact per suite × cloud leg (FND-6).  Resolving the glob
 here rather than in the workflow keeps the "how many legs ran" branching out of
@@ -26,6 +31,7 @@ Usage::
         --unit-coverage unit/coverage.json \\
         --integration-junit integration/results/test-results.xml \\
         --integration-coverage integration/coverage.json \\
+        --integration-result failure \\
         --e2e-junit 'e2e-evidence/*/results/sdr-test-results.xml' \\
         --cross-cloud-configured aws,azure,gcp \\
         --cross-cloud-observed aws,azure \\
@@ -39,6 +45,7 @@ import argparse
 import datetime as _dt
 import json
 from pathlib import Path
+from typing import Literal, get_args
 
 from conformance.scorecard.compute import build_scorecard
 from conformance.scorecard.readers import (
@@ -55,6 +62,9 @@ from conformance.scorecard.schema import (
     TierName,
     TierTestCounts,
 )
+
+#: A GitHub Actions ``needs.<job>.result``.
+JobResult = Literal["success", "failure", "cancelled", "skipped"]
 
 
 def _now_iso() -> str:
@@ -123,6 +133,14 @@ def main(argv: list[str]) -> int:
     parser.add_argument(
         "--integration-coverage", default=None, help="Integration coverage.json."
     )
+    parser.add_argument(
+        "--integration-result",
+        default=None,
+        choices=get_args(JobResult),
+        help="The integration job's result. 'failure' with no executed tests "
+        "records the tier as present and failing (the job crashed before pytest "
+        "ran) instead of absent. Junit evidence wins whenever tests executed.",
+    )
     # Deprecated single-file aliases (pre-tier-split); map to the unit tier.
     parser.add_argument(
         "--junit", default=None, help="Deprecated alias for --unit-junit."
@@ -185,9 +203,17 @@ def main(argv: list[str]) -> int:
             f"{', '.join(args.e2e_junit)} — e2e tier marked not-applicable"
         )
 
+    integration = _counts(args.integration_junit)
+    if args.integration_result == "failure" and integration.ran == 0:
+        print(
+            "warning: integration job failed before any test executed — "
+            "tier recorded as present and failing"
+        )
+        integration = integration.model_copy(update={"job_failed": True})
+
     tests = RawTests(
         unit=_counts(unit_junit),
-        integration=_counts(args.integration_junit),
+        integration=integration,
         e2e=parse_junit_tier_merged(e2e_paths),
     )
 

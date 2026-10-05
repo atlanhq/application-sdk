@@ -192,8 +192,9 @@ on:
           Repo-relative path to the app's committed contract ledger
           (contract_schema.lock.json).  The guard compares this file between
           origin/main and HEAD and blocks any deletion or type change.
-          Default: contract_schema.lock.json (repo root — convention for app repos).
-          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+          Default: contract_schema.lock.json (repo root — the convention for app
+          repos and the SDK alike; the SDK's conformance wheel packages its root
+          ledger at build time).
         required: false
         default: "contract_schema.lock.json"
         type: string
@@ -519,6 +520,10 @@ jobs:
         with:
           name: conformance-${{ matrix.slug }}-sarif
           path: ${{ matrix.slug }}.sarif
+          # Explicit, or it falls back to the 90-day repo default (FND-3313).
+          # Its one reader, conformance-upload-sarif.yaml, fires on workflow_run
+          # as soon as this run completes.
+          retention-days: 7
           # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
           # a run, so re-running a failed job would otherwise 409 here and burn the
           # retry on a conflict that has nothing to do with a finalize failure. It is
@@ -545,6 +550,7 @@ jobs:
           # Consumers resolve this artifact by `<name>*` glob, not exact name.
           name: conformance-${{ matrix.slug }}-sarif-retry
           path: ${{ matrix.slug }}.sarif
+          retention-days: 7
           overwrite: true
 
   # ── Contract ledger append-only guard ─────────────────────────────────────
@@ -555,7 +561,8 @@ jobs:
   # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
   # travels with the published package — no local script copy needed in app repos.
   # The ledger-path input lets each caller point to its own ledger; the SDK
-  # overrides the default via conformance.yaml / sdk-gate.yaml.
+  # passes the same repo-root default explicitly via conformance.yaml /
+  # sdk-gate.yaml.
   #
   # Requires fetch-depth: 0 so the full git history (and origin/main) is
   # available to `git show`.  Skipped on push to main (no base-ref diff).

@@ -38,7 +38,11 @@ does not.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -144,6 +148,11 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p025"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.DECISION,
+            target="app owner",
+            note="align the contract and .env.example to the code name, or rename App.name with a legacy_workflow_types alias",
         ),
     ),
 )

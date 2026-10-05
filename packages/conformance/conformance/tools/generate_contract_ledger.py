@@ -14,6 +14,12 @@ In the SDK repo itself the suite is in-tree, so ``uv run`` is correct:
 
     uv run atlan-application-sdk-conformance gen-contract-ledger
 
+There, from any directory in the checkout, it scans the whole SDK and writes the
+repo-root ``contract_schema.lock.json`` — the SDK's only committed ledger, which
+the conformance wheel's build hook packages (FND-3108). The ledger records the
+template contracts' entrypoints and the SDK contract bases (``Input``,
+``Output``, ``PublishInputMixin``) that every app contract inherits from.
+
 Check whether the committed ledger is up-to-date (CI gate / drift test):
 
     uv run atlan-application-sdk-conformance gen-contract-ledger --check
@@ -54,6 +60,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
+    sdk_base_contract_names,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -67,6 +74,9 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
 )
+from conformance.suite.schema.disposition import RuleScope
+
+LEDGER_NAME = "contract_schema.lock.json"
 
 
 def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
@@ -113,7 +123,9 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     # which contracts exist.
     register_alias_records(by_name, alias_targets)
 
-    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(
+        file_trees, by_name
+    ) | sdk_base_contract_names(by_name)
 
     # Index existing ledger entries for fast lookup
     existing_by_key: dict[tuple[str, str], ContractField] = {
@@ -179,6 +191,16 @@ def _find_repo_root() -> Path | None:
     return None
 
 
+def _sdk_checkout_root(start: Path) -> Path | None:
+    """The SDK checkout containing *start*: the dir holding ``application_sdk/`` and ``packages/conformance/``."""
+    for parent in [start, *start.parents]:
+        if (parent / "application_sdk").is_dir() and (
+            parent / "packages" / "conformance" / "pyproject.toml"
+        ).is_file():
+            return parent
+    return None
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Generate the entrypoint-contract ledger from source.",
@@ -194,8 +216,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--outfile",
         type=Path,
-        default=Path("contract_schema.lock.json"),
-        help="Ledger path to write (default: contract_schema.lock.json in cwd).",
+        default=None,
+        help=(
+            "Ledger path to write (default: contract_schema.lock.json in cwd; "
+            "in the SDK repo, the repo-root contract_schema.lock.json)."
+        ),
     )
     parser.add_argument(
         "--check",
@@ -216,7 +241,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         sys.exit(2)
 
-    outfile: Path = args.outfile
+    scope = detect_scope(repo_root)
+    if scope is RuleScope.SDK and args.repo is None:
+        repo_root = _sdk_checkout_root(repo_root.resolve()) or repo_root
+    outfile: Path = args.outfile or (
+        repo_root / LEDGER_NAME if scope is RuleScope.SDK else Path(LEDGER_NAME)
+    )
     # A first ledger starts EMPTY — see load_ledger_baseline for why, and note
     # that bootstrap's write-if-absent scaffold shares the same helper so the
     # invariant cannot drift between the two writers.
@@ -229,8 +259,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         if outfile.read_text(encoding="utf-8") != content:
             print(
-                f"STALE: {outfile}\nRun `{regen_command(detect_scope(repo_root))}` "
-                "to update.",
+                f"STALE: {outfile}\nRun `{regen_command(scope)}` to update.",
                 file=sys.stderr,
             )
             sys.exit(1)

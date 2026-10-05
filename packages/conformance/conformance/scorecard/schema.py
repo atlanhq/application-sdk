@@ -60,6 +60,12 @@ class TierTestCounts(BaseModel):
     skipped: int = Field(default=0, ge=0)
     errors: int = Field(default=0, ge=0)
     duration_sec: float = Field(default=0.0, ge=0.0)
+    job_failed: bool = False
+    """The tier's CI job failed before any test executed, so its junit holds
+    nothing. Set only when the job is known to have run against a real suite
+    and failed — a setup step dying (e.g. a toolchain download) must read as a
+    *failing* tier, not an absent one. An absent tier tells the repo to write a
+    suite it already has (FND-3299)."""
 
     model_config = _COMMON
 
@@ -75,12 +81,12 @@ class TierTestCounts(BaseModel):
 
     @property
     def present(self) -> bool:
-        return self.ran > 0
+        return self.ran > 0 or self.job_failed
 
     @property
     def green(self) -> bool:
-        """No failures or errors among the tests that ran."""
-        return self.failed == 0 and self.errors == 0
+        """No failures or errors among the tests that ran, and the job itself did not fail."""
+        return self.failed == 0 and self.errors == 0 and not self.job_failed
 
 
 class RawTests(BaseModel):
