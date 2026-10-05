@@ -29,6 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
+    SDK_APP_BASE_NAMES,
     _IgnoreDirective,
     _parse_directives,
     make_finding,
@@ -152,7 +153,7 @@ class _Resolver:
             return self.resolve_expr(rel, info.rebinds[name], depth + 1)
         if name in info.from_imports:
             module, orig = info.from_imports[name]
-            if module == _SDK_PACKAGE or module.startswith(f"{_SDK_PACKAGE}."):
+            if _is_sdk_module(module):
                 return None
             target = self.module_for(module)
             if target is None:
@@ -181,6 +182,57 @@ class _Resolver:
             return None
         return self.module_for(".".join([base, *chain]))
 
+    def is_sdk_app_base(self, rel: str, expr: ast.expr) -> bool:
+        info = self._by_rel.get(rel)
+        if info is None:
+            return False
+        if isinstance(expr, ast.Name):
+            if expr.id in info.classes or expr.id in info.rebinds:
+                return False
+            origin = info.from_imports.get(expr.id)
+            return (
+                origin is not None
+                and _is_sdk_module(origin[0])
+                and origin[1] in SDK_APP_BASE_NAMES
+            )
+        if isinstance(expr, ast.Attribute) and expr.attr in SDK_APP_BASE_NAMES:
+            cur = expr.value
+            chain: list[str] = []
+            while isinstance(cur, ast.Attribute):
+                chain.insert(0, cur.attr)
+                cur = cur.value
+            if not isinstance(cur, ast.Name):
+                return False
+            module = info.module_imports.get(cur.id)
+            if module is None and cur.id in info.from_imports:
+                parent, orig = info.from_imports[cur.id]
+                module = f"{parent}.{orig}" if parent else orig
+            return module is not None and _is_sdk_module(".".join([module, *chain]))
+        return False
+
+    def reaches_sdk_app(
+        self, rel: str, expr: ast.expr, seen: set[tuple[str, str]] | None = None
+    ) -> bool:
+        if self.is_sdk_app_base(rel, expr):
+            return True
+        decl = self.resolve_expr(rel, expr)
+        seen = set() if seen is None else seen
+        if decl is None or decl in seen or len(seen) > _MAX_DEPTH:
+            return False
+        seen.add(decl)
+        info = self._by_rel[decl[0]]
+        node = next(
+            (
+                s
+                for s in info.tree.body
+                if isinstance(s, ast.ClassDef) and s.name == decl[1]
+            ),
+            None,
+        )
+        return node is not None and any(
+            self.reaches_sdk_app(decl[0], base, seen) for base in node.bases
+        )
+
     def resolve_expr(
         self, rel: str, expr: ast.expr, depth: int = 0
     ) -> tuple[str, str] | None:
@@ -200,6 +252,10 @@ class _Resolver:
                 return None
             return self.resolve_name(target.rel, expr.attr, depth + 1)
         return None
+
+
+def _is_sdk_module(module: str) -> bool:
+    return module == _SDK_PACKAGE or module.startswith(f"{_SDK_PACKAGE}.")
 
 
 def _unwrap(node: ast.expr) -> ast.expr:
@@ -225,11 +281,13 @@ def _ref_name(expr: ast.expr, aliases: dict[str, str]) -> str | None:
 
 
 def _entrypoint_methods(
-    tree: ast.Module,
+    info: _ModuleInfo,
+    resolver: _Resolver,
     by_name: dict[str, ClassRecord],
     app_cache: dict[str, bool | None],
     aliases: dict[str, str],
 ) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
+    tree = info.tree
     prov = collect_import_provenance(tree)
     found: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = []
     for class_node in ast.walk(tree):
@@ -258,6 +316,7 @@ def _entrypoint_methods(
                 if (
                     bname == "App"
                     or resolve_ancestor(bname, "App", by_name, app_cache, set()) is True
+                    or resolver.reaches_sdk_app(info.rel, base)
                 ):
                     found.append((func, "run"))
                     break
@@ -297,7 +356,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     for info in modules.values():
         aliases = aliases_by_rel[info.rel]
         for func, entrypoint in _entrypoint_methods(
-            info.tree, by_name, app_cache, aliases
+            info, resolver, by_name, app_cache, aliases
         ):
             annotations: list[tuple[str, ast.expr | None]] = []
             non_self = _get_non_self_params(func)

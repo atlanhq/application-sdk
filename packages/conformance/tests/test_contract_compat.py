@@ -895,6 +895,73 @@ def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_RENAMED_BUNDLE_INPUT = """\
+from application_sdk.app import App
+
+class {cls}AppInputContract:
+    {field}: str = ""
+
+AppInputContract = {cls}AppInputContract
+
+class {cls}App(App):
+    async def run(self, input: {cls}AppInputContract) -> None:
+        pass
+"""
+
+
+def _renamed_bundle(crawler_field: str, miner_field: str) -> dict[str, str]:
+    return {
+        "crawler/_input.py": _RENAMED_BUNDLE_INPUT.format(
+            cls="Crawler", field=crawler_field
+        ),
+        "miner/_input.py": _RENAMED_BUNDLE_INPUT.format(cls="Miner", field=miner_field),
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "removed", "fires"),
+    [
+        ("active", "miner_only", True),
+        ("active", None, False),
+        ("sunset", "miner_only", False),
+    ],
+    ids=["removed-from-every-class", "kept-on-a-sibling", "sunset"],
+)
+def test_b005_reads_rows_recorded_under_the_pre_rename_bundle_name(
+    tmp_path: Path, status: str, removed: str | None, fires: bool
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "miner_only", "str", status),
+        ContractField("CrawlerAppInputContract", "crawler_only", "str", "active"),
+    )
+    miner_field = "other" if removed == "miner_only" else "miner_only"
+    findings = _scan(tmp_path, _renamed_bundle("crawler_only", miner_field), ledger)
+    legacy = [
+        f
+        for f in findings
+        if f.rule_id == "B005"
+        and not f.suppressed
+        and "'AppInputContract.miner_only'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
+def test_b005_pre_rename_rows_left_to_the_main_pass_when_the_class_exists(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "gone", "str", "active"),
+    )
+    files = {
+        **_renamed_bundle("crawler_only", "miner_only"),
+        "legacy/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A,
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [f.file for f in b005] == ["legacy/_input.py"]
+
+
 # ── B005: the four changes that are not breaks ────────────────────────────────
 
 

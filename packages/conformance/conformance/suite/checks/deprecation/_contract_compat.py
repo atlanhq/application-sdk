@@ -747,4 +747,86 @@ def scan_contract_compat(
                         )
                     )
 
+    findings.extend(
+        _renamed_bundle_input_findings(
+            file_trees, file_aliases, file_directives, by_name, ledger_by_contract, root
+        )
+    )
     return findings
+
+
+_LEGACY_BUNDLE_INPUT = "AppInputContract"
+
+
+def _renamed_bundle_input_findings(
+    file_trees: dict[Path, ast.AST],
+    file_aliases: dict[Path, dict[str, str]],
+    file_directives: dict[Path, dict[int, _IgnoreDirective]],
+    by_name: dict[str, ClassRecord],
+    ledger_by_contract: dict[str, list[ContractField]],
+    root: Path,
+) -> list[Finding]:
+    """B005 for ledger rows recorded under the pre-rename bundle input name.
+
+    Bundle ``_input.py`` modules once all declared ``class AppInputContract``;
+    they now declare ``<Entrypoint>AppInputContract`` and rebind
+    ``AppInputContract`` to it. The rows the ledger holds under the old name
+    have no live class of that name any more, so the main pass never reads
+    them. They were recorded across every entrypoint's class, so a row is
+    removed only when no renamed class still carries the field.
+    """
+    rows = ledger_by_contract.get(_LEGACY_BUNDLE_INPUT)
+    if not rows:
+        return []
+    renamed: list[tuple[Path, ast.ClassDef]] = []
+    for path, tree in file_trees.items():
+        if not isinstance(tree, ast.Module):
+            continue
+        classes = {s.name: s for s in tree.body if isinstance(s, ast.ClassDef)}
+        if _LEGACY_BUNDLE_INPUT in classes:
+            return []
+        for stmt in tree.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == _LEGACY_BUNDLE_INPUT
+                and isinstance(stmt.value, ast.Name)
+                and stmt.value.id in classes
+            ):
+                renamed.append((path, classes[stmt.value.id]))
+    if not renamed:
+        return []
+    renamed.sort(key=lambda item: (str(item[0]), item[1].lineno))
+    present = {
+        f.name
+        for path, node in renamed
+        for f in resolve_contract_fields(node, file_aliases.get(path, {}), by_name)
+    }
+    anchor_path, anchor = renamed[0]
+    try:
+        rel = str(anchor_path.relative_to(root))
+    except ValueError:
+        rel = str(anchor_path)
+    names = ", ".join(sorted({node.name for _, node in renamed}))
+    return [
+        make_finding(
+            filename=rel,
+            rule_id="B005",
+            node=anchor,
+            message=(
+                f"Contract field '{_LEGACY_BUNDLE_INPUT}.{lf.field}' (ledger type: "
+                f"'{lf.type}', status: '{lf.status}') was removed from the contract. "
+                f"The ledger recorded it under '{_LEGACY_BUNDLE_INPUT}' before "
+                "contract-toolkit named bundle input classes per entrypoint, and "
+                f"none of {names} declares it now. Entrypoint contract fields are "
+                "permanent — mark it 'deprecated' and keep it, or mark it 'sunset' "
+                "to retire it. "
+                "Suppress with '# conformance: ignore[B005] <reason>' "
+                "only if this contract has no deployed consumers."
+            ),
+            directives=file_directives.get(anchor_path, {}),
+        )
+        for lf in rows
+        if lf.field not in present and lf.status != "sunset"
+    ]

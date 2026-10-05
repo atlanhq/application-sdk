@@ -1210,6 +1210,36 @@ def test_p039_fires_on_closed_bare_input_contract(tmp_path: Path) -> None:
     assert p039[0].file == "app/generated/_input.py"
 
 
+@pytest.mark.parametrize(
+    ("name", "fires"),
+    [
+        ("CrawlerAppInputContract", True),
+        ("QueryMinerAppInputContract", True),
+        ("CrawlerInputContract", False),
+        ("appInputContract", False),
+    ],
+)
+def test_p039_matches_per_entrypoint_bundle_class_names(
+    tmp_path: Path, name: str, fires: bool
+) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/crawler/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/crawler/_input.py": _INPUT_BARE_CLOSED.replace(
+                "class AppInputContract(", f"class {name}("
+            )
+            + f"\n\nAppInputContract = {name}\n",
+        },
+    )
+    p039 = [f for f in _run(tmp_path) if f.rule_id == "P039"]
+    assert len(p039) == (1 if fires else 0)
+    if fires:
+        assert p039[0].file == "app/generated/crawler/_input.py"
+        assert f"'{name}'" in p039[0].message
+
+
 def test_p039_silent_when_contract_allows_unbounded(tmp_path: Path) -> None:
     _write(
         tmp_path,

@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -377,5 +379,73 @@ def test_single_entrypoint_app_is_silent(tmp_path: Path) -> None:
         "    @entrypoint\n"
         "    async def crawler(self, input: AppInputContract) -> Output:\n"
         "        return Output()\n"
+    )
+    assert _k027(tmp_path, files) == []
+
+
+_RUN_ON_TEMPLATE_BODY = (
+    "from app.generated.crawler._input import AppInputContract\n"
+    "from app.generated.miner import _input as miner_input\n"
+    "\n"
+    "\n"
+    "class Crawler({base}):\n"
+    "    async def run(self, input: AppInputContract) -> Output:\n"
+    "        return Output()\n"
+    "\n"
+    "    @entrypoint\n"
+    "    async def miner(self, input: miner_input.AppInputContract) -> Output:\n"
+    "        return Output()\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("header", "base", "extra"),
+    [
+        (
+            "from application_sdk.templates import SqlMetadataExtractor\n",
+            "SqlMetadataExtractor",
+            {},
+        ),
+        ("import application_sdk.templates as t\n", "t.SqlApp", {}),
+        (
+            "from app.base import Base\n",
+            "Base",
+            {
+                "app/base.py": "from application_sdk.templates import SqlApp\n"
+                "\n"
+                "\n"
+                "class Base(SqlApp):\n"
+                "    pass\n"
+            },
+        ),
+    ],
+    ids=["imported-template", "attribute-template", "in-repo-base-of-template"],
+)
+def test_run_on_sdk_template_base_is_an_entrypoint(
+    tmp_path: Path, header: str, base: str, extra: dict[str, str]
+) -> None:
+    files = {**_bundle_inputs(), **extra}
+    files["app/app.py"] = (
+        "from application_sdk.app import entrypoint\n"
+        "from application_sdk.contracts.base import Output\n"
+        + header
+        + _RUN_ON_TEMPLATE_BODY.format(base=base)
+    )
+    findings = _k027(tmp_path, files)
+    assert {f.discriminator for f in findings} == {"AppInputContract"}
+    assert len(findings) == 2
+
+
+def test_run_on_local_class_named_like_a_template_is_silent(tmp_path: Path) -> None:
+    files = _bundle_inputs()
+    files["app/app.py"] = (
+        "from application_sdk.app import entrypoint\n"
+        "from application_sdk.contracts.base import Output\n"
+        "\n"
+        "\n"
+        "class SqlMetadataExtractor:\n"
+        "    pass\n"
+        "\n"
+        "\n" + _RUN_ON_TEMPLATE_BODY.format(base="SqlMetadataExtractor")
     )
     assert _k027(tmp_path, files) == []
