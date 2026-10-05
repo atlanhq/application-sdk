@@ -2319,6 +2319,32 @@ def test_d010_fires_when_lock_lacks_duckdb(tmp_path: Path) -> None:
     assert findings[0].line == 5
 
 
+def test_d010_message_says_to_check_the_import_site_is_live_first(
+    tmp_path: Path,
+) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+    )
+    assert len(findings) == 1
+    message = findings[0].message
+    assert "dead code" in message
+    assert "delete" in message
+    assert message.index("dead code") < message.index("[sql]' (or [incremental])")
+
+
+def test_d010_full_description_says_to_check_the_import_site_is_live_first() -> None:
+    from conformance.suite.rules.dependency import RULES
+
+    (d010,) = [r for r in RULES if r.id == "D010"]
+    remediation = d010.full_description.split("**Remediation:**", 1)[1]
+    assert "dead code" in remediation
+    assert "delete" in remediation
+    assert "suppress" in remediation
+
+
 def test_d010_silent_when_lock_resolves_duckdb_for_the_app(tmp_path: Path) -> None:
     """duckdb reachable from the app's own production deps via the [sql] extra."""
     findings = _d010_scan(
