@@ -66,7 +66,6 @@ EXCLUDE_REPOS = {"atlanhq/application-sdk"}
 BASE_BRANCH = "main"
 RESYNC_LABEL = "conformance-resync"
 APPROVE_WORKFLOW = "renovate-auto-approve.yml"
-REQUEST_TIMEOUT = 60
 _REPO_RE = re.compile(r"^atlanhq/[A-Za-z0-9._-]+$")
 
 
@@ -81,10 +80,11 @@ _flatten = gate.flatten
 
 
 def _run(args: list[str], runner: Runner, **kwargs) -> subprocess.CompletedProcess:
-    kwargs.setdefault("capture_output", True)
-    kwargs.setdefault("text", True)
-    kwargs.setdefault("check", False)
-    return runner(args, **kwargs)
+    """Every lane subprocess is bounded (``gate.call``): this is one serial
+    run over the fleet, so a stalled fetch or API call must fail that repo,
+    not hold the job."""
+    timeout = gate.GIT_TIMEOUT if args[:1] == ["git"] else gate.GH_TIMEOUT
+    return gate.call(runner, args, timeout=timeout, **kwargs)
 
 
 def read_clone_file(work: str, path: str) -> str | None:
@@ -191,8 +191,9 @@ def open_prs(repo: str, runner: Runner) -> list[dict]:
 def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | None]:
     """(keep, duplicates, foreign) among ``repo``'s open PRs.
 
-    ``keep`` is the lane's own open PR on ``RESYNC_BRANCH``; any other PR the
-    lane's author opened is a duplicate (should not normally happen — this App
+    ``keep`` is the lane's own open PR on ``RESYNC_BRANCH`` against ``main``;
+    any other PR the lane's author opened, including its own PR retargeted
+    to another base, is a duplicate (should not normally happen — this App
     only ever pushes that one branch — but closed on sight if it does).
     ``foreign`` is someone else's open PR on ``RESYNC_BRANCH`` in this repo;
     the lane never force-pushes over a person's PR, so a repo with one is left
@@ -208,10 +209,15 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
         head = pr.get("head") or {}
         author = (pr.get("user") or {}).get("login")
         same_repo = (head.get("repo") or {}).get("full_name") == repo_of(pr)
+        on_main = (pr.get("base") or {}).get("ref") == BASE_BRANCH
         if head.get("ref") == gate.RESYNC_BRANCH:
             if not same_repo:
                 continue
-            if author == gate.RESYNC_AUTHOR:
+            if author == gate.RESYNC_AUTHOR and not on_main:
+                # Retargeted off main: the gate never approves it, so close
+                # it as a duplicate and let this run open a fresh one.
+                dupes.append(pr)
+            elif author == gate.RESYNC_AUTHOR:
                 keep = pr
             else:
                 foreign = pr
@@ -393,14 +399,12 @@ def pr_matches_render(
     if changed != sorted(staged):
         return False
     for path in staged:
-        ours = git(
-            ["rev-parse", "--verify", "-q", f"HEAD:{path}"], work, runner, check=False
-        ).strip()
+        # `ls-tree` prints mode, type and blob: an exec-bit-only difference
+        # must count, or the gate's whole-tree compare rejects a PR the lane
+        # thinks is current.
+        ours = git(["ls-tree", "HEAD", "--", path], work, runner, check=False).strip()
         theirs = git(
-            ["rev-parse", "--verify", "-q", f"FETCH_HEAD:{path}"],
-            work,
-            runner,
-            check=False,
+            ["ls-tree", "FETCH_HEAD", "--", path], work, runner, check=False
         ).strip()
         if ours != theirs:
             return False
@@ -592,12 +596,24 @@ def process_repo(
             # The open PR was rendered from an older main this run can no
             # longer reproduce. Disarm it rather than close it, so a transient
             # failure (an index outage) costs no PR; the next good run re-arms.
-            if keep:
-                result["automerge"] = (
-                    "would disarm"
-                    if dry_run
-                    else set_automerge(repo, keep["number"], False, runner)
-                )
+            # A disarm that does not succeed closes the PR instead: it must
+            # never stay armed.
+            if keep and keep.get("auto_merge"):
+                if dry_run:
+                    result["automerge"] = "would disarm"
+                else:
+                    outcome = set_automerge(repo, keep["number"], False, runner)
+                    result["automerge"] = outcome
+                    if outcome != "disarmed":
+                        withdraw_lane_pr(
+                            repo,
+                            keep,
+                            f"the render failed and auto-merge could not be disarmed ({outcome})",
+                            dry_run,
+                            runner,
+                            result,
+                        )
+                        return result
                 step(f"Render failed; auto-merge on PR #{keep['number']} disarmed.")
             return result
         if manifest.get("skipped"):

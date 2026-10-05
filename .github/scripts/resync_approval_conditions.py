@@ -94,6 +94,10 @@ _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
 # Well inside the approver job's 10-minute limit (pull + install + render),
 # so a slow render fails closed with a message instead of a killed job.
 BOOTSTRAP_TIMEOUT = 300
+# Every gh/git call is bounded, so a stalled request fails the step in
+# seconds rather than holding the job to its workflow timeout.
+GH_TIMEOUT = 60
+GIT_TIMEOUT = 300
 
 
 def pr_marker(suite_version: str, resolved_at: str) -> str:
@@ -303,7 +307,12 @@ def sandboxed_render(
                 check=False,
             )
         except subprocess.TimeoutExpired:
-            runner(["docker", "rm", "-f", name], capture_output=True, check=False)
+            runner(
+                ["docker", "rm", "-f", name],
+                capture_output=True,
+                check=False,
+                timeout=GH_TIMEOUT,
+            )
             return 124, "", f"render timed out after {BOOTSTRAP_TIMEOUT}s"
         stdout, stderr = proc.stdout or "", proc.stderr or ""
         manifest = parse_manifest(stdout)
@@ -333,6 +342,26 @@ Runner = Callable[..., subprocess.CompletedProcess]
 
 class GhError(RuntimeError):
     """A GitHub or git call failed — aborts the step (a red step is visible)."""
+
+
+def call(
+    runner: Runner, cmd: list[str], *, timeout: int = GH_TIMEOUT, **kwargs: Any
+) -> subprocess.CompletedProcess:
+    """``runner(cmd)`` with output captured and a bounded ``timeout``; a call
+    that overruns raises :class:`GhError` instead of hanging."""
+    kwargs.setdefault("capture_output", True)
+    kwargs.setdefault("text", True)
+    kwargs.setdefault("check", False)
+    try:
+        return runner(cmd, timeout=timeout, **kwargs)
+    except subprocess.TimeoutExpired as exc:
+        raise GhError(
+            f"{cmd[0]} {cmd[1] if len(cmd) > 1 else ''} timed out after {timeout}s"
+        ) from exc
+
+
+def _is_not_found(result: subprocess.CompletedProcess) -> bool:
+    return "HTTP 404" in (result.stderr or "") or "Not Found" in (result.stderr or "")
 
 
 # ---------------------------------------------------------------------------
@@ -459,9 +488,22 @@ def _setting_key(line: str) -> str:
 
 
 def still_lost(path: str, lost: list[str]) -> list[str]:
-    """Lost lines for ``path`` minus the accepted drops."""
+    """Lost lines for ``path`` minus the accepted drops.
+
+    Each accepted key excuses ONE lost line: the canonical template carried
+    that setting once. A second lost line with the same key is a repo's own
+    value that happens to share the name, and it is still reported.
+    """
     accepted = ACCEPTED_DROPS.get(path, frozenset())
-    return [line for line in lost if _setting_key(line) not in accepted]
+    excused: set[str] = set()
+    remaining: list[str] = []
+    for line in lost:
+        key = _setting_key(line)
+        if key in accepted and key not in excused:
+            excused.add(key)
+            continue
+        remaining.append(line)
+    return remaining
 
 
 def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
@@ -544,13 +586,12 @@ def git_env() -> dict[str, str]:
 
 
 def _git(args: list[str], cwd: str, runner: Runner) -> str:
-    result = runner(
+    result = call(
+        runner,
         ["git", *args],
+        timeout=GIT_TIMEOUT,
         cwd=cwd,
-        capture_output=True,
-        text=True,
         env=git_env(),
-        check=False,
     )
     if result.returncode != 0:
         raise GhError(f"git {args[0]} failed: {(result.stderr or '')[-300:]}")
@@ -590,8 +631,13 @@ def stage_like_the_lane(
 def parent_automerge_mode(repo: str, parent_sha: str, runner: Runner) -> str:
     """Condition (e0): the repo's renovate.json at the render base, classified
     by the fleet's shared rule. ``auto`` is the only approvable answer; soft,
-    unknown, missing and unreadable all withhold the approval."""
-    result = runner(
+    unknown, missing and unreadable all withhold the approval.
+
+    Only a 404 means missing. Any other failure (a rate limit, a transport
+    error) raises :class:`GhError`, so a transient API problem shows as a red
+    step rather than a quiet skip that reads as an absent file."""
+    result = call(
+        runner,
         [
             "gh",
             "api",
@@ -599,11 +645,15 @@ def parent_automerge_mode(repo: str, parent_sha: str, runner: Runner) -> str:
             "-q",
             ".content",
         ],
-        capture_output=True,
-        text=True,
-        check=False,
     )
-    if result.returncode != 0 or not (result.stdout or "").strip():
+    if result.returncode != 0:
+        if _is_not_found(result):
+            return "missing"
+        raise GhError(
+            f"reading renovate.json at {parent_sha[:12]}: "
+            f"{(result.stderr or '').strip()[-300:]}"
+        )
+    if not (result.stdout or "").strip():
         return "missing"
     try:
         text = base64.b64decode(result.stdout).decode("utf-8")
@@ -614,8 +664,10 @@ def parent_automerge_mode(repo: str, parent_sha: str, runner: Runner) -> str:
 
 def parent_pinned_conformance(repo: str, parent_sha: str, runner: Runner) -> str | None:
     """The conformance version ``uv.lock`` resolves at the render base, read
-    raw (``uv.lock`` routinely exceeds the contents API's 1 MB base64 cap)."""
-    result = runner(
+    raw (``uv.lock`` routinely exceeds the contents API's 1 MB base64 cap).
+    ``None`` only for a 404 or an empty file; any other failure raises."""
+    result = call(
+        runner,
         [
             "gh",
             "api",
@@ -623,11 +675,15 @@ def parent_pinned_conformance(repo: str, parent_sha: str, runner: Runner) -> str
             "Accept: application/vnd.github.raw",
             f"repos/{repo}/contents/uv.lock?ref={parent_sha}",
         ],
-        capture_output=True,
-        text=True,
-        check=False,
     )
-    if result.returncode != 0 or not (result.stdout or "").strip():
+    if result.returncode != 0:
+        if _is_not_found(result):
+            return None
+        raise GhError(
+            f"reading uv.lock at {parent_sha[:12]}: "
+            f"{(result.stderr or '').strip()[-300:]}"
+        )
+    if not (result.stdout or "").strip():
         return None
     return pinned_conformance(result.stdout)
 
@@ -708,7 +764,7 @@ def render_and_compare(
 
 
 def gh_json(args: list[str], runner: Runner, *, what: str) -> Any:
-    result = runner(["gh", *args], capture_output=True, text=True, check=False)
+    result = call(runner, ["gh", *args])
     if result.returncode != 0:
         raise GhError(f"{what}: {(result.stderr or '').strip()[-300:]}")
     try:
@@ -734,12 +790,7 @@ def required_checks_green(
     """``gh pr checks --required`` exits 0 iff every required check is green.
     The lane calls this too, with ``echo=False`` to keep its log to one line
     per repo."""
-    checks = runner(
-        ["gh", "pr", "checks", pr, "--repo", repo, "--required"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    checks = call(runner, ["gh", "pr", "checks", pr, "--repo", repo, "--required"])
     if echo:
         for stream in (checks.stdout, checks.stderr):
             if stream and stream.strip():
@@ -855,15 +906,20 @@ def process_resync_pr(
         return False
     print(f"PR #{pr}: PR tree is byte-identical to the independent render.")
 
+    # Re-run condition (a) on the live PR, not just its head: a same-repo
+    # writer can retarget the base, convert it to a draft or close it while
+    # the render runs, all without moving the head SHA.
     live = gh_json(
         ["api", f"repos/{repo}/pulls/{pr}"],
         runner,
-        what=f"re-reading PR #{pr}'s head",
+        what=f"re-reading PR #{pr}",
     )
-    if not isinstance(live, dict) or (live.get("head") or {}).get("sha") != head_sha:
-        print(f"PR #{pr}: HEAD moved during verification — skipping.")
+    ok, message = check_meta(pr, live if isinstance(live, dict) else {}, repo, head_sha)
+    if not ok:
+        print(f"{message} (changed during verification)")
         return False
-    runner(
+    call(
+        runner,
         [
             "gh",
             "api",
@@ -877,8 +933,6 @@ def process_resync_pr(
             "-f",
             f"body={RESYNC_APPROVAL_BODY}",
         ],
-        capture_output=True,
-        text=True,
         check=True,
     )
     print(f"✅ Approved PR #{pr} as atlan-ci (conformance resync auto-approval).")

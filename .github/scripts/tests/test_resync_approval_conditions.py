@@ -86,8 +86,12 @@ class FakeRunner:
         renovate_json=None,
         renovate_json_missing=False,
         parent_pin="0.39.0",
+        live=None,
+        parent_read_error=None,
     ):
         self.parent_pin = parent_pin
+        self.live = live
+        self.parent_read_error = parent_read_error
         self.commits = [commit()] if commits is None else commits
         self.live_head = live_head
         self.renovate_json = (
@@ -108,9 +112,16 @@ class FakeRunner:
             self.approved = True
             return subprocess.CompletedProcess(cmd, 0, "", "")
         if cmd[:3] == ["gh", "api", f"repos/{REPO}/pulls/7"]:
-            return subprocess.CompletedProcess(
-                cmd, 0, json.dumps({"head": {"sha": self.live_head}}), ""
+            live = self.live or meta(
+                head={
+                    "sha": self.live_head,
+                    "ref": resync.RESYNC_BRANCH,
+                    "repo": {"full_name": REPO},
+                }
             )
+            return subprocess.CompletedProcess(cmd, 0, json.dumps(live), "")
+        if "/contents/" in joined and self.parent_read_error:
+            return subprocess.CompletedProcess(cmd, 1, "", self.parent_read_error)
         if cmd[:3] == ["gh", "pr", "checks"]:
             return subprocess.CompletedProcess(cmd, self.checks_rc, "", "")
         if "/commits" in joined and "pulls" in joined:
@@ -666,3 +677,51 @@ def test_already_approved_head_skips_the_render():
     }
     approved, runner, render = run(runner=FakeRunner(reviews=[review]))
     assert not approved and not runner.approved and render.calls == []
+
+
+# ---------------------------------------------------------------------------
+# Round-2 review: live revalidation, API errors, accepted drops, timeouts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "live",
+    [
+        meta(base={"ref": "attacker-branch", "repo": {"full_name": REPO}}),
+        meta(draft=True),
+        meta(state="closed"),
+    ],
+)
+def test_pr_changed_during_verification_never_approves(live):
+    approved, runner, render = run(runner=FakeRunner(live=live))
+    assert render.calls  # it got as far as the render
+    assert not approved and not runner.approved
+
+
+def test_rate_limited_parent_read_raises_instead_of_reading_as_missing():
+    runner = FakeRunner(parent_read_error="gh: API rate limit exceeded (HTTP 403)")
+    with pytest.raises(resync.GhError):
+        run(runner=runner)
+    assert not runner.approved
+
+
+def test_missing_parent_files_still_read_as_missing():
+    runner = FakeRunner(parent_read_error="gh: Not Found (HTTP 404)")
+    assert resync.parent_automerge_mode(REPO, PARENT, runner) == "missing"
+    assert resync.parent_pinned_conformance(REPO, PARENT, runner) is None
+
+
+def test_an_accepted_key_excuses_one_lost_line_not_every_line_using_it():
+    path = ".github/workflows/tests.yaml"
+    lost = ["e2e-clouds: aws", "e2e-clouds: gcp", "kept-key: x"]
+    assert resync.still_lost(path, lost) == ["e2e-clouds: gcp", "kept-key: x"]
+    assert resync.still_lost(path, ["e2e-clouds: aws"]) == []
+
+
+def test_call_turns_a_timeout_into_a_gh_error():
+    def runner(cmd, **kwargs):
+        assert kwargs["timeout"] == resync.GH_TIMEOUT
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    with pytest.raises(resync.GhError, match="timed out"):
+        resync.call(runner, ["gh", "api", "x"])

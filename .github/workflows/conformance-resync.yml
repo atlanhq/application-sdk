@@ -79,8 +79,13 @@ on:
 permissions:
   contents: read
 
+# One group per scope. GitHub keeps one PENDING run per group and replaces it
+# with the next, so a single static group could silently drop a scoped
+# dispatch queued behind another. Overlapping scopes are safe: every push
+# uses --force-with-lease, so a raced repo errors for that run, never
+# overwrites.
 concurrency:
-  group: conformance-resync
+  group: conformance-resync-${{ github.event.inputs.repos || vars.CONFORMANCE_RESYNC_REPOS || 'full-fleet' }}
   cancel-in-progress: false
 
 jobs:

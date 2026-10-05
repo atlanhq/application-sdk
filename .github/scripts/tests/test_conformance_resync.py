@@ -35,8 +35,11 @@ def _pr(
     fork: bool = False,
     state: str = "open",
     sha: str = "h" * 40,
+    base: str = "main",
+    armed: bool = False,
 ) -> dict:
     return {
+        "auto_merge": {"merge_method": "squash"} if armed else None,
         "number": number,
         "state": state,
         "user": {"login": author},
@@ -45,7 +48,7 @@ def _pr(
             "sha": sha,
             "repo": {"full_name": "someone/fork" if fork else REPO},
         },
-        "base": {"ref": "main", "repo": {"full_name": REPO}},
+        "base": {"ref": base, "repo": {"full_name": REPO}},
     }
 
 
@@ -347,10 +350,10 @@ def _files_runner(paths: list[str], blobs: dict[str, tuple[str, str]]) -> FakeRu
         ),
     }
     for path, (ours, theirs) in blobs.items():
-        answers[("git", "rev-parse", "--verify", "-q", f"HEAD:{path}")] = (
-            subprocess.CompletedProcess([], 0, stdout=ours + "\n")
+        answers[("git", "ls-tree", "HEAD", "--", path)] = subprocess.CompletedProcess(
+            [], 0, stdout=ours + "\n"
         )
-        answers[("git", "rev-parse", "--verify", "-q", f"FETCH_HEAD:{path}")] = (
+        answers[("git", "ls-tree", "FETCH_HEAD", "--", path)] = (
             subprocess.CompletedProcess([], 0, stdout=theirs + "\n")
         )
     return FakeRunner(answers)
@@ -514,7 +517,9 @@ def _lane_runner(keep: dict) -> FakeRunner:
     )
 
 
-def _run_failing_render(monkeypatch, dry_run: bool) -> tuple[dict, FakeRunner]:
+def _run_failing_render(
+    monkeypatch, dry_run: bool, *, armed: bool = True, refuse_disarm: bool = False
+) -> tuple[dict, FakeRunner]:
     lock = f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "0.39.0"\n'
     monkeypatch.setattr(
         lane,
@@ -522,7 +527,11 @@ def _run_failing_render(monkeypatch, dry_run: bool) -> tuple[dict, FakeRunner]:
         lambda work, path: lock if path == "uv.lock" else '{"extends": []}',
     )
     monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (1, "", "index outage"))
-    runner = _lane_runner(_pr(7, gate.RESYNC_BRANCH))
+    runner = _lane_runner(_pr(7, gate.RESYNC_BRANCH, armed=armed))
+    if refuse_disarm:
+        runner.answers[("gh", "pr", "merge", "7", "--repo", REPO, "--disable-auto")] = (
+            subprocess.CompletedProcess([], 1, stderr="refused")
+        )
     result = lane.process_repo(
         REPO,
         identity=(BOT, "bot@example.invalid"),
@@ -546,3 +555,113 @@ def test_failed_render_in_a_dry_run_changes_nothing(monkeypatch):
     result, runner = _run_failing_render(monkeypatch, dry_run=True)
     assert result["automerge"] == "would disarm"
     assert not any(c[:3] == ["gh", "pr", "merge"] for c in runner.calls)
+
+
+def test_failed_render_closes_the_pr_when_the_disarm_is_refused(monkeypatch):
+    result, runner = _run_failing_render(monkeypatch, dry_run=False, refuse_disarm=True)
+    assert result["action"] == "error" and result["closed"] == 7
+    assert ["gh", "pr", "close", "7", "--repo", REPO] in runner.calls
+
+
+def test_failed_render_leaves_an_unarmed_pr_alone(monkeypatch):
+    _, runner = _run_failing_render(monkeypatch, dry_run=False, armed=False)
+    assert not any(
+        c[:3] in (["gh", "pr", "merge"], ["gh", "pr", "close"]) for c in runner.calls
+    )
+
+
+def test_lane_pr_retargeted_off_main_is_a_duplicate_not_keep():
+    keep, dupes, foreign = lane.split_lane_prs([_pr(7, gate.RESYNC_BRANCH, base="dev")])
+    assert keep is None and foreign is None and [d["number"] for d in dupes] == [7]
+
+
+def test_pr_matches_render_sees_an_exec_bit_only_difference():
+    runner = _files_runner(
+        ["run.sh"],
+        {"run.sh": ("100755 blob b1\trun.sh", "100644 blob b1\trun.sh")},
+    )
+    assert lane.pr_matches_render(REPO, 7, ["run.sh"], "/w", runner) is False
+
+
+def test_lane_subprocesses_are_bounded():
+    seen = []
+
+    def runner(cmd, **kwargs):
+        seen.append((cmd[0], kwargs.get("timeout")))
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    lane._run(["gh", "api", "x"], runner)
+    lane._run(["git", "fetch"], runner)
+    assert seen == [("gh", gate.GH_TIMEOUT), ("git", gate.GIT_TIMEOUT)]
+
+
+# ── process_repo: the successful and in-sync paths ───────────────────────
+
+
+def _process(monkeypatch, *, keep: dict | None, staged: list[str]) -> FakeRunner:
+    lock = f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "0.39.0"\n'
+    monkeypatch.setattr(
+        lane,
+        "read_clone_file",
+        lambda work, path: lock
+        if path == "uv.lock"
+        else '{"extends": ["github>atlanhq/application-sdk//renovate/fleet"]}',
+    )
+    manifest = json.dumps({"touched": staged})
+    monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (0, manifest + "\n", ""))
+    runner = (
+        _lane_runner(keep)
+        if keep
+        else FakeRunner(
+            {
+                (
+                    "gh",
+                    "api",
+                    f"repos/{REPO}/pulls?state=open&per_page=100",
+                    "--paginate",
+                    "--slurp",
+                ): subprocess.CompletedProcess([], 0, stdout=json.dumps([[]])),
+            }
+        )
+    )
+    runner.answers[("git", "diff", "--cached", "--name-only")] = (
+        subprocess.CompletedProcess([], 0, stdout="\n".join(staged))
+    )
+    return runner
+
+
+def _drive(runner: FakeRunner) -> dict:
+    return lane.process_repo(
+        REPO,
+        identity=(BOT, "bot@example.invalid"),
+        resolved_now=AT,
+        dry_run=False,
+        automerge_enabled=True,
+        diffs_dir=None,
+        runner=runner,
+    )
+
+
+def test_in_sync_main_closes_the_existing_lane_pr(monkeypatch):
+    runner = _process(monkeypatch, keep=_pr(7, gate.RESYNC_BRANCH), staged=[])
+    result = _drive(runner)
+    assert result["action"] == "in_sync" and result["closed"] == 7
+    assert ["gh", "pr", "close", "7", "--repo", REPO] in runner.calls
+    assert not any(c[:2] == ["git", "push"] for c in runner.calls)
+
+
+def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+
+    def opened(cmd, **kwargs):
+        if cmd[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"]:
+            return subprocess.CompletedProcess(
+                cmd, 0, json.dumps({"number": 9, "html_url": "u", "state": "open"}), ""
+            )
+        return FakeRunner.__call__(runner, cmd, **kwargs)
+
+    result = _drive(opened)
+    assert result["action"] == "pr_opened" and result["pr"] == "u"
+    pushes = [c for c in runner.calls if c[:2] == ["git", "push"]]
+    assert pushes and pushes[0][-1] == f"HEAD:refs/heads/{gate.RESYNC_BRANCH}"
+    assert any(c[:3] == ["git", "add", "-A"] and "a.yaml" in c for c in runner.calls)
