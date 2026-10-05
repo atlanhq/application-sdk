@@ -12,21 +12,29 @@ def _cmd_detect(argv: list[str]) -> int:
     return main(argv)
 
 
-def _cmd_programs_dir(_argv: list[str]) -> int:
+def _print_package_dir(name: str) -> int:
     import importlib.resources as _ir
 
-    programs = _ir.files("conformance") / "programs"
+    target = _ir.files("conformance") / name
     # Resolve to a real filesystem path (works for both installed wheels and
     # editable installs where the files are already on disk).
     try:
-        ctx = _ir.as_file(programs)
+        ctx = _ir.as_file(target)
         with ctx as p:
             print(str(p))
     except (FileNotFoundError, ModuleNotFoundError):
         # Fallback: direct path (editable installs)
         here = pathlib.Path(__file__).parent
-        print(str(here / "programs"))
+        print(str(here / name))
     return 0
+
+
+def _cmd_programs_dir(_argv: list[str]) -> int:
+    return _print_package_dir("programs")
+
+
+def _cmd_skills_dir(_argv: list[str]) -> int:
+    return _print_package_dir("skills")
 
 
 def _cmd_gen_rule_docs(argv: list[str]) -> int:
@@ -132,6 +140,7 @@ def _cmd_scorecard(argv: list[str]) -> int:
 _COMMANDS = {
     "detect": _cmd_detect,
     "programs-dir": _cmd_programs_dir,
+    "skills-dir": _cmd_skills_dir,
     "gen-rule-docs": _cmd_gen_rule_docs,
     "gen-deprecations": _cmd_gen_deprecations,
     "gen-contract-ledger": _cmd_gen_contract_ledger,
@@ -151,11 +160,13 @@ usage: atlan-application-sdk-conformance <command> [args]
 commands:
   detect         Run the conformance suite and emit SARIF
   programs-dir   Print the absolute path to the bundled .prose.md programs
+  skills-dir     Print the absolute path to the bundled migration skills
   gen-rule-docs  Regenerate rule docs from Python rule definitions
   gen-deprecations  Regenerate the deprecated-symbol manifest from SDK source
   gen-contract-ledger  Regenerate the entrypoint-contract ledger (contract_schema.lock.json)
                        --repo DIR    repo root to scan (default: auto-detected)
-                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd)
+                       --outfile PATH  ledger path (default: contract_schema.lock.json in cwd;
+                                       repo root in the SDK)
                        --check       verify ledger is current; exit 1 if stale
   gen-toolkit-baseline Regenerate data/toolkit_baseline.json from contract-toolkit/src/PklProject
                        --sdk-root DIR  repo root to read (default: auto-detected)

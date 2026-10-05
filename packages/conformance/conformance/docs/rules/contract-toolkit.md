@@ -60,6 +60,7 @@ and aligns every app with the one supported workflow for contract evolution (BLD
   header comment recording that toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl.
   All three reference apps amend App.pkl; none of their contracts amends NativeApp.pkl
   or NativeAppBundle.pkl.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
 pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
@@ -120,6 +121,7 @@ fails, blocking CI (BLDX-1479).
   scanner excludes that module by design (App.pkl imports it internally and types
   `connector` as `Connectors.Type` without re-exporting the constants, so every current
   toolkit example still imports it).
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Already correct when:** `Connectors.pkl` is a detector-level exemption — no directive is needed or licensed. A
   justified inline `// conformance: ignore[K002] <reason>` IS the correct end state only
   for a match the scanner actually emits: an import of `Config.pkl`, `Credential.pkl`,
@@ -208,6 +210,7 @@ committed artifacts look freshly generated.
   `@0.26.0` under resolvedDependencies with its sha256. The pin and the resolved lock
   are regenerated together by `pkl project resolve`; editing one alone is what produces
   the drift.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -266,6 +269,7 @@ it.
   manifest.json in app/generated/, the three outputs K004 checks. A contract/app.pkl
   with any of those missing means the repo's own generate task has not run since the
   contract last changed.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The app defines `contract/app.pkl` but one or more of the artifacts `pkl eval` is
 expected to produce is absent:
@@ -321,6 +325,7 @@ suppressed per file rather than ever graduating to BLOCK (BLDX-1414).
   from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The repo-root atlan.yaml
   carries the same banner. A stripped banner is the fingerprint of a hand edit that the
   next regeneration will erase.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A file the contract toolkit is expected to generate (`atlan.yaml`, `app.yaml`, or a
 `.py` file under `app/generated/` other than `__init__.py`) does not carry the
@@ -374,6 +379,7 @@ artifacts exist, without either layer needing visibility into the other's langua
   `OpenAPIConnectorOutput(PublishInputMixin, Output)` in app/contracts.py, the Output of
   `run()` in app/connector.py. The manifest is what the platform reads to wire the DAG,
   so a field only one side knows about is a hand-off that never happens.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A `$.extract.outputs.<field>` JSONPath reference in a committed
 `app/generated/**/manifest.json` DAG node's `inputs.args` names a field that the
@@ -424,6 +430,7 @@ against drift in CI, so the check stays correct offline inside any consumer repo
   pin in contract/PklProject to the latest version data/toolkit_baseline.json records,
   which is the comparison K007 makes. Renovate opens the bump; the fix is to take it and
   re-run the repo's generate task, not to edit the pin alone.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The `app-contract-toolkit` dependency in `contract/PklProject` resolves (per
 `contract/PklProject.deps.json`) to a version older than the latest the SDK publishes.
@@ -462,6 +469,7 @@ package. The canonical base URI is read from the baked-in toolkit baseline.
   `package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<version>`,
   the single SDK-published package. A fork, a local path, or a different host resolves a
   renderer nobody else in the fleet is using.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The `app-contract-toolkit` dependency in `contract/PklProject` is pointed at a base URI
 other than the canonical SDK-published package
@@ -507,6 +515,7 @@ customer's install or crawl fails on identity plumbing they can neither see nor 
   `{{credential}}`-style tokens in args are Automation Engine runtime substitutions and
   are legitimate too. Anything else ({app_name}, {name}) is a placeholder the toolkit
   was meant to fill and did not, usually because the pin predates the template.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -557,6 +566,7 @@ the rule only applies when the contract declares no entrypoints block.
 - **Compliant example:** atlan-openapi-app app/generated/ — _e2e_base.py alongside _input.py, both emitted from
   contract/app.pkl. tests/e2e/test_connection_create.py imports that generated base,
   which is why the scaffold has to exist before the suite can be written.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A single-entrypoint `contract/app.pkl` exists but its generated E2E scaffolding
 `app/generated/_e2e_base.py` is absent. The toolkit emits this module unconditionally
@@ -599,6 +609,7 @@ the customer stays on the broken version while everyone believes the release wen
 - **Compliant example:** atlan-metabase-app atlan.yaml — a top-level `app_id`, generated from the `appId`
   assignment in atlan-metabase-app contract/app.pkl. It is the marketplace's identity
   for the app, so publishing without it 404s rather than creating something.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -654,6 +665,7 @@ one that carries a fix a customer is actively blocked on.
   contract/app.pkl into a temporary tree and copies it back. atlan-mysql-app
   pyproject.toml shows the narrower variant that copies only app/generated/*.json. The
   SDK Certify step invokes this task by name, so its absence aborts the publish.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -711,6 +723,7 @@ neither guesses.
   node names the app that owns its queue, never the connector doing the routing; K013
   grades only such system-app and toolkit-owned nodes, not the connector's own extract
   node.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A node in a committed generated `manifest.json` declares an `app_name` that disagrees
 with the app actually running it. Two independent signals are checked, each against a
@@ -776,6 +789,7 @@ written down, so it is reviewable and cannot be inherited by accident.
 
 - **Compliant example:** atlan-metabase-app atlan.yaml — `release_model: semver`, declared rather than inherited.
   Leaving it out silently takes the 'cd' default, which auto-publishes on merge.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The committed `atlan.yaml` has no usable top-level `release_model:` key, or declares a
 value outside the allowed set.
@@ -857,6 +871,7 @@ fleet is blocked by adopting it at this tier.
   app/connector.py declares none either. Agreement between the two is the invariant;
   absence on both sides is the ordinary compliant state, and an app that needs the block
   has to declare it in both places.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -944,6 +959,7 @@ deprecation window, which the SDK's matching registration-time warning provides.
 - **Compliant example:** atlan-metabase-app app/generated/artifact_schemas.json — one entry per FileReference
   field the entrypoint contracts declare. An undescribed FileReference is an artefact
   the platform cannot validate or render.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 An entry point's `input`/`return` contract declares a `FileReference` field -- directly
 or inherited from a base or SDK mixin -- and the entry point's committed
@@ -1027,6 +1043,7 @@ app either way.
   line per entity into openapi_metadata.json, returned as
   `FileReference(local_path=str(output_file))`. The Python and the schema are two
   statements about one file, and only one of them is checked at runtime.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 An `artifactSchemas` entry in the committed `artifact_schemas.json` contradicts the
 app's own writer for the same `FileReference` contract field.
@@ -1107,6 +1124,7 @@ what the app itself controls — whether the payload it *is* sent can be receive
   $.dag.extract.inputs.args (credential, connection, extraction_method, agent_json,
   include_collections, exclude_collections) is a field the entrypoint's Input contract
   declares. An arg the contract cannot receive is dropped on the way in, silently.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A **flat** key in the `extract` node's `inputs.args` of a committed
 `app/generated/**/manifest.json` — `args.<key>`, not `args.metadata.<key>` — is not
@@ -1123,6 +1141,22 @@ workflow error.
 Keys still inside an `args.metadata` envelope are **not** checked here: an app still
 emitting that envelope consumes it by design until it migrates, so demanding flat
 declarations of those keys would be wrong. The envelope itself is K020.
+
+**Which contract.** The entrypoint's `Input` is the first parameter annotation of its
+`@entrypoint` method, or of an undecorated `async def run` on a class that subclasses,
+directly or through in-repo bases in any file, `App` or an SDK App template (`SqlApp`,
+`BaseMetadataExtractor`, `SqlMetadataExtractor`, `IncrementalSqlMetadataExtractor`,
+`SqlQueryExtractor`) imported from `application_sdk`. A same-named local class, or one
+imported from any other module, is not an App base. When the app writes no `run()` of
+its own and inherits it unchanged from a template that defines one, the contract is that
+template's `run()` input — `ExtractionInput` for `SqlApp` and `SqlMetadataExtractor`,
+`IncrementalExtractionInput` for `IncrementalSqlMetadataExtractor`,
+`QueryExtractionInput` for `SqlQueryExtractor` — because the runtime validates the
+payload against exactly that model. A contract the app declares beside it (such as a
+generated `AppInputContract`) is not bound to any entrypoint, so an arg only it declares
+is still dropped and is reported. Only when no entrypoint is visible at all
+(`BaseMetadataExtractor` defines no `run()`) does the rule fall back to the app's sole
+live `ExtractionInput` descendant.
 
 **Scope.** This rule checks only that the app can *receive* the payload the Automation
 Engine sends it. A filter can also be lost upstream, in the platform's workflow
@@ -1159,7 +1193,8 @@ hand-edited manifest). If the arg is genuinely not wanted, remove it from
 `contract/app.pkl` and re-run `pkl eval -m . contract/app.pkl`.
 
 **Suppress** with `# conformance: ignore[K018] <reason>` on the `Input` class definition
-(or the comment-only line directly above it).
+(or the comment-only line directly above it) — or, for an app that inherits a template's
+`run()`, on the app class definition, where that finding is anchored.
 
 ---
 
@@ -1188,6 +1223,7 @@ should catch instead of a customer.
   placeholder in app/generated/manifest.json (include-collections, exclude-collections).
   A form key with no placeholder collects a value from the customer that never reaches
   the workflow.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A form key declared as a widget in `contract/app.pkl`'s `uiConfig` block has no matching
 `{{form-key}}` placeholder anywhere in the committed `app/generated/**/manifest.json`
@@ -1248,6 +1284,8 @@ workflows checked, instead of as a side effect of someone's unrelated regenerate
   top-level keys, not wrapped in the legacy `args.metadata{}` envelope. Toolkit 0.9.0
   flattened them, and an app still emitting the envelope loses every key the SDK's input
   model does not name.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
+  — Check published workflows before flipping nested->flat args
 
 The `extract` node of a committed `app/generated/**/manifest.json` carries an
 `args.metadata{}` block instead of flat top-level args.
@@ -1317,6 +1355,7 @@ drops json_schema_extra.
   FilterMap | str` and the SDK's mode="before" coercer. Re-typing the field locally is
   what drops the json_schema_extra that coercer keys on, which is why the inherited
   shape is the compliant one.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 An `include_*` / `exclude_*` filter field on the entrypoint's Python `Input` contract is
 typed as a (possibly `Annotated`) strict `dict` — with no `str` union and no
@@ -1380,6 +1419,7 @@ rename.
   entrypoints bind MetabaseInput/MetabaseOutput and
   MetabaseLineageInput/MetabaseLineageOutput, one uniquely named class per entrypoint
   and direction, so no two contracts share a ledger key.
+- **Fix by:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 Two or more entrypoints bind Input or Output contract classes that are declared in
 different places but reach the contract ledger under the same bare class name.

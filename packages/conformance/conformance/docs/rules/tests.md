@@ -66,6 +66,7 @@ the repo's own addopts so it is correct for any app, not just the SDK.
   atlan-openapi-app tests/integration/test_openapi.py shows the other accepted form:
   `@pytest.mark.integration` on the enclosing `TestOpenAPIConnectorExtraction` class,
   which marks every method in it.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 Every test collected under `tests/integration/` must carry a marker that the unit job
 deselects (e.g. `integration`, `s3_integration`, `storage_emulator`) so the unit job
@@ -100,6 +101,7 @@ subclass.
 - **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — `TestMySQLE2E` sets `mode =
   RunMode.AGENT`, which is what drives the SDR (agent-mode) path. An app declaring a
   self-deployed runtime and never exercising that mode has an untested deployment shape.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one test must
 drive the SDR (agent-mode) execution path. Two harnesses satisfy this rule:
@@ -156,6 +158,7 @@ splitting a suite's scenarios across their right homes needs human judgement.
 - **Compliant example:** atlan-mysql-app tests/e2e/test_mysql_e2e.py — the suite extends the generated
   `MysqlGeneratedE2EBase`, not the retired BaseSDRIntegrationTest. The generated base is
   regenerated from the contract, so it cannot drift from the app it tests.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `BaseSDRIntegrationTest` (`application_sdk.testing.sdr.base`) is **deprecated** and will
 be removed in v4.0. Any subclass under `tests/` is flagged.
@@ -253,6 +256,7 @@ with MissingAppModuleError / 'App server failed to start within 60s' (BLDX-1520)
   run_dev_combined. The image never runs main.py (the Dockerfile boots via
   ATLAN_APP_MODULE). Calling application_sdk.main.main() from main.py instead requires
   ATLAN_APP_MODULE, which CI's dev-mode boot does not set.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 Root `main.py` must not call `application_sdk.main.main()` directly (whether via `from
 application_sdk.main import main`, an aliased module import, or a bare dotted call).
@@ -308,6 +312,7 @@ coverage tool is green' and 'the tests actually verify something.'
   mapped entity: `assert_structure` checks the required keys and relationship refs, and
   each qualified-name test asserts on the value itself. A test whose body only exercises
   code is a smoke test wearing a test's name.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A collected test function (`test*`, including methods of a `Test*` class) has a
 non-empty body but contains none of the recognised assertion forms:
@@ -374,6 +379,7 @@ tested' to anyone scanning the test file, which is actively misleading.
 - **Compliant example:** atlan-metabase-app tests/unit/test_utils.py — the smallest tests in the three reference
   apps still assert (`test_none_returns_none`: `assert to_epoch_ms(None) is None`); none
   is a `pass` or an ellipsis awaiting a body.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A collected test function's body consists solely of `pass`, an `Ellipsis` (`...`), a
 docstring, or some combination of those — no other statement is present.
@@ -407,6 +413,7 @@ whose entire assertion surface is a truism.
 - **Compliant example:** atlan-openapi-app tests/unit/test_contracts.py — assertions compare the value under test
   against an expected one. `assert True`, `assert 1 == 1` and `assert some_object` on a
   value that is never falsy appear nowhere.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A collected test's only assertion(s) evaluate a literal truthy constant (`assert True`,
 `assert 1`, `assert "non-empty string"`) rather than an expression whose value depends
@@ -456,6 +463,7 @@ error, no skip, nothing — the tests simply never exist as far as CI is concern
 - **Compliant example:** atlan-metabase-app tests/unit/ — every collectable module is named test_*.py. A helper
   that is not meant to be collected goes in conftest.py, as atlan-metabase-app
   tests/unit/conftest.py does.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A `.py` file under a test-tier directory (`tests/unit`, `tests/integration`,
 `tests/e2e`, `tests/ui`) defines at least one `def test*` function or `class Test*`, but
@@ -503,6 +511,7 @@ contribution to coverage from that point on.
   conditional: an `if` guard skips when ATLAN_BASE_URL / ATLAN_API_KEY are unset, and a
   try/except ImportError skips when the installed SDK predates the agnostic e2e harness.
   An unconditional module skip disables the file forever and nothing tells you.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A module-level call to `pytest.skip(..., allow_module_level=True)` appears directly in
 the module body (not nested inside an `if` or `try` statement), so it executes — and
@@ -550,6 +559,7 @@ has some logic worth a fast unit test.
 - **Compliant example:** atlan-mysql-app tests/unit/ — unit modules covering the SQL client (test_client.py), the
   handler (test_handler.py), the app's mappers, the wire-shape parity spec and the
   preflight behaviour scenarios. This tier is the floor and is not exemptable.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 No collectable pytest tests (`def test*` / `class Test*` in a `test_*.py` / `*_test.py`
 file) exist under `tests/unit/`. This is the universal floor of the tiering architecture
@@ -590,6 +600,7 @@ the Pkl contract and must not be hand-edited, so the exemption can't live there.
   against fake secret stores, and test_mysql_workflow.py drives the whole extraction on
   the embedded runtime. None of the three reference apps needs the `[tool.conformance]
   exempt_test_tiers` opt-out.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 No collectable pytest tests exist under `tests/integration/`. Per the agreed tiering
 architecture, integration tests connect to the real source and run the app's extract
@@ -635,6 +646,7 @@ tier exist at all. Exemptable the same way as T011 for scaffold/minimal apps via
   `TestMySQLE2E`, that skips itself at module level when ATLAN_BASE_URL / ATLAN_API_KEY
   are unset, so the tier is collectable everywhere and runs only where a tenant is
   configured. Each of the three reference apps ships this tier rather than exempting it.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 No collectable pytest tests exist under `tests/e2e/`. Per the agreed tiering
 architecture this tier needs only one representative run — the full pipeline including
@@ -681,6 +693,7 @@ the file layout alone. Enforcing the placement convention removes that ambiguity
 - **Compliant example:** atlan-metabase-app tests/ — everything collectable sits under unit/, integration/ or
   e2e/. None of the three reference apps has a tests/sdr/ or a tests/full_dag/; the tier
   a test belongs to is a directory, not a naming convention.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A file matching pytest's collection glob (`test_*.py` / `*_test.py`) and defining at
 least one collectable test lives under `tests/` but outside all four canonical tier
@@ -730,6 +743,7 @@ initial adoption PR.
   pyproject.toml keeps `fail_under = 84` under [tool.coverage.report] as the fallback
   for local runs. A measured number with no floor in either place is a report nobody's
   build ever reads.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `[tool.coverage.report]` exists in `pyproject.toml` — the repo has opted into coverage
 measurement — but `fail_under` is either absent (defaults to 0) or explicitly set to
@@ -781,6 +795,7 @@ reaches into ordinary app/ submodules is the signal this rule targets.
   `app/generated/**`, the latter with a comment saying it is regenerated from
   contract/app.pkl on every contract change. Omitting anything under app/ that a human
   wrote inflates the number instead of measuring it.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `[tool.coverage.run].omit` contains a pattern matching source under `app/` that is not
 one of the recognised legitimate exclusions (`app/generated/**` — generated contract
@@ -837,6 +852,7 @@ atlan-mysql-app, ~20 min of dead CI per run, before this rule existed.
   `ATLAN_DEPLOYMENT_NAME=${ATLAN_DEPLOYMENT_NAME:-e2e-full-ci-${GITHUB_RUN_ID}}`. The
   overlay inherits the per-leg value the sdr-e2e action sets and only defaults it;
   hard-coding it points every leg at one queue.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 An e2e CI docker-compose overlay under `.github/` (discovered as a `*.yml`/`*.yaml` with
 a top-level `services:` key that mentions `ATLAN_DEPLOYMENT_NAME`) assigns
@@ -894,6 +910,7 @@ matched pair: applying one without the other breaks a previously-passing e2e.
   overridden: the SDK's `BaseE2ETest.agent_spec` (reached through the generated
   `OpenapiGeneratedE2EBase`) derives the worker queue from ATLAN_APPLICATION_NAME +
   ATLAN_DEPLOYMENT_NAME, so each leg lands on the queue its own CI action provisioned.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 An `agent_spec` override under `tests/` returns a hard-coded `AgentSpec(agent_name=...)`
 (a plain string or an f-string such as `f"myconn-e2e-full-ci-{self.run_id}"`) without
@@ -963,6 +980,7 @@ addopts-deselect it — the directory is the tier boundary.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `addopts` sets only timeouts, with a comment
   recording why integration tests are deliberately NOT deselected there: the
   directory-scoped CI job would collect nothing and pytest would exit 5.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `[tool.pytest.ini_options].addopts` in `pyproject.toml` contains a `-m 'not <marker>'`
 selection expression, and one or more collectable tests under `tests/integration/` carry
@@ -1049,6 +1067,7 @@ flagged.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `asyncio_default_fixture_loop_scope` and
   `asyncio_default_test_loop_scope` are both "session", with a comment explaining the
   hang that follows when only the fixture scope is broadened.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `[tool.pytest.ini_options]` in `pyproject.toml` sets
 `asyncio_default_fixture_loop_scope` to a broadened scope (`session` / `package` /
@@ -1133,6 +1152,7 @@ converges on the caller instead.
   inputs; the reusable owns the e2e leg. Calling the SDK's sdr-e2e action directly
   re-implements what the reusable workflow already owns, and then has to track its
   changes by hand.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A workflow under `.github/workflows/` invokes
 `atlanhq/application-sdk/.github/actions/sdr-e2e` directly, and that same file does not
@@ -1201,6 +1221,7 @@ and does not mark them reachable.
   `e2e` PR label and from workflow_dispatch, so a suite under tests/e2e/ actually runs.
   A tests/e2e/ directory nothing triggers is a suite that has never failed because it
   has never run.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 The repo has at least one pytest-collectable file under `tests/e2e/` (`test_*.py` /
 `*_test.py`), and nothing under `.github/workflows/` can run it. A suite counts as
@@ -1261,6 +1282,7 @@ app's e2e can pass on exactly the bug the fleet has already shipped twice.
 - **Compliant example:** atlan-mysql-app .github/workflows/tests.yaml — the tests-reusable caller sets
   `two-store: true`, with a comment naming the ADR. Without it the e2e leg runs
   single-store and a missing App.upload() bridge goes green.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 `atlan.yaml` declares `self_deployed_runtime: true`, the repo ships e2e suites, and the
 `tests-reusable.yaml` caller does not pass `two-store: true`.
@@ -1326,6 +1348,7 @@ it touched, which is what this rule exists to stop recurring.
   `MetabaseMustacheSubstitutions` (_e2e_substitutions.py); the test imports them instead
   of subclassing CredentialBody or MustacheSubstitutions. Hand-declaring them in the
   test freezes a copy of what the contract will regenerate.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A module under `tests/` declares scaffolding the contract toolkit generates. Three
 shapes are flagged:
@@ -1391,6 +1414,7 @@ rather than assuming AGENT keeps a deliberate tier-5 DIRECT run legal and visibl
 - **Compliant example:** atlan-metabase-app tests/e2e/test_metabase_e2e.py — `mode = RunMode.AGENT` is declared
   on the class. Inheriting the RunMode.DIRECT default means the CI-side worker under
   test is never the one the run routes to.
+- **Fix by:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A pytest-collectable class (`Test*`) under `tests/` transitively subclasses the SDK e2e
 harness (`BaseE2ETest` / `SQLAppE2ETest`, or a generated `<Name>GeneratedE2EBase`) and
@@ -1453,6 +1477,7 @@ would have run it in CI does not exist.
   contract — two @entrypoint methods on one marketplace card (the BLDX-1342 route/card
   split), with extract-lineage run as a DAG node inside the single full-DAG e2e — is the
   multi-entrypoint shape T025 deliberately does not flag.
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
 
 A person has to close this, not the remediation lane: covering an entrypoint means an
 e2e run against a real source for it (a reachable system and CI credentials), which only

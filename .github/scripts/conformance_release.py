@@ -9,8 +9,8 @@ Usage:
     python conformance_release.py
 
 Exits 0 with "skip=true" written to GITHUB_OUTPUT when there are no
-unreleased commits touching packages/conformance/** (lock files excluded — see
-PATHSPEC below). Exits non-zero on error.
+unreleased commits touching packages/conformance/** or the SDK ledger the
+package ships (lock files excluded — see PATHSPEC below). Exits non-zero on error.
 
 Environment:
     GITHUB_OUTPUT      - path to the GitHub Actions output file (optional for
@@ -46,6 +46,7 @@ PACKAGE_DIR = "packages/conformance"
 LOCK_FILES = ("uv.lock", "package-lock.json")
 PATHSPEC = [
     f"{PACKAGE_DIR}/**",
+    "contract_schema.lock.json",
     *(f":(exclude,glob){PACKAGE_DIR}/**/{name}" for name in LOCK_FILES),
 ]
 

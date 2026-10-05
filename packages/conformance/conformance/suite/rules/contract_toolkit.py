@@ -99,7 +99,11 @@ it suppresses any rule on that line), and justification text is mandatory.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -187,6 +191,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k001"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -304,6 +312,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k002"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K003",
@@ -390,6 +402,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k003"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K004",
@@ -470,6 +486,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k004"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K005",
@@ -537,6 +557,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k005"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -619,6 +643,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k006"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K007",
@@ -675,6 +703,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k007"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K008",
@@ -729,6 +761,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k008"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -816,6 +852,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k009"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K010",
@@ -867,6 +907,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k010"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -952,6 +996,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k011"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K012",
@@ -1028,6 +1076,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k012"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1128,6 +1180,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k013"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K014",
@@ -1223,6 +1279,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k014"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1349,6 +1409,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k015"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K016",
@@ -1465,6 +1529,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k016"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K017",
@@ -1579,6 +1647,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k017"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K018",
@@ -1655,6 +1727,27 @@ RULES: tuple[RuleDefinition, ...] = (
             "until it migrates, so demanding flat declarations of those keys "
             "would be wrong. The envelope itself is K020.\n"
             "\n"
+            "**Which contract.** The entrypoint's ``Input`` is the first "
+            "parameter annotation of its ``@entrypoint`` method, or of an "
+            "undecorated ``async def run`` on a class that subclasses, directly "
+            "or through in-repo bases in any file, ``App`` or an SDK App template "
+            "(``SqlApp``, ``BaseMetadataExtractor``, ``SqlMetadataExtractor``, "
+            "``IncrementalSqlMetadataExtractor``, ``SqlQueryExtractor``) imported "
+            "from ``application_sdk``. A same-named local class, or one imported "
+            "from any other module, is not an App base. When the app writes no "
+            "``run()`` of its own and inherits it unchanged from a template that "
+            "defines one, the contract is that template's ``run()`` input — "
+            "``ExtractionInput`` for ``SqlApp`` and ``SqlMetadataExtractor``, "
+            "``IncrementalExtractionInput`` for "
+            "``IncrementalSqlMetadataExtractor``, ``QueryExtractionInput`` for "
+            "``SqlQueryExtractor`` — because the runtime validates the payload "
+            "against exactly that model. A contract the app declares beside it "
+            "(such as a generated ``AppInputContract``) is not bound to any "
+            "entrypoint, so an arg only it declares is still dropped and is "
+            "reported. Only when no entrypoint is visible at all "
+            "(``BaseMetadataExtractor`` defines no ``run()``) does the rule "
+            "fall back to the app's sole live ``ExtractionInput`` descendant.\n"
+            "\n"
             "**Scope.** This rule checks only that the app can *receive* the "
             "payload the Automation Engine sends it. A filter can also be lost "
             "upstream, in the platform's workflow re-render, before the payload "
@@ -1699,11 +1792,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "**Suppress** with ``# conformance: ignore[K018] <reason>`` on the "
             "``Input`` class definition (or the comment-only line directly above "
-            "it).\n"
+            "it) — or, for an app that inherits a template's ``run()``, on the "
+            "app class definition, where that finding is anchored.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k018"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1782,6 +1880,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k019"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -1873,6 +1975,11 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k020"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
+            note="Check published workflows before flipping nested->flat args",
         ),
     ),
     RuleDefinition(
@@ -1969,6 +2076,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k021"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
+        ),
     ),
     RuleDefinition(
         id="K027",
@@ -2043,6 +2154,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k027"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
 )

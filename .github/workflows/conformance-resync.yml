@@ -1,0 +1,176 @@
+name: Conformance Resync
+
+# Fleet-wide `bootstrap --resync` lane (FND-2848, ported from connector-pulse
+# PR #1157 into this repo per FND-2868). For every Renovate-onboarded fleet
+# repo (the same roster renovate.yaml discovers) whose main uv.lock resolves
+# atlan-application-sdk-conformance, .github/scripts/conformance_resync.py:
+#
+#   - runs, at exactly the version that repo's uv.lock pins (latest or not),
+#     `atlan-application-sdk-conformance bootstrap --resync --json`;
+#   - stages only the paths the --json `touched` list names, set-compares
+#     every .bak against its replacement, and never commits a .bak — a resync
+#     that would drop a per-repo setting HOLDS the repo (no PR opened/updated);
+#   - keeps ONE PR per repo on resync_approval_conditions.RESYNC_BRANCH,
+#     authored by resync_approval_conditions.RESYNC_AUTHOR: force-pushed in
+#     place from a fresh render, closed once main already carries the
+#     changes, duplicates closed. The branch is the lane's; a repo where
+#     someone else has a PR on it is skipped as a best-effort courtesy;
+#   - arms auto-merge only when vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED is
+#     "true" AND the repo's renovate.json lets Renovate auto-merge;
+#   - for an existing lane PR this run left untouched, whose required checks
+#     are all green and which atlan-ci has not yet approved with the resync
+#     signature, dispatches that repo's own renovate-auto-approve.yml by
+#     workflow_dispatch(pr_number=...). That approver's workflow_run trigger
+#     only listens on `renovate/**` branches, and this lane's branch
+#     (bot/conformance-resync) is not one of them and is never re-rendered by
+#     the resync itself, so without this dispatch nothing would ever ask the
+#     approver to look at these PRs at all.
+#
+# The render itself (third-party PyPI code) runs in a pinned uv container,
+# resync_approval_conditions.RENDER_IMAGE, never on the runner host: this job
+# holds a fleet-wide workflows-write token, and on a hosted runner a same-host
+# child can read any process's environment or the runner's memory.
+#
+# The independent byte-for-byte proof that a lane PR is safe to approve is
+# .github/scripts/resync_approval_conditions.py (the atlan-ci code-owner
+# gate), which this lane's script imports its shared constants and
+# staging/compare helpers from rather than keeping a second copy.
+#
+# Dry run by default. Live only when BOTH vars.CONFORMANCE_RESYNC_LIVE is
+# "true" AND (for a manual dispatch) the dry_run input is false — a scheduled
+# run carries no dispatch input at all, so it is gated by the live switch
+# alone, matching how the fleet's other lanes distinguish "no override given"
+# from "override says don't".
+#
+# Required configuration:
+#   Environment `conformance-resync`, deployable from main only. It holds the
+#     App key, so a branch run cannot mint a fleet-wide workflows-write token.
+#   vars.CONFORMANCE_SYNC_APP_ID / secrets.CONFORMANCE_SYNC_APP_PRIVATE_KEY —
+#     the atlan-conformance-sync GitHub App (resync_approval_conditions
+#     RESYNC_AUTHOR). Needs, on every atlan-*-app repo: contents (write —
+#     push the resync branch), pull_requests (write — open/update/close the
+#     lane PR, review list), workflows (write — the managed .github/workflows
+#     shims are bootstrap-managed), actions (write — dispatch
+#     renovate-auto-approve.yml).
+#   vars.CONFORMANCE_RESYNC_LIVE — "true" arms live pushes/PRs (see above).
+#   vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED — "true" lets the lane arm
+#     auto-merge (still subject to each repo's renovate.json); unset/false =
+#     PRs only, never armed.
+#   vars.CONFORMANCE_RESYNC_REPOS — optional JSON array of "owner/repo" that
+#     scopes scheduled runs (pilot rollout); unset = the whole fleet. A
+#     dispatch's `repos` input overrides it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run: run every step for real (clone, resync, .bak check, diff) but push/open/edit/close nothing."
+        type: boolean
+        default: true
+      repos:
+        description: 'Optional JSON array of "owner/repo" to scope the run. Empty = full Renovate-onboarded fleet.'
+        type: string
+        default: ""
+  schedule:
+    # Offset from renovate.yaml's `0 */4 * * *` so a resync pass always finds
+    # the fleet's lock/renovate state settled from the sweep before it, and so
+    # the approval-dispatch pass keeps up with PRs the resync itself opened.
+    - cron: "30 */4 * * *"
+
+permissions:
+  contents: read
+
+# One group per scope. GitHub keeps one PENDING run per group and replaces it
+# with the next, so a single static group could silently drop a scoped
+# dispatch queued behind another. Overlapping scopes are safe: every push
+# uses --force-with-lease, so a raced repo errors for that run, never
+# overwrites.
+concurrency:
+  group: conformance-resync-${{ github.event.inputs.repos || vars.CONFORMANCE_RESYNC_REPOS || 'full-fleet' }}
+  cancel-in-progress: false
+
+jobs:
+  resync:
+    runs-on: ubuntu-latest
+    environment: conformance-resync
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Mint atlan-conformance-sync App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ vars.CONFORMANCE_SYNC_APP_ID }}
+          private-key: ${{ secrets.CONFORMANCE_SYNC_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - name: Assert the token is the conformance-sync App
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: python3 .github/scripts/assert_app_token_slug.py atlan-conformance-sync
+
+      - name: Resync the fleet
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOS: ${{ github.event.inputs.repos || vars.CONFORMANCE_RESYNC_REPOS }}
+          DRY_RUN: >-
+            ${{ (vars.CONFORMANCE_RESYNC_LIVE == 'true' && github.event.inputs.dry_run != 'true') && 'false' || 'true' }}
+          AUTOMERGE_ENABLED: ${{ vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED || 'false' }}
+        run: |
+          python3 .github/scripts/conformance_resync.py \
+            --repos "$REPOS" \
+            --out resync-results.json \
+            --diffs-dir resync-diffs
+
+      - name: Upload conformance-resync-results
+        id: upload-results
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-results
+          path: resync-results.json
+          overwrite: true
+          retention-days: 14
+
+      - name: Wait before the conformance-resync-results retry
+        if: always() && steps.upload-results.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload conformance-resync-results (retry)
+        if: always() && steps.upload-results.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-results-retry
+          path: resync-results.json
+          overwrite: true
+          retention-days: 14
+
+      - name: Upload conformance-resync-diffs
+        id: upload-diffs
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-diffs
+          path: resync-diffs/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14
+
+      - name: Wait before the conformance-resync-diffs retry
+        if: always() && steps.upload-diffs.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload conformance-resync-diffs (retry)
+        if: always() && steps.upload-diffs.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-resync-diffs-retry
+          path: resync-diffs/
+          if-no-files-found: ignore
+          overwrite: true
+          retention-days: 14

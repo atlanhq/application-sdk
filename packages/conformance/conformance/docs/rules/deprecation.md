@@ -55,6 +55,7 @@ a blind swap.
   (application_sdk.app, application_sdk.contracts, application_sdk.errors). What counts
   as deprecated is not a judgement call: it is the manifest this rule reads, regenerated
   from SDK source by `gen-deprecations`.
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 
 Flags app consumption of any symbol recorded in the deprecated-symbol manifest the SDK
 ships with this conformance package (BLDX-1418).  Four surfaces are matched,
@@ -177,28 +178,34 @@ they hit with zero changes on their side.
   contract field and its type. `atlan-application-sdk-conformance ledger-guard` enforces
   it append-only between the base ref and HEAD, so a removal or a retype is refused
   there rather than discovered by a customer.
+- **Fix by:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 - **Interacts with:** ledger-guard is append-only: a recorded type cannot change and an entry cannot be
   deleted — only the status may move. That is why `sunset` is the retirement path rather
   than a retype or a delete. P001 also bears on this: it refuses `Any` on a contract
   field, so replacing `Any` in place with a concrete type is required and no longer
   counts as a break here — a constructor change off `Any` is still a break.
-- **Already correct when:** Four shapes are NOT breaks and do not fire: a field whose ledger status is `sunset` (the
-  retirement marker — `deprecated` still requires the field to be present), a type that
-  was WIDENED (including nested containers), an INHERITED field whose base class changed
-  the type, and a move OFF `Any` that keeps the same outer shape (`Any` replaced in
-  place; a type alias declared at the top level of the same module, including a chain of
-  such aliases, or a public SDK type alias bound by `from application_sdk… import X`
-  (such as `FilterMap`), is expanded to its target before the comparison, a generic
-  alias taking its subscript's arguments (`BoundedDict[str, str]`) or `Any` for each
-  parameter when used bare — the ledger side is not expanded, and an alias declared
-  under `if TYPE_CHECKING:` / `try`, as a string, or as a plain `X = <name>` such as
-  `Ident = str` is not recognised, an alias whose name is bound more than once anywhere
-  in the file (in any scope, even a function local), or any alias in a file with a `from
-  x import *`, is not expanded, and a chain that expands past a size budget is compared
-  unexpanded). To retire a field deliberately, mark it `sunset` in
-  contract_schema.lock.json. Before treating a removal as dead code, grep the whole repo
-  — including scripts/ and *.sh JSONPath args like $.extract.outputs.<field> — for
-  readers the contract does not know about.
+- **Already correct when:** Five shapes are NOT breaks and do not fire: a field whose ledger status is `sunset` (the
+  retirement marker — `deprecated` still requires the field to be present), an INHERITED
+  field the SDK retired (absent because an SDK contract the class still inherits from,
+  directly or through in-repo bases, dropped it and the SDK's own bundled ledger records
+  it `sunset` on that contract with the same name and type — a field the app or an
+  in-repo base declared under another type, or one lost by leaving the SDK base, still
+  fires; a removed app field with the SDK field's exact name and type cannot be told
+  apart from it and is excused too), a type that was WIDENED (including nested
+  containers), an INHERITED field whose base class changed the type, and a move OFF
+  `Any` that keeps the same outer shape (`Any` replaced in place; a type alias declared
+  at the top level of the same module, including a chain of such aliases, or a public
+  SDK type alias bound by `from application_sdk… import X` (such as `FilterMap`), is
+  expanded to its target before the comparison, a generic alias taking its subscript's
+  arguments (`BoundedDict[str, str]`) or `Any` for each parameter when used bare — the
+  ledger side is not expanded, and an alias declared under `if TYPE_CHECKING:` / `try`,
+  as a string, or as a plain `X = <name>` such as `Ident = str` is not recognised, an
+  alias whose name is bound more than once anywhere in the file (in any scope, even a
+  function local), or any alias in a file with a `from x import *`, is not expanded, and
+  a chain that expands past a size budget is compared unexpanded). To retire a field
+  deliberately, mark it `sunset` in contract_schema.lock.json. Before treating a removal
+  as dead code, grep the whole repo — including scripts/ and *.sh JSONPath args like
+  $.extract.outputs.<field> — for readers the contract does not know about.
 
 Fires when a ledger entry for an entrypoint contract field is either:
 
@@ -216,9 +223,21 @@ field inherited from an in-repo base class, or from an SDK-provided mixin such a
 Composing a contract from a mixin (the documented pattern) does not require redeclaring
 the mixin's fields to stay ledger-protected.
 
+The same resolution means an app ledger records fields its contract only inherits from
+an SDK template (`ExtractionInput` and the rest) or an SDK contract base (`Input`,
+`Output`, `PublishInputMixin`). When the SDK deliberately retires one, it marks the
+field `sunset` in its own ledger — the SDK repo's root `contract_schema.lock.json`,
+which this package ships as package data. A missing field that ledger records `sunset`
+on an SDK contract the app contract still inherits from is not reported: the SDK's own
+B005 run guards that field, and the app did not remove it and cannot restore it. The
+app's ledger entry is left as it is.
+
 Only entrypoint contracts are gated — Input/Output classes bound to an
-`@entrypoint`-decorated method or an `App.run()` method.  `@task` boundary contracts are
-explicitly excluded: tasks are internal and may evolve with breaking changes.
+`@entrypoint`-decorated method or an undecorated `async def run` on a class that
+subclasses, directly or through in-repo bases, `App` or an SDK App template imported
+from `application_sdk` (`SqlApp`, `BaseMetadataExtractor`, ...).  `@task` boundary
+contracts are explicitly excluded: tasks are internal and may evolve with breaking
+changes.
 
 The ledger is append-only and machine-generated, so regeneration can only *add* — it can
 never launder a removal.  To retire a field: mark it `deprecated` or `sunset` in the Pkl
@@ -258,6 +277,9 @@ against.
   contract field, regenerated by `atlan-application-sdk-conformance
   gen-contract-ledger`. A field missing from the ledger means the ledger was not
   regenerated after contract/app.pkl changed, not that the field is wrong.
+- **Fix by:** `uvx atlan-application-sdk-conformance==<version> gen-contract-ledger` — <version> is
+  the version of the checker that raised the finding; copy the pinned command from the
+  finding message verbatim (FND-607)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -295,7 +317,8 @@ gains fields.  Regenerating with an older locked version therefore rewrites the 
 byte-identically and leaves the finding standing with no diff to commit — a dead end on
 a BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the suite is
 in-tree, so there the command is `uv run atlan-application-sdk-conformance
-gen-contract-ledger`.
+gen-contract-ledger`, which writes the repo-root `contract_schema.lock.json` from any
+directory in the checkout.
 
 The generator is append-only — it appends new live fields and refreshes `status` from
 source but never deletes an entry or rewrites a recorded `type`.  Regenerating after a
@@ -334,6 +357,7 @@ with pyarrow-receiver exemptions) and the pandas migration changes call shapes.
   this rule looks for (count_rows, to_pylist, .names) appear in no SDK-importing module
   of the three reference apps; daft was removed from the SDK in 3.20.0, so they are dead
   on any current runtime.
+- **Migrate with:** the `migrate-off-daft` skill (`skills-dir`)
 
 Flags daft-only DataFrame API usage in apps that consume the SDK (files importing
 `application_sdk`), where SDK >= 3.22 readers return **pandas** frames and the `[daft]`
@@ -401,6 +425,7 @@ prevent; revisit once the count nears zero.
   application_sdk.app, .contracts, .credentials, .errors, .observability and .outputs,
   plus msgspec and orjson. No module under the three reference apps' app/ directories
   imports an underscore-prefixed module or name it does not own.
+- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
 
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:

@@ -28,6 +28,7 @@ from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.storage.errors import (
     StorageBucketRelocationError,
     StorageConfigError,
+    StorageDiskFullError,
     StorageError,
     StorageIntegrityError,
     StorageNotFoundError,
@@ -76,6 +77,7 @@ def test_storage_error_sets_service_so_evidence_is_not_all_null() -> None:
         (StorageConfigError, {"key": "artifacts/t.json"}),
         (StorageBucketRelocationError, {"key": "artifacts/t.json"}),
         (StorageIntegrityError, {"key": "artifacts/t.json"}),
+        (StorageDiskFullError, {"key": "artifacts/t.json"}),
     ],
 )
 def test_every_storage_class_sets_service(factory: type, kwargs: dict) -> None:

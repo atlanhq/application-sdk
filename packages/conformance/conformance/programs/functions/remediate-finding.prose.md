@@ -13,7 +13,7 @@ description: >
 - `finding` (object, required) — a finding as returned by `detect-violations`:
   `rule_id`, `area`, `file`, `line`, `column`, `message`, `hint`,
   `autofixable`, `disposition`, `fingerprint`, `forces_external_influence`,
-  `canonical_reference`.  `autofixable` is the rule's classification —
+  `canonical_reference`, `remediation_reference`.  `autofixable` is the rule's classification —
   `true` means an *auto-fixable* rule the lane may apply a prescription for,
   `false` means a *migration* rule that is never applied by this function
   (see *Reference apps, impact analysis and verification* below).
@@ -97,6 +97,9 @@ description: >
   migration guide to run when the rule names one, and any owner decision the
   migration needs.  The loop carries it into residue verbatim so the
   connector's migration sub-issue starts from it rather than from nothing.
+- `remediation_reference` — for a migration rule, `finding.remediation_reference`
+  passed through unchanged, so the loop can group residue by the skill,
+  guide or decision that closes it.
 
 ### Write-scope constraint
 
@@ -383,9 +386,14 @@ sanctioned channel, silently disabling the gate is not.
 - `finding.autofixable == false` (a **migration** rule): apply nothing.  Do
   steps 1 and 2 anyway, then return `not_remediable = true` with a
   `migration_brief` — target state as the reference app implements it (file
-  and symbol), the files in this app that would change, the external skill or
-  guide to run when the rule names one, and the owner decision if there is
-  one.  The brief is the deliverable; the loop carries it into residue.
+  and symbol), the files in this app that would change, and what
+  `finding.remediation_reference` names: the skill (`kind = skill`, under
+  `skills-dir`), the guide (`kind = guide`, a file in the conformance
+  package), or the owner decision (`kind = decision`, `note` is the choice).
+  Do not invent a skill the reference does not name.  Return
+  `remediation_reference` unchanged.  The brief is the deliverable; the loop
+  carries it into residue, and `/remediate` runs the named skill after the
+  loop (interactive sessions only).
 
 ### Dispatch by area
 

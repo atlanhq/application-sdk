@@ -123,7 +123,10 @@ human audit):
      If either holds this is a **defect in the rule, not in the app**: take the
      `false-positive` path in `remediate-finding` step 5 so
      `report-rule-defect` raises it against the suite.  Never suppress it
-     silently.
+     silently.  A field the SDK itself retired from a template the contract
+     inherits never reaches this list: B005 excuses it when the SDK's bundled
+     ledger records it `sunset` on that template, so do not hand-edit the
+     app's ledger for it.
   2. **Restore the field** when the removal was unintentional and the ledger
      entry gives its type — re-declare it on the contract class with that type.
      Report `classification = "mechanical"` only when the finding names the
@@ -305,6 +308,25 @@ human audit):
   `DeprecationWarning` in `__init__`/`__init_subclass__`) is a small design
   choice for the symbol's owner; record in residue with the suggestion the
   finding message already carries.
+
+- **B008 PrivateModuleImport** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app imports or uses an underscore-prefixed
+  module or name it does not own: a private segment in the module path, a
+  private name from a public module, a third-party private (`pandas._libs`),
+  or a reach-through on a module alias (`sdk.execution._temporal.x`).  The
+  app's own privates (relative imports, or imports rooted at a package inside
+  the repo) and dunders are never flagged.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: every foreign import names a public
+  module (`application_sdk.app`, `.contracts`, `.credentials`, `.errors`,
+  `.observability`, `.outputs`).  The brief names, per site, the public
+  equivalent to import, or — when the site is a test asserting on an SDK
+  private — the public behaviour to test instead.  When no public equivalent
+  exists, the brief says so and proposes
+  `# conformance: ignore[B008] no public equivalent — tracked in <id>`.  An
+  error class from `application_sdk.storage.formats` is also a P045 finding;
+  follow that prescription.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2d
+  (positive-idiom check 1).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when
