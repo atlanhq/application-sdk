@@ -75,8 +75,10 @@ from pathlib import Path
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     _parse_directives,
+    collect_module_alias_targets,
     discover,
     make_cli_main,
+    register_alias_records,
 )
 from conformance.suite.schema.findings import Finding
 
@@ -214,6 +216,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     file_records: dict[Path, list[ClassRecord]] = {}
     file_trees: dict[Path, ast.AST] = {}
     by_name: dict[str, ClassRecord] = {}
+    alias_targets: dict[str, str] = {}
     code_consts: dict[str, str] = {}
 
     for path in paths:
@@ -275,6 +278,8 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         code_consts.update(module_code_constants(tree))
         for rec in records:
             by_name.setdefault(rec.name, rec)
+        for local, target in collect_module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
 
     # Pass 2 + 3 — resolve and emit P003
     # Codes reached through a module-level constant are declared, just not
@@ -306,9 +311,13 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             elif not rec.code_value.startswith(f"{leaf_prefix}_"):
                 findings.append(emit_p003(rec, leaf_prefix, directives))
 
-    # Pass 4 — emit P013/P014 (cross-file boundary-type enforcement)
+    # Pass 4 — emit P013/P014; a module-level `Alias = Class` resolves as Class
+    boundary_by_name = dict(by_name)
+    register_alias_records(boundary_by_name, alias_targets)
     findings.extend(
-        check_p013_p014(file_trees, by_name, file_directives, root, file_records)
+        check_p013_p014(
+            file_trees, boundary_by_name, file_directives, root, file_records
+        )
     )
 
     # Pass 5 — emit P027 (app-wide app_state read-with-no-writer)

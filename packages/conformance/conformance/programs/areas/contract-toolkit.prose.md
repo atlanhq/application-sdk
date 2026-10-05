@@ -48,10 +48,10 @@ description: >
   by the test-suite gate.
   K027 (two entrypoints bind different Input/Output contract classes under one
   bare class name, so the contract ledger conflates them) is a mechanical Python
-  rename -- subclass the generated class under a unique name, or regenerate with a
-  toolkit that names bundle classes per entrypoint and import the unique name --
-  followed by a ledger regenerate, verified by the test-suite gate.
-  K009, K011, K012, K015, and K027 are
+  rename -- regenerate with a toolkit that names bundle classes per entrypoint and
+  import or subclass the unique name -- followed by a ledger regenerate, verified by
+  the test-suite gate.
+  K009, K011, K012, and K015 are
   BLOCK-tier (they fail the gate in default mode); the rest of the K-series is WARN.
 ---
 
@@ -65,11 +65,10 @@ findings in the working tree, classified by disposition and remediability.
 The fingerprint-set of all unsuppressed FAILING/WARNING K-series results in the
 current working tree, as reported by `suite.runner --series K`.
 
-All K-series rules are WARN-tier **except K003, K009, K011, K012, K015, and K027 (BLOCK)**.
+All K-series rules are WARN-tier **except K003, K009, K011, K012, and K015 (BLOCK)**.
 So in **default** mode this facet is empty *unless* a K003 (pin/lock drift),
 K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
-(missing `generate` poe task), K015 (legacy-alias contract/code drift), or K027
-(entrypoint contract class-name collision)
+(missing `generate` poe task), or K015 (legacy-alias contract/code drift)
 finding is present — those are FAILING results
 that fail the gate and must be remediated in default mode.  In **strict** mode
 the fingerprint-set also includes the unsuppressed WARNING results
@@ -124,11 +123,10 @@ call detect-fix-recheck
 
 _Read by `remediate-finding` when `finding.area == "contract-toolkit"`._
 
-All K-series rules are **WARN-tier except K003, K009, K011, K012, K015, and K027 (BLOCK)** —
+All K-series rules are **WARN-tier except K003, K009, K011, K012, and K015 (BLOCK)** —
 the WARN rules surface only under `--strict` mode, while K003 (pin/lock drift),
 K009 (unresolved scaffold placeholder), K011 (missing `app_id`), K012
-(missing `generate` poe task), K015 (legacy-alias contract/code drift), and K027
-(entrypoint contract class-name collision) are
+(missing `generate` poe task), and K015 (legacy-alias contract/code drift) are
 FAILING results that must be remediated even
 in default mode.
 Before proposing any edit, read the actual lines around `finding.line` in
@@ -999,20 +997,20 @@ modules, and the role (Input or Output).
 
 *Procedure:*
 
-1. **Generated bundle classes bound directly.** If the classes come from
-   `app/generated/<entrypoint>/_input.py` and the app's toolkit already names them
-   `<Entrypoint>InputContract`, change each entrypoint's annotation (and import) to
-   that unique name instead of the `AppInputContract` alias. If the toolkit is
-   older, either bump it and regenerate (`pkl eval -m . contract/app.pkl`, then the
-   `pkl-eval` gate) or use step 2.
-2. **Hand-written or older generated classes.** Subclass (or rename) each class
-   under a unique name, matching atlan-mssql-app:
-   `from app.generated.miner._input import AppInputContract as _GeneratedMinerInput`
-   then `class MinerInputContract(_GeneratedMinerInput): ...`, and annotate the
-   entrypoint with the new name. Rename only classes the app owns; never hand-edit
-   `app/generated/`.
+1. **Generated bundle classes.** If the classes come from
+   `app/generated/<entrypoint>/_input.py`, make sure the app's toolkit names them
+   `<Entrypoint>AppInputContract` (bump it and regenerate with
+   `pkl eval -m . contract/app.pkl`, then the `pkl-eval` gate, if it is older).
+   Import that unique name, not the `AppInputContract` alias, wherever an
+   entrypoint annotation or an app subclass uses it. A subclass of the alias
+   (`from app.generated.miner._input import AppInputContract as _Gen` then
+   `class MinerInputContract(_Gen)`) still resolves its base by the shared bare
+   name, so its ledger entry can carry another entrypoint's fields.
+2. **Hand-written classes.** Rename each class the app owns under a unique name and
+   annotate the entrypoint with it. Never hand-edit `app/generated/`.
 3. **Regenerate the contract ledger** (`gen-contract-ledger`) so its keys follow the
-   new names, and commit it with the rename.
+   new names, and commit it with the rename. A field the old shared name recorded
+   but the contract never had now reports as B005: mark it `sunset` in the ledger.
 4. **Verification is the standard test-suite gate.** Re-running
    `atlan-application-sdk-conformance detect --series K` confirms no name is
    reached from two declarations.

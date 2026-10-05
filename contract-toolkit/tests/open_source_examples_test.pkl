@@ -327,12 +327,12 @@ facts {
       "from typing import ClassVar\n\n" +
       "from application_sdk.credentials.ref import CredentialRef\n" +
       "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
-      "class CrawlerInputContract(ExtractionInput):"
+      "class CrawlerAppInputContract(ExtractionInput):"
     )
     bundleMinerInputPy.contains(
       "from __future__ import annotations\n\n" +
       "from application_sdk.templates.contracts import ExtractionInput\n\n\n" +
-      "class MinerInputContract(ExtractionInput):"
+      "class MinerAppInputContract(ExtractionInput):"
     )
     !bundleMinerInputPy.contains("from typing import")
     !bundleMinerInputPy.contains("from pydantic import")

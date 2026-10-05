@@ -1297,6 +1297,33 @@ def test_p013_silent_on_correctly_typed_entrypoint(tmp_path: Path) -> None:
     assert p013 == []
 
 
+def test_p013_silent_on_subclass_of_a_rebound_generated_contract(
+    tmp_path: Path,
+) -> None:
+    """A base imported by a module-level alias name resolves to the class it names."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "generated/_input.py": (
+            "from application_sdk.contracts import Input\n"
+            "class MinerAppInputContract(Input):\n"
+            "    x: str = ''\n"
+            "AppInputContract = MinerAppInputContract\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "from generated._input import AppInputContract as _Gen\n"
+            "class MinerInputContract(_Gen):\n"
+            "    y: str = ''\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: MinerInputContract) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_silent_on_contracts_in_same_file(tmp_path: Path) -> None:
     """Contracts defined in the same file as the App → resolved correctly."""
     src = (

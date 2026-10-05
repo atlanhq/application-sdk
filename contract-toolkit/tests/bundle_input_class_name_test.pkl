@@ -26,22 +26,22 @@ local function clashingBundle(a: String, b: String) = (namesBundle) {
 
 facts {
   ["Bundle entrypoints get a unique input class named after the entrypoint"] {
-    crawlerPy.contains("\nclass CrawlerInputContract(ExtractionInput):\n")
-    minerPy.contains("\nclass MinerInputContract(ExtractionInput):\n")
+    crawlerPy.contains("\nclass CrawlerAppInputContract(ExtractionInput):\n")
+    minerPy.contains("\nclass MinerAppInputContract(ExtractionInput):\n")
     !crawlerPy.contains("class AppInputContract")
     !minerPy.contains("class AppInputContract")
   }
 
   ["Bundle input modules keep AppInputContract as a backward-compatible alias"] {
-    crawlerPy.endsWith("\n\n\nAppInputContract = CrawlerInputContract\n")
-    minerPy.endsWith("\n\n\nAppInputContract = MinerInputContract\n")
+    crawlerPy.endsWith("\n\n\nAppInputContract = CrawlerAppInputContract\n")
+    minerPy.endsWith("\n\n\nAppInputContract = MinerAppInputContract\n")
   }
 
   ["Entrypoint names with dashes and underscores are PascalCased"] {
     namesBundle.output.files["app/generated/query_miner/_input.py"].text
-      .contains("\nclass QueryMinerInputContract(ExtractionInput):\n")
+      .contains("\nclass QueryMinerAppInputContract(ExtractionInput):\n")
     namesBundle.output.files["app/generated/usage-stats/_input.py"].text
-      .contains("\nclass UsageStatsInputContract(ExtractionInput):\n")
+      .contains("\nclass UsageStatsAppInputContract(ExtractionInput):\n")
   }
 
   ["Single-entrypoint input output is unchanged"] {
@@ -52,7 +52,7 @@ facts {
 
   ["Entrypoints whose names map to the same class name are rejected"] {
     module.catch(() -> clashingBundle("foo-bar", "foo_bar").output.files)
-      .contains("generate the same input contract class name (FooBarInputContract)")
+      .contains("generate the same input contract class name (FooBarAppInputContract)")
   }
 
   ["Entrypoint names that do not start with a letter are rejected"] {
@@ -62,11 +62,11 @@ facts {
 
   ["NativeAppBundle entrypoints get the same unique names and alias"] {
     nativeBundle.output.files["crawler/_input.py"].text
-      .contains("\nclass CrawlerInputContract(ExtractionInput):\n")
+      .contains("\nclass CrawlerAppInputContract(ExtractionInput):\n")
     nativeBundle.output.files["crawler/_input.py"].text
-      .endsWith("\n\n\nAppInputContract = CrawlerInputContract\n")
+      .endsWith("\n\n\nAppInputContract = CrawlerAppInputContract\n")
     nativeBundle.output.files["query-miner/_input.py"].text
-      .contains("\nclass QueryMinerInputContract(ExtractionInput):\n")
+      .contains("\nclass QueryMinerAppInputContract(ExtractionInput):\n")
     nativePipeline.output.files["_input.py"].text.contains("\nclass AppInputContract(ExtractionInput):\n")
   }
 }

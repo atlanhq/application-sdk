@@ -1980,7 +1980,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         scope=RuleScope.APP,
         name="EntrypointContractClassNameCollision",
-        tier=EnforcementTier.BLOCK,
+        tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
@@ -2017,7 +2017,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Each annotation is resolved through imports (including "
             "``import x as y`` and ``from pkg import module``), module-level "
-            "rebindings such as ``AppInputContract = CrawlerInputContract``, and "
+            "rebindings such as ``AppInputContract = CrawlerAppInputContract``, and "
             "string annotations to the in-repo class that declares it. A binding "
             "reaches the ledger under two names: the import-de-aliased name the "
             "annotation uses, and the declaring class's own name. A collision is "
@@ -2026,14 +2026,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``application_sdk.*``) are never checked: they are the same class "
             "everywhere and the ledger does not record them.\n"
             "\n"
-            "**Fix:** give each entrypoint's contract a unique class name. "
-            "Subclass the generated class under a unique name, as "
-            "atlan-mssql-app does "
-            "(``class MinerInputContract(_GeneratedMinerInput)``), or regenerate "
-            "with a contract-toolkit that names bundle input classes "
-            "``<Entrypoint>InputContract`` and import that unique name, not the "
-            "``AppInputContract`` alias the generated module keeps for backward "
-            "compatibility. Then regenerate the contract ledger.\n"
+            "**Fix:** give each entrypoint's contract a unique class name: "
+            "regenerate with a contract-toolkit that names bundle input classes "
+            "``<Entrypoint>AppInputContract`` and import or subclass that unique "
+            "name, not the ``AppInputContract`` alias the generated module keeps "
+            "for backward compatibility. A subclass of the alias still resolves "
+            "its base by the shared bare name, so its ledger entry can carry "
+            "another entrypoint's fields. Then regenerate the contract ledger; "
+            "fields the old shared name recorded but the contract never had "
+            "now report as B005 and are marked ``sunset`` in the ledger.\n"
             "\n"
             "**Suppress** with ``# conformance: ignore[K027] <reason>`` on the "
             "entrypoint method definition (or the comment-only line directly above "

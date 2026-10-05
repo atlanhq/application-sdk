@@ -62,7 +62,7 @@ def _bundle_inputs() -> dict[str, str]:
 
 def test_rule_metadata() -> None:
     rule = get_rule(_RULE)
-    assert rule.tier is EnforcementTier.BLOCK
+    assert rule.tier is EnforcementTier.WARN
     assert rule.scope is RuleScope.APP
     assert rule.autofixable is True
     assert rule.category == "contract-toolkit"
@@ -226,22 +226,22 @@ def test_regenerated_bundle_alias_imports_still_fire(tmp_path: Path) -> None:
             "from application_sdk.templates.contracts import ExtractionInput\n"
             "\n"
             "\n"
-            "class CrawlerInputContract(ExtractionInput):\n"
+            "class CrawlerAppInputContract(ExtractionInput):\n"
             "    a: int = 0\n"
             "\n"
             "\n"
-            "AppInputContract = CrawlerInputContract\n"
+            "AppInputContract = CrawlerAppInputContract\n"
         ),
         "app/generated/miner/__init__.py": "",
         "app/generated/miner/_input.py": (
             "from application_sdk.templates.contracts import ExtractionInput\n"
             "\n"
             "\n"
-            "class MinerInputContract(ExtractionInput):\n"
+            "class MinerAppInputContract(ExtractionInput):\n"
             "    b: int = 0\n"
             "\n"
             "\n"
-            "AppInputContract = MinerInputContract\n"
+            "AppInputContract = MinerAppInputContract\n"
         ),
         "app/app.py": (
             _APP_HEADER + "from app.generated.crawler import _input as crawler_input\n"
@@ -272,36 +272,36 @@ def test_regenerated_bundle_unique_names_are_silent(tmp_path: Path) -> None:
             "from application_sdk.templates.contracts import ExtractionInput\n"
             "\n"
             "\n"
-            "class CrawlerInputContract(ExtractionInput):\n"
+            "class CrawlerAppInputContract(ExtractionInput):\n"
             "    a: int = 0\n"
             "\n"
             "\n"
-            "AppInputContract = CrawlerInputContract\n"
+            "AppInputContract = CrawlerAppInputContract\n"
         ),
         "app/generated/miner/__init__.py": "",
         "app/generated/miner/_input.py": (
             "from application_sdk.templates.contracts import ExtractionInput\n"
             "\n"
             "\n"
-            "class MinerInputContract(ExtractionInput):\n"
+            "class MinerAppInputContract(ExtractionInput):\n"
             "    b: int = 0\n"
             "\n"
             "\n"
-            "AppInputContract = MinerInputContract\n"
+            "AppInputContract = MinerAppInputContract\n"
         ),
         "app/app.py": (
             _APP_HEADER
-            + "from app.generated.crawler._input import CrawlerInputContract\n"
-            "from app.generated.miner._input import MinerInputContract\n"
+            + "from app.generated.crawler._input import CrawlerAppInputContract\n"
+            "from app.generated.miner._input import MinerAppInputContract\n"
             "\n"
             "\n"
             "class MyApp(App):\n"
             "    @entrypoint\n"
-            "    async def crawler(self, input: CrawlerInputContract) -> Output:\n"
+            "    async def crawler(self, input: CrawlerAppInputContract) -> Output:\n"
             "        return Output()\n"
             "\n"
             "    @entrypoint\n"
-            "    async def miner(self, input: MinerInputContract) -> Output:\n"
+            "    async def miner(self, input: MinerAppInputContract) -> Output:\n"
             "        return Output()\n"
         ),
     }

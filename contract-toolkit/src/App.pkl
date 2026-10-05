@@ -4554,7 +4554,7 @@ local function normalizeContractFileName(fileName: String): String =
 // FND-3140: a bundle gives each entrypoint's input class a unique name and keeps
 // `AppInputContract` as an alias, so existing imports still resolve.
 local function bundleInputClassName(entrypointName: String): String =
-  pascalCase(entrypointName) + "InputContract"
+  pascalCase(entrypointName) + "AppInputContract"
 
 local bundleInputClassDecl: String = "\nclass AppInputContract("
 

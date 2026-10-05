@@ -33,9 +33,7 @@ from conformance.suite.checks._ast_common import (
     _parse_directives,
     make_finding,
 )
-from conformance.suite.checks._entrypoint_contract_classes import (
-    _extract_wire_name,
-)
+from conformance.suite.checks._entrypoint_contract_classes import _extract_wire_name
 from conformance.suite.checks._entrypoint_contract_fields import _base_name
 from conformance.suite.checks.prescriptions._contract_common import (
     _unwrap_annotated,
@@ -371,12 +369,10 @@ def _make_finding(
                 "The contract ledger keys contracts by bare class name, so these "
                 "classes share one ledger identity and B005/B006 check each against "
                 "the other's fields. Give each entrypoint's contract a unique class "
-                "name: subclass the generated class under a unique name (as "
-                "atlan-mssql-app does with 'class MinerInputContract("
-                "_GeneratedMinerInput)'), or regenerate with a contract-toolkit that "
-                "names bundle input classes '<Entrypoint>InputContract' and import "
-                "that unique name instead of the 'AppInputContract' alias. Then "
-                "regenerate the contract ledger. Suppress with "
+                "name: regenerate with a contract-toolkit that names bundle input "
+                "classes '<Entrypoint>AppInputContract' and import or subclass that "
+                "unique name instead of the 'AppInputContract' alias, or rename the "
+                "app's own class. Then regenerate the contract ledger. Suppress with "
                 f"'# conformance: ignore[{_RULE_ID}] <reason>' on the entrypoint "
                 "method definition."
             ),

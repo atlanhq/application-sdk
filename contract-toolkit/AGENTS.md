@@ -72,7 +72,7 @@ tests/
 - Native credentials use `FieldSpec`, `AuthOption`, `ConditionalFieldSpec`, `NamedWidget`, and `NamedProperty` from `NativeApp.pkl`.
 - `Credential.pkl` is legacy. Do not use it for new native app credential config.
 - Workflow UI uses `Config.pkl` widgets inside `uiConfig.tasks`.
-- Generated `_input.py` defines `AppInputContract` extending SDK `ExtractionInput`. In a bundle, each entrypoint's class is `<PascalCase(entrypoint)>InputContract` with `AppInputContract` kept as an alias.
+- Generated `_input.py` defines `AppInputContract` extending SDK `ExtractionInput`. In a bundle, each entrypoint's class is `<PascalCase(entrypoint)>AppInputContract` with `AppInputContract` kept as an alias.
 - Default DAG is `extract -> publish`. Use typed nodes (`PublishNode`, `QueryIntelligenceNode`, `PopularityNode`, `LineageNode`, `LineagePublishNode`) before raw `DAGNode`.
 
 ## Commands

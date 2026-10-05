@@ -261,7 +261,7 @@ local function capitalizeFirst(s: String): String =
   if (s.isEmpty) s else s.take(1).toUpperCase() + s.drop(1)
 
 local function inputClassName(entrypointName: String): String =
-  entrypointName.split(Regex("[^A-Za-z0-9]+")).map((seg) -> capitalizeFirst(seg)).join("") + "InputContract"
+  entrypointName.split(Regex("[^A-Za-z0-9]+")).map((seg) -> capitalizeFirst(seg)).join("") + "AppInputContract"
 
 local inputClassDecl: String = "\nclass AppInputContract("
 

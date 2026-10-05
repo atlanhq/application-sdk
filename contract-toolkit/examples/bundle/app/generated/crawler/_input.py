@@ -8,7 +8,7 @@ from application_sdk.credentials.ref import CredentialRef
 from application_sdk.templates.contracts import ExtractionInput
 
 
-class CrawlerInputContract(ExtractionInput):
+class CrawlerAppInputContract(ExtractionInput):
     _config_hash_exclude: ClassVar[set[str]] = {
         "output_dir",
         "checkpoint_dir",
@@ -27,4 +27,4 @@ class CrawlerInputContract(ExtractionInput):
     """When True, skip the Atlas publish step (executor_enabled=False)."""
 
 
-AppInputContract = CrawlerInputContract
+AppInputContract = CrawlerAppInputContract

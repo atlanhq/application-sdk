@@ -36,7 +36,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
-| [K027](#k027) | `EntrypointContractClassNameCollision` | `block` | `app` | `contract-toolkit` | yes | 0.42.0 |
+| [K027](#k027) | `EntrypointContractClassNameCollision` | `warn` | `app` | `contract-toolkit` | yes | 0.42.0 |
 
 ---
 
@@ -1354,7 +1354,7 @@ coerced by a path the static check cannot follow.
 
 ## K027 — `EntrypointContractClassNameCollision` {#k027}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.42.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.42.0
 
 > two entrypoints bind different Input/Output contract classes that share one bare class name
 
@@ -1386,19 +1386,20 @@ different places but reach the contract ledger under the same bare class name.
 
 Each annotation is resolved through imports (including `import x as y` and `from pkg
 import module`), module-level rebindings such as `AppInputContract =
-CrawlerInputContract`, and string annotations to the in-repo class that declares it. A
-binding reaches the ledger under two names: the import-de-aliased name the annotation
+CrawlerAppInputContract`, and string annotations to the in-repo class that declares it.
+A binding reaches the ledger under two names: the import-de-aliased name the annotation
 uses, and the declaring class's own name. A collision is one such name reached from two
 distinct declarations. One class reused by two entrypoints is not a collision, and SDK
 classes (`application_sdk.*`) are never checked: they are the same class everywhere and
 the ledger does not record them.
 
-**Fix:** give each entrypoint's contract a unique class name. Subclass the generated
-class under a unique name, as atlan-mssql-app does (`class
-MinerInputContract(_GeneratedMinerInput)`), or regenerate with a contract-toolkit that
-names bundle input classes `<Entrypoint>InputContract` and import that unique name, not
-the `AppInputContract` alias the generated module keeps for backward compatibility. Then
-regenerate the contract ledger.
+**Fix:** give each entrypoint's contract a unique class name: regenerate with a
+contract-toolkit that names bundle input classes `<Entrypoint>AppInputContract` and
+import or subclass that unique name, not the `AppInputContract` alias the generated
+module keeps for backward compatibility. A subclass of the alias still resolves its base
+by the shared bare name, so its ledger entry can carry another entrypoint's fields. Then
+regenerate the contract ledger; fields the old shared name recorded but the contract
+never had now report as B005 and are marked `sunset` in the ledger.
 
 **Suppress** with `# conformance: ignore[K027] <reason>` on the entrypoint method
 definition (or the comment-only line directly above it).
