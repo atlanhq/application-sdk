@@ -1173,7 +1173,6 @@ async def download_file(
         key = normalize_key(key)
 
     path = Path(local_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     verifying = integrity.verification_enabled(verify)
     # Hash while streaming whenever verification is on: the bytes are already
@@ -1230,6 +1229,9 @@ async def download_file(
             declared = result.meta["size"]
             ensure_free_space(path, declared, operation="download")
             with disk_full_guard(path, operation="download", required_bytes=declared):
+                # Inside the guard: a missing parent needs room for its own
+                # directory entry, and a full volume there is the same failure.
+                path.parent.mkdir(parents=True, exist_ok=True)
                 staging_dir = path.parent / PARTIAL_DIRNAME
                 # mode hardens only the first creation (ignored when the directory
                 # exists) — it keeps a staging dir under a shared temp root private.

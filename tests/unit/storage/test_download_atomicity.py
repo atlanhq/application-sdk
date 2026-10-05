@@ -935,3 +935,37 @@ class TestDiskFullDuringDownload:
                 )
 
         assert caught.value.required_bytes == 64 and caught.value.free_bytes == 10
+
+    async def test_a_full_volume_creating_the_parent_is_a_disk_full_error(
+        self, tmp_path
+    ) -> None:
+        """Creating a missing destination directory needs room too: an ENOSPC
+        there must reach the caller typed, not as a bare OSError."""
+
+        class _Result:
+            meta = {"size": 4}
+
+            async def stream(self, **kw):
+                yield b"data"
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(return_value=_Result()),
+            ),
+            patch(
+                "pathlib.Path.mkdir",
+                side_effect=OSError(errno.ENOSPC, "No space left on device"),
+            ),
+        ):
+            with pytest.raises(StorageDiskFullError) as caught:
+                await download_file(
+                    "k",
+                    tmp_path / "missing" / "f.bin",
+                    MagicMock(),
+                    normalize=False,
+                    verify=False,
+                )
+
+        assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
+        assert caught.value.key == "k"
