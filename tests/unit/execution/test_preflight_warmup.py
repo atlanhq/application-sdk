@@ -74,6 +74,7 @@ from application_sdk.handler._warmup import (
     warmup_poll_delay,
     warmup_probe_timeout_seconds,
 )
+from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import (
     CheckTier,
     PreflightCheck,
@@ -1162,6 +1163,25 @@ class TestThePollActivity:
         assert caught.value.type == "DependencyUnavailableError"
         assert handler.probes == 0
 
+    async def test_without_a_warmup_it_answers_ready_and_reads_no_credentials(
+        self,
+    ) -> None:
+        """``has_warmup=False``: no secret-store read and no handler call, so an
+        app without a warmup pays for the activity but not a second lookup."""
+        handler = _handler(WarmupState.COLD)
+        poll = build_preflight_warmup_activity(handler, "myapp", has_warmup=False)
+        with mock.patch.object(
+            preflight_gate,
+            "_resolve_gate_credentials",
+            side_effect=AssertionError("credentials must not be resolved"),
+        ) as resolve:
+            result = await poll(PreflightGateInput(entrypoint="crawl"))
+        assert result == WarmupPoll(
+            observation=WarmupObservation(state=WarmupState.READY)
+        )
+        resolve.assert_not_called()
+        assert handler.probes == 0
+
     @pytest.mark.parametrize(
         ("error", "terminal"),
         [
@@ -1458,6 +1478,35 @@ class TestWorkerRegistration:
         with pytest.raises(WorkerActivityNameCollisionError) as caught:
             create_worker(_mock_client(), enable_sdr=False)
         assert "preflight_warmup" in str(caught.value)
+
+    @pytest.mark.parametrize(
+        ("handler", "has_warmup"),
+        [
+            (None, False),
+            (DefaultHandler(), False),
+            (WarmingSourceHandler(WarmingSource([WarmupState.READY])), True),
+        ],
+    )
+    def test_the_poll_knows_whether_the_handler_has_a_warmup(
+        self, handler: Any, has_warmup: bool
+    ) -> None:
+        class _AnyApp(App):
+            async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
+                return _WarmupWorkerOutput()
+
+        real = preflight_gate.build_preflight_warmup_activity
+        seen: list[bool] = []
+
+        def _spy(*args: Any, **kwargs: Any) -> Any:
+            seen.append(kwargs["has_warmup"])
+            return real(*args, **kwargs)
+
+        with (
+            mock.patch.object(preflight_gate, "build_preflight_warmup_activity", _spy),
+            mock.patch("application_sdk.execution._temporal.worker.Worker"),
+        ):
+            create_worker(_mock_client(), handler=handler, enable_sdr=False)
+        assert seen == [has_warmup]
 
     def test_clamped_declarations_are_logged(self) -> None:
         class _MisdeclaredApp(App):

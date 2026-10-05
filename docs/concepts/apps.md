@@ -642,8 +642,9 @@ The gate runs it like this:
 
 1. Before any check, the workflow dispatches one `{app}:preflight_warmup` activity: a single
    `warmup` probe with its own timeout, so the probe never spends the check budget. Every app gets
-   this activity, including one that does not override `warmup`, whose default answers `READY` at
-   once. `READY` is followed by one dispatch of the check activity, `{app}:preflight`, with every
+   this activity, including one that does not override `warmup`: for such an app the worker
+   answers `READY` at once, without resolving credentials or calling the handler, so it costs no
+   extra secret-store read. `READY` is followed by one dispatch of the check activity, `{app}:preflight`, with every
    tier; its row is the row the gate always wrote, with no `gate_tier` or warmup fields.
 2. Otherwise the check activity runs only the `PREFLIGHT` tier, enforced like any verdict. Once
    that dispatch lets the run go on, the workflow keeps polling `{app}:preflight_warmup` — one

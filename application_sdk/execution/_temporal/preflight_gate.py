@@ -2606,6 +2606,7 @@ def build_preflight_warmup_activity(
     app_name: str,
     *,
     probe_timeout_seconds: int = WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS,
+    has_warmup: bool = True,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the gate's warmup poll activity (``{app}:preflight_warmup``).
 
@@ -2622,10 +2623,18 @@ def build_preflight_warmup_activity(
     Credential resolution and the probe share one deadline
     (``probe_timeout_seconds + WARMUP_POLL_OVERHEAD_SECONDS``), so together they
     always finish inside :func:`warmup_activity_timeouts`' ``start_to_close``.
+
+    ``has_warmup=False`` is the worker's statement that the app's handler does
+    not override ``Handler.warmup``, whose default answers ``READY``. The
+    activity then answers ``READY`` itself, without resolving credentials or
+    calling the handler, so an app without a warmup pays for the activity but
+    not for a second secret-store read on every run.
     """
 
     @activity.defn(name=preflight_warmup_activity_name(app_name))
     async def preflight_warmup(input: PreflightGateInput) -> WarmupPoll:
+        if not has_warmup:
+            return WarmupPoll(observation=WarmupObservation(state=WarmupState.READY))
         loop = asyncio.get_running_loop()
         call_budget = float(probe_timeout_seconds + WARMUP_POLL_OVERHEAD_SECONDS)
         deadline = loop.time() + call_budget

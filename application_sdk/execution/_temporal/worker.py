@@ -624,7 +624,7 @@ def create_worker(
         warmup_ceiling_seconds,
         warmup_probe_timeout_seconds,
     )
-    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+    from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
@@ -795,6 +795,9 @@ def create_worker(
                 InProcessPreflightTransport(gate_handler),
                 name,
                 probe_timeout_seconds=probe_timeout,
+                # The default Handler.warmup answers READY; knowing that here
+                # spares every app without a warmup a credential read per run.
+                has_warmup=type(gate_handler).warmup is not Handler.warmup,
             )
         )
     task_activities = [*task_activities, *gate_activities]
