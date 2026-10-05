@@ -2732,6 +2732,49 @@ def fail():
     _single(src, "E018")
 
 
+@pytest.mark.parametrize(
+    ("imports", "cancelled_error"),
+    [
+        ("import asyncio", "asyncio.CancelledError()"),
+        ("import asyncio as tasklib", "tasklib.CancelledError()"),
+        ("from asyncio import CancelledError", "CancelledError()"),
+    ],
+)
+def test_p018_no_finding_stdlib_asyncio_cancelled_error(
+    imports: str, cancelled_error: str
+) -> None:
+    _none(
+        f"""\
+{imports}
+
+async def cancel_work():
+    raise {cancelled_error}
+"""
+    )
+
+
+def test_p018_sdk_cancelled_error_still_flagged() -> None:
+    _single(
+        """\
+def fail():
+    raise application_sdk.errors.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_other_module_aliased_as_asyncio_still_flagged() -> None:
+    _single(
+        """\
+import domain_errors as asyncio
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
 def test_p018_no_finding_classification_pending() -> None:
     _none(
         """\

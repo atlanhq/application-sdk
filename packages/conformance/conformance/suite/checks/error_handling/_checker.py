@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import ast
 
-from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
+from conformance.suite.checks._ast_common import (
+    _IgnoreDirective,
+    collect_import_origins,
+    make_finding,
+)
 from conformance.suite.schema.findings import Finding
 
 from .exception_chaining import ExceptionChainingMixin
@@ -38,6 +42,7 @@ class Checker(
         self._legacy_aliases = legacy_aliases
         self._local_helpers = local_helpers or {}
         self._findings: list[Finding] = []
+        self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._except_stack: list[ast.ExceptHandler] = []
@@ -63,6 +68,10 @@ class Checker(
         )
 
     # ── Context management ────────────────────────────────────────────────────
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._import_origins = collect_import_origins(node)
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not
