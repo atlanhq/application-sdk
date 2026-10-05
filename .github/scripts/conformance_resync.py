@@ -233,6 +233,32 @@ def foreign_pr_now(repo: str, runner: Runner) -> dict | None:
     return foreign
 
 
+BEFORE_REF = "refs/resync/before"
+
+
+def restore_branch(work: str, before_sha: str, runner: Runner) -> bool:
+    """Put the lane branch back on ``before_sha`` (fetched to ``BEFORE_REF``),
+    leased on the commit the lane just pushed so nothing newer is clobbered."""
+    fetched = git(["rev-parse", BEFORE_REF], work, runner, check=False).strip()
+    if fetched != before_sha:
+        return False
+    pushed = git(["rev-parse", "HEAD"], work, runner).strip()
+    result = _run(
+        [
+            "git",
+            "push",
+            "-q",
+            f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{pushed}",
+            "origin",
+            f"{BEFORE_REF}:refs/heads/{gate.RESYNC_BRANCH}",
+        ],
+        runner,
+        cwd=work,
+        env=gate.git_env(),
+    )
+    return result.returncode == 0
+
+
 def repo_of(pr: dict) -> str | None:
     return (pr.get("base") or {}).get("repo", {}).get("full_name")
 
@@ -774,6 +800,21 @@ def process_repo(
                     reason=f"foreign PR #{late['number']} on {gate.RESYNC_BRANCH}",
                 )
                 return result
+            if remote_sha:
+                # Keep the branch's current commit locally, so the push can be
+                # undone if a foreign PR turns out to point at it.
+                git(
+                    [
+                        "fetch",
+                        "-q",
+                        "--depth",
+                        "1",
+                        "origin",
+                        f"+refs/heads/{gate.RESYNC_BRANCH}:{BEFORE_REF}",
+                    ],
+                    work,
+                    runner,
+                )
             lease = f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{remote_sha}"
             git(
                 [
@@ -786,6 +827,31 @@ def process_repo(
                 work,
                 runner,
             )
+            # GitHub cannot push "only if no PR points at this branch", so a
+            # PR opened between the re-check and the push is caught here and
+            # the push undone: its branch goes back to the commit it was
+            # opened on, so the lane never leaves another person's PR
+            # rewritten.
+            late = foreign_pr_now(repo, runner)
+            if late:
+                if not remote_sha:
+                    outcome = "the branch was new, so their PR was opened on the lane's commit; left alone"
+                    action = "skipped"
+                elif restore_branch(work, remote_sha, runner):
+                    outcome = f"branch restored to {remote_sha[:12]}"
+                    action = "skipped"
+                else:
+                    outcome = f"restoring the branch to {remote_sha[:12]} FAILED"
+                    action = "error"
+                step(
+                    f"#{late['number']} on {gate.RESYNC_BRANCH} was opened by someone "
+                    f"else during the push — {outcome}."
+                )
+                result.update(
+                    action=action,
+                    reason=f"foreign PR #{late['number']} on {gate.RESYNC_BRANCH}: {outcome}",
+                )
+                return result
             pushed_this_run = True
             step("Force-pushed the fresh render onto the lane branch.")
         else:

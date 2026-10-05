@@ -696,3 +696,66 @@ def test_a_foreign_pr_opened_during_the_render_is_never_pushed_over(monkeypatch)
     assert not any(
         c[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"] for c in runner.calls
     )
+
+
+def _post_push_foreign(monkeypatch, *, remote_sha: str, restore_rc: int = 0):
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+    branch = f"refs/heads/{gate.RESYNC_BRANCH}"
+    if remote_sha:
+        runner.answers[("git", "ls-remote", "origin", branch)] = (
+            subprocess.CompletedProcess([], 0, stdout=f"{remote_sha}\t{branch}\n")
+        )
+        runner.answers[("git", "rev-parse", lane.BEFORE_REF)] = (
+            subprocess.CompletedProcess([], 0, stdout=remote_sha + "\n")
+        )
+    runner.answers[("git", "rev-parse", "HEAD")] = subprocess.CompletedProcess(
+        [], 0, stdout="n" * 40 + "\n"
+    )
+    restore = (
+        "git",
+        "push",
+        "-q",
+        f"--force-with-lease={branch}:{'n' * 40}",
+        "origin",
+        f"{lane.BEFORE_REF}:{branch}",
+    )
+    runner.answers[restore] = subprocess.CompletedProcess([], restore_rc)
+    listing = (
+        "gh",
+        "api",
+        f"repos/{REPO}/pulls?state=open&per_page=100",
+        "--paginate",
+        "--slurp",
+    )
+    scans = []
+
+    def foreign_after_push(cmd, **kwargs):
+        if tuple(cmd) == listing:
+            scans.append(1)
+            prs = (
+                [] if len(scans) < 3 else [_pr(5, gate.RESYNC_BRANCH, author="someone")]
+            )
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([prs]), "")
+        return FakeRunner.__call__(runner, cmd, **kwargs)
+
+    return _drive(foreign_after_push), runner, list(restore)
+
+
+def test_a_foreign_pr_opened_during_the_push_gets_its_branch_restored(monkeypatch):
+    result, runner, restore = _post_push_foreign(monkeypatch, remote_sha="o" * 40)
+    assert result["action"] == "skipped" and "restored" in result["reason"]
+    assert restore in runner.calls
+    assert not any(
+        c[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"] for c in runner.calls
+    )
+
+
+def test_a_new_branch_is_never_deleted_from_under_a_foreign_pr(monkeypatch):
+    result, runner, restore = _post_push_foreign(monkeypatch, remote_sha="")
+    assert result["action"] == "skipped" and "left alone" in result["reason"]
+    assert restore not in runner.calls
+
+
+def test_a_failed_restore_is_an_error_not_a_skip(monkeypatch):
+    result, _, _ = _post_push_foreign(monkeypatch, remote_sha="o" * 40, restore_rc=1)
+    assert result["action"] == "error" and "FAILED" in result["reason"]
