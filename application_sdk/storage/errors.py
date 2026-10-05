@@ -31,6 +31,7 @@ from application_sdk.errors.leaves import (
     AppPermissionDeniedError,
     DataIntegrityError,
     DependencyUnavailableError,
+    DiskFullError,
     InvalidInputError,
     NotFoundError,
     PreconditionError,
@@ -823,3 +824,70 @@ class UnplaceableDeclaredFileError(InvalidInputError, StorageError):
 
     def __str__(self) -> str:
         return f"[{self.error_code.code}] {self.message}"
+
+
+@dataclass(kw_only=True)
+class StorageDiskFullError(DiskFullError, StorageError):
+    """A download could not be written because the local volume is full.
+
+    A ``DiskFullError`` (code ``RESOURCE_EXHAUSTED_DISK_FULL``, retryable,
+    audience platform): the fix is the volume, not the object store. It is also
+    a ``StorageError``, so ``except StorageError:`` blocks and the fan-out
+    unwrapping in ``_run_bounded`` keep working, as with every other typed
+    storage error.
+
+    Attributes:
+        key: Object-store key being downloaded.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        key: str | None = None,
+        path: str | None = None,
+        operation: str | None = None,
+        required_bytes: int | None = None,
+        free_bytes: int | None = None,
+        limit: str | None = None,
+        observed: str | None = None,
+        cause: Exception | None = None,
+        error_code: ErrorCode | None = None,
+    ) -> None:
+        DiskFullError.__init__(
+            self,
+            message=message,
+            path=path,
+            operation=operation,
+            required_bytes=required_bytes,
+            free_bytes=free_bytes,
+            limit=limit,
+            observed=observed,
+            cause=cause,
+        )
+        _init_storage_evidence(self, key=key, error_code=error_code)
+
+    @classmethod
+    def from_disk_full(
+        cls, exc: DiskFullError, *, key: str | None = None
+    ) -> StorageDiskFullError:
+        """The same failure as *exc*, now also a ``StorageError`` naming *key*."""
+        return cls(
+            exc.message,
+            key=key,
+            path=exc.path,
+            operation=exc.operation,
+            required_bytes=exc.required_bytes,
+            free_bytes=exc.free_bytes,
+            limit=exc.limit,
+            observed=exc.observed,
+            cause=exc.cause,
+        )
+
+    def __str__(self) -> str:
+        parts = [f"[{self.code}] {self.message}"]
+        if self.key:
+            parts.append(f"key={self.key}")
+        if self.cause:
+            parts.append(f"caused_by={type(self.cause).__name__}: {self.cause}")
+        return " | ".join(parts)

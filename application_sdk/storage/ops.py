@@ -74,7 +74,7 @@ if TYPE_CHECKING:
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
-from application_sdk.common.atomic import disk_full_guard
+from application_sdk.common.atomic import disk_full_guard, ensure_free_space
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -1090,6 +1090,14 @@ async def upload_file(
     return digest
 
 
+def _declared_size(result: Any) -> int | None:
+    """The object's size as the store declared it with the GET, or None."""
+    try:
+        return int(result.meta["size"])
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
 async def download_file(
     key: str,
     local_path: str | Path,
@@ -1158,8 +1166,12 @@ async def download_file(
 
     Raises:
         StorageNotFoundError: If *key* does not exist in the store.
-        StorageError: If the download or write fails, or fewer bytes reached
-            disk than the store declared for the object.
+        StorageDiskFullError: If the local volume is out of space
+            (``ENOSPC`` / ``EDQUOT``) for the object, or already has less free
+            space than the store declared for it. A ``DiskFullError``
+            (``RESOURCE_EXHAUSTED_DISK_FULL``) that is also a ``StorageError``.
+        StorageError: If the download or write fails for any other reason, or
+            fewer bytes reached disk than the store declared for the object.
         StorageIntegrityError: If the downloaded content does not match the
             digest its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
@@ -1220,7 +1232,13 @@ async def download_file(
         try:
             # A full volume is its own failure, not a generic storage one: it
             # names the volume to resize, where StorageError reads as the store.
-            with disk_full_guard(path, operation="download"):
+            # The declared size is known before the first byte arrives, so a
+            # volume that plainly cannot hold the object fails here, in seconds,
+            # and the message can say what was needed.
+            declared = _declared_size(result)
+            if declared:
+                ensure_free_space(path, declared, operation="download")
+            with disk_full_guard(path, operation="download", required_bytes=declared):
                 staging_dir = path.parent / PARTIAL_DIRNAME
                 # mode hardens only the first creation (ignored when the directory
                 # exists) — it keeps a staging dir under a shared temp root private.
@@ -1264,7 +1282,7 @@ async def download_file(
                     await run_in_thread(os.fsync, fh.fileno())
                 os.replace(tmp_name, path)
                 published = True
-        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and the exception is re-raised as StorageDiskFullError or StorageError
         except Exception as exc:
             elapsed_ms = (time.monotonic() - started) * 1000.0
             _log_storage_event(
@@ -1279,7 +1297,15 @@ async def download_file(
             from application_sdk.errors import DiskFullError  # noqa: PLC0415
 
             if isinstance(exc, DiskFullError):
-                raise
+                # Also a StorageError, so `except StorageError:` and the
+                # fan-out unwrapping in `_run_bounded` still see it.
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    StorageDiskFullError,
+                )
+
+                raise StorageDiskFullError.from_disk_full(exc, key=key) from (
+                    exc.__cause__ or exc
+                )
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
             raise StorageError(
