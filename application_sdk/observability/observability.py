@@ -29,6 +29,16 @@ from application_sdk.constants import (
 )
 from application_sdk.observability.utils import in_temporal_workflow
 
+
+def _has_running_loop() -> bool:
+    """Whether the calling thread is running an asyncio event loop."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 # --- Path configuration ---
 # Structure: observability/<mode>/<signal>/year=.../hour=.../file.json.gz
 # SDR (ENABLE_ATLAN_UPLOAD=true):     sdr/logs/, sdr/metrics/, sdr/traces/
@@ -651,15 +661,19 @@ class AtlanObservability(Generic[T], ABC):
             # Process the record
             processed_record = self.process_record(record)
 
-            # Add to buffer. Inside a workflow, only append: a flush started
-            # here would run on Temporal's workflow loop, where
-            # ``_flush_records`` cannot write, so leave it to the periodic
-            # flush on the worker loop.
+            # Add to buffer. Only append, and leave the batch to the periodic
+            # flush, when a flush cannot be started from here:
+            # - inside a workflow, it would run on Temporal's workflow loop,
+            #   where ``_flush_records`` cannot write;
+            # - on a thread with no running event loop (sync activities run in
+            #   the worker's thread pool), ``asyncio.create_task`` raises, and
+            #   the batch already swapped out of the buffer would be lost.
             in_workflow = in_temporal_workflow()
+            can_flush_here = not in_workflow and _has_running_loop()
             with self._buffer_lock:
                 self._buffer.append(processed_record)
                 now = time()
-                if not in_workflow and (
+                if can_flush_here and (
                     len(self._buffer) >= self._batch_size
                     or (now - self._last_flush_time) >= self._flush_interval
                 ):
