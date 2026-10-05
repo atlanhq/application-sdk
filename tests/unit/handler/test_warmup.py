@@ -9,7 +9,9 @@ import time
 import types
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import ClassVar
+from unittest import mock
 
 import orjson
 import pytest
@@ -21,6 +23,7 @@ from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import AuthError, SourceUnavailableError
+from application_sdk.handler import service as service_module
 from application_sdk.handler._preflight_outcome import (
     _check_matrix_json,
     rows_outside_tiers,
@@ -887,3 +890,154 @@ class TestWarmupUnavailableError:
             WarmupObservation(state=WarmupState.UNAVAILABLE), "test-app"
         )
         assert error.message.endswith("(unavailable)")
+
+
+# ---------------------------------------------------------------------------
+# FND-3334: the setup form's SageV2 warmup flag must match the handler
+# ---------------------------------------------------------------------------
+
+
+def _form(warmup: bool | None, *, widget: str = "sageV2") -> dict[str, object]:
+    """A generated setup form whose preflight widget sets ``ui.warmup`` as given
+    (``None``: the key is absent, which is what the toolkit renders by default)."""
+    ui: dict[str, object] = {"widget": widget, "config": []}
+    if warmup is not None:
+        ui["warmup"] = warmup
+    return {
+        "config": {
+            "properties": {
+                "host": {"type": "string", "ui": {"widget": "input"}},
+                "preflight": {"type": "string", "ui": ui},
+            }
+        }
+    }
+
+
+class TestTheSageV2WarmupFlag:
+    @pytest.mark.parametrize(
+        ("form", "expected"),
+        [
+            (_form(True), True),
+            (_form(False), False),
+            (_form(None), False),
+            (_form(True, widget="sage"), None),
+            ({"config": {"properties": {}}}, None),
+            ({"config": {}}, None),
+            ({"properties": {"p": {"ui": {"widget": "sageV2", "warmup": True}}}}, True),
+        ],
+    )
+    def test_it_reads_the_top_level_sagev2_widget(
+        self, form: dict[str, object], expected: bool | None
+    ) -> None:
+        assert service_module.sagev2_warmup_flag(form) is expected
+
+
+@pytest.fixture
+def generated_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr(service_module, "CONTRACT_GENERATED_DIR", tmp_path)
+    return tmp_path
+
+
+def _write(directory: Path, name: str, form: dict[str, object]) -> None:
+    path = directory / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(orjson.dumps(form))
+
+
+class TestWarmupFlagDrift:
+    @pytest.mark.parametrize(
+        ("declared", "has_warmup", "says"),
+        [
+            (None, True, "does not set warmup"),
+            (False, True, "does not set warmup"),
+            (True, False, "always answers ready"),
+            (True, True, None),
+            (None, False, None),
+        ],
+    )
+    def test_a_mismatch_is_a_warning_naming_the_entry_point_and_direction(
+        self,
+        generated_dir: Path,
+        declared: bool | None,
+        has_warmup: bool,
+        says: str | None,
+    ) -> None:
+        _write(generated_dir, "crawler/crawler.json", _form(declared))
+        with mock.patch.object(service_module, "logger") as log:
+            drifted = service_module.warn_on_warmup_flag_drift(
+                ["crawler"], lambda ep: has_warmup
+            )
+        if says is None:
+            assert drifted == []
+            log.warning.assert_not_called()
+        else:
+            assert drifted == ["crawler"]
+            (call,) = log.warning.call_args_list
+            assert call.args[1] == "crawler"
+            assert says in call.args[0]
+
+    def test_each_entry_point_is_compared_with_its_own_form_and_handler(
+        self, generated_dir: Path
+    ) -> None:
+        _write(generated_dir, "crawler/crawler.json", _form(True))
+        _write(generated_dir, "miner/miner.json", _form(None))
+        with mock.patch.object(service_module, "logger"):
+            drifted = service_module.warn_on_warmup_flag_drift(
+                ["crawler", "miner"], lambda ep: ep == "crawler"
+            )
+        assert drifted == []
+
+    def test_a_form_without_sagev2_or_no_form_is_skipped(
+        self, generated_dir: Path
+    ) -> None:
+        _write(generated_dir, "crawler/crawler.json", _form(None, widget="sage"))
+        with mock.patch.object(service_module, "logger") as log:
+            drifted = service_module.warn_on_warmup_flag_drift(
+                ["crawler", "absent"], lambda ep: True
+            )
+        assert drifted == []
+        log.warning.assert_not_called()
+
+    def test_the_service_checks_at_startup(
+        self, generated_dir: Path, app_registry: None
+    ) -> None:
+        """A flat single-entry-point form, an app handler that overrides
+        ``warmup``, and no flag: the service warns once, at creation."""
+        app_cls = _warm_app(600, 10)
+        app_name = AppRegistry.get_instance().list_all()[0].name
+        _write(generated_dir, "form.json", _form(None))
+
+        class _Warms(DefaultHandler):
+            async def warmup(self, input: WarmupInput) -> WarmupObservation:
+                return WarmupObservation(state=WarmupState.READY)
+
+        with mock.patch.object(service_module, "logger") as log:
+            create_app_handler_service(_Warms(), app_name=app_name, app_class=app_cls)
+        drift = [c for c in log.warning.call_args_list if "SageV2" in str(c.args[0])]
+        assert len(drift) == 1
+
+    def test_a_matching_app_logs_nothing_at_startup(
+        self, generated_dir: Path, app_registry: None
+    ) -> None:
+        app_cls = _warm_app(600, 10)
+        app_name = AppRegistry.get_instance().list_all()[0].name
+        _write(generated_dir, "form.json", _form(None))
+        with mock.patch.object(service_module, "logger") as log:
+            create_app_handler_service(
+                DefaultHandler(), app_name=app_name, app_class=app_cls
+            )
+        assert not [c for c in log.warning.call_args_list if "SageV2" in str(c.args[0])]
+
+    def test_a_broken_comparison_never_breaks_the_service(
+        self, generated_dir: Path, app_registry: None
+    ) -> None:
+        app_cls = _warm_app(600, 10)
+        app_name = AppRegistry.get_instance().list_all()[0].name
+        (generated_dir / "form.json").write_text("{not json")
+        with mock.patch.object(service_module, "logger") as log:
+            create_app_handler_service(
+                DefaultHandler(), app_name=app_name, app_class=app_cls
+            )
+        assert any(
+            "Could not compare" in str(c.args[0]) for c in log.warning.call_args_list
+        )

@@ -224,6 +224,8 @@ Raise a typed `AuthError`, `AppPermissionDeniedError` or `NotFoundError` for a f
 
 The other fields are for the user and the poll cadence; nothing branches on them. `source_state` is the source's own label (`RESUMING`): the gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait. `queued_queries` is how many statements are waiting for a slot, a count rather than a duration. `next_poll_seconds` is the source's own suggestion for when to ask again; the gate honours it with a 5s floor and never polls past the ceiling, and without it backs off from 5s, doubling to 30s.
 
+**Tell the setup UI.** An app with a warmup also sets `warmup: true` on the SageV2 widget in its contract, so the setup form runs the warmup flow (poll `/warmup`, then `/check` with `tiers=["warmup"]`). The handler service checks the two agree at startup: for each entry point, it compares the served form's SageV2 `ui.warmup` with whether that entry point has a warmup (a module `warmup` hook, or an app handler overriding `Handler.warmup`), and logs a WARNING naming the entry point on a mismatch. The flag is never added at serve time; the contract is its source. A form with no SageV2 widget is not compared.
+
 ### MetadataInput / MetadataOutput
 
 ```python

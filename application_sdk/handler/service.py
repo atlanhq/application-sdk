@@ -614,6 +614,102 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
+
+def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
+    """The generated setup form served for *entrypoint*, and the files it was
+    chosen from.
+
+    Searches both generated layouts: multi-entrypoint apps nest each form under
+    ``CONTRACT_GENERATED_DIR/<entrypoint>/``, single-entrypoint apps emit it
+    flat in ``CONTRACT_GENERATED_DIR``. The nested directory wins. Within a
+    directory :func:`choose_form_configmap` decides. ``(None, [])`` when no
+    eligible form exists.
+    """
+    for search_dir in (CONTRACT_GENERATED_DIR / entrypoint, CONTRACT_GENERATED_DIR):
+        candidates = eligible_form_configmaps(search_dir)
+        target = choose_form_configmap(candidates, entrypoint)
+        if target is not None:
+            return target, candidates
+    return None, []
+
+
+SAGE_V2_WIDGET = "sageV2"
+"""The ``ui.widget`` value of the setup form's preflight widget."""
+
+
+def sagev2_warmup_flag(form: dict[str, Any]) -> bool | None:
+    """What a generated setup form declares about the app's warmup.
+
+    Reads the top-level ``config.properties`` (the walk the setup UI makes to
+    find its preflight widget) for a property whose ``ui.widget`` is
+    ``sageV2``. ``None`` when there is none; otherwise whether any such widget
+    sets ``ui.warmup`` to ``true``. A missing ``ui.warmup`` is ``false``.
+    """
+    config = form.get("config", form)
+    properties = config.get("properties") if isinstance(config, dict) else None
+    if not isinstance(properties, dict):
+        return None
+    flags = [
+        prop["ui"].get("warmup") is True
+        for prop in properties.values()
+        if isinstance(prop, dict)
+        and isinstance(prop.get("ui"), dict)
+        and prop["ui"].get("widget") == SAGE_V2_WIDGET
+    ]
+    return any(flags) if flags else None
+
+
+def warn_on_warmup_flag_drift(
+    entrypoints: list[str], has_warmup: Callable[[str], bool]
+) -> list[str]:
+    """Log a WARNING for each entry point whose setup form and handler disagree
+    about the warmup. Returns the entry points it warned about.
+
+    The form's SageV2 ``ui.warmup`` flag tells the setup UI to run the warmup
+    flow; *has_warmup* says whether the entry point's handler actually has one
+    (a module ``warmup`` hook, or an app handler overriding
+    ``Handler.warmup``). The contract is the source of the flag, so nothing is
+    changed here: a mismatch is only reported. An entry point with no served
+    form, or a form with no SageV2 widget, has nothing to compare.
+    """
+    drifted: list[str] = []
+    for entrypoint in entrypoints:
+        target, _ = _entrypoint_form(entrypoint)
+        if target is None:
+            continue
+        with open(target, encoding="utf-8") as f:
+            form = json.load(f)
+        declared = sagev2_warmup_flag(form) if isinstance(form, dict) else None
+        if declared is None:
+            continue
+        actual = has_warmup(entrypoint)
+        if declared == actual:
+            continue
+        drifted.append(entrypoint)
+        if actual:
+            logger.warning(
+                "Entry point %s has a warmup (Handler.warmup is overridden or a "
+                "module warmup hook exists) but its setup form %s does not set "
+                "warmup on the SageV2 widget: the setup check will never run "
+                "the warmup-tier checks, so missing grants on them surface "
+                "only on a real run. Set warmup: true on the SageV2 widget in "
+                "the app's contract.",
+                entrypoint,
+                target.name,
+            )
+        else:
+            logger.warning(
+                "Entry point %s sets warmup on the SageV2 widget of its setup "
+                "form %s but has no warmup (Handler.warmup is not overridden "
+                "and there is no module warmup hook): the setup UI makes a "
+                "/warmup round trip that always answers ready. Remove warmup "
+                "from the SageV2 widget, or implement Handler.warmup.",
+                entrypoint,
+                target.name,
+            )
+    return drifted
+
+
 # The form-discovery exclusion vocabulary lives in
 # `application_sdk.common._generated_tree`, which is the authority: this endpoint is
 # what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
@@ -2176,14 +2272,8 @@ def _register_workflow_routes(
                 # pod stderr alike. Hence the warning below — the next
                 # unrecognised sibling shows up in the logs on the first
                 # request, before anyone opens the wizard.
-                for search_dir in (
-                    CONTRACT_GENERATED_DIR / ep.name,
-                    CONTRACT_GENERATED_DIR,
-                ):
-                    candidates = eligible_form_configmaps(search_dir)
-                    target = choose_form_configmap(candidates, ep.name)
-                    if target is None:
-                        continue
+                target, candidates = _entrypoint_form(ep.name)
+                if target is not None:
                     if len(candidates) > 1 and not names_entrypoint(
                         target.stem, ep.name
                     ):
@@ -2200,7 +2290,6 @@ def _register_workflow_routes(
                             target.stem,
                             [c.stem for c in candidates],
                         )
-                    break
 
         if target is not None:
             with open(target, encoding="utf-8") as f:
@@ -3571,6 +3660,30 @@ def create_app_handler_service(
         logger.warning(
             "Static UI assets not found at %s, skipping static mount",
             static_dir,
+        )
+
+    # FND-3334: the setup form's SageV2 warmup flag and the handler must agree.
+    # Reported once at startup; never allowed to break the service.
+    try:
+        from application_sdk.app.registry import (  # noqa: PLC0415 — cold path: one read at startup
+            AppNotFoundError,
+            AppRegistry,
+        )
+
+        try:
+            app_meta = AppRegistry.get_instance().get(app_name) if app_name else None
+        except AppNotFoundError:
+            # A service for an app this process did not register (a test, a
+            # handler-only pod) has no entry points to compare.
+            app_meta = None
+        if app_meta is not None:
+            eps = sorted(app_meta.entry_points.values(), key=lambda e: e.name)
+            explicit = [ep.name for ep in eps if not ep.implicit]
+            warn_on_warmup_flag_drift(explicit or [ep.name for ep in eps], _has_warmup)
+    except Exception:
+        logger.warning(
+            "Could not compare setup forms' warmup flags with the handler",
+            exc_info=True,
         )
 
     return app
