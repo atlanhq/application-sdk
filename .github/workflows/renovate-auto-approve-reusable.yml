@@ -92,8 +92,9 @@
 # required check is still running when it fires, the gate waits for it here
 # instead of relying on that workflow's completion to fire again. One wait
 # budget covers every PR at the SHA. If it runs out with a check still pending,
-# the gate dispatches the caller once with pr_number (a follow-up evaluation
-# with a fresh wait); a follow-up never dispatches another.
+# a caller that sets follow_up_when_pending gets one dispatch with pr_number
+# (a follow-up evaluation with a fresh wait); a follow-up never dispatches
+# another.
 #
 # No dashboard dispatch. This workflow used to trigger a single-repo
 # renovate-dashboard.yaml run after every gate evaluation; at four workflow_run
@@ -145,6 +146,19 @@ on:
         required: false
         default: 0
         type: number
+      follow_up_when_pending:
+        description: >
+          Fan-in follow-up (FND-3317). When the wait runs out with a required
+          check still pending, dispatch the caller once with pr_number, so the
+          PR is re-evaluated when that check finishes. Set it in a caller whose
+          `if:` skips non-anchor first-attempt completions: there, nothing else
+          re-fires the gate for a check that finishes after the anchor's wait.
+          Only an anchor (workflow_run) run dispatches; a follow-up never
+          dispatches another. Needs the caller to declare workflow_dispatch
+          with a pr_number input.
+        required: false
+        default: false
+        type: boolean
     secrets:
       org_pat:
         description: >
@@ -226,9 +240,8 @@ jobs:
           DISPATCH_PR: ${{ inputs.pr_number }}
           EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
           CHECKS_WAIT_MINUTES: ${{ inputs.checks_wait_minutes }}
-          # The CALLER's workflow (in a reusable, github.workflow_ref names the
-          # caller). If the wait runs out with a required check still pending,
-          # the gate dispatches it once with pr_number, so a check that finishes
-          # after the anchor gave up still gets the PR re-evaluated.
+          FOLLOW_UP_WHEN_PENDING: ${{ inputs.follow_up_when_pending }}
+          # The workflow a follow-up dispatches: in a reusable,
+          # github.workflow_ref names the CALLER.
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: python3 .sdk-scripts/.github/scripts/renovate_approval_conditions.py

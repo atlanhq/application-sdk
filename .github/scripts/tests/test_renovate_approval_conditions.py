@@ -37,6 +37,7 @@ import renovate_approval_conditions as gate  # noqa: E402
 SHA = "abc123"
 REPO = "owner/repo"
 CALLER_REF = "owner/repo/.github/workflows/renovate-auto-approve.yml@refs/heads/main"
+FOLLOW_UP = {"FOLLOW_UP_WHEN_PENDING": "true", "CALLER_WORKFLOW_REF": CALLER_REF}
 
 
 # ---------------------------------------------------------------------------
@@ -906,7 +907,7 @@ class TestFanInWait:
             monkeypatch,
             capsys=capsys,
             sleeps=sleeps,
-            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
             commit_pulls=[
                 {"state": "open", "number": 7},
                 {"state": "open", "number": 8},
@@ -926,7 +927,7 @@ class TestFanInWait:
         _code, fake, log = run_main(
             monkeypatch,
             capsys=capsys,
-            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
             checks_exit=8,
         )
         assert fake.approvals == []
@@ -953,7 +954,7 @@ class TestFanInWait:
                 "RUN_SHA": "",
                 "DISPATCH_PR": "7",
                 "CHECKS_WAIT_MINUTES": "1",
-                "CALLER_WORKFLOW_REF": CALLER_REF,
+                **FOLLOW_UP,
             },
             checks_exit=8,
         )
@@ -966,8 +967,19 @@ class TestFanInWait:
         _code, fake, _log = run_main(
             monkeypatch,
             capsys=capsys,
-            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
             checks_exit=checks_exit,
+        )
+        assert fake.dispatches == []
+
+    def test_a_caller_without_follow_up_never_dispatches(self, monkeypatch, capsys):
+        # A caller still firing on every upstream workflow leaves the flag off:
+        # the late check's own completion re-fires the gate there.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            checks_exit=8,
         )
         assert fake.dispatches == []
 
@@ -976,7 +988,7 @@ class TestFanInWait:
         _code, fake, _log = run_main(
             monkeypatch,
             capsys=capsys,
-            env={"CHECKS_WAIT_MINUTES": "5", "CALLER_WORKFLOW_REF": CALLER_REF},
+            env={"CHECKS_WAIT_MINUTES": "5", **FOLLOW_UP},
             meta=[pr_payload(), pr_payload(head="deadbeef")],
             checks_exit=8,
         )
@@ -988,7 +1000,11 @@ class TestFanInWait:
         _code, fake, log = run_main(
             monkeypatch,
             capsys=capsys,
-            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": ""},
+            env={
+                "CHECKS_WAIT_MINUTES": "1",
+                "FOLLOW_UP_WHEN_PENDING": "true",
+                "CALLER_WORKFLOW_REF": "",
+            },
             checks_exit=8,
         )
         assert fake.dispatches == []

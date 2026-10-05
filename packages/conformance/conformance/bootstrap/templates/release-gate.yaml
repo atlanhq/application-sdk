@@ -49,7 +49,7 @@ permissions:
 # `cancelled` "Release Gate" on the head. Run-unique, each runs to completion,
 # and the newest run's verdict is the one the required check reads.
 concurrency:
-  group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) && github.ref || github.run_id }}
+  group: release-gate-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:

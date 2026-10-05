@@ -767,7 +767,13 @@ def caller_workflow_file(workflow_ref: str) -> str:
 
 
 def request_follow_up(
-    repo: str, event_name: str, workflow_ref: str, prs: list[str], runner: Runner
+    repo: str,
+    event_name: str,
+    workflow_ref: str,
+    prs: list[str],
+    runner: Runner,
+    *,
+    enabled: bool,
 ) -> None:
     """Dispatch one follow-up evaluation for each PR still pending at budget end.
 
@@ -780,7 +786,13 @@ def request_follow_up(
     Only an anchor (workflow_run) run asks for one. A follow-up that is itself
     still pending stops there, so a check stuck pending forever costs at most
     one extra run. It is then the fleet scanner's stuck-PR signal to report.
+
+    ``enabled`` is the caller's ``follow_up_when_pending``. A caller that still
+    fires on every upstream workflow leaves it off: there, the late check's own
+    completion re-fires the gate.
     """
+    if not enabled:
+        return
     if event_name != "workflow_run":
         print(
             f"PR(s) {', '.join('#' + p for p in prs)}: still pending after a "
@@ -974,6 +986,7 @@ def main(
     dispatch_pr = os.environ.get("DISPATCH_PR", "")
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
     workflow_ref = os.environ.get("CALLER_WORKFLOW_REF", "")
+    follow_up = os.environ.get("FOLLOW_UP_WHEN_PENDING", "").strip().lower() == "true"
     budget = FanInBudget.from_seconds(
         parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
     )
@@ -998,7 +1011,12 @@ def main(
             )
         if budget.still_pending:
             request_follow_up(
-                repo, event_name, workflow_ref, budget.still_pending, runner
+                repo,
+                event_name,
+                workflow_ref,
+                budget.still_pending,
+                runner,
+                enabled=follow_up,
             )
     except resync.GhError as exc:  # also this module's GhError, a subclass
         # Abort rather than continue on a partial view — the inherited

@@ -49,9 +49,10 @@ jobs:
     # so a skipped trigger never gets a runner: SDK Gate is the anchor (it
     # composes the SDK tests, so it is the one that usually finishes last) and
     # the reusable waits out any required check still pending when it fires
-    # (checks_wait_minutes), then dispatches this workflow once with pr_number
-    # if one is still pending, so a check that finishes late (CodeQL Advanced)
-    # still gets the PR re-evaluated. Any re-run (run_attempt > 1) also passes, so
+    # (checks_wait_minutes). A check that finishes after that wait (CodeQL
+    # Advanced) is skipped here as a non-anchor first attempt, so
+    # follow_up_when_pending makes the reusable dispatch this workflow once with
+    # pr_number to re-evaluate the PR. Any re-run (run_attempt > 1) also passes, so
     # re-running a flaked workflow still re-evaluates the PR.
     if: >-
       github.event_name == 'workflow_dispatch'
@@ -64,6 +65,9 @@ jobs:
       head_sha: ${{ github.event.workflow_run.head_sha }}
       pr_number: ${{ inputs.pr_number }}
       checks_wait_minutes: 15
+      # A late first-attempt finish (e.g. CodeQL Advanced after the SDK Gate
+      # anchor's wait ran out) is re-evaluated by one dispatched follow-up.
+      follow_up_when_pending: true
       # application-sdk tracks the SHA-pinned actions in its shipped conformance
       # bootstrap templates (Renovate config in renovate.json). Those live under
       # packages/conformance/ source, outside the built-in allowlist, so declare

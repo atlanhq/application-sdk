@@ -32,9 +32,10 @@ jobs:
     # Only event-payload fields are used, so a skipped trigger never gets a
     # runner. A successful run passes when it is:
     #   - Tests, the anchor: usually the last to finish. If another required
-    #     check is still running, the reusable waits for it (checks_wait_minutes),
-    #     and if it is STILL running when the wait ends, dispatches this workflow
-    #     once with pr_number, so a late first-attempt finish is not lost.
+    #     check is still running, the reusable waits for it (checks_wait_minutes).
+    #     A check that finishes AFTER that wait is skipped here (not the anchor,
+    #     first attempt), so follow_up_when_pending makes the reusable dispatch
+    #     this workflow once with pr_number to re-evaluate the PR.
     #   - any re-run (run_attempt > 1), so re-running a flaked workflow after
     #     the anchor already gave up still re-evaluates the PR.
     # workflow_dispatch always runs (manual testing, conformance-resync nudge).
@@ -49,4 +50,7 @@ jobs:
       head_sha: ${{ github.event.workflow_run.head_sha }}
       pr_number: ${{ inputs.pr_number }}
       checks_wait_minutes: 15
+      # A late first-attempt finish (e.g. Conformance after the Tests anchor's
+      # wait ran out) is re-evaluated by one dispatched follow-up, not lost.
+      follow_up_when_pending: true
     secrets: inherit

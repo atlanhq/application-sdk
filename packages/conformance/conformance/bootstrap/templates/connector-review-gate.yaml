@@ -62,7 +62,7 @@ permissions:
 # evict the pending one and leave a `cancelled` check on the head. It still has
 # the last word, since the required check reads the newest run on the SHA.
 concurrency:
-  group: connector-review-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) && github.ref || github.run_id }}
+  group: connector-review-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:

@@ -897,18 +897,18 @@ _SUPERSEDING_CALLERS = {
 def test_caller_supersedes_only_on_a_new_pr_commit(name: str, prefix: str) -> None:
     """FND-3314: a new commit on a PR cancels the previous commit's run.
 
-    The group is shared only by the PR events that can bring a new commit
-    (opened, synchronize, reopened) and is run-unique everywhere else, so a
-    merge_group entry never evicts another (FND-218), and neither do same-SHA
-    label or review events: a shared group holds one pending run, and a third
-    arrival would leave a `cancelled` check on the head SHA, which Renovate
-    never merges past. Only `synchronize` cancels, for the same reason.
+    The group is shared only by `opened` and `synchronize` and is run-unique
+    everywhere else, so a merge_group entry never evicts another (FND-218), and
+    neither do same-SHA events (reopened, labeled, review): a shared group holds
+    one pending run, and a cancel or a third arrival would leave a `cancelled`
+    check on the head SHA, which Renovate never merges past. Only `synchronize`
+    cancels, for the same reason.
     """
     concurrency = yaml.safe_load(render(name))["concurrency"]
     assert concurrency == {
         "group": prefix
         + "${{ github.event_name == 'pull_request' && contains(fromJSON("
-        + '\'["opened", "synchronize", "reopened"]\'), github.event.action)'
+        + '\'["opened", "synchronize"]\'), github.event.action)'
         + " && github.ref || github.run_id }}",
         "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
         "github.event.action == 'synchronize' }}",
