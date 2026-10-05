@@ -61,11 +61,17 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
     sdk_base_contract_names,
+    sdk_contract_ancestors,
+)
+from conformance.suite.checks._sdk_contract_mixins import (
+    SDK_CONTRACT_BASE_FIELDS,
+    SDK_TEMPLATE_CONTRACT_FIELDS,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
     ContractLedger,
     load_ledger_baseline,
+    load_sdk_ledger,
     regen_command,
     serialize,
 )
@@ -132,6 +138,10 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
         (f.contract, f.field): f for f in existing.fields
     }
 
+    sdk_ledger_names: dict[str, set[str]] = {}
+    for f in load_sdk_ledger().fields:
+        sdk_ledger_names.setdefault(f.contract, set()).add(f.field)
+
     # Collect all live contract fields from entrypoint classes
     live_entries: dict[tuple[str, str], ContractField] = {}
     for path, tree in file_trees.items():
@@ -141,6 +151,16 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                 continue
             if class_node.name not in entrypoint_names:
                 continue
+            sdk_names: set[str] = set()
+            for ancestor in sdk_contract_ancestors(class_node, aliases, by_name):
+                sdk_names.update(sdk_ledger_names.get(ancestor, ()))
+                sdk_names.update(
+                    sf.name
+                    for sf in (
+                        SDK_TEMPLATE_CONTRACT_FIELDS.get(ancestor)
+                        or SDK_CONTRACT_BASE_FIELDS.get(ancestor, ())
+                    )
+                )
             for fi in resolve_contract_fields(class_node, aliases, by_name):
                 key = (class_node.name, fi.name)
                 live_entries[key] = ContractField(
@@ -148,6 +168,11 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                     field=fi.name,
                     type=fi.canonical_type,
                     status=fi.status,
+                    origin=(
+                        "declared"
+                        if fi.node is not None and fi.name in sdk_names
+                        else None
+                    ),
                 )
 
     # Merge: append-only with status refresh
@@ -163,6 +188,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                 field=existing_field.field,
                 type=existing_field.type,  # NEVER change the recorded type
                 status=live.status,
+                origin=live.origin,
             )
         else:
             # Field removed from source — keep in ledger (B005 will flag it)

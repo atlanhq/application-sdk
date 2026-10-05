@@ -14,6 +14,7 @@ integrate end-to-end.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -26,6 +27,7 @@ from conformance.suite.checks.deprecation._ledger_schema import (
 )
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
+from conformance.tools.generate_contract_ledger import build_ledger
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1776,6 +1778,80 @@ def test_b005_sdk_retired_field_on_a_template_base_is_exempt(
         tmp_path, {"app.py": _SDK_TASK_INPUT_APP.format(base=base)}, ledger, sdk_ledger
     )
     assert ("B005" not in _ids(findings)) is exempt
+
+
+_SDK_TEMPLATE_INPUT_REDECLARED = _SDK_TEMPLATE_INPUT.replace(
+    "class DbtExtractInput(ExtractionInput):\n    pass\n",
+    'class DbtExtractInput(ExtractionInput):\n    credential_guid: str = ""\n',
+)
+
+
+@pytest.mark.parametrize(
+    ("origin", "fires"),
+    [("declared", True), (None, False)],
+    ids=["app-declared-it", "inherited-or-unknown"],
+)
+def test_b005_sdk_retirement_does_not_waive_a_field_the_app_declared(
+    tmp_path: Path,
+    _sdk_retired_credential_guid: ContractLedger,
+    origin: str | None,
+    fires: bool,
+) -> None:
+    """The app redeclared the SDK field, then removed its own declaration."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active", origin)
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert ("B005" in _ids(findings)) is fires
+
+
+@pytest.mark.parametrize(
+    ("src", "origin"),
+    [(_SDK_TEMPLATE_INPUT_REDECLARED, "declared"), (_SDK_TEMPLATE_INPUT, None)],
+    ids=["redeclared", "inherited"],
+)
+def test_ledger_records_origin_only_for_app_declared_sdk_fields(
+    tmp_path: Path, src: str, origin: str | None
+) -> None:
+    (tmp_path / "app.py").write_text(src, encoding="utf-8")
+    fields = {
+        (f.contract, f.field): f for f in build_ledger(tmp_path, _make_ledger()).fields
+    }
+    assert fields[("DbtExtractInput", "credential_guid")].origin == origin
+    assert all(
+        f.origin is None
+        for key, f in fields.items()
+        if key != ("DbtExtractInput", "credential_guid")
+    )
+
+
+def test_ledger_origin_survives_the_declaration_being_removed(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    (tmp_path / "app.py").write_text(_SDK_TEMPLATE_INPUT_REDECLARED, encoding="utf-8")
+    first = build_ledger(tmp_path, _make_ledger())
+    (tmp_path / "app.py").write_text(_SDK_TEMPLATE_INPUT, encoding="utf-8")
+    second = build_ledger(tmp_path, first)
+    row = next(
+        f
+        for f in second.fields
+        if (f.contract, f.field) == ("DbtExtractInput", "credential_guid")
+    )
+    assert row.origin == "declared"
+
+
+def test_ledger_omits_origin_when_unset() -> None:
+    text = serialize(
+        _make_ledger(
+            ContractField("A", "x", "str", "active"),
+            ContractField("A", "y", "str", "active", "declared"),
+        )
+    )
+    rows = {r["field"]: r for r in json.loads(text)["fields"]}
+    assert "origin" not in rows["x"]
+    assert rows["y"]["origin"] == "declared"
 
 
 def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(

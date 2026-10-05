@@ -668,7 +668,11 @@ def scan_contract_compat(
                     # A sunset field is withdrawn by decision; 'deprecated'
                     # still means shipped-but-discouraged and must stay present.
                     continue
-                if live is None and (lf.field, lf.type) in retired_upstream:
+                if (
+                    live is None
+                    and lf.origin != "declared"
+                    and (lf.field, lf.type) in retired_upstream
+                ):
                     continue
                 if live is None:
                     findings.append(

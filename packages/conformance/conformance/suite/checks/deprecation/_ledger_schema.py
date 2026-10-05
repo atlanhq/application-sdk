@@ -76,6 +76,7 @@ class ContractField:
     field: str
     type: str  # canonical normalized annotation string, frozen on first record
     status: str  # "active" | "deprecated" | "sunset"
+    origin: str | None = None
 
 
 @dataclass
@@ -91,7 +92,10 @@ def serialize(ledger: ContractLedger) -> str:
     payload = {
         "version": ledger.version,
         "fields": sorted(
-            [asdict(f) for f in ledger.fields],
+            [
+                {k: v for k, v in asdict(f).items() if k != "origin" or v}
+                for f in ledger.fields
+            ],
             key=lambda r: (r["contract"], r["field"]),
         ),
     }
@@ -105,6 +109,7 @@ def _parse(payload: dict) -> ContractLedger:
             field=r["field"],
             type=r["type"],
             status=r.get("status", "active"),
+            origin=r.get("origin"),
         )
         for r in payload.get("fields", [])
     ]
