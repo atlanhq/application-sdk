@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import email.message
 import inspect
+import io
 import json
 import sys
 from datetime import date, timedelta
@@ -799,6 +801,140 @@ def test_does_not_retry_a_malformed_query(monkeypatch):
     except RuntimeError as exc:
         assert "422" in str(exc)
     assert post.calls == 1
+
+
+# --- rate-limit retry (FND-3214) -------------------------------------------
+#
+# The one-day merged window raised a pass from 10 merged searches to 62, and two
+# runs in three then died on a secondary-rate-limit 403 — which skipped the
+# auto-merge re-arm step behind it. These go through the real urlopen ->
+# _post_graphql_once -> _post_graphql path, because the classification depends
+# on the HTTPError's status, headers and body, which a pre-wrapped RuntimeError
+# would not carry.
+
+_SECONDARY_LIMIT_BODY = (
+    b'{"message": "You have exceeded a secondary rate limit. Please wait a few '
+    b'minutes before you try again."}'
+)
+
+
+def _http_error(status: int, body: bytes, headers: dict | None = None):
+    hdrs = email.message.Message()
+    for key, value in (headers or {}).items():
+        hdrs[key] = value
+    return rfs.urllib.error.HTTPError(
+        rfs.GRAPHQL_URL, status, "Forbidden", hdrs, io.BytesIO(body)
+    )
+
+
+class _ScriptedUrlopen:
+    """Stands in for urlopen: raises each scripted HTTPError, then succeeds."""
+
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.calls = 0
+
+    def __call__(self, req, timeout=None):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return io.BytesIO(b'{"data": {"ok": true}}')
+
+
+def test_retries_a_secondary_rate_limit_after_a_minute(monkeypatch):
+    # The exact failure: 403, no retry headers, "secondary rate limit" in the body.
+    urlopen = _ScriptedUrlopen([_http_error(403, _SECONDARY_LIMIT_BODY)])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert urlopen.calls == 2
+    # GitHub's floor for a secondary limit with no header hint — not the 1s
+    # 5xx backoff, which would just trip the limit again.
+    assert slept == [60.0]
+
+
+def test_rate_limit_backoff_grows_exponentially(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY) for _ in range(3)]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [60.0, 120.0, 240.0]
+
+
+def test_rate_limit_honours_a_longer_retry_after(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY, {"Retry-After": "90"})]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [90.0]
+
+
+def test_rate_limit_wait_is_capped(monkeypatch):
+    # An hour-long hint would outlive the job; clamp, and let the attempt cap
+    # fail the run with the real 403 if the limit really has not cleared.
+    urlopen = _ScriptedUrlopen([_http_error(429, b"{}", {"Retry-After": "3600"})])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [rfs._RATE_LIMIT_MAX_WAIT_SECONDS]
+
+
+def test_rate_limit_gives_up_at_the_attempt_cap(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY) for _ in range(rfs.GRAPHQL_ATTEMPTS)]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "secondary rate limit" in str(exc)
+    assert urlopen.calls == rfs.GRAPHQL_ATTEMPTS
+
+
+def test_does_not_retry_a_403_that_is_not_a_rate_limit(monkeypatch):
+    # A token without access fails identically every time — still one attempt.
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, b'{"message": "Resource not accessible by integration"}')]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "Resource not accessible" in str(exc)
+    assert urlopen.calls == 1
+
+
+def test_rate_limit_hint_reads_the_primary_quota_reset():
+    hdrs = email.message.Message()
+    hdrs["x-ratelimit-remaining"] = "0"
+    hdrs["x-ratelimit-reset"] = "1200"
+
+    assert rfs._rate_limit_hint(hdrs, now=1000.0) == 200.0
+    assert rfs._is_rate_limited(403, hdrs, "{}")
+
+
+def test_rate_limit_hint_ignores_reset_while_quota_remains():
+    hdrs = email.message.Message()
+    hdrs["x-ratelimit-remaining"] = "4000"
+    hdrs["x-ratelimit-reset"] = "1200"
+
+    assert rfs._rate_limit_hint(hdrs, now=1000.0) is None
+    assert not rfs._is_rate_limited(403, hdrs, "{}")
 
 
 def test_retries_a_transport_failure(monkeypatch):
