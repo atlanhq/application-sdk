@@ -325,8 +325,8 @@ def test_first_attempts_overwrite_so_only_one_artifact_is_ever_live():
     409s there, hands the upload to the retry, and leaves BOTH `<name>` (from
     the earlier attempt) and `<name>-retry` live. Consumers glob `<name>*`, so
     a `merge-multiple` download then flattens two files of the same inner name
-    in undefined order — for `docker-image` that means Trivy scanning the
-    previous attempt's image. Overwrite here is what keeps at most one live
+    in undefined order — for `trivy-results` that means the Security Gate
+    judging the previous attempt's scan. Overwrite here is what keeps at most one live
     artifact per name, which is the invariant those globs rest on.
     """
     bad = [
@@ -430,23 +430,26 @@ def test_a_retry_keeps_its_first_attempts_retention():
     assert not problems, "\n  ".join(problems)
 
 
-def test_the_image_tarball_is_kept_for_one_day():
+def test_no_workflow_uploads_an_image_tarball():
     """`docker-image` was ~97% of each connector repo's live artifact bytes.
 
-    Its readers (trivy-scan, endor-scan) are jobs of the same run, so a day is
-    enough. Measured over three connector repos (FND-3313): 50-76 tarballs of
+    Measured over three connector repos (FND-3313): 50-76 tarballs of
     ~0.55-0.65 GB each live under the old 7-day retention, 27-49 GB per repo.
+    Its only readers were the Trivy and Endor jobs of the same run, so
+    build-and-scan.yaml now builds and scans in one job and the tarball never
+    leaves the runner (FND-3319). Any image tarball upload is a regression.
     """
-    found = []
-    for rel, scope, steps in _scopes():
-        for step in (s for s in steps if _is_upload(s)):
-            if _artifact_path(step) == "/tmp/image.tar":
-                found.append(
-                    (_label(rel, scope, step), _with(step).get("retention-days"))
-                )
-    assert len(found) >= 2, f"image tarball uploads not found: {found}"
-    too_long = [f"{label}: {days!r}" for label, days in found if days != 1]
-    assert not too_long, "\n  ".join(too_long)
+    found = [
+        _label(rel, scope, step)
+        for rel, scope, steps in _scopes()
+        for step in steps
+        if _is_upload(step)
+        and (
+            _artifact_path(step).endswith(".tar")
+            or str(_with(step).get("name", "")).startswith("docker-image")
+        )
+    ]
+    assert not found, "image tarball uploads:\n  " + "\n  ".join(found)
 
 
 def _guards_on(step: dict, step_id: str) -> bool:
