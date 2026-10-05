@@ -55,7 +55,7 @@ outputs:
 
 F001, F002, F003, F004, F005, F006, F007, F008, F009, F010, F011, F012, F014. These rules name this skill as their `remediation_reference`, and
 `/remediate` hands their findings here. When the skill is done, run
-`atlan-application-sdk-conformance detect --series F` and confirm none of
+`atlan-application-sdk-conformance detect --rule F001,F002,F003,F004,F005,F006,F007,F008,F009,F010,F011,F012,F014` and confirm none of
 these rule ids is still reported.
 
 ## Scope boundary — check first

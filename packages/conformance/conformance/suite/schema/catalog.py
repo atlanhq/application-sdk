@@ -75,9 +75,6 @@ class RemediationReference(BaseModel):
             raise ValueError("a decision reference must state the choice in note")
         return self
 
-    def to_properties(self) -> dict[str, str]:
-        return {"kind": self.kind.value, "target": self.target, "note": self.note}
-
 
 # ---------------------------------------------------------------------------
 # Typed rule definition
@@ -340,9 +337,7 @@ class RuleDefinition(BaseModel):
             rationale=self.rationale or None,
             forces_external_influence=self.forces_external_influence,
             canonical_reference=self.canonical_reference or None,
-            remediation_reference=self.remediation_reference.to_properties()
-            if self.remediation_reference
-            else None,
+            remediation_reference=self.remediation_reference,
         )
         return ReportingDescriptor(
             id=self.id,

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 import pytest
-from conformance.suite.rules import CATALOG
+from conformance.suite.rules import CATALOG, get_rule
 from conformance.suite.schema.catalog import (
     RemediationKind,
     RemediationReference,
@@ -37,6 +37,23 @@ def _migration_rules() -> list[RuleDefinition]:
         for r in CATALOG.values()
         if r.scope in (RuleScope.APP, RuleScope.BOTH) and not r.autofixable
     ]
+
+
+def _packaged_skills() -> list[Path]:
+    return sorted(d for d in (PACKAGE_ROOT / "skills").iterdir() if d.is_dir())
+
+
+def _skill_order() -> list[str]:
+    return (PACKAGE_ROOT / "skills" / "order.txt").read_text().split()
+
+
+def _rules_by_skill() -> dict[str, set[str]]:
+    by_skill: dict[str, set[str]] = {}
+    for r in CATALOG.values():
+        ref = r.remediation_reference
+        if ref is not None and ref.kind is RemediationKind.SKILL:
+            by_skill.setdefault(ref.target, set()).add(r.id)
+    return by_skill
 
 
 def _rule(**overrides: object) -> RuleDefinition:
@@ -215,7 +232,7 @@ def test_every_packaged_skill_names_the_rules_that_point_at_it() -> None:
 
 def test_repo_root_skill_paths_resolve_to_the_packaged_skill() -> None:
     """Developers in this repo keep reaching the skill at its old path."""
-    for skill in sorted((PACKAGE_ROOT / "skills").iterdir()):
+    for skill in _packaged_skills():
         root_copy = REPO_ROOT / ".claude" / "skills" / skill.name / "SKILL.md"
         assert root_copy.is_file(), root_copy
         assert root_copy.resolve() == (skill / "SKILL.md").resolve(), root_copy
@@ -284,3 +301,64 @@ def test_remediation_programs_carry_the_reference(path: str) -> None:
 )
 def test_remediate_skill_resolves_skills_dir_for_the_hand_off(path: Path) -> None:
     assert "skills-dir" in path.read_text(), path
+
+
+def test_skill_order_lists_every_packaged_skill_once() -> None:
+    order = _skill_order()
+    assert len(order) == len(set(order)), order
+    assert sorted(order) == [d.name for d in _packaged_skills()]
+
+
+def test_skill_order_honours_each_skills_runs_before() -> None:
+    """A skill that must run before another (``runs_before`` in its frontmatter)
+    comes first in ``order.txt``: ``migrate-off-daft`` has to cross the daft
+    cliff before any skill that bumps the SDK."""
+    order = _skill_order()
+    broken = []
+    for skill in _packaged_skills():
+        match = re.search(
+            r"^runs_before:\s*\[(.*)\]\s*$", (skill / "SKILL.md").read_text(), re.M
+        )
+        for later in match.group(1).split(",") if match else []:
+            later = later.strip()
+            if later in order and order.index(later) < order.index(skill.name):
+                broken.append(f"{skill.name} must run before {later}")
+    assert not broken, broken
+
+
+def test_each_skill_rechecks_exactly_the_rules_that_point_at_it() -> None:
+    """The re-check after a hand-off is ``detect --rule <ids>`` for the rules the
+    skill clears, so it reports nothing the skill does not touch."""
+    for name, ids in _rules_by_skill().items():
+        text = (PACKAGE_ROOT / "skills" / name / "SKILL.md").read_text()
+        match = re.search(r"detect --rule ([A-Z0-9,]+)", text)
+        assert match, name
+        assert set(match.group(1).split(",")) == ids, name
+
+
+def test_remediation_reference_round_trips_through_sarif() -> None:
+    from conformance.suite.schema.extensions import AtlanRuleProperties
+
+    for r in CATALOG.values():
+        props = r.to_reporting_descriptor().properties
+        assert (
+            AtlanRuleProperties.from_properties(props).remediation_reference
+            == r.remediation_reference
+        ), r.id
+
+
+@pytest.mark.parametrize(
+    "malformed",
+    [
+        {"kind": "rewrite", "target": "x", "note": ""},
+        {"kind": "decision", "target": "app owner", "note": ""},
+        {"kind": "skill", "note": ""},
+    ],
+)
+def test_malformed_sarif_reference_is_rejected(malformed: dict[str, str]) -> None:
+    from conformance.suite.schema.extensions import AtlanRuleProperties
+
+    props = dict(get_rule("F001").to_reporting_descriptor().properties)
+    props["atlan/remediationReference"] = malformed
+    with pytest.raises(ValidationError):
+        AtlanRuleProperties.from_properties(props)

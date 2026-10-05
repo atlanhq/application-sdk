@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from conformance.suite.schema.catalog import RemediationReference
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -99,9 +100,8 @@ class AtlanRuleProperties(BaseModel):
     the SARIF — possibly a small one, with no access to the Python catalog —
     knows exactly which reference-app file to open before proposing a fix."""
 
-    remediation_reference: dict[str, str] | None = None
-    """``{"kind", "target", "note"}`` from
-    ``catalog.RuleDefinition.remediation_reference``, carried as
+    remediation_reference: RemediationReference | None = None
+    """``catalog.RuleDefinition.remediation_reference``, carried as
     ``atlan/remediationReference`` so ``/remediate`` in a connector repo can
     hand a migration finding to its skill without the Python catalog."""
 
@@ -129,7 +129,9 @@ class AtlanRuleProperties(BaseModel):
         if self.canonical_reference:
             out["atlan/canonicalReference"] = self.canonical_reference
         if self.remediation_reference:
-            out["atlan/remediationReference"] = self.remediation_reference
+            out["atlan/remediationReference"] = self.remediation_reference.model_dump(
+                mode="json"
+            )
         return out
 
     @classmethod
@@ -150,7 +152,9 @@ class AtlanRuleProperties(BaseModel):
                 props.get("atlan/forcesExternalInfluence", False)
             ),
             canonical_reference=props.get("atlan/canonicalReference"),
-            remediation_reference=props.get("atlan/remediationReference"),
+            remediation_reference=RemediationReference.model_validate(ref)
+            if (ref := props.get("atlan/remediationReference")) is not None
+            else None,
         )
 
 

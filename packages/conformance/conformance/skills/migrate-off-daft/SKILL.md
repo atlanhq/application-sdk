@@ -32,6 +32,7 @@ description: >
   defect unless the developer explicitly accepts it. Run this BEFORE any
   skill that bumps the SDK (adopt-preflight-gate, upgrade-v3) when the app
   is below 3.20.0.
+runs_before: [adopt-preflight-gate, upgrade-v3]
 mandatory_triggers:
   - "/migrate-off-daft"
   - "migrate off daft"
@@ -60,7 +61,7 @@ outputs:
 
 B007. These rules name this skill as their `remediation_reference`, and
 `/remediate` hands their findings here. When the skill is done, run
-`atlan-application-sdk-conformance detect --series B` and confirm none of
+`atlan-application-sdk-conformance detect --rule B007` and confirm none of
 these rule ids is still reported.
 
 ## The cliff, precisely

@@ -59,7 +59,7 @@ and aligns every app with the one supported workflow for contract evolution (BLD
   header comment recording that toolkit 0.10.0 consolidated NativeApp.pkl into App.pkl.
   All three reference apps amend App.pkl; none of their contracts amends NativeApp.pkl
   or NativeAppBundle.pkl.
-- **Migrate with:** the `make-contract` skill (`skills-dir`)
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 The `contract/app.pkl` file (or any `contract/**/*.pkl` file) contains an `amends` line
 pointing at `NativeApp.pkl` or `NativeAppBundle.pkl` instead of the canonical `App.pkl`.
@@ -324,7 +324,7 @@ suppressed per file rather than ever graduating to BLOCK (BLDX-1414).
   from contract/app.pkl — DO NOT EDIT MANUALLY.` banner. The repo-root atlan.yaml
   carries the same banner. A stripped banner is the fingerprint of a hand edit that the
   next regeneration will erase.
-- **Migrate with:** the `make-contract` skill (`skills-dir`)
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 
 A file the contract toolkit is expected to generate (`atlan.yaml`, `app.yaml`, or a
 `.py` file under `app/generated/` other than `__init__.py`) does not carry the
@@ -514,7 +514,7 @@ customer's install or crawl fails on identity plumbing they can neither see nor 
   `{{credential}}`-style tokens in args are Automation Engine runtime substitutions and
   are legitimate too. Anything else ({app_name}, {name}) is a placeholder the toolkit
   was meant to fill and did not, usually because the pin predates the template.
-- **Migrate with:** the `make-contract` skill (`skills-dir`)
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips

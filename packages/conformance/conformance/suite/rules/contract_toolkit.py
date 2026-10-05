@@ -193,8 +193,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k001"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.SKILL,
-            target="make-contract",
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -559,8 +559,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k005"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.SKILL,
-            target="make-contract",
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
@@ -853,8 +853,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "packages/conformance/conformance/docs/rules/contract-toolkit.md#k009"
         ),
         remediation_reference=RemediationReference(
-            kind=RemediationKind.SKILL,
-            target="make-contract",
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/contract-toolkit.prose.md",
         ),
     ),
     RuleDefinition(
