@@ -13,7 +13,8 @@ name: Conformance Resync
 #   - keeps ONE PR per repo on resync_approval_conditions.RESYNC_BRANCH,
 #     authored by resync_approval_conditions.RESYNC_AUTHOR: force-pushed in
 #     place from a fresh render, closed once main already carries the
-#     changes, duplicates closed, a person's PR on that branch never touched;
+#     changes, duplicates closed. The branch is the lane's; a repo where
+#     someone else has a PR on it is skipped as a best-effort courtesy;
 #   - arms auto-merge only when vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED is
 #     "true" AND the repo's renovate.json lets Renovate auto-merge;
 #   - for an existing lane PR this run left untouched, whose required checks

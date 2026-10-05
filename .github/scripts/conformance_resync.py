@@ -195,9 +195,14 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
     any other PR the lane's author opened, including its own PR retargeted
     to another base, is a duplicate (should not normally happen — this App
     only ever pushes that one branch — but closed on sight if it does).
-    ``foreign`` is someone else's open PR on ``RESYNC_BRANCH`` in this repo;
-    the lane never force-pushes over a person's PR, so a repo with one is left
-    alone entirely this run. A fork PR whose branch merely shares the name is
+    ``foreign`` is someone else's open PR on ``RESYNC_BRANCH`` in this repo.
+
+    ``RESYNC_BRANCH`` belongs to the lane: every lane PR body says the next
+    run force-pushes over it. Skipping a repo with a foreign PR is a
+    best-effort courtesy for a PR seen at the start of the run, not a
+    guarantee. GitHub has no "push only if no PR uses this branch", so a PR
+    opened from the bot's branch while a run is under way can be force-pushed
+    over, and no check-then-push could rule that out. A fork PR whose branch merely shares the name is
     ignored: the lane pushes this repo's branch, never the fork's, so it is
     not in the way, and counting it would let anyone with a fork stall the
     repo's resync.
@@ -224,39 +229,6 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
         elif author == gate.RESYNC_AUTHOR and same_repo:
             dupes.append(pr)
     return keep, dupes, foreign
-
-
-def foreign_pr_now(repo: str, runner: Runner) -> dict | None:
-    """Re-run the foreign-PR scan right before a push. The window left between
-    this read and the push is one API round trip, not a whole render."""
-    _keep, _dupes, foreign = split_lane_prs(open_prs(repo, runner))
-    return foreign
-
-
-BEFORE_REF = "refs/resync/before"
-
-
-def restore_branch(work: str, before_sha: str, runner: Runner) -> bool:
-    """Put the lane branch back on ``before_sha`` (fetched to ``BEFORE_REF``),
-    leased on the commit the lane just pushed so nothing newer is clobbered."""
-    fetched = git(["rev-parse", BEFORE_REF], work, runner, check=False).strip()
-    if fetched != before_sha:
-        return False
-    pushed = git(["rev-parse", "HEAD"], work, runner).strip()
-    result = _run(
-        [
-            "git",
-            "push",
-            "-q",
-            f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{pushed}",
-            "origin",
-            f"{BEFORE_REF}:refs/heads/{gate.RESYNC_BRANCH}",
-        ],
-        runner,
-        cwd=work,
-        env=gate.git_env(),
-    )
-    return result.returncode == 0
 
 
 def repo_of(pr: dict) -> str | None:
@@ -365,8 +337,8 @@ def render_pr_body(
         "",
         "This is the repo's single conformance-resync PR. The lane re-renders it "
         f"from latest `{BASE_BRANCH}` on every run and closes it once `{BASE_BRANCH}` "
-        "already carries the changes. Please don't push to this branch — the "
-        "next run force-pushes over it.",
+        "already carries the changes. This branch belongs to the lane: please "
+        "don't push to it or open a PR from it — the next run force-pushes over it.",
         "",
         "Opened by application-sdk `conformance-resync.yml`.",
     ]
@@ -559,7 +531,7 @@ def process_repo(
     if foreign:
         step(
             f"#{foreign['number']} on {gate.RESYNC_BRANCH} was opened by someone else "
-            "— never force-pushing over a person's PR, leaving the repo alone."
+            "— leaving the repo alone this run (best effort: the branch is the lane's)."
         )
         result.update(
             action="skipped",
@@ -786,35 +758,6 @@ def process_repo(
             return result
 
         if not (same_content and keep):
-            # The foreign-PR scan ran before the render, which can take
-            # minutes. A person may have opened a PR from the existing branch
-            # since; the lease guards only the ref value, not a new PR on it.
-            late = foreign_pr_now(repo, runner)
-            if late:
-                step(
-                    f"#{late['number']} on {gate.RESYNC_BRANCH} was opened by someone "
-                    "else during the render — not pushing over it."
-                )
-                result.update(
-                    action="skipped",
-                    reason=f"foreign PR #{late['number']} on {gate.RESYNC_BRANCH}",
-                )
-                return result
-            if remote_sha:
-                # Keep the branch's current commit locally, so the push can be
-                # undone if a foreign PR turns out to point at it.
-                git(
-                    [
-                        "fetch",
-                        "-q",
-                        "--depth",
-                        "1",
-                        "origin",
-                        f"+refs/heads/{gate.RESYNC_BRANCH}:{BEFORE_REF}",
-                    ],
-                    work,
-                    runner,
-                )
             lease = f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{remote_sha}"
             git(
                 [
@@ -827,31 +770,6 @@ def process_repo(
                 work,
                 runner,
             )
-            # GitHub cannot push "only if no PR points at this branch", so a
-            # PR opened between the re-check and the push is caught here and
-            # the push undone: its branch goes back to the commit it was
-            # opened on, so the lane never leaves another person's PR
-            # rewritten.
-            late = foreign_pr_now(repo, runner)
-            if late:
-                if not remote_sha:
-                    outcome = "the branch was new, so their PR was opened on the lane's commit; left alone"
-                    action = "skipped"
-                elif restore_branch(work, remote_sha, runner):
-                    outcome = f"branch restored to {remote_sha[:12]}"
-                    action = "skipped"
-                else:
-                    outcome = f"restoring the branch to {remote_sha[:12]} FAILED"
-                    action = "error"
-                step(
-                    f"#{late['number']} on {gate.RESYNC_BRANCH} was opened by someone "
-                    f"else during the push — {outcome}."
-                )
-                result.update(
-                    action=action,
-                    reason=f"foreign PR #{late['number']} on {gate.RESYNC_BRANCH}: {outcome}",
-                )
-                return result
             pushed_this_run = True
             step("Force-pushed the fresh render onto the lane branch.")
         else:
