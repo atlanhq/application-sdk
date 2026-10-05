@@ -738,7 +738,7 @@ _FORCE_ALL_SCHEDULE = (
     "force-all: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' }}"
 )
-_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 */6 * * *"'
+_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 3 * * *"'
 
 
 def test_conformance_yaml_default_exit_zero_false() -> None:
