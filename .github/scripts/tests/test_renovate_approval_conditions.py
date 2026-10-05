@@ -36,6 +36,7 @@ import renovate_approval_conditions as gate  # noqa: E402
 
 SHA = "abc123"
 REPO = "owner/repo"
+CALLER_REF = "owner/repo/.github/workflows/renovate-auto-approve.yml@refs/heads/main"
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +195,10 @@ class FakeGh:
     @property
     def checks_calls(self) -> int:
         return sum(1 for c in self.calls if c[1:3] == ["pr", "checks"])
+
+    @property
+    def dispatches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[1:3] == ["workflow", "run"]]
 
     @property
     def api_paths(self) -> list[str]:
@@ -814,6 +819,9 @@ class TestFanInWait:
             ("100", gate.MAX_CHECKS_WAIT_SECONDS),
             ("nan", 0),
             ("inf", 0),
+            # Finite, but `* 60` overflows: must clamp, not raise OverflowError.
+            ("1e308", gate.MAX_CHECKS_WAIT_SECONDS),
+            ("-1e308", 0),
         ],
     )
     def test_wait_minutes_parse_and_clamp(self, raw, expected):
@@ -889,6 +897,114 @@ class TestFanInWait:
         assert sleeps == [gate.CHECKS_POLL_SECONDS]
         assert fake.checks_calls == 1
         assert "deadbeef" in log
+
+    def test_one_budget_covers_every_pr_at_the_sha(self, monkeypatch, capsys):
+        # Two PRs at one SHA, both pending: a per-PR budget would wait twice and
+        # outlive the job's timeout-minutes. The run's budget is shared.
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            commit_pulls=[
+                {"state": "open", "number": 7},
+                {"state": "open", "number": 8},
+            ],
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        assert [d[-1] for d in fake.dispatches] == ["pr_number=7", "pr_number=8"]
+
+    def test_still_pending_at_budget_end_dispatches_one_follow_up(
+        self, monkeypatch, capsys
+    ):
+        # The anchor gave up with a check still running. That check's own
+        # first-attempt completion is filtered out by the caller's `if:`, so
+        # without a follow-up the PR would never be re-evaluated.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert fake.dispatches == [
+            [
+                "gh",
+                "workflow",
+                "run",
+                "renovate-auto-approve.yml",
+                "--repo",
+                REPO,
+                "-f",
+                "pr_number=7",
+            ]
+        ]
+        assert "dispatched one follow-up" in log
+
+    def test_a_follow_up_never_dispatches_another(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={
+                "EVENT_NAME": "workflow_dispatch",
+                "RUN_SHA": "",
+                "DISPATCH_PR": "7",
+                "CHECKS_WAIT_MINUTES": "1",
+                "CALLER_WORKFLOW_REF": CALLER_REF,
+            },
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert fake.dispatches == []
+        assert "not dispatching another" in log
+
+    @pytest.mark.parametrize("checks_exit", [0, 1])
+    def test_settled_checks_never_dispatch(self, monkeypatch, capsys, checks_exit):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            checks_exit=checks_exit,
+        )
+        assert fake.dispatches == []
+
+    def test_head_moving_mid_wait_does_not_dispatch(self, monkeypatch, capsys):
+        # The new HEAD has its own anchor run coming.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "5", "CALLER_WORKFLOW_REF": CALLER_REF},
+            meta=[pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=8,
+        )
+        assert fake.dispatches == []
+
+    def test_unreadable_caller_ref_warns_instead_of_dispatching(
+        self, monkeypatch, capsys
+    ):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": ""},
+            checks_exit=8,
+        )
+        assert fake.dispatches == []
+        assert "::warning::" in log
+
+    @pytest.mark.parametrize(
+        "ref,expected",
+        [
+            (CALLER_REF, "renovate-auto-approve.yml"),
+            ("o/r/.github/workflows/a.yaml@refs/pull/7/merge", "a.yaml"),
+            ("", ""),
+            ("o/r/not-a-workflow@main", ""),
+        ],
+    )
+    def test_caller_workflow_file(self, ref, expected):
+        assert gate.caller_workflow_file(ref) == expected
 
     def test_a_pr_that_cannot_qualify_never_waits(self, monkeypatch, capsys):
         sleeps: list[float] = []

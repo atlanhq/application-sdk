@@ -66,7 +66,8 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 # Sibling module: the script runs as `python3 .../renovate_approval_conditions.py`,
@@ -218,6 +219,35 @@ CHECKS_POLL_SECONDS = 30
 MAX_CHECKS_WAIT_SECONDS = 15 * 60
 
 Runner = Callable[..., subprocess.CompletedProcess]
+
+
+class WaitOutcome(Enum):
+    """How the fan-in wait for one PR ended."""
+
+    #: No required check is pending any more; condition (e) judges them.
+    SETTLED = "settled"
+    #: The run's wait budget ran out with a required check still pending.
+    STILL_PENDING = "still_pending"
+    #: The PR's HEAD moved off the evaluated SHA mid-wait.
+    HEAD_MOVED = "head_moved"
+
+
+@dataclass
+class FanInBudget:
+    """The fan-in wait for one run, shared by every candidate PR.
+
+    One budget per run, not per PR: ``resolve_prs`` can return several open PRs
+    at a SHA, and a per-PR budget would let the second one wait past the job's
+    ``timeout-minutes`` and be killed mid-evaluation. PRs still pending when the
+    budget runs out are collected in ``still_pending`` for a follow-up.
+    """
+
+    polls_left: int
+    still_pending: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_seconds(cls, seconds: int) -> FanInBudget:
+        return cls(polls_left=math.ceil(seconds / CHECKS_POLL_SECONDS))
 
 
 @dataclass(frozen=True)
@@ -643,8 +673,8 @@ def required_checks_green(repo: str, pr: str, runner: Runner) -> bool:
 
     Non-required failures are correctly excluded — the ruleset, not this script,
     decides what "required" means, so a repo changing its required contexts needs
-    no change here. Pending required checks exit non-zero; a later workflow_run
-    completion re-fires and re-evaluates.
+    no change here. Pending required checks exit non-zero; the fan-in wait and
+    its one follow-up (``request_follow_up``) are what re-evaluate them.
     """
     result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
     # Echo gh's own table so the step log still shows which check was red.
@@ -668,9 +698,13 @@ def parse_wait_seconds(raw: str) -> int:
     except ValueError:
         print(f"::warning::CHECKS_WAIT_MINUTES={raw!r} is not a number; not waiting.")
         return 0
-    if not math.isfinite(minutes):
+    # Clamp in minutes, before converting: `minutes * 60` overflows to inf for a
+    # finite value near float max, and int(inf) raises instead of clamping.
+    if not math.isfinite(minutes) or minutes <= 0:
         return 0
-    return max(0, min(int(minutes * 60), MAX_CHECKS_WAIT_SECONDS))
+    if minutes >= MAX_CHECKS_WAIT_SECONDS / 60:
+        return MAX_CHECKS_WAIT_SECONDS
+    return int(minutes * 60)
 
 
 def wait_for_pending_checks(
@@ -679,33 +713,36 @@ def wait_for_pending_checks(
     eval_sha: str,
     runner: Runner,
     *,
-    wait_seconds: int,
+    budget: FanInBudget,
     sleep: Callable[[float], None] = time.sleep,
-) -> bool:
+) -> WaitOutcome:
     """Fan-in (FND-3317): poll while any required check is still PENDING.
 
     The caller fires this workflow once per SHA, on the completion of the
     workflow that usually finishes last (the anchor), instead of once per
     upstream workflow. When some other required check is still running at
-    that moment, nothing else would re-fire the gate, so it waits here for
-    up to ``wait_seconds``. Only "pending" keeps it waiting: pass or fail
-    both return at once and condition (e) judges them as before. A budget
-    that runs out also returns True — (e) then sees the pending check and
-    withholds, exactly as an early trigger always has.
+    that moment, nothing else would re-fire the gate, so it waits here,
+    drawing on the run's shared ``budget``. Only "pending" keeps it waiting:
+    pass or fail both return SETTLED at once and condition (e) judges them as
+    before. A budget that runs out returns STILL_PENDING, and ``main`` then
+    asks for one follow-up evaluation (see ``request_follow_up``).
 
-    Returns False only when the PR's HEAD moved off ``eval_sha`` mid-wait:
+    Returns HEAD_MOVED when the PR's HEAD moved off ``eval_sha`` mid-wait:
     the new HEAD has its own anchor run coming, and these checks no longer
     describe the PR. HEAD is re-read after each sleep, so a push does not
     cost the rest of the budget.
     """
-    polls = math.ceil(wait_seconds / CHECKS_POLL_SECONDS)
-    for poll in range(1, polls + 1):
+    while True:
         result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
         if result.returncode != CHECKS_PENDING_EXIT:
-            return True
+            return WaitOutcome.SETTLED
+        if budget.polls_left <= 0:
+            print(f"PR #{pr}: wait budget spent with required checks still pending.")
+            return WaitOutcome.STILL_PENDING
+        budget.polls_left -= 1
         print(
             f"PR #{pr}: required checks still pending — waiting "
-            f"{CHECKS_POLL_SECONDS}s ({poll}/{polls})."
+            f"{CHECKS_POLL_SECONDS}s ({budget.polls_left} poll(s) left this run)."
         )
         sleep(CHECKS_POLL_SECONDS)
         meta = fetch_pr_meta(repo, pr, runner)
@@ -713,10 +750,63 @@ def wait_for_pending_checks(
         ok, message = check_head_unchanged(pr, head_sha, eval_sha)
         if not ok:
             print(message)
-            return False
-    if polls:
-        print(f"PR #{pr}: wait budget spent with required checks still pending.")
-    return True
+            return WaitOutcome.HEAD_MOVED
+
+
+def caller_workflow_file(workflow_ref: str) -> str:
+    """The caller's workflow file name from ``github.workflow_ref``.
+
+    In a reusable workflow ``github.workflow_ref`` names the CALLER, shaped
+    ``owner/repo/.github/workflows/<file>@<ref>``. Returns "" for anything else.
+    """
+    path = workflow_ref.split("@", 1)[0]
+    marker = "/.github/workflows/"
+    if marker not in path:
+        return ""
+    return path.split(marker, 1)[1]
+
+
+def request_follow_up(
+    repo: str, event_name: str, workflow_ref: str, prs: list[str], runner: Runner
+) -> None:
+    """Dispatch one follow-up evaluation for each PR still pending at budget end.
+
+    The fan-in only fires on the anchor's completion, so a required check that
+    finishes after the anchor's wait would otherwise never re-evaluate the PR:
+    its own first-attempt completion is filtered out by the caller's ``if:``.
+    The follow-up is a workflow_dispatch of the caller with ``pr_number``, which
+    waits again with a fresh budget.
+
+    Only an anchor (workflow_run) run asks for one. A follow-up that is itself
+    still pending stops there, so a check stuck pending forever costs at most
+    one extra run. It is then the fleet scanner's stuck-PR signal to report.
+    """
+    if event_name != "workflow_run":
+        print(
+            f"PR(s) {', '.join('#' + p for p in prs)}: still pending after a "
+            f"{event_name} evaluation; not dispatching another follow-up."
+        )
+        return
+    workflow = caller_workflow_file(workflow_ref)
+    if not workflow:
+        print(
+            f"::warning::Cannot dispatch a follow-up evaluation: "
+            f"CALLER_WORKFLOW_REF={workflow_ref!r} does not name a workflow file."
+        )
+        return
+    for pr in prs:
+        result = _gh(
+            ["workflow", "run", workflow, "--repo", repo, "-f", f"pr_number={pr}"],
+            runner,
+        )
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout or "").strip()
+            print(
+                f"::warning::PR #{pr}: could not dispatch a follow-up evaluation "
+                f"of {workflow}: {detail}"
+            )
+        else:
+            print(f"PR #{pr}: dispatched one follow-up evaluation ({workflow}).")
 
 
 def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
@@ -778,7 +868,7 @@ def process_pr(
     extra_pattern: str,
     runner: Runner,
     *,
-    wait_seconds: int = 0,
+    budget: FanInBudget | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Evaluate one PR and approve it if every condition holds.
@@ -835,9 +925,16 @@ def process_pr(
 
     # e. All ruleset-required checks must be green. Waiting happens only here,
     # after the cheap conditions, so a PR that can never qualify never waits.
-    if not wait_for_pending_checks(
-        repo, pr, eval_sha, runner, wait_seconds=wait_seconds, sleep=sleep
-    ):
+    if budget is None:
+        budget = FanInBudget(polls_left=0)
+    outcome = wait_for_pending_checks(
+        repo, pr, eval_sha, runner, budget=budget, sleep=sleep
+    )
+    if outcome is WaitOutcome.HEAD_MOVED:
+        return False
+    if outcome is WaitOutcome.STILL_PENDING:
+        budget.still_pending.append(pr)
+        print(f"PR #{pr}: required checks not yet all green — skipping.")
         return False
     print(f"PR #{pr}: checking required CI status...")
     if not required_checks_green(repo, pr, runner):
@@ -876,7 +973,10 @@ def main(
     run_sha = os.environ.get("RUN_SHA", "")
     dispatch_pr = os.environ.get("DISPATCH_PR", "")
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
-    wait_seconds = parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
+    workflow_ref = os.environ.get("CALLER_WORKFLOW_REF", "")
+    budget = FanInBudget.from_seconds(
+        parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
+    )
 
     try:
         pr_numbers, eval_sha = resolve_prs(
@@ -893,8 +993,12 @@ def main(
                 eval_sha,
                 extra_pattern,
                 runner,
-                wait_seconds=wait_seconds,
+                budget=budget,
                 sleep=sleep,
+            )
+        if budget.still_pending:
+            request_follow_up(
+                repo, event_name, workflow_ref, budget.still_pending, runner
             )
     except resync.GhError as exc:  # also this module's GhError, a subclass
         # Abort rather than continue on a partial view — the inherited

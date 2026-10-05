@@ -49,7 +49,9 @@ jobs:
     # so a skipped trigger never gets a runner: SDK Gate is the anchor (it
     # composes the SDK tests, so it is the one that usually finishes last) and
     # the reusable waits out any required check still pending when it fires
-    # (checks_wait_minutes). Any re-run (run_attempt > 1) also passes, so
+    # (checks_wait_minutes), then dispatches this workflow once with pr_number
+    # if one is still pending, so a check that finishes late (CodeQL Advanced)
+    # still gets the PR re-evaluated. Any re-run (run_attempt > 1) also passes, so
     # re-running a flaked workflow still re-evaluates the PR.
     if: >-
       github.event_name == 'workflow_dispatch'

@@ -32,7 +32,9 @@ jobs:
     # Only event-payload fields are used, so a skipped trigger never gets a
     # runner. A successful run passes when it is:
     #   - Tests, the anchor: usually the last to finish. If another required
-    #     check is still running, the reusable waits for it (checks_wait_minutes).
+    #     check is still running, the reusable waits for it (checks_wait_minutes),
+    #     and if it is STILL running when the wait ends, dispatches this workflow
+    #     once with pr_number, so a late first-attempt finish is not lost.
     #   - any re-run (run_attempt > 1), so re-running a flaked workflow after
     #     the anchor already gave up still re-evaluates the PR.
     # workflow_dispatch always runs (manual testing, conformance-resync nudge).

@@ -27,10 +27,14 @@ permissions:
 # A new commit on a PR retires the previous commit's run (FND-3314) — without
 # this every push, and every Renovate rebase, ran all series to completion.
 #
-# The group is shared only on a PR ref. Everywhere else — main, schedule,
-# workflow_dispatch and above all merge_group — it is run-unique, because a
-# shared group holds ONE pending run and a third arrival evicts it (FND-218,
-# docs/standards/ci.md "`concurrency:` is not a lock, and not a queue").
+# The group is shared only by the pull_request events that can bring a new
+# commit: opened, synchronize, reopened. Everything else — main, schedule,
+# workflow_dispatch, merge_group, and the same-SHA PR events other callers
+# subscribe to (labeled, unlabeled, pull_request_review) — is run-unique,
+# because a shared group holds ONE pending run and a third arrival evicts it,
+# leaving a `cancelled` check (FND-218, docs/standards/ci.md "`concurrency:` is
+# not a lock, and not a queue"). Two label events on top of a running check
+# would do exactly that on the head SHA.
 #
 # Only `synchronize` cancels. That event always brings a new head SHA, so the
 # `cancelled` check runs it leaves land on a commit that is no longer head.
@@ -38,7 +42,7 @@ permissions:
 # `cancelled` check on the head itself, and Renovate never merges a branch
 # with one (see commits.yaml in application-sdk) — those queue instead.
 concurrency:
-  group: conformance-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  group: conformance-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:

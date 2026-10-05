@@ -23,7 +23,7 @@ permissions:
 # (`generated-freshness-<PR number>`, queue-only); this name must never equal
 # it, or GitHub cancels the call as a concurrency deadlock.
 concurrency:
-  group: generated-freshness-caller-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  group: generated-freshness-caller-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize", "reopened"]'), github.event.action) && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
