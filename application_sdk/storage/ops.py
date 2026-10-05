@@ -74,6 +74,7 @@ if TYPE_CHECKING:
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.common.atomic import disk_full_guard
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -1217,47 +1218,52 @@ async def download_file(
     published = False
     try:
         try:
-            staging_dir = path.parent / PARTIAL_DIRNAME
-            # mode hardens only the first creation (ignored when the directory
-            # exists) — it keeps a staging dir under a shared temp root private.
-            os.makedirs(staging_dir, mode=0o700, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(
-                dir=str(staging_dir), prefix=path.name + "."
-            )
-            from application_sdk.constants import (  # noqa: PLC0415
-                STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-            )
+            # A full volume is its own failure, not a generic storage one: it
+            # names the volume to resize, where StorageError reads as the store.
+            with disk_full_guard(path, operation="download"):
+                staging_dir = path.parent / PARTIAL_DIRNAME
+                # mode hardens only the first creation (ignored when the directory
+                # exists) — it keeps a staging dir under a shared temp root private.
+                os.makedirs(staging_dir, mode=0o700, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(staging_dir), prefix=path.name + "."
+                )
+                from application_sdk.constants import (  # noqa: PLC0415
+                    STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+                )
 
-            last_progress = started
-            with os.fdopen(fd, "wb") as fh:
-                async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                    raw = bytes(chunk)
-                    fh.write(raw)
-                    bytes_written += len(raw)
-                    if h is not None:
-                        h.update(raw)
-                    # One streamed chunk landed on disk — see the matching mark in
-                    # upload_file for why this is per chunk and ungated.
-                    current_progress_tracker().mark_progress("storage.download_chunk")
-                    if _progress_interval > 0:
-                        now = time.monotonic()
-                        if now - last_progress >= _progress_interval:
-                            _log_transfer_progress(
-                                "download",
-                                key,
-                                bytes_so_far=bytes_written,
-                                elapsed_ms=(now - started) * 1000.0,
-                            )
-                            last_progress = now
-                # fsync before the publish: on a delayed-allocation filesystem
-                # ENOSPC can surface only at writeback, and without this a
-                # short file would be published as complete (the FND-318
-                # argument). Offloaded so a large flush does not hold the
-                # event loop and the activity heartbeat with it.
-                fh.flush()
-                await run_in_thread(os.fsync, fh.fileno())
-            os.replace(tmp_name, path)
-            published = True
+                last_progress = started
+                with os.fdopen(fd, "wb") as fh:
+                    async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                        raw = bytes(chunk)
+                        fh.write(raw)
+                        bytes_written += len(raw)
+                        if h is not None:
+                            h.update(raw)
+                        # One streamed chunk landed on disk — see the matching mark in
+                        # upload_file for why this is per chunk and ungated.
+                        current_progress_tracker().mark_progress(
+                            "storage.download_chunk"
+                        )
+                        if _progress_interval > 0:
+                            now = time.monotonic()
+                            if now - last_progress >= _progress_interval:
+                                _log_transfer_progress(
+                                    "download",
+                                    key,
+                                    bytes_so_far=bytes_written,
+                                    elapsed_ms=(now - started) * 1000.0,
+                                )
+                                last_progress = now
+                    # fsync before the publish: on a delayed-allocation filesystem
+                    # ENOSPC can surface only at writeback, and without this a
+                    # short file would be published as complete (the FND-318
+                    # argument). Offloaded so a large flush does not hold the
+                    # event loop and the activity heartbeat with it.
+                    fh.flush()
+                    await run_in_thread(os.fsync, fh.fileno())
+                os.replace(tmp_name, path)
+                published = True
         # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
         except Exception as exc:
             elapsed_ms = (time.monotonic() - started) * 1000.0
@@ -1270,6 +1276,10 @@ async def download_file(
                 size_bytes=bytes_written,
                 error_class=_exc_class_name(exc),
             )
+            from application_sdk.errors import DiskFullError  # noqa: PLC0415
+
+            if isinstance(exc, DiskFullError):
+                raise
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
             raise StorageError(
