@@ -6,7 +6,6 @@ database operations, supporting batch processing and server-side cursors.
 """
 
 import asyncio
-import concurrent
 import hashlib
 from collections.abc import AsyncIterator, Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -387,6 +386,12 @@ class BaseSQLClient(ClientInterface):
         and automatically closes the connection when done. This prevents memory
         leaks from persistent connections.
 
+        Every driver call — connect, execute, each fetchmany and close — runs on
+        one dedicated thread, because DB-API cursors are thread-affine and break
+        when their calls are spread across threads. That executor is never joined
+        on the event loop, so cancelling the awaiting task cannot freeze the worker
+        while a blocked driver call is still in flight.
+
         Args:
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
@@ -409,34 +414,39 @@ class BaseSQLClient(ClientInterface):
             len(query),
         )
 
-        # Use context manager for automatic connection cleanup
-        with self.engine.connect() as connection:
+        executor = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="sdk-sql-query-"
+        )
+        connection = None
+        try:
+            connection = await loop.run_in_executor(executor, self.engine.connect)
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
-            with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(_escape_colons_for_text(query))
+            cursor = await loop.run_in_executor(
+                executor, connection.execute, text(_escape_colons_for_text(query))
+            )
+            if not cursor or not cursor.cursor:
+                raise UnsupportedSqlCursorError()
+            column_names: list[str] = [
+                description.name.lower() for description in cursor.cursor.description
+            ]
+
+            while True:
+                rows = await loop.run_in_executor(
+                    executor, cursor.fetchmany, batch_size
                 )
-                if not cursor or not cursor.cursor:
-                    raise UnsupportedSqlCursorError()
-                column_names: list[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+                if not rows:
+                    break
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
-
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            # Connection automatically closed by context manager
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
+        finally:
+            if connection is not None:
+                executor.submit(connection.close)
+            executor.shutdown(wait=False)
 
         logger.info("Query execution completed")
 
@@ -528,11 +538,7 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_running_loop().run_in_executor(
-                    executor, self._execute_query, query, chunksize
-                )
+            return await run_in_thread(self._execute_query, query, chunksize)
 
     async def get_batched_results(
         self,
