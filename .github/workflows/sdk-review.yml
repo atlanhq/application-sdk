@@ -20,7 +20,9 @@ permissions:
   issues: write
 
 jobs:
-  # A human tag is answered with a 😕 — the reaction sdk_resolve_push_guard.py
+  # Bots never get the reply: any `Bot` account (mothership-ai[bot] included,
+  # also named in case its type ever reads differently) and atlan-ci, which is
+  # a User account. A human tag is answered with a 😕 — the reaction sdk_resolve_push_guard.py
   # reads as "seen and declined" — and a pointer to `/lens`. Posted with
   # GITHUB_TOKEN, which starts no workflow. The comment must not start with
   # `@sdk-review`, `@sdk-resolve` or `/lens`, or it would read as a trigger.
@@ -29,6 +31,7 @@ jobs:
       github.event_name == 'issue_comment'
       && github.event.issue.pull_request
       && startsWith(github.event.comment.body, '@sdk-review')
+      && github.event.comment.user.type != 'Bot'
       && github.event.comment.user.login != 'atlan-ci'
       && github.event.comment.user.login != 'mothership-ai[bot]'
       && (
