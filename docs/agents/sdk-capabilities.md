@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    8ee1dccc4b3cb2c9dbc89483860dbc2b9b167702
-source-date:   2026-10-05T23:09:51+01:00
+source-sha:    b004edfa8b58a2c4fdd49d2e46bd70a50dca484c
+source-date:   2026-10-06T00:35:45+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2406,7 +2406,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `run_in_thread`
 
 - **Import:** `from application_sdk.execution.heartbeat import run_in_thread`
-- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, cancel_handle: CancelHandle | None = None, **kwargs: Any)`
+- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
