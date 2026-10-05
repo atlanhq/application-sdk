@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from typing import NamedTuple
 
 from .._ast_common._exc_info import has_exc_info_traceback
@@ -238,9 +238,7 @@ def _raise_preserves_trace(stmt: ast.Raise) -> bool:
     Only ``raise X(...) from None`` deliberately discards the context, so it is
     treated as trace-losing.
     """
-    if isinstance(stmt.cause, ast.Constant) and stmt.cause.value is None:
-        return False
-    return True
+    return not (isinstance(stmt.cause, ast.Constant) and stmt.cause.value is None)
 
 
 class RedactionScope(NamedTuple):
@@ -620,6 +618,8 @@ class TypedFailureScope(NamedTuple):
     carried_at: dict[int, frozenset[str]]
     live_at_end: frozenset[str]
     typed_binding: bool = False
+    local_helpers: Mapping[str, ast.FunctionDef] | None = None
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None
 
 
 # Calls that turn the caught exception into text.  A string is the failure
@@ -683,29 +683,322 @@ def _expr_types_cause(
     return False
 
 
+def _iter_eager_expr(expr: ast.expr) -> Iterator[ast.AST]:
+    """Walk an expression without entering deferred or nested scopes."""
+    deferred = (ast.Lambda, ast.GeneratorExp, ast.ListComp, ast.SetComp, ast.DictComp)
+    pending: list[ast.AST] = [expr]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, deferred):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _class_like(target: str | None) -> bool:
+    """A capitalised leaf name, ignoring leading underscores (``_TargetOutcome`` counts)."""
+    return target is not None and target.lstrip("_")[:1].isupper()
+
+
+def _returns_typed_constructor(expr: ast.expr, carried_names: frozenset[str]) -> bool:
+    """True when *expr* itself is a class-like call built from *carried_names*.
+
+    The returned value must be the constructor: a constructor elsewhere in the
+    expression (``(Outcome(error=e), None)[1]``) says nothing about what the
+    caller receives.
+    """
+    if not carried_names or not isinstance(expr, ast.Call):
+        return False
+    if not _class_like(_get_name(expr.func)):
+        return False
+    args = [*expr.args, *[kw.value for kw in expr.keywords]]
+    return any(_references_any(arg, carried_names) for arg in args)
+
+
+def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
+    """Return parameters carried into a typed result by a simple local helper.
+
+    Only an undecorated, synchronous, straight-line helper with one final return
+    is summarized. Its parameter must flow through assignments into the eager
+    class-like constructor that *is* the returned value. Anything with branching,
+    multiple exits, varargs, a deferred constructor, or a return that merely
+    contains a constructor remains opaque.
+    """
+    simple_statements = (ast.Expr, ast.Assign, ast.AnnAssign, ast.Return)
+    if (
+        function.decorator_list
+        or function.args.vararg is not None
+        or function.args.kwarg is not None
+        or not function.body
+        or not isinstance(function.body[-1], ast.Return)
+        or sum(isinstance(stmt, ast.Return) for stmt in function.body) != 1
+        or any(not isinstance(stmt, simple_statements) for stmt in function.body)
+    ):
+        return frozenset()
+
+    returned = function.body[-1]
+    assert isinstance(returned, ast.Return)
+    if returned.value is None or any(
+        isinstance(node, (ast.IfExp, ast.BoolOp))
+        for node in _iter_eager_expr(returned.value)
+    ):
+        return frozenset()
+
+    parameters = [
+        *function.args.posonlyargs,
+        *function.args.args,
+        *function.args.kwonlyargs,
+    ]
+
+    def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _references_any(value, frozenset({exc_name, *live}))
+
+    typed: set[str] = set()
+    for parameter in parameters:
+        carried_at: dict[int, frozenset[str]] = {}
+        _track_carried(
+            function.body,
+            parameter.arg,
+            {parameter.arg},
+            carried_at,
+            carries_input,
+        )
+        if _returns_typed_constructor(
+            returned.value, carried_at.get(id(returned), frozenset())
+        ):
+            typed.add(parameter.arg)
+    return frozenset(typed)
+
+
+def _function_binds_name(
+    function: ast.FunctionDef | ast.AsyncFunctionDef | None, name: str
+) -> bool:
+    """True if *name* is local to *function* and shadows a module helper."""
+    if function is None:
+        return False
+    args = function.args
+    parameters = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+    if args.vararg is not None:
+        parameters.append(args.vararg)
+    if args.kwarg is not None:
+        parameters.append(args.kwarg)
+    if any(parameter.arg == name for parameter in parameters):
+        return True
+    for node in _iter_shallow(function):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)) and (
+            node.name == name
+        ):
+            return True
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        # `nonlocal` points the name at an enclosing function's local; `global`
+        # lets this function rebind the module name. Neither is the proven helper.
+        if isinstance(node, (ast.Nonlocal, ast.Global)) and name in node.names:
+            return True
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                if bound == name:
+                    return True
+    return False
+
+
+def module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef]:
+    """Top-level synchronous functions whose name nothing else in the module rebinds.
+
+    A helper reassigned at module level, or declared ``global`` by any function
+    (which may then rebind it), is not proven to be the function whose body was
+    summarized.
+    """
+    rebound: set[str] = set()
+    for stmt in tree.body:
+        if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            for target in (
+                stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
+            ):
+                rebound |= _rebound_names(target)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            rebound |= set(node.names)
+    helpers: dict[str, ast.FunctionDef] = {}
+    for stmt in tree.body:
+        if isinstance(stmt, ast.FunctionDef) and stmt.name not in rebound:
+            helpers[stmt.name] = stmt
+        elif isinstance(stmt, (ast.AsyncFunctionDef, ast.ClassDef)):
+            helpers.pop(stmt.name, None)
+    return helpers
+
+
+def visible_helpers(
+    helpers: Mapping[str, ast.FunctionDef],
+    functions: list[ast.FunctionDef | ast.AsyncFunctionDef],
+) -> dict[str, ast.FunctionDef]:
+    """The module helpers a call inside *functions* (outermost first) still resolves to."""
+    return {
+        name: helper
+        for name, helper in helpers.items()
+        if not any(_function_binds_name(function, name) for function in functions)
+    }
+
+
+def _call_argument_for_parameter(
+    call: ast.Call, function: ast.FunctionDef, parameter: str
+) -> ast.expr | None:
+    """Resolve a directly supplied helper argument; reject unpacked calls."""
+    if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
+        keyword.arg is None for keyword in call.keywords
+    ):
+        return None
+    positional = [*function.args.posonlyargs, *function.args.args]
+    if len(call.args) > len(positional):
+        return None
+    supplied = {
+        arg.arg: value for arg, value in zip(positional, call.args, strict=False)
+    }
+    for keyword in call.keywords:
+        assert keyword.arg is not None
+        if keyword.arg in supplied:
+            return None
+        supplied[keyword.arg] = keyword.value
+    return supplied.get(parameter)
+
+
+def _calls_reaching_value(value: ast.expr) -> Iterator[ast.Call]:
+    """Calls whose result becomes (part of) *value* unchanged.
+
+    Descends only through class-like constructors, whose arguments become part
+    of the typed value they build, and literal containers. Any other call is
+    yielded but not entered: a lowercase wrapper may drop what it is given.
+    """
+    pending: list[ast.expr] = [value]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Call):
+            yield node
+            if _class_like(_get_name(node.func)):
+                pending.extend([*node.args, *[kw.value for kw in node.keywords]])
+        elif isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            pending.extend(node.elts)
+        elif isinstance(node, ast.Dict):
+            pending.extend(v for v in node.values if v is not None)
+        elif isinstance(node, ast.Starred):
+            pending.append(node.value)
+
+
+def _expression_uses_typed_helper(
+    value: ast.expr,
+    exc_name: str,
+    live: set[str],
+    *,
+    local_helpers: Mapping[str, ast.FunctionDef] | None,
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+) -> bool:
+    """True when a proven same-module helper, called with the failure, produces *value*.
+
+    The helper's result must be the value itself or reach it through class-like
+    constructors (see :func:`_calls_reaching_value`); ``discard(helper(exc))``
+    stays opaque.
+    """
+    if not local_helpers:
+        return False
+    carrying_names = frozenset({exc_name, *live})
+    for node in _calls_reaching_value(value):
+        if not isinstance(node.func, ast.Name):
+            continue
+        helper_name = node.func.id
+        helper = local_helpers.get(helper_name)
+        if helper is None or _function_binds_name(enclosing_function, helper_name):
+            continue
+        for parameter in _typed_helper_parameters(helper):
+            argument = _call_argument_for_parameter(node, helper, parameter)
+            if isinstance(argument, ast.Name) and argument.id in carrying_names:
+                return True
+    return False
+
+
 def _derives_typed_failure(
-    value: ast.expr, exc_name: str, live: set[str], *, typed_binding: bool = False
+    value: ast.expr,
+    exc_name: str,
+    live: set[str],
+    *,
+    typed_binding: bool = False,
+    local_helpers: Mapping[str, ast.FunctionDef] | None = None,
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
 ) -> bool:
     """True when *value* carries the caught exception out as typed data."""
-    return _expr_types_cause(
-        value, exc_name, typed_binding=typed_binding
-    ) or _references_any(value, frozenset(live))
+    return (
+        _expr_types_cause(value, exc_name, typed_binding=typed_binding)
+        or _references_any(value, frozenset(live))
+        or _expression_uses_typed_helper(
+            value,
+            exc_name,
+            live,
+            local_helpers=local_helpers,
+            enclosing_function=enclosing_function,
+        )
+    )
 
 
 def _typed_failure_deriver(
     typed_binding: bool,
+    *,
+    local_helpers: Mapping[str, ast.FunctionDef] | None = None,
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
 ) -> Callable[[ast.expr, str, set[str]], bool]:
-    """:func:`_derives_typed_failure` bound to a handler's ``typed_binding``."""
+    """:func:`_derives_typed_failure` bound to a handler's local context."""
 
     def derives(value: ast.expr, exc_name: str, live: set[str]) -> bool:
         return _derives_typed_failure(
-            value, exc_name, live, typed_binding=typed_binding
+            value,
+            exc_name,
+            live,
+            typed_binding=typed_binding,
+            local_helpers=local_helpers,
+            enclosing_function=enclosing_function,
         )
 
     return derives
 
 
-def typed_failure_scope(handler: ast.ExceptHandler) -> TypedFailureScope | None:
+def _handler_rebinds_exception(handler: ast.ExceptHandler) -> bool:
+    """Conservatively reject helper proof if the caught binding is rebound."""
+    if handler.name is None:
+        return True
+    for stmt in handler.body:
+        for node in _iter_shallow(stmt):
+            if (
+                isinstance(node, ast.Name)
+                and node.id == handler.name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if (
+                isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                and node.name == handler.name
+            ):
+                return True
+            if isinstance(node, ast.ExceptHandler) and node.name == handler.name:
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound == handler.name:
+                        return True
+    return False
+
+
+def typed_failure_scope(
+    handler: ast.ExceptHandler,
+    *,
+    local_helpers: Mapping[str, ast.FunctionDef] | None = None,
+    enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+) -> TypedFailureScope | None:
     """Find where *handler*'s caught exception survives as typed data.
 
     ``None`` when the handler does not bind the exception (``except Exception:``)
@@ -723,16 +1016,26 @@ def typed_failure_scope(handler: ast.ExceptHandler) -> TypedFailureScope | None:
     if handler.name is None:
         return None
     typed_binding = _handler_binds_typed_error(handler)
+    helper_context = local_helpers if not _handler_rebinds_exception(handler) else None
     carried_at: dict[int, frozenset[str]] = {}
     live_at_end = _track_carried(
         handler.body,
         handler.name,
         set(),
         carried_at,
-        _typed_failure_deriver(typed_binding),
+        _typed_failure_deriver(
+            typed_binding,
+            local_helpers=helper_context,
+            enclosing_function=enclosing_function,
+        ),
     )
     return TypedFailureScope(
-        handler.name, carried_at, frozenset(live_at_end), typed_binding
+        handler.name,
+        carried_at,
+        frozenset(live_at_end),
+        typed_binding,
+        helper_context,
+        enclosing_function,
     )
 
 
@@ -745,6 +1048,8 @@ def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) ->
         scope.exc_name,
         set(scope.carried_at.get(id(stmt), frozenset())),
         typed_binding=scope.typed_binding,
+        local_helpers=scope.local_helpers,
+        enclosing_function=scope.enclosing_function,
     )
 
 
@@ -993,9 +1298,20 @@ def _staged_row_is_returned(
         scope.exc_name,
         set(scope.live_at_end),
         carried,
-        _typed_failure_deriver(scope.typed_binding),
+        _typed_failure_deriver(
+            scope.typed_binding,
+            local_helpers=scope.local_helpers,
+            enclosing_function=scope.enclosing_function,
+        ),
     )
-    below = TypedFailureScope(scope.exc_name, carried, frozenset(), scope.typed_binding)
+    below = TypedFailureScope(
+        scope.exc_name,
+        carried,
+        frozenset(),
+        scope.typed_binding,
+        scope.local_helpers,
+        scope.enclosing_function,
+    )
     returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
     if not returns:
         return False
@@ -1007,6 +1323,7 @@ def _body_returns_typed_failure(
     *,
     function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
     redaction: RedactionScope | None = None,
+    local_helpers: Mapping[str, ast.FunctionDef] | None = None,
 ) -> bool:
     """True when the caught exception leaves *handler* as typed data on every path.
 
@@ -1029,7 +1346,11 @@ def _body_returns_typed_failure(
     (:func:`_staged_row_is_returned`); without *function* that shape cannot be
     proven and does not pass.
     """
-    scope = typed_failure_scope(handler)
+    scope = typed_failure_scope(
+        handler,
+        local_helpers=local_helpers,
+        enclosing_function=function,
+    )
     if scope is None:
         return False
     if _has_swallowing_exit(handler.body, scope, redaction=redaction):

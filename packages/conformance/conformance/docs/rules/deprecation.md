@@ -225,6 +225,14 @@ never launder a removal.  To retire a field: mark it `deprecated` or `sunset` in
 widget definition, regenerate the contract, run `gen-contract-ledger` to record the new
 status, and commit the updated ledger in the same PR.
 
+A field keeps its recorded type for life: the ledger keys entries by contract and field
+name, so a retype cannot be recorded under the same name. To change a type deliberately,
+either revert it, or retire the field (`sunset`) and add a new field under a new name
+with the new type, moving producers to it. Replacing an untyped object (`dict[str,
+Any]`) with a model is such a retype — a model can require keys or value types that
+payloads already in flight do not carry — and not the in-place `Any` replacement P001
+mandates, which keeps the outer shape.
+
 ---
 
 ## B006 — `StaleContractLedger` {#b006}

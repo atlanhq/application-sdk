@@ -3965,7 +3965,7 @@ def test_verify_checks_every_open_finding_in_batches(repo: Path):
         ),
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
-    fixed = review_mod._verify(client, ws, fs, "--- a.py\n@@ -1 +1 @@")
+    fixed = review_mod._verify(client, ws, fs, "--- a.py\n@@ -1 +1 @@").fixed
     assert fixed == [fs[0].id, fs[24].id]
     assert len(script.requests) == 2  # 20 + 5
     first, second = (json.dumps(r) for r in script.requests)
@@ -4148,7 +4148,9 @@ def test_concerns_alone_still_get_rechecked(repo: Path):
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
     st = PRState(approach=json.loads(json.dumps(_CONCERNS)))
-    fixed = review_mod._verify(client, ws, [], "--- a.py", review_mod.open_concerns(st))
+    fixed = review_mod._verify(
+        client, ws, [], "--- a.py", review_mod.open_concerns(st)
+    ).fixed
     assert fixed == ["A1"] and len(script.requests) == 1
 
 
@@ -4276,7 +4278,9 @@ def test_verify_is_told_which_paths_no_longer_exist(repo: Path):
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
     removed = review_mod.removed_paths(parse_unified_diff(RENAME_DIFF))
 
-    assert review_mod._verify(client, ws, [f], "--- a.py", removed=removed) == [f.id]
+    assert review_mod._verify(client, ws, [f], "--- a.py", removed=removed).fixed == [
+        f.id
+    ]
     user = script.requests[0]["messages"][1]["content"]
     assert (
         "<paths_removed_by_this_pr>\n"
@@ -4372,3 +4376,325 @@ def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
         "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml"
         in json.dumps(verify)
     )
+
+
+# ---- verify that runs out of output budget ------------------------------------------------------------------------
+
+
+def _cut_off_reply(out: int = 8000):
+    """What a reasoning model returns when it spends the whole cap thinking: no
+    verdict tool call, every output token used."""
+    status, headers, text = response(out=out)
+    body = json.loads(text)
+    body["choices"][0]["finish_reason"] = "length"
+    return status, headers, json.dumps(body)
+
+
+def test_a_verify_cut_off_is_not_read_as_nothing_fixed(repo: Path):
+    """A verify reply with no verdict was taken as "none fixed", so findings the
+    PR had fixed were reported open round after round, with nothing said."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    concern = ("A1", {"title": "skipped not refused", "why": "w"})
+    script = Script(_cut_off_reply())
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+
+    got = review_mod._verify(client, ws, [f], "--- a.py", [concern])
+
+    assert got.fixed == [] and got.cut_off == [f.id, "A1"]
+    assert f.status != "fixed"
+
+
+def test_a_verdict_reply_at_the_cap_is_still_read(repo: Path):
+    """Using every token is only a cut-off when no verdict came back."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    reply = response(
+        [tool_call("verdicts", {"items": [{"id": f.id, "status": "fixed"}]})], out=8000
+    )
+    client = Client(
+        model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script(reply)
+    )
+
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert got.fixed == [f.id] and got.cut_off == []
+
+
+def test_verify_keeps_its_budget_unless_opted_in(repo: Path):
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    script = Script(
+        response([tool_call("verdicts", {"items": []})]),
+        response([tool_call("verdicts", {"items": []})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+
+    review_mod._verify(client, ws, [f], "--- a.py")
+    review_mod._verify(client, ws, [f], "--- a.py", max_tokens=24000)
+
+    assert [r["max_tokens"] for r in script.requests] == [8000, 24000]
+
+
+def test_shipped_config_keeps_the_verify_default_and_names_the_opt_in():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    assert cfg.limits.verify_max_tokens == 8000
+    assert cfg.limits.verify_max_tokens_opt_in > cfg.limits.verify_max_tokens
+
+
+@pytest.mark.parametrize(
+    ("body", "force", "verify_budget"),
+    [
+        ("/lens", False, False),
+        ("/lens verify-budget", False, True),
+        ("/lens force verify-budget", True, True),
+        ("/lens force please", True, False),
+    ],
+)
+def test_verify_budget_is_parsed_from_the_comment(body, force, verify_budget):
+    d = decide("issue_comment", _comment(body), REPO)
+    assert d.run and (d.force, d.verify_budget) == (force, verify_budget)
+
+
+def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
+    """End to end through `run`: round 2's verify is cut off. The finding stays
+    open, and both the verdict and the summary say it was not re-judged and
+    how to re-check it with the raised budget."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_elsewhere(gh)
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script(_cut_off_reply())),
+    )
+
+    assert fid in res.verify_cut_off and fid not in res.resolved_verified
+    assert res.verify_skipped == []  # verify ran; it was cut off, not skipped
+    assert any(f.id == fid for f in res.state.open_findings())
+    brief = review_mod.verdict_brief(res, "https://example.test/summary")
+    summary = review_mod.render_summary(res)
+    for body in (brief, summary):
+        assert "Verify ran out of output budget" in body and fid in body
+        assert "`/lens force verify-budget`" in body
+        # Without force, a merge-only push re-checks nothing: never offer that form.
+        assert "`/lens verify-budget`" not in body
+    from lens import report as report_mod  # noqa: PLC0415
+
+    # Both JSON outputs carry the same cut-off, guidance included, not just the ids.
+    rep = report_mod.build(res)
+    for cut in (
+        json.loads(review_mod.to_json(res))["verify_cut_off"],
+        rep["verify_cut_off"],
+    ):
+        assert cut["items"] == res.verify_cut_off
+        assert (cut["max_tokens"], cut["opted_in"]) == (8000, False)
+        assert cut["opt_in_tokens"] == 24000
+        assert "`/lens force verify-budget`" in cut["message"]
+    assert "Verify ran out of output budget" in report_mod.markdown(rep, 1)
+
+
+def test_a_cut_off_with_the_opt_in_does_not_offer_it_again():
+    res = review_mod.RunResult(
+        "reviewed",
+        verify_cut_off=["F-000001"],
+        verify_max_tokens=24000,
+        verify_opt_in_tokens=24000,
+        verify_opted_in=True,
+    )
+    line = review_mod.verify_cut_off_line(res)
+    assert "24,000" in line and "already the opt-in budget" in line
+    assert "/lens force verify-budget" not in line
+
+
+def test_a_responses_api_cut_off_is_read_from_its_incomplete_status(repo: Path):
+    """The shipped config uses Responses, which reports the cap as status
+    `incomplete`. Fewer tokens than the cap, so only the status can flag it."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    status, headers, text = _responses_reply([REASONING], output=500, reasoning=500)
+    body = json.loads(text)
+    body["status"] = "incomplete"
+    client = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script((status, headers, json.dumps(body))),
+        api="responses",
+    )
+
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert got.fixed == [] and got.cut_off == [f.id]
+    assert f.status != "fixed"
+
+
+@pytest.mark.parametrize(
+    ("argv", "verify_budget"),
+    [([], False), (["--verify-budget"], True)],
+)
+def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budget):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    seen: dict = {}
+
+    def fake_run(**kwargs):
+        seen.update(kwargs)
+        return review_mod.RunResult("skipped", "test")
+
+    class QuietGitHub:  # --dry-run posts nothing; only cleanup is looked up
+        def __init__(self, repo):
+            pass
+
+        def delete_comment(self, comment_id):  # pragma: no cover - id is 0
+            raise AssertionError("a dry run posts no progress note to delete")
+
+    monkeypatch.setattr(cli, "GitHub", QuietGitHub)
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("LENS_REPORT_PATH", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    root = str(Path(__file__).resolve().parents[3])
+
+    code = cli.main(
+        ["review", "--repo", "o/r", "--pr", "7", "--root", root, "--dry-run", *argv]
+    )
+
+    assert code == 0 and seen["verify_budget"] is verify_budget
+
+
+def _round_two_merge_only(gh):
+    """A second head that only merges the base branch: no PR file changes."""
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = ""
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = gh.files[
+        ("application_sdk/storage/fetch.py", "h1")
+    ]
+
+
+def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
+    """A merge-only push left 0 PR files in range, so verify was skipped and the
+    open findings were shown again with nothing saying they were not re-checked."""
+    from lens import report as report_mod  # noqa: PLC0415
+
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        verify_budget=True,
+    )
+
+    assert res.verify_skipped and fid in res.verify_skipped
+    assert res.verify_cut_off == [] and fid not in res.resolved_verified
+    assert not any("<changes_this_round>" in json.dumps(r) for r in script.requests)
+    brief = review_mod.verdict_brief(res, "https://example.test/summary")
+    summary = review_mod.render_summary(res)
+    for body in (brief, summary):
+        assert "Nothing was re-checked this round" in body and fid in body
+        assert "`/lens force`" in body
+    rep = report_mod.build(res)
+    for skipped in (
+        json.loads(review_mod.to_json(res))["verify_skipped"],
+        rep["verify_skipped"],
+    ):
+        assert skipped["items"] == res.verify_skipped
+        assert "Nothing was re-checked" in skipped["message"]
+    assert "Nothing was re-checked this round" in report_mod.markdown(rep, 1)
+
+
+def test_a_round_that_rechecks_says_nothing_about_skipping(repo: Path):
+    """Control: a round that touches a PR file runs verify and adds no notice."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    _round_two_elsewhere(gh)
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(
+            Script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+
+    assert res.verify_skipped == [] and res.verify_cut_off == []
+    assert review_mod.verify_notice_line(res) == ""
+    assert "Nothing was re-checked" not in review_mod.render_summary(res)
+
+
+def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
+    """The cut-off hint names `/lens force verify-budget`. Followed on a new head that
+    only merges the base branch, force must still re-check: it reviews the (empty) new
+    commits incrementally, and verify used to be skipped, so the hint did nothing."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        force=True,
+        verify_budget=True,
+    )
+
+    assert res.mode == "incremental"  # a new head: force did not make it a full review
+    assert res.verify_skipped == [] and res.verify_opted_in
+    assert len(script.requests) == 1 and fid in json.dumps(script.requests[0])
+    # Nothing in the round's own range, so verify is shown the whole PR's change.
+    assert "<changes_this_round>" in json.dumps(script.requests[0])
+    assert review_mod.verify_notice_line(res) == ""

@@ -30,11 +30,13 @@ class Checker(
         directives: dict[int, _IgnoreDirective],
         atlan_ioerror_imported: bool,
         legacy_aliases: frozenset[str] = frozenset(),
+        local_helpers: dict[str, ast.FunctionDef] | None = None,
     ) -> None:
         self._filename = filename
         self._directives = directives
         self._atlan_ioerror_imported = atlan_ioerror_imported
         self._legacy_aliases = legacy_aliases
+        self._local_helpers = local_helpers or {}
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []

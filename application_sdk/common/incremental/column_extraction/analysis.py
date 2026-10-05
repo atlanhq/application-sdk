@@ -8,12 +8,37 @@ state (CREATED, UPDATED, or BACKFILL).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
-from application_sdk.common.incremental.models import EntityType
+from application_sdk.common.incremental.models import EntityType, TableState
+from application_sdk.constants import TRANSFORMED_SUBDIR
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+# SQL literals for the states the analysis filters on. Built from the enum so
+# the query and the Python comparisons cannot drift apart.
+_CHANGED_STATES_SQL = f"('{TableState.CREATED}', '{TableState.UPDATED}')"
+
+
+class ColumnExtractionAnalysis(NamedTuple):
+    """What :func:`get_tables_needing_column_extraction` found.
+
+    A ``NamedTuple``, so the four-way positional unpacking callers already do
+    keeps working unchanged; new code reads the fields by name.
+
+    Attributes:
+        rows: One dict per table needing columns, with ``table_id``,
+            ``is_changed`` and ``is_backfill`` keys.
+        changed_count: Tables created or updated.
+        backfill_count: Backfill tables (not changed, but in the backfill set).
+        no_change_count: Unchanged tables.
+    """
+
+    rows: list[dict[str, Any]]
+    changed_count: int
+    backfill_count: int
+    no_change_count: int
 
 
 def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
@@ -40,7 +65,7 @@ def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
             "provided in workflow_args"
         )
 
-    transformed_dir = Path(output_path_str).joinpath("transformed")
+    transformed_dir = Path(output_path_str).joinpath(TRANSFORMED_SUBDIR)
 
     if not transformed_dir.exists() or not any(transformed_dir.rglob("*.json")):
         raise FileNotFoundError(
@@ -55,7 +80,7 @@ def get_transformed_dir(workflow_args: dict[str, Any]) -> Path:
 def get_tables_needing_column_extraction(
     transformed_dir: Path,
     backfill_qualified_names: set[str] | None = None,
-) -> tuple[list[dict[str, Any]], int, int, int]:
+) -> ColumnExtractionAnalysis:
     """Get tables needing column extraction using DuckDB.
 
     Reads transformed table JSON files and identifies which tables need
@@ -66,11 +91,8 @@ def get_tables_needing_column_extraction(
         backfill_qualified_names: Optional set of qualified names needing backfill.
 
     Returns:
-        Tuple of:
-        - rows: list of dicts with table_id, is_changed, is_backfill keys
-        - changed_count: Number of tables created or updated
-        - backfill_count: Number of backfill tables
-        - no_change_count: Number of unchanged tables
+        A :class:`ColumnExtractionAnalysis` — a ``NamedTuple`` of
+        ``(rows, changed_count, backfill_count, no_change_count)``.
     """
     try:
         from application_sdk.common.incremental.storage.duckdb_utils import (  # noqa: PLC0415 — optional dep: duckdb
@@ -107,7 +129,7 @@ def get_tables_needing_column_extraction(
                 json_extract_string(to_json(attributes), '$.qualifiedName') AS qualified_name,
                 COALESCE(
                     json_extract_string(to_json(customAttributes), '$.incremental_state'),
-                    'NO CHANGE'
+                    '{TableState.NO_CHANGE}'
                 ) AS incremental_state
             FROM {json_source}
             """
@@ -120,9 +142,9 @@ def get_tables_needing_column_extraction(
             """).fetchall()
 
             state_map: dict[str, int] = {row[0]: row[1] for row in state_counts}
-            created_count = state_map.get("CREATED", 0)
-            updated_count = state_map.get("UPDATED", 0)
-            no_change_count = state_map.get("NO CHANGE", 0)
+            created_count = state_map.get(TableState.CREATED, 0)
+            updated_count = state_map.get(TableState.UPDATED, 0)
+            no_change_count = state_map.get(TableState.NO_CHANGE, 0)
             total_count = sum(state_map.values())
 
             logger.info(
@@ -148,11 +170,11 @@ def get_tables_needing_column_extraction(
             result_rows = conn.execute(f"""
             SELECT
                 database_name || '.' || schema_name || '.' || table_name AS table_id,
-                incremental_state IN ('CREATED', 'UPDATED') AS is_changed,
-                (incremental_state NOT IN ('CREATED', 'UPDATED'))
+                incremental_state IN {_CHANGED_STATES_SQL} AS is_changed,
+                (incremental_state NOT IN {_CHANGED_STATES_SQL})
                     AND ({backfill_filter}) AS is_backfill
             FROM ({base_sql})
-            WHERE incremental_state IN ('CREATED', 'UPDATED')
+            WHERE incremental_state IN {_CHANGED_STATES_SQL}
                OR ({backfill_filter})
             """).fetchall()
 
@@ -175,7 +197,9 @@ def get_tables_needing_column_extraction(
             backfill_count,
         )
 
-        return rows, changed_count, backfill_count, no_change_count
+        return ColumnExtractionAnalysis(
+            rows, changed_count, backfill_count, no_change_count
+        )
 
     # conformance: ignore[E004] re-raises immediately as typed ColumnExtractionAnalysisError; no swallow occurs
     except Exception as e:

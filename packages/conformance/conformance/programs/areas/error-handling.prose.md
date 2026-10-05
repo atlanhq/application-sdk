@@ -292,13 +292,16 @@ outcome mirroring the error-handling shape in the reference app named by
   `.format(exc)`) still fire.  A string is the failure laundered into a plain
   value.
 
-- **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
-  so a missing or broken dependency reads as a normal skip.  Bind the
-  exception and carry its text into whatever the block does next: a log line
-  for a runtime guard, as `application_sdk/clients/ssl_utils.py`'s
+- **E008 ImportErrorWithoutLogging** — `except ImportError` that hides a
+  missing or broken dependency, so it reads as a normal skip.  When the handler
+  takes a fallback or returns without surfacing the failure, bind the exception
+  and carry its text into a log line, as `application_sdk/clients/ssl_utils.py`'s
   `_get_default_ca_bundle_path` logs its certifi fallback (no reference app has
-  a scanned `except ImportError`; E008 skips `tests/`).  Legitimate optional-dependency guards still need the trace — the fallback
-  being correct is not the same as the failure being invisible.
+  a scanned `except ImportError`; E008 skips `tests/`).  A cause-preserving
+  re-raise on every path, including wrapping the ImportError in a typed domain
+  error (`raise MissingExtraError(cause=exc) from exc`), already surfaces the
+  failure and does not need a duplicate log.  A correct fallback still needs a
+  trace; correctness alone does not make the missing-import event visible.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.
