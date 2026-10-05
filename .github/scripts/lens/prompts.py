@@ -34,6 +34,9 @@ Evidence
 - A changed symbol marked PUBLIC API: check the change against its call sites; a behaviour change callers
   can observe is at least high — unless <description> declares it as intended. A declared change is the
   author's decision: do not ask them to declare or document what the description already states.
+- <released_surface_removals>, when present, lists the public names that shipped in the last release
+  and that the PR head removes or narrows. A removed or renamed public name is a break only if listed
+  there; one absent from it never shipped. If it says "release baseline unavailable", judge as usual.
 - existing_code must be copied VERBATIM from the diff or <changed_functions> (1-6 lines, without the
   line-number column or the + marker).
 
@@ -128,7 +131,11 @@ quoted line was edited. A <concern id="A…"> is an earlier concern about the PR
 fixed when the PR no longer has that problem (the code changed, or the claim it contradicted was
 corrected). <paths_removed_by_this_pr> lists every path the PR deletes or renames away
 (`renamed: old -> new`): at the PR head those paths do not exist. A finding or concern that depends
-on one of them still existing can no longer occur. Answer by calling verdicts once, with one verdict
+on one of them still existing can no longer occur. <released_surface_removals> lists the public
+names that shipped in the last release (`baseline vX.Y.Z`) and that the PR head removes or narrows:
+a finding that a public name was removed or narrowed without deprecation is fixed when that name
+is not listed there (it never shipped, or still exists), unless the block says
+"release baseline unavailable". Answer by calling verdicts once, with one verdict
 per finding and concern id.
 fixed: the defect can no longer occur. open: it still can. Do not raise new issues.
 """

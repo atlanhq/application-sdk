@@ -785,26 +785,28 @@ def _resolve_commit_subject(args: argparse.Namespace) -> str | None:
     return args.commit_subject
 
 
-def _cmd_check(args: argparse.Namespace) -> int:
-    repo = Path(args.repo).resolve()
-    base_ref = args.base_ref or latest_release_tag(repo)
+def snapshot_at_ref(repo: Path, ref: str, package: str = DEFAULT_PACKAGE) -> Snapshot:
+    """The surface of *package* as committed at *ref*, read without a checkout.
+
+    Raises :class:`ValueError` when git cannot produce the tree (unknown ref,
+    package absent at that ref) or a module in it does not parse.
+    """
     with tempfile.TemporaryDirectory(prefix="surface-base-") as tmp:
         base_root = Path(tmp)
         # --output to a file rather than piping: the archive is binary, and a
         # text-mode pipe would mangle any non-UTF-8 byte in the tree.
         bundle = base_root / "base.tar"
-        _git(
-            repo,
-            "archive",
-            "--format=tar",
-            f"--output={bundle}",
-            base_ref,
-            args.package,
-        )
+        _git(repo, "archive", "--format=tar", f"--output={bundle}", ref, package)
         with tarfile.open(bundle) as tar:
             tar.extractall(base_root, filter="data")
         bundle.unlink()
-        base = build_snapshot(base_root, args.package)
+        return build_snapshot(base_root, package)
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    repo = Path(args.repo).resolve()
+    base_ref = args.base_ref or latest_release_tag(repo)
+    base = snapshot_at_ref(repo, base_ref, args.package)
     head = build_snapshot(repo, args.package)
     findings = compare(base, head, commit_subject=_resolve_commit_subject(args))
     report = render_report(findings, base_label=base_ref, head_label=args.head_label)

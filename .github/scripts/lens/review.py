@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import holistic, prompts, trace
+from . import holistic, prompts, surface, trace
 from .agent import AgentLimits, BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
@@ -519,6 +519,20 @@ def run(
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
+    # ---- the last release's public names this PR takes away ---------------
+    # Once per round, shared by the verify call and every bundle: a removal is a
+    # break only if the name shipped, which neither can tell from a diff.
+    with trace.group("3b · released surface (last release vs PR head)"):
+        released = surface.released_surface_removals(
+            root, full_files, head_text, lambda p: gh.file_at(p, head)
+        )
+        trace.line(
+            released.replace("\n", "; ")[:400]
+            if released
+            else "skipped: the PR changes no package module"
+        )
+    pr_meta["released_surface_removals"] = released
+
     # ---- verify still-open findings (1 call) -------------------------------
     # Every open finding, not only those whose own file changed: a fix often lands
     # in another file (a data file's finding fixed in the code that reads it). The
@@ -559,6 +573,7 @@ def run(
                     round_diff(verify_files, to_verify),
                     concerns,
                     removed=removed_paths(full_files),
+                    released=released,
                     max_tokens=res.verify_max_tokens,
                 )
                 if to_verify or concerns
@@ -965,11 +980,12 @@ def _verify(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
+    released: str = "",
     max_tokens: int = AgentLimits.verify_max_tokens,
 ) -> Verified:
     """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
-    (with the first batch). The paths the PR removes, then the round's changes,
-    lead each call, so the batches share one cached prefix. Returns the ids
+    (with the first batch). The paths the PR removes, the last release's public
+    names it removes (`surface`), then the round's changes, lead each call, so the batches share one cached prefix. Returns the ids
     judged fixed, and the ids no verdict came back for because a call ran out
     of output budget first."""
     batches = [
@@ -984,6 +1000,7 @@ def _verify(
             changes,
             concerns if n == 0 else None,
             removed=removed,
+            released=released,
             max_tokens=max_tokens,
         )
         out.fixed += got.fixed
@@ -999,6 +1016,7 @@ def _verify_batch(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
+    released: str = "",
     max_tokens: int = AgentLimits.verify_max_tokens,
 ) -> Verified:
     items = (
@@ -1006,6 +1024,10 @@ def _verify_batch(
         if removed
         else []
     )
+    if released:
+        items.append(
+            f"<released_surface_removals>\n{released}\n</released_surface_removals>"
+        )
     if changes:
         items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     for cid, c in concerns or []:
