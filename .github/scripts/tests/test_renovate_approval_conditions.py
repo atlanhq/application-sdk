@@ -823,9 +823,7 @@ class TestFanInWait:
         assert gate.parse_wait_seconds("ten") == 0
         assert "::warning::" in capsys.readouterr().out
 
-    def test_no_wait_configured_keeps_the_one_shot_behaviour(
-        self, monkeypatch, capsys
-    ):
+    def test_no_wait_configured_keeps_the_one_shot_behaviour(self, monkeypatch, capsys):
         sleeps: list[float] = []
         _code, fake, _log = run_main(
             monkeypatch, capsys=capsys, sleeps=sleeps, checks_exit=8
