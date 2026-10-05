@@ -773,6 +773,8 @@ def test_catalog_p_series_present() -> None:
     CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
     declaring its own CredentialValue alias, instead of the SDK's
     route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
+    P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
+    whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -826,6 +828,7 @@ def test_catalog_p_series_present() -> None:
         "P051",
         "P052",
         "P053",
+        "P054",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
