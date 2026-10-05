@@ -50,15 +50,21 @@ Environment:
     DISPATCH_PR             PR number (workflow_dispatch manual testing).
     EXTRA_DEP_PATTERN       optional ERE alternation of repo-specific dependency
                             paths, appended to the built-in allowlist.
+    CHECKS_WAIT_MINUTES     optional fan-in wait (FND-3317): how long to keep
+                            polling while required checks are still PENDING
+                            before judging (e). Empty or 0 = no wait. See
+                            :func:`wait_for_pending_checks`.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import subprocess
 import sys
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -196,6 +202,20 @@ APPROVAL_BODY = (
     "push (`dismiss_stale_reviews_on_push`) and re-posted once the new\n"
     "HEAD's required checks are green."
 )
+
+#: ``gh pr checks`` exit code for "checks pending" (``gh pr checks --help``,
+#: "Additional exit codes"). The only exit the fan-in wait keeps polling on;
+#: pass (0) and fail (1) both end the wait and are judged by condition (e).
+CHECKS_PENDING_EXIT = 8
+
+#: Seconds between polls while required checks are pending.
+CHECKS_POLL_SECONDS = 30
+
+#: Ceiling on the fan-in wait, whatever the caller asks for. It has to fit
+#: inside the reusable job's ``timeout-minutes`` with room for the conditions
+#: themselves, and a wait that long already means the anchor workflow is not
+#: the one that usually finishes last — the caller's anchor choice is wrong.
+MAX_CHECKS_WAIT_SECONDS = 15 * 60
 
 Runner = Callable[..., subprocess.CompletedProcess]
 
@@ -634,6 +654,71 @@ def required_checks_green(repo: str, pr: str, runner: Runner) -> bool:
     return result.returncode == 0
 
 
+def parse_wait_seconds(raw: str) -> int:
+    """``CHECKS_WAIT_MINUTES`` as seconds, clamped to [0, MAX_CHECKS_WAIT_SECONDS].
+
+    An unreadable value means no wait, with a warning, rather than an error:
+    waiting less can only withhold an approval this run, never grant one.
+    """
+    raw = raw.strip()
+    if not raw:
+        return 0
+    try:
+        minutes = float(raw)
+    except ValueError:
+        print(f"::warning::CHECKS_WAIT_MINUTES={raw!r} is not a number; not waiting.")
+        return 0
+    if not math.isfinite(minutes):
+        return 0
+    return max(0, min(int(minutes * 60), MAX_CHECKS_WAIT_SECONDS))
+
+
+def wait_for_pending_checks(
+    repo: str,
+    pr: str,
+    eval_sha: str,
+    runner: Runner,
+    *,
+    wait_seconds: int,
+    sleep: Callable[[float], None] = time.sleep,
+) -> bool:
+    """Fan-in (FND-3317): poll while any required check is still PENDING.
+
+    The caller fires this workflow once per SHA, on the completion of the
+    workflow that usually finishes last (the anchor), instead of once per
+    upstream workflow. When some other required check is still running at
+    that moment, nothing else would re-fire the gate, so it waits here for
+    up to ``wait_seconds``. Only "pending" keeps it waiting: pass or fail
+    both return at once and condition (e) judges them as before. A budget
+    that runs out also returns True — (e) then sees the pending check and
+    withholds, exactly as an early trigger always has.
+
+    Returns False only when the PR's HEAD moved off ``eval_sha`` mid-wait:
+    the new HEAD has its own anchor run coming, and these checks no longer
+    describe the PR. HEAD is re-read after each sleep, so a push does not
+    cost the rest of the budget.
+    """
+    polls = math.ceil(wait_seconds / CHECKS_POLL_SECONDS)
+    for poll in range(1, polls + 1):
+        result = _gh(["pr", "checks", pr, "--repo", repo, "--required"], runner)
+        if result.returncode != CHECKS_PENDING_EXIT:
+            return True
+        print(
+            f"PR #{pr}: required checks still pending — waiting "
+            f"{CHECKS_POLL_SECONDS}s ({poll}/{polls})."
+        )
+        sleep(CHECKS_POLL_SECONDS)
+        meta = fetch_pr_meta(repo, pr, runner)
+        head_sha = str(((meta.get("head") or {}).get("sha")) or "")
+        ok, message = check_head_unchanged(pr, head_sha, eval_sha)
+        if not ok:
+            print(message)
+            return False
+    if polls:
+        print(f"PR #{pr}: wait budget spent with required checks still pending.")
+    return True
+
+
 def fetch_artifact_state(repo: str, eval_sha: str, runner: Runner) -> str:
     """Read the ``renovate/artifacts`` state for ``eval_sha``, fail-closed.
 
@@ -687,7 +772,14 @@ def approve(repo: str, pr: str, runner: Runner) -> None:
 
 
 def process_pr(
-    repo: str, pr: str, eval_sha: str, extra_pattern: str, runner: Runner
+    repo: str,
+    pr: str,
+    eval_sha: str,
+    extra_pattern: str,
+    runner: Runner,
+    *,
+    wait_seconds: int = 0,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Evaluate one PR and approve it if every condition holds.
 
@@ -741,7 +833,12 @@ def process_pr(
     if any(f.filename.startswith(WORKFLOWS_PREFIX) for f in changed_files):
         print(f"PR #{pr}: workflow changes are pin-only.")
 
-    # e. All ruleset-required checks must be green.
+    # e. All ruleset-required checks must be green. Waiting happens only here,
+    # after the cheap conditions, so a PR that can never qualify never waits.
+    if not wait_for_pending_checks(
+        repo, pr, eval_sha, runner, wait_seconds=wait_seconds, sleep=sleep
+    ):
+        return False
     print(f"PR #{pr}: checking required CI status...")
     if not required_checks_green(repo, pr, runner):
         print(f"PR #{pr}: required checks not yet all green — skipping.")
@@ -771,12 +868,15 @@ def process_pr(
     return True
 
 
-def main(runner: Runner = subprocess.run) -> int:
+def main(
+    runner: Runner = subprocess.run, sleep: Callable[[float], None] = time.sleep
+) -> int:
     repo = os.environ["REPO"]
     event_name = os.environ.get("EVENT_NAME", "workflow_run")
     run_sha = os.environ.get("RUN_SHA", "")
     dispatch_pr = os.environ.get("DISPATCH_PR", "")
     extra_pattern = os.environ.get("EXTRA_DEP_PATTERN", "")
+    wait_seconds = parse_wait_seconds(os.environ.get("CHECKS_WAIT_MINUTES", ""))
 
     try:
         pr_numbers, eval_sha = resolve_prs(
@@ -787,7 +887,15 @@ def main(runner: Runner = subprocess.run) -> int:
             return 0
         for pr in pr_numbers:
             print(f"--- Evaluating PR #{pr} ---")
-            process_pr(repo, pr, eval_sha, extra_pattern, runner)
+            process_pr(
+                repo,
+                pr,
+                eval_sha,
+                extra_pattern,
+                runner,
+                wait_seconds=wait_seconds,
+                sleep=sleep,
+            )
     except resync.GhError as exc:  # also this module's GhError, a subclass
         # Abort rather than continue on a partial view — the inherited
         # `set -euo pipefail` semantics. A red step is visible; the next

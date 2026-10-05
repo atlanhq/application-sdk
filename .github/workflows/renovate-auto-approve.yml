@@ -44,14 +44,24 @@ jobs:
     # Skip failed/cancelled upstream runs — the reusable's gh pr checks guard
     # would no-op them anyway, but filtering here avoids consuming a runner
     # at all. workflow_dispatch always runs (used for manual testing).
+    #
+    # Fan-in to one billed run per SHA (FND-3317), on event-payload fields only
+    # so a skipped trigger never gets a runner: SDK Gate is the anchor (it
+    # composes the SDK tests, so it is the one that usually finishes last) and
+    # the reusable waits out any required check still pending when it fires
+    # (checks_wait_minutes). Any re-run (run_attempt > 1) also passes, so
+    # re-running a flaked workflow still re-evaluates the PR.
     if: >-
       github.event_name == 'workflow_dispatch'
-      || github.event.workflow_run.conclusion == 'success'
+      || (github.event.workflow_run.conclusion == 'success'
+          && (github.event.workflow_run.name == 'SDK Gate'
+              || github.event.workflow_run.run_attempt > 1))
     uses: ./.github/workflows/renovate-auto-approve-reusable.yml
     with:
       event_name: ${{ github.event_name }}
       head_sha: ${{ github.event.workflow_run.head_sha }}
       pr_number: ${{ inputs.pr_number }}
+      checks_wait_minutes: 15
       # application-sdk tracks the SHA-pinned actions in its shipped conformance
       # bootstrap templates (Renovate config in renovate.json). Those live under
       # packages/conformance/ source, outside the built-in allowlist, so declare
