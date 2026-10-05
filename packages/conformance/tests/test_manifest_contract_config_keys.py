@@ -793,6 +793,48 @@ def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
     assert all(f.file == "app/workflow.py" for f in findings)
 
 
+_TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP = """\
+from application_sdk.templates import {base}
+from application_sdk.templates.contracts import ExtractionInput{alias}
+
+class MyApp({base}):
+    async def run(self, input: {name}):
+        return await super().run(input)
+"""
+
+
+@pytest.mark.parametrize(
+    ("base", "alias", "name"),
+    [
+        ("SqlMetadataExtractor", "", "ExtractionInput"),
+        ("SqlApp", " as EI", "EI"),
+    ],
+)
+def test_k018_pairs_run_override_typed_with_an_sdk_template_input(
+    tmp_path: Path, base: str, alias: str, name: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP.format(
+                base=base, alias=alias, name=name
+            ),
+            "app/generated/_input.py": _GENERATED_INPUT_STUB,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {"connection": "{{connection}}", "not_on_input": "{{not-on-input}}"}
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"not_on_input"}
+    assert all(f.file == "app/workflow.py" for f in findings)
+
+
 # ---------------------------------------------------------------------------
 # K018 — run() inherited unchanged from an SDK template (FND-3110)
 # ---------------------------------------------------------------------------

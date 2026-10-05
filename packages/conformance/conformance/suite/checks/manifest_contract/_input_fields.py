@@ -88,6 +88,10 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
 )
+from conformance.suite.checks.prescriptions._typed_boundaries import (
+    _annotation_terminal_name,
+    _get_non_self_params,
+)
 from conformance.suite.schema.findings import Finding
 
 from ._manifest_args import ManifestArgs, collect_arg_keys
@@ -429,6 +433,32 @@ def _inherited_template_run(
     return anchor, template
 
 
+def _entrypoint_owner(
+    target: EntrypointContract,
+    by_name: dict[str, ClassRecord],
+    trees: dict[str, ast.AST],
+) -> ClassRecord | None:
+    """The in-repo class in *target*'s file whose method takes its Input type."""
+    tree = trees.get(target.filename)
+    aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+
+    def takes_input(item: ast.stmt) -> bool:
+        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            return False
+        params = _get_non_self_params(item)
+        if not params or params[0].annotation is None:
+            return False
+        name = _annotation_terminal_name(params[0].annotation)
+        return name is not None and aliases.get(name, name) == target.input_class_name
+
+    owners = [
+        rec
+        for rec in by_name.values()
+        if rec.file == target.filename and any(takes_input(i) for i in rec.node.body)
+    ]
+    return min(owners, key=lambda r: r.node.lineno) if owners else None
+
+
 def _pair_manifests_with_contracts(
     manifests: list[ManifestArgs],
     mode: str,
@@ -463,6 +493,10 @@ def _pair_manifests_with_contracts(
             rec = by_name.get(target.input_class_name)
             if rec is not None:
                 pairs.append(_Pairing(manifest, rec, rec.name, input_rec=rec))
+            elif target.input_class_name in SDK_TEMPLATE_CONTRACT_FIELDS and (
+                anchor := _entrypoint_owner(target, by_name, trees)
+            ):
+                pairs.append(_Pairing(manifest, anchor, target.input_class_name))
         return pairs
 
     if mode != "single" or len(manifests) != 1:
