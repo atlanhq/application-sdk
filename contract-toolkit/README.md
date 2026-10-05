@@ -496,6 +496,8 @@ app/generated/
 
 **Shared credentials:** Set `connectorConfigName = "atlan-connectors-teradata"` in each entrypoint contract. The bundle hoists the credential config to `app/generated/` root and deduplicates by filename. Duplicate names with different content fail generation.
 
+**Per-entrypoint input classes:** each `{entrypoint}/_input.py` declares `<PascalCase(entrypoint)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `miner` → `MinerAppInputContract`) and keeps `AppInputContract = <that class>` as an alias, so existing imports still work. Single-entrypoint apps still get `class AppInputContract`. See [docs/reference.md](docs/reference.md#multi-entrypoint-bundle).
+
 See [`examples/bundle/`](examples/bundle/) for a runnable example.
 
 ## Widget Types
