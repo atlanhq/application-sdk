@@ -228,7 +228,7 @@ class Offender:
     reason: str
 
 
-class GhError(RuntimeError):
+class GhError(resync.GhError):
     """A ``gh`` call whose failure must abort the step rather than be absorbed.
 
     Used only for the calls the original bash left ungated under ``set -e``:
@@ -788,7 +788,7 @@ def main(runner: Runner = subprocess.run) -> int:
         for pr in pr_numbers:
             print(f"--- Evaluating PR #{pr} ---")
             process_pr(repo, pr, eval_sha, extra_pattern, runner)
-    except (GhError, resync.GhError) as exc:
+    except resync.GhError as exc:  # also this module's GhError, a subclass
         # Abort rather than continue on a partial view — the inherited
         # `set -euo pipefail` semantics. A red step is visible; the next
         # workflow_run completion re-evaluates every candidate PR anyway.

@@ -102,11 +102,7 @@ jobs:
       - name: Assert the token is the conformance-sync App
         env:
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
-        run: |
-          if [ "$APP_SLUG" != "atlan-conformance-sync" ]; then
-            echo "::error::CONFORMANCE_SYNC_APP_* minted a token for '$APP_SLUG', expected 'atlan-conformance-sync' — refusing to write to the fleet."
-            exit 1
-          fi
+        run: python3 .github/scripts/assert_app_token_slug.py atlan-conformance-sync
 
       - name: Resync the fleet
         env:

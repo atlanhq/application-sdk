@@ -133,11 +133,14 @@ def test_foreign_pr_on_fixed_branch_is_detected_and_never_merged_with_keep():
     assert foreign["number"] == 9
 
 
-def test_fork_pr_on_fixed_branch_is_foreign_not_keep():
+def test_fork_pr_on_fixed_branch_is_ignored_not_foreign():
+    # A fork's same-named branch is not the branch the lane pushes, so it
+    # must not stall the repo's resync, and it is never the lane's own PR.
     forked = _pr(5, gate.RESYNC_BRANCH, fork=True)
-    keep, _dupes, foreign = lane.split_lane_prs([forked])
-    assert keep is None
-    assert foreign["number"] == 5
+    keep, dupes, foreign = lane.split_lane_prs([forked])
+    assert (keep, dupes, foreign) == (None, [], None)
+    ours = _pr(7, gate.RESYNC_BRANCH)
+    assert lane.split_lane_prs([forked, ours])[0]["number"] == 7
 
 
 # ── PR text ───────────────────────────────────────────────────────────────
@@ -290,9 +293,9 @@ def test_checks_all_green_reads_required_checks_exit_code():
             ): subprocess.CompletedProcess([], 0),
         }
     )
-    assert lane.checks_all_green(REPO, 7, runner) is True
+    assert gate.required_checks_green(REPO, "7", runner, echo=False) is True
     runner2 = FakeRunner(default_rc=1)
-    assert lane.checks_all_green(REPO, 7, runner2) is False
+    assert gate.required_checks_green(REPO, "7", runner2, echo=False) is False
 
 
 def test_dispatch_approval_invokes_the_repos_own_approver():
@@ -482,3 +485,64 @@ def test_read_clone_file_reads_the_checkout_and_refuses_symlinks(tmp_path):
     assert lane.read_clone_file(str(tmp_path), "uv.lock") == "lock"
     assert lane.read_clone_file(str(tmp_path), "renovate.json") is None
     assert lane.read_clone_file(str(tmp_path), "missing") is None
+
+
+# ── resolved-at reuse never trusts an edited body ────────────────────────
+
+
+def test_resolved_at_from_an_edited_body_is_not_reused():
+    now = "2026-10-01T00:00:00Z"
+    for edited in ("2099-01-01T00:00:00Z", "2026-13-45T00:00:00Z"):
+        keep = {"body": gate.pr_marker("0.39.0", edited)}
+        assert lane.choose_resolved_at(keep, "0.39.0", now) == now
+
+
+# ── a failed render disarms the PR it can no longer reproduce ────────────
+
+
+def _lane_runner(keep: dict) -> FakeRunner:
+    return FakeRunner(
+        {
+            (
+                "gh",
+                "api",
+                f"repos/{REPO}/pulls?state=open&per_page=100",
+                "--paginate",
+                "--slurp",
+            ): subprocess.CompletedProcess([], 0, stdout=json.dumps([[keep]])),
+        }
+    )
+
+
+def _run_failing_render(monkeypatch, dry_run: bool) -> tuple[dict, FakeRunner]:
+    lock = f'[[package]]\nname = "{gate.CONFORMANCE_PACKAGE}"\nversion = "0.39.0"\n'
+    monkeypatch.setattr(
+        lane,
+        "read_clone_file",
+        lambda work, path: lock if path == "uv.lock" else '{"extends": []}',
+    )
+    monkeypatch.setattr(lane, "run_bootstrap", lambda *a: (1, "", "index outage"))
+    runner = _lane_runner(_pr(7, gate.RESYNC_BRANCH))
+    result = lane.process_repo(
+        REPO,
+        identity=(BOT, "bot@example.invalid"),
+        resolved_now=AT,
+        dry_run=dry_run,
+        automerge_enabled=True,
+        diffs_dir=None,
+        runner=runner,
+    )
+    return result, runner
+
+
+def test_failed_render_disarms_the_open_lane_pr(monkeypatch):
+    result, runner = _run_failing_render(monkeypatch, dry_run=False)
+    assert result["action"] == "error"
+    assert ["gh", "pr", "merge", "7", "--repo", REPO, "--disable-auto"] in runner.calls
+    assert not any(c[:3] == ["gh", "pr", "close"] for c in runner.calls)
+
+
+def test_failed_render_in_a_dry_run_changes_nothing(monkeypatch):
+    result, runner = _run_failing_render(monkeypatch, dry_run=True)
+    assert result["automerge"] == "would disarm"
+    assert not any(c[:3] == ["gh", "pr", "merge"] for c in runner.calls)

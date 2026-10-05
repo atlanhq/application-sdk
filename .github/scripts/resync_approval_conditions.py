@@ -20,6 +20,10 @@ here and requiring a byte-identical result:
      current HEAD is the SHA under evaluation
   b. the body carries the lane's marker, naming the suite version it rendered
   c. exactly one commit on the PR, authored by the lane, with one parent
+  c0. the marker's ``resolved-at`` is a real UTC date no later than that
+      commit's committer date or now. It sets the release-age fence and the
+      body is editable by anyone with write access, so a later date would
+      lift the fence
   d. that parent is in the base branch's history (the render base is real main)
   e0. ``renovate.json`` at that parent is in auto-merge mode
      (``discover_org_consumers.automerge_mode`` == ``auto``); soft, unknown,
@@ -39,10 +43,13 @@ here and requiring a byte-identical result:
      the head is re-read just before posting, and the review is pinned to it
      with ``commit_id``
 
+(g) and (h) are evaluated before (e): they cost one API call each, the render
+costs an image pull and a package install.
+
 The lane (``.github/scripts/conformance_resync.py``) imports
 :func:`stage_like_the_lane`, :data:`ACCEPTED_DROPS` and the marker from here, so
-the two cannot drift; if they ever did, the trees would differ, which makes the trees
-differ, which fails CLOSED (no approval), never open.
+the two cannot drift; if they ever did, the trees would differ, which fails
+CLOSED (no approval), never open.
 
 Fail closed throughout: anything other than an affirmative signal skips.
 """
@@ -61,7 +68,7 @@ import tomllib
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import discover_org_consumers as discover
@@ -84,7 +91,9 @@ FIRST_PARTY = (
     "pyatlan",
 )
 _SEMVER_RE = re.compile(r"^\d+\.\d+\.\d+$")
-BOOTSTRAP_TIMEOUT = 600
+# Well inside the approver job's 10-minute limit (pull + install + render),
+# so a slow render fails closed with a message instead of a killed job.
+BOOTSTRAP_TIMEOUT = 300
 
 
 def pr_marker(suite_version: str, resolved_at: str) -> str:
@@ -97,12 +106,48 @@ def pr_marker(suite_version: str, resolved_at: str) -> str:
     )
 
 
+_RESOLVED_AT_FMT = "%Y-%m-%dT%H:%M:%SZ"
+
+
+def parse_resolved_at(text: str | None) -> datetime | None:
+    """``resolved-at`` as an aware UTC datetime, or ``None`` when absent or not
+    a real date (the marker regex accepts month 13; ``strptime`` does not)."""
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text, _RESOLVED_AT_FMT).replace(tzinfo=UTC)
+    except ValueError:
+        return None
+
+
+def check_resolved_at(text: str | None, *caps: datetime) -> tuple[bool, str]:
+    """Whether ``resolved-at`` is a real date no later than every cap.
+
+    ``resolved-at`` sets the third-party release-age fence, and it lives in the
+    PR body, which anyone with write access to the app repo can edit. A date in
+    the future would lift the fence. A date at or before the caps keeps every
+    third-party package at least :data:`RELEASE_AGE` old when it is used, which
+    is all the cooldown asks. The lane always writes a time it has already
+    reached, before it commits, so its own values pass.
+    """
+    at = parse_resolved_at(text)
+    if at is None:
+        return False, f"resolved-at {text!r} is not a valid UTC timestamp"
+    for cap in caps:
+        if at > cap:
+            return False, (
+                f"resolved-at {text} is later than {cap.strftime(_RESOLVED_AT_FMT)} "
+                "— it would lift the release-age fence"
+            )
+    return True, ""
+
+
 def resync_command(suite: str, resolved_at: str) -> list[str]:
     """The one ``bootstrap --resync`` invocation the lane and this gate run.
     Third-party packages resolve as of ``resolved_at`` minus the org release-age
     window; first-party packages as of ``resolved_at`` itself."""
-    at = datetime.strptime(resolved_at, "%Y-%m-%dT%H:%M:%SZ")
-    cutoff = (at - RELEASE_AGE).strftime("%Y-%m-%dT%H:%M:%SZ")
+    at = datetime.strptime(resolved_at, _RESOLVED_AT_FMT)
+    cutoff = (at - RELEASE_AGE).strftime(_RESOLVED_AT_FMT)
     first_party = [
         arg
         for pkg in FIRST_PARTY
@@ -485,7 +530,7 @@ class RenderResult:
     note: str = ""
 
 
-def _git_env() -> dict[str, str]:
+def git_env() -> dict[str, str]:
     """Token in env only (GIT_CONFIG_*) — never on argv or in a remote URL."""
     token = os.environ.get("GH_TOKEN", "")
     basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
@@ -504,7 +549,7 @@ def _git(args: list[str], cwd: str, runner: Runner) -> str:
         cwd=cwd,
         capture_output=True,
         text=True,
-        env=_git_env(),
+        env=git_env(),
         check=False,
     )
     if result.returncode != 0:
@@ -658,11 +703,11 @@ def render_and_compare(
 
 
 # ---------------------------------------------------------------------------
-# GitHub I/O + orchestration
+# GitHub I/O + orchestration (shared with the lane, conformance_resync.py)
 # ---------------------------------------------------------------------------
 
 
-def _gh_json(args: list[str], runner: Runner, *, what: str) -> Any:
+def gh_json(args: list[str], runner: Runner, *, what: str) -> Any:
     result = runner(["gh", *args], capture_output=True, text=True, check=False)
     if result.returncode != 0:
         raise GhError(f"{what}: {(result.stderr or '').strip()[-300:]}")
@@ -672,7 +717,7 @@ def _gh_json(args: list[str], runner: Runner, *, what: str) -> Any:
         raise GhError(f"{what}: unparseable response") from exc
 
 
-def _flatten(payload: Any) -> list[Any]:
+def flatten(payload: Any) -> list[Any]:
     """``--paginate --slurp`` yields a list of pages; flatten to one list."""
     if (
         isinstance(payload, list)
@@ -681,6 +726,36 @@ def _flatten(payload: Any) -> list[Any]:
     ):
         return [item for page in payload for item in page]
     return payload if isinstance(payload, list) else []
+
+
+def required_checks_green(
+    repo: str, pr: str, runner: Runner, *, echo: bool = True
+) -> bool:
+    """``gh pr checks --required`` exits 0 iff every required check is green.
+    The lane calls this too, with ``echo=False`` to keep its log to one line
+    per repo."""
+    checks = runner(
+        ["gh", "pr", "checks", pr, "--repo", repo, "--required"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if echo:
+        for stream in (checks.stdout, checks.stderr):
+            if stream and stream.strip():
+                print(stream.rstrip())
+    return checks.returncode == 0
+
+
+def commit_time(commit: Any) -> datetime | None:
+    """The committer date of a ``pulls/{n}/commits`` entry."""
+    date = (((commit or {}).get("commit") or {}).get("committer") or {}).get("date")
+    if not isinstance(date, str):
+        return None
+    try:
+        return datetime.fromisoformat(date.replace("Z", "+00:00"))
+    except ValueError:
+        return None
 
 
 def process_resync_pr(
@@ -704,8 +779,8 @@ def process_resync_pr(
         print(f"PR #{pr}: no conformance-resync marker in the body — skipping.")
         return False
 
-    commits = _flatten(
-        _gh_json(
+    commits = flatten(
+        gh_json(
             ["api", f"repos/{repo}/pulls/{pr}/commits", "--paginate", "--slurp"],
             runner,
             what=f"listing commits for PR #{pr}",
@@ -716,8 +791,19 @@ def process_resync_pr(
         print(message)
         return False
 
+    # The lane picks resolved-at before it commits, so it is never later than
+    # the commit or than now. A body edited to a later date is refused.
+    committed = commit_time(commits[0])
+    if committed is None:
+        print(f"PR #{pr}: the lane commit has no committer date — skipping.")
+        return False
+    ok, why = check_resolved_at(resolved_at, committed, datetime.now(UTC))
+    if not ok:
+        print(f"PR #{pr}: {why} — skipping.")
+        return False
+
     base_ref = str((meta.get("base") or {}).get("ref") or "")
-    compare = _gh_json(
+    compare = gh_json(
         ["api", f"repos/{repo}/compare/{parent_sha}...{base_ref}"],
         runner,
         what=f"checking PR #{pr}'s base ancestry",
@@ -732,6 +818,25 @@ def process_resync_pr(
     ok, why = parent_preconditions(repo, parent_sha, suite, runner)
     if not ok:
         print(f"PR #{pr}: {why} — skipping.")
+        return False
+
+    # Cheapest first: the render pulls an image and installs packages, so it
+    # runs only once nothing cheaper can refuse the PR.
+    if not required_checks_green(repo, pr, runner):
+        print(f"PR #{pr}: required checks not yet all green — skipping.")
+        return False
+
+    reviews = flatten(
+        gh_json(
+            ["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--slurp"],
+            runner,
+            what=f"listing reviews for PR #{pr}",
+        )
+    )
+    if count_resync_approvals(reviews, head_sha):
+        print(
+            f"PR #{pr}: already approved at this head with the resync signature — skipping."
+        )
         return False
 
     print(
@@ -750,33 +855,7 @@ def process_resync_pr(
         return False
     print(f"PR #{pr}: PR tree is byte-identical to the independent render.")
 
-    checks = runner(
-        ["gh", "pr", "checks", pr, "--repo", repo, "--required"],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    for stream in (checks.stdout, checks.stderr):
-        if stream and stream.strip():
-            print(stream.rstrip())
-    if checks.returncode != 0:
-        print(f"PR #{pr}: required checks not yet all green — skipping.")
-        return False
-
-    reviews = _flatten(
-        _gh_json(
-            ["api", f"repos/{repo}/pulls/{pr}/reviews", "--paginate", "--slurp"],
-            runner,
-            what=f"listing reviews for PR #{pr}",
-        )
-    )
-    if count_resync_approvals(reviews, head_sha):
-        print(
-            f"PR #{pr}: already approved at this head with the resync signature — skipping."
-        )
-        return False
-
-    live = _gh_json(
+    live = gh_json(
         ["api", f"repos/{repo}/pulls/{pr}"],
         runner,
         what=f"re-reading PR #{pr}'s head",

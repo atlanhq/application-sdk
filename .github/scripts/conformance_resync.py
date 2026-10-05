@@ -42,7 +42,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import pathlib
@@ -71,8 +70,11 @@ REQUEST_TIMEOUT = 60
 _REPO_RE = re.compile(r"^atlanhq/[A-Za-z0-9._-]+$")
 
 
-class LaneError(RuntimeError):
-    """A gh/git call the lane cannot recover from — aborts that repo only."""
+# The gate's error type, so one ``except`` covers the lane and the shared
+# helpers it calls (gh_json, flatten, git_env all live in the gate module).
+LaneError = gate.GhError
+gh_json = gate.gh_json
+_flatten = gate.flatten
 
 
 # ── GitHub / git plumbing ────────────────────────────────────────────────
@@ -85,26 +87,6 @@ def _run(args: list[str], runner: Runner, **kwargs) -> subprocess.CompletedProce
     return runner(args, **kwargs)
 
 
-def gh_json(args: list[str], runner: Runner, *, what: str) -> object:
-    result = _run(["gh", *args], runner)
-    if result.returncode != 0:
-        raise LaneError(f"{what}: {(result.stderr or '').strip()[-300:]}")
-    try:
-        return json.loads(result.stdout or "null")
-    except ValueError as exc:
-        raise LaneError(f"{what}: unparseable response") from exc
-
-
-def _flatten(payload: object) -> list:
-    if (
-        isinstance(payload, list)
-        and payload
-        and all(isinstance(p, list) for p in payload)
-    ):
-        return [item for page in payload for item in page]
-    return payload if isinstance(payload, list) else []
-
-
 def read_clone_file(work: str, path: str) -> str | None:
     """``path`` in the checked-out clone at ``work``, or ``None`` if absent."""
     target = pathlib.Path(work, path)
@@ -113,22 +95,8 @@ def read_clone_file(work: str, path: str) -> str | None:
     return target.read_text(encoding="utf-8", errors="replace")
 
 
-def _git_env() -> dict[str, str]:
-    """Token in env only, never on argv or in a remote URL — mirrors
-    ``resync_approval_conditions._git_env``."""
-    token = os.environ.get("GH_TOKEN", "")
-    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
-    return {
-        **os.environ,
-        "GIT_CONFIG_COUNT": "1",
-        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
-        "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {basic}",
-        "GIT_TERMINAL_PROMPT": "0",
-    }
-
-
 def git(args: list[str], cwd: str, runner: Runner, *, check: bool = True) -> str:
-    result = _run(["git", *args], runner, cwd=cwd, env=_git_env())
+    result = _run(["git", *args], runner, cwd=cwd, env=gate.git_env())
     if check and result.returncode != 0:
         raise LaneError(f"git {args[0]} failed: {(result.stderr or '')[-400:]}")
     return result.stdout or ""
@@ -226,9 +194,12 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
     ``keep`` is the lane's own open PR on ``RESYNC_BRANCH``; any other PR the
     lane's author opened is a duplicate (should not normally happen — this App
     only ever pushes that one branch — but closed on sight if it does).
-    ``foreign`` is someone else's open PR sitting on ``RESYNC_BRANCH`` itself;
+    ``foreign`` is someone else's open PR on ``RESYNC_BRANCH`` in this repo;
     the lane never force-pushes over a person's PR, so a repo with one is left
-    alone entirely this run.
+    alone entirely this run. A fork PR whose branch merely shares the name is
+    ignored: the lane pushes this repo's branch, never the fork's, so it is
+    not in the way, and counting it would let anyone with a fork stall the
+    repo's resync.
     """
     keep: dict | None = None
     dupes: list[dict] = []
@@ -238,7 +209,9 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
         author = (pr.get("user") or {}).get("login")
         same_repo = (head.get("repo") or {}).get("full_name") == repo_of(pr)
         if head.get("ref") == gate.RESYNC_BRANCH:
-            if author == gate.RESYNC_AUTHOR and same_repo:
+            if not same_repo:
+                continue
+            if author == gate.RESYNC_AUTHOR:
                 keep = pr
             else:
                 foreign = pr
@@ -387,11 +360,20 @@ def should_dispatch_approval(
 
 def choose_resolved_at(keep: dict | None, pinned: str, now: str) -> str:
     """Reuse the open PR's resolution timestamp while it renders the same
-    suite, so an unchanged PR re-renders identically and its body stays put."""
+    suite, so an unchanged PR re-renders identically and its body stays put.
+
+    The body is editable by anyone with write access to the app repo, so a
+    reused value must be a real date no later than ``now``
+    (``resync_approval_conditions.check_resolved_at``); anything else would
+    lift the release-age fence, and the lane falls back to ``now``.
+    """
     body = (keep or {}).get("body")
-    if gate.marker_suite_version(body) == pinned and gate.marker_resolved_at(body):
-        return str(gate.marker_resolved_at(body))
-    return now
+    reused = gate.marker_resolved_at(body)
+    if gate.marker_suite_version(body) != pinned or not reused:
+        return now
+    cap = gate.parse_resolved_at(now)
+    ok, _ = gate.check_resolved_at(reused, cap) if cap else (False, "")
+    return reused if ok else now
 
 
 def pr_matches_render(
@@ -488,13 +470,6 @@ def unchanged_pr_approvable(
     if parent_pin != pinned:
         return False, f"uv.lock at the parent pins {parent_pin}, main pins {pinned}"
     return True, ""
-
-
-def checks_all_green(repo: str, pr_number: int, runner: Runner) -> bool:
-    result = _run(
-        ["gh", "pr", "checks", str(pr_number), "--repo", repo, "--required"], runner
-    )
-    return result.returncode == 0
 
 
 def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> str:
@@ -614,6 +589,16 @@ def process_repo(
             result.update(
                 action="error", reason=f"bootstrap exited {rc}: {(err or out)[-400:]}"
             )
+            # The open PR was rendered from an older main this run can no
+            # longer reproduce. Disarm it rather than close it, so a transient
+            # failure (an index outage) costs no PR; the next good run re-arms.
+            if keep:
+                result["automerge"] = (
+                    "would disarm"
+                    if dry_run
+                    else set_automerge(repo, keep["number"], False, runner)
+                )
+                step(f"Render failed; auto-merge on PR #{keep['number']} disarmed.")
             return result
         if manifest.get("skipped"):
             result.update(
@@ -880,7 +865,7 @@ def _maybe_dispatch(
     number = pr.get("number")
     if not number:
         return
-    checks_ok = checks_all_green(repo, number, runner)
+    checks_ok = gate.required_checks_green(repo, str(number), runner, echo=False)
     reviews = _flatten(
         gh_json(
             ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"],

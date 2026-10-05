@@ -57,11 +57,17 @@ def meta(**over):
     return base
 
 
-def commit(sha=HEAD, author=resync.RESYNC_AUTHOR, parents=(PARENT,)):
+COMMITTED_AT = "2026-09-28T12:05:00Z"
+
+
+def commit(
+    sha=HEAD, author=resync.RESYNC_AUTHOR, parents=(PARENT,), committed=COMMITTED_AT
+):
     return {
         "sha": sha,
         "author": {"login": author},
         "parents": [{"sha": p} for p in parents],
+        "commit": {"committer": {"date": committed}},
     }
 
 
@@ -602,3 +608,61 @@ def test_sandboxed_render_timeout_kills_the_container(tmp_path):
     name = calls[0][calls[0].index("--name") + 1]
     assert rc == 124 and "timed out" in err
     assert calls[-1] == ["docker", "rm", "-f", name]
+
+
+# ---------------------------------------------------------------------------
+# resolved-at comes from the editable PR body: bound it, never crash on it
+# ---------------------------------------------------------------------------
+
+
+def _marker(resolved_at):
+    return f"<!-- conformance-resync-lane suite=0.39.0 resolved-at={resolved_at} -->"
+
+
+@pytest.mark.parametrize(
+    "resolved_at",
+    [
+        "2099-01-01T00:00:00Z",  # in the future: would lift the fence
+        "2026-09-28T12:06:00Z",  # after the lane's own commit
+        "2026-13-45T00:00:00Z",  # matches the marker regex, not a real date
+    ],
+)
+def test_unsafe_resolved_at_never_approves_and_never_renders(resolved_at):
+    approved, runner, render = run(meta(body=_marker(resolved_at)))
+    assert not approved and not runner.approved and render.calls == []
+
+
+def test_commit_without_committer_date_never_approves():
+    no_date = commit()
+    del no_date["commit"]
+    approved, runner, render = run(runner=FakeRunner(commits=[no_date]))
+    assert not approved and not runner.approved and render.calls == []
+
+
+def test_check_resolved_at_bounds():
+    cap = resync.parse_resolved_at("2026-09-28T12:05:00Z")
+    assert resync.check_resolved_at(RESOLVED_AT, cap) == (True, "")
+    assert not resync.check_resolved_at("2026-09-28T12:05:01Z", cap)[0]
+    assert not resync.check_resolved_at(None, cap)[0]
+    assert resync.parse_resolved_at("2026-02-30T00:00:00Z") is None
+
+
+# ---------------------------------------------------------------------------
+# Cheap checks run before the render
+# ---------------------------------------------------------------------------
+
+
+def test_red_checks_skip_the_render():
+    approved, runner, render = run(runner=FakeRunner(checks_rc=1))
+    assert not approved and render.calls == []
+
+
+def test_already_approved_head_skips_the_render():
+    review = {
+        "user": {"login": resync.APPROVER_LOGIN},
+        "state": "APPROVED",
+        "commit_id": HEAD,
+        "body": resync.RESYNC_APPROVAL_BODY,
+    }
+    approved, runner, render = run(runner=FakeRunner(reviews=[review]))
+    assert not approved and not runner.approved and render.calls == []
