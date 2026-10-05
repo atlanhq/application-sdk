@@ -31,6 +31,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PreflightClassification,
+    WarmupPoll,
     _plumbing_evidence,
 )
 from application_sdk.execution.errors import ApplicationError
@@ -38,6 +39,8 @@ from application_sdk.handler.contracts import (
     PreflightGateMode,
     PreflightOutput,
     PreflightStatus,
+    WarmupObservation,
+    WarmupState,
 )
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
@@ -118,8 +121,22 @@ def _patched(value: bool):
 
 
 def _exec(return_value=None, side_effect=None):
+    """Patch ``execute_activity``; return the mock that sees only check dispatches.
+
+    The gate's first activity is its own warmup probe (``{app}:preflight_warmup``),
+    answered READY here — what every app without a warmup reports — so these
+    tests keep exercising the one check dispatch that follows it.
+    """
     m = mock.AsyncMock(return_value=return_value, side_effect=side_effect)
-    return m, mock.patch("application_sdk.app.base.workflow.execute_activity", m)
+
+    async def _route(name: str, *args: object, **kwargs: object) -> object:
+        if name.endswith(":preflight_warmup"):
+            return WarmupPoll(observation=WarmupObservation(state=WarmupState.READY))
+        return await m(name, *args, **kwargs)
+
+    return m, mock.patch(
+        "application_sdk.app.base.workflow.execute_activity", side_effect=_route
+    )
 
 
 def _rows(safe_log) -> list[dict]:

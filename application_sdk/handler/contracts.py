@@ -730,9 +730,8 @@ class PreflightOutput(BaseModel):
 
     On ``/check``: the probe's observation when the request asked for the
     ``WARMUP`` tier and the source was not ``READY``; ``None`` when warmup was
-    not probed. On the gate's first dispatch: the observation that sends the
-    workflow into its warmup wait; ``None`` when there is nothing to wait for.
-    A handler leaves it unset."""
+    not probed. Never set on the gate path, which probes the warmup in an
+    activity of its own. A handler leaves it unset."""
 
     @field_validator("error", mode="before")
     @classmethod

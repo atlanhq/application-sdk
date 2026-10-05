@@ -437,7 +437,7 @@ runtime; `start_to_close` is the correct in-flight bound.
 ### Preflight Gate Posture
 
 Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
-handler as the first activity of every extraction workflow. Enforcement is a **gate** property,
+handler at the start of every extraction workflow, before any of its own tasks. Enforcement is a **gate** property,
 not a handler property: the handler always returns the honest verdict, and the gate decides what
 to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_gate_mode`
 `ClassVar`:
@@ -633,27 +633,33 @@ The ceiling is how long the gate waits for `READY`, measured from gate start. Th
 worker slot, so it can be far longer than `preflight_gate_timeout_seconds`, and the gate uses all
 of it only while the source keeps reporting it is not ready. The probe timeout is how long one
 `warmup` call may take on warm compute: it reaches the handler as
-`WarmupInput.probe_timeout_seconds`, is enforced around every probe, and sizes each poll activity.
+`WarmupInput.probe_timeout_seconds`, is enforced around every probe, and sizes each probe activity
+(the probe timeout plus 10s of credential-resolution and scheduling headroom).
 `preflight_warmup_mode` decides whether a warmup that never got ready blocks the run, independent
 of `preflight_gate_mode` (below).
 
 The gate runs it like this:
 
-1. The check activity, `{app}:preflight`, probes `warmup` once before it runs any check, bounded
-   by the probe timeout and what is left of the gate budget. `READY` runs every tier in that same
-   dispatch, and the run is exactly what it was before warmup existed: one dispatch, one row, no
-   `gate_tier` or warmup fields.
-2. Otherwise the activity runs only the `PREFLIGHT` tier, enforced like any verdict, and hands the
-   observation to the workflow. Once that dispatch lets the run go on, the workflow polls
-   `{app}:preflight_warmup` — one probe per short activity, separated by durable timers, so the
-   wait holds no worker slot. The wait between polls is 5s doubling to 30s, or the source's
-   `next_poll_seconds` with a 5s floor, and never runs past the ceiling.
+1. Before any check, the workflow dispatches one `{app}:preflight_warmup` activity: a single
+   `warmup` probe with its own timeout, so the probe never spends the check budget. Every app gets
+   this activity, including one that does not override `warmup`, whose default answers `READY` at
+   once. `READY` is followed by one dispatch of the check activity, `{app}:preflight`, with every
+   tier; its row is the row the gate always wrote, with no `gate_tier` or warmup fields.
+2. Otherwise the check activity runs only the `PREFLIGHT` tier, enforced like any verdict. Once
+   that dispatch lets the run go on, the workflow keeps polling `{app}:preflight_warmup` — one
+   probe per short activity, separated by durable timers, so the wait holds no worker slot. The
+   wait between polls is 5s doubling to 30s, or the source's `next_poll_seconds` with a 5s floor,
+   and never runs past the ceiling.
 3. On `READY` within the ceiling it dispatches the check activity again with only the `WARMUP`
    tier. That verdict is enforced like any other, by category under `preflight_gate_mode`.
 
-A typed AUTH, PERMISSION or NOT_FOUND raise from the probe ends the wait at once. It is a verdict on
-the source like any handler raise, so `preflight_gate_mode` gates it on its category. Any other
-raise, or a probe that overruns its timeout, reads as `WARMING` and is polled again.
+The check activity never calls `warmup`; the tiers it runs are decided by the workflow from the
+probe activities.
+
+A typed AUTH, PERMISSION or NOT_FOUND raise from a probe ends the wait at once. It is a verdict on
+the source like any handler raise, so `preflight_gate_mode` gates it on its category. When the
+first probe raises it, no check runs at all: the run writes that one row. Any other raise, or a
+probe that overruns its timeout, reads as `WARMING` and is polled again.
 
 Two outcomes are attributed to the source's compute, and `preflight_warmup_mode` alone decides
 them: `SOFT` reports and lets the run proceed, `HARD` stops it, whatever `preflight_gate_mode` says.
@@ -671,8 +677,11 @@ While it waits, the workflow sets its Temporal current details — the line the 
 shows — to `waiting for source warmup: <source_state, else the state>[, N queued], <elapsed>`, e.g.
 `waiting for source warmup: RESUMING, 40s`, and clears it when the wait ends. The warmup reads as
 the source getting ready, not as the connector failing. A warmup activity that itself fails — a
-lost worker, a credential lookup the secret store refused — is the gate's own plumbing and fails
-open as `no_verdict` / `gate_broken`.
+lost worker, a credential lookup the secret store refused — is the gate's own plumbing. When the
+first probe activity fails this way, the gate falls back to one check dispatch with every tier, as
+if the probe had answered `READY`, and that row carries `warmup_outcome = 'broken'` so the missing
+probe stays visible. A later probe activity that fails ends the wait open, as `no_verdict` /
+`gate_broken`.
 
 The rows of a run that waited carry `gate_tier`: `preflight` on the first dispatch's row, `warmup`
 on the row that ended the wait. One run therefore has up to two rows; dedupe on
@@ -680,7 +689,9 @@ on the row that ended the wait. One run therefore has up to two rows; dedupe on
 `preflight` row (written while the warmup is still in flight, so a run that ends there reads as
 warming, not as a missing verdict), or `unavailable` when the first probe already said so; and on
 the `warmup` row whatever ended the wait — `ready`, `unavailable`, `failed` (a typed raise),
-`exhausted` (the ceiling) or `broken` (a warmup activity failed). Once the wait has ended the row
+`exhausted` (the ceiling) or `broken` (a later probe activity failed). A run whose first probe
+activity failed has one row with no `gate_tier` and `warmup_outcome = 'broken'`. Once the wait has
+ended the row
 adds `warmup_duration_ms` (gate start to that state, on the workflow clock) and
 `warmup_transitions`, a JSON list of `{"state", "at_ms"}` objects for each state the probes
 observed, oldest first, capped at 32. Each check in `check_matrix` carries `tier` only when it is
@@ -691,10 +702,11 @@ handler's answer at run time, not a declaration. The name is reserved: a `@task`
 `preflight_warmup` fails worker boot, on every app.
 
 No `workflow.patched` guard covers this phase. App workers are PINNED
-(`default_versioning_behavior`), so a run drains on the build that started it, and a history from
-before the phase replays unchanged anyway: its check activity returned no observation, so the
-workflow issues no further command. If app workers ever move off PINNED, the wait loop needs a
-`workflow.patched` guard.
+(`default_versioning_behavior`), so a run drains on the build that started it. A run started on a
+build without this phase does **not** replay on this one: its first gate command was the check
+activity, and this build's is the probe activity. Only a deployment with no `ATLAN_APP_BUILD_ID`
+(local, self-deployed) can hit that, the same exposure the hard-mode block on a dead gate frame
+accepts. If app workers ever move off PINNED, this phase needs a `workflow.patched` guard.
 
 #### Verifying artifact storage (opt-in)
 

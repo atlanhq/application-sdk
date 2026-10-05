@@ -2631,26 +2631,30 @@ async def _run_preflight_gate(
     or ``gate_attempt`` never drops the rows that prove a gate never ran or never
     returned.
 
-    **Warmup phase (FND-3039).** The check activity probes the handler's
-    ``warmup`` before its first dispatch. ``READY`` — what an app that does not
-    override ``warmup`` always answers — runs every tier in that one dispatch,
-    and this frame does nothing more. Otherwise the activity runs only the
-    ``PREFLIGHT`` tier and returns the observation on ``PreflightOutput.warmup``;
-    once that dispatch lets the run go on, this frame waits: short
-    ``{app}:preflight_warmup`` polls separated by durable timers, so the wait
-    holds no worker slot. On ``READY`` it dispatches the check activity again
-    with ``tiers={WARMUP}``. ``UNAVAILABLE`` and the ceiling (from gate start)
-    are attributed to the source and ``warmup_mode`` alone decides whether they
-    block; a typed AUTH / PERMISSION / NOT_FOUND raise from the probe is a
-    verdict, gated on its category under ``gate_mode``. A warmup activity that
-    itself fails is the gate's own plumbing and fails open (``no_verdict`` /
-    ``gate_broken``), like the check activity.
+    **Warmup phase (FND-3039).** Before any check, this frame dispatches one
+    ``{app}:preflight_warmup`` activity: one ``Handler.warmup`` probe with its
+    own timeout (the app's probe timeout plus slack), so the probe never spends
+    the check activity's budget. ``READY`` — what an app that does not override
+    ``warmup`` always answers — is followed by one check dispatch with every
+    tier, exactly as before tiers. Otherwise the check activity runs the
+    ``PREFLIGHT`` tier, and once that dispatch lets the run go on, this frame
+    waits: further probes separated by durable timers, so the wait holds no
+    worker slot. On ``READY`` it dispatches the check activity again with
+    ``tiers={WARMUP}``. ``UNAVAILABLE`` and the ceiling (from gate start) are
+    attributed to the source and ``warmup_mode`` alone decides whether they
+    block; a typed AUTH / PERMISSION / NOT_FOUND raise from a probe is a
+    verdict, gated on its category under ``gate_mode``. A first probe whose own
+    plumbing fails falls back to one dispatch with every tier (its row says
+    ``warmup_outcome=broken``); a later one fails open as ``no_verdict`` /
+    ``gate_broken``.
 
     **Replay.** No ``workflow.patched`` guards this phase: app workers are
     PINNED (``default_versioning_behavior``), so a run drains on the build that
-    started it. A history from before the phase replays unchanged anyway — its
-    check activity returned no ``warmup``, so this frame issues no further
-    command. If app workers ever move off PINNED, this loop needs a
+    started it. A run started on a build without this phase does *not* replay
+    on this one — its first command was the check activity, this frame's is the
+    warmup probe — so only a deployment with no ``ATLAN_APP_BUILD_ID`` (local,
+    self-deployed) can hit that, the same exposure the hard-mode block above
+    accepts. If app workers ever move off PINNED, this phase needs a
     ``workflow.patched`` guard.
     """
     with workflow.unsafe.imports_passed_through():
@@ -2706,7 +2710,6 @@ async def _run_preflight_gate(
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             CheckTier,
             PreflightCheck,
-            PreflightOutput,
             WarmupObservation,
             WarmupState,
         )
@@ -2836,42 +2839,10 @@ async def _run_preflight_gate(
         warmup_probe_timeout_seconds, ceiling
     )
     dispatched_at = workflow.now()
-    first: PreflightOutput | None = None
-    try:
-        # Inside the guard: an exception escaping here would become a workflow
-        # *task* failure, which Temporal retries indefinitely (see
-        # _validate_workflow_input). Nothing on the gate's own path may do that.
-        start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
-        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
-        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
-
-        async def _dispatch_checks(
-            tiers: frozenset[CheckTier] | None, warmup_seen: WarmupWait | None
-        ) -> PreflightOutput | None:
-            return await workflow.execute_activity(
-                preflight_gate_activity_name(app_name),
-                gate_input.model_copy(update={"tiers": tiers, "warmup": warmup_seen}),
-                result_type=PreflightOutput,
-                schedule_to_close_timeout=schedule_to_close,
-                start_to_close_timeout=start_to_close,
-                heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
-                retry_policy=gate_retry_policy(max_attempts),
-            )
-
-        first = await _dispatch_checks(None, None)
-    except Exception as e:
-        _no_verdict(e, None, None)
-        return
-
-    # Success: the activity already emitted the proceeded outcome event. Only a
-    # first probe that was not READY left an observation to wait on.
-    seen = first.warmup if first is not None else None
-    if seen is None or seen.state is WarmupState.READY:
-        return
-
     warmup_posture = coerce_gate_mode(warmup_mode)
     deadline = dispatched_at + timedelta(seconds=ceiling)
     transitions: list[WarmupTransition] = []
+    warmup_s2c, warmup_sc2 = warmup_activity_timeouts(probe_timeout)
 
     def _observe(observation: WarmupObservation) -> None:
         """Record *observation* if its state changed; refresh the health line."""
@@ -2889,13 +2860,114 @@ async def _run_preflight_gate(
             transitions=transitions[:WARMUP_TRANSITIONS_MAX],
         )
 
+    async def _poll() -> WarmupPoll:
+        """One ``{app}:preflight_warmup`` activity: its own timeout, never the
+        check activity's budget."""
+        return await workflow.execute_activity(
+            preflight_warmup_activity_name(app_name),
+            gate_input,
+            result_type=WarmupPoll,
+            schedule_to_close_timeout=warmup_sc2,
+            start_to_close_timeout=warmup_s2c,
+            retry_policy=warmup_retry_policy(),
+        )
+
+    def _terminal(error: FailureDetails) -> None:
+        """A typed AUTH / PERMISSION / NOT_FOUND raise from the probe: a verdict
+        on the source like any handler raise, so category gating under the
+        gate posture."""
+        _set_health_line("")
+        blocks = gate_blocks(mode, error.category)
+        _emit_row(
+            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
+            error.code,
+            PreflightClassification.SOURCE_UNVERIFIABLE,
+            _elapsed_ms(),
+            attempt=0,
+            audience=error.audience.value,
+            primary=error,
+            tier=CheckTier.WARMUP,
+            warmup_seen=_wait(WarmupOutcome.FAILED),
+        )
+        if blocks:
+            raise build_workflow_block(error, [], app_name, 0)
+
+    try:
+        # Inside the guard: an exception escaping here would become a workflow
+        # *task* failure, which Temporal retries indefinitely (see
+        # _validate_workflow_input). Nothing on the gate's own path may do that.
+        start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
+        heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
+        gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+    except Exception as e:
+        _no_verdict(e, None, None)
+        return
+
+    async def _dispatch_checks(
+        tiers: frozenset[CheckTier] | None, warmup_seen: WarmupWait | None
+    ) -> None:
+        await workflow.execute_activity(
+            preflight_gate_activity_name(app_name),
+            gate_input.model_copy(update={"tiers": tiers, "warmup": warmup_seen}),
+            schedule_to_close_timeout=schedule_to_close,
+            start_to_close_timeout=start_to_close,
+            heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
+            retry_policy=gate_retry_policy(max_attempts),
+        )
+
+    # The first warmup probe is its own activity, ahead of the checks, so it
+    # never spends the check budget. READY — what every app that does not
+    # override Handler.warmup answers — sends one check dispatch with every
+    # tier, exactly as before tiers.
+    first_poll: WarmupPoll | None = None
+    try:
+        first_poll = await _poll()
+    except Exception:
+        # The probe's own plumbing failed: run every tier, as before tiers, and
+        # say so on that row. A broken probe must not cost the run its verdict.
+        _safe_log(
+            "warning",
+            "Preflight warmup probe failed; running every check tier",
+            app_name=app_name,
+            entrypoint=entry,
+            exc_info=True,
+        )
+    if first_poll is not None and first_poll.is_terminal and first_poll.error:
+        _observe(first_poll.observation)
+        _terminal(first_poll.error)
+        return
+    seen = first_poll.observation if first_poll is not None else None
+    if seen is None or seen.state is WarmupState.READY:
+        try:
+            await _dispatch_checks(
+                None,
+                None if seen is not None else WarmupWait(outcome=WarmupOutcome.BROKEN),
+            )
+        except Exception as e:
+            _no_verdict(e, None, None)
+        # Success: the activity already emitted the proceeded outcome event.
+        return
+
     _observe(seen)
-    warmup_s2c, warmup_sc2 = warmup_activity_timeouts(probe_timeout)
+    first_wait = WarmupWait(
+        outcome=WarmupOutcome.UNAVAILABLE
+        if seen.state is WarmupState.UNAVAILABLE
+        else WarmupOutcome.WARMING
+    )
+    try:
+        await _dispatch_checks(frozenset({CheckTier.PREFLIGHT}), first_wait)
+    except Exception as e:
+        _set_health_line("")
+        _no_verdict(e, CheckTier.PREFLIGHT, first_wait)
+        return
+
     terminal: FailureDetails | None = None
-    last_error: FailureDetails | None = None
+    last_error: FailureDetails | None = (
+        first_poll.error if first_poll is not None else None
+    )
     unhinted = 0
-    # Set only by a poll: a READY the first probe reported was reported in
-    # time, however long the PREFLIGHT checks then took to finish.
+    # Set only by a poll after the PREFLIGHT dispatch; the first probe ran
+    # before it, so it is in time by construction.
     late_ready = False
     try:
         while seen.state.is_pending:
@@ -2907,14 +2979,7 @@ async def _run_preflight_gate(
                 unhinted += 1
             if delay > 0:
                 await workflow.sleep(timedelta(seconds=delay))
-            poll: WarmupPoll = await workflow.execute_activity(
-                preflight_warmup_activity_name(app_name),
-                gate_input,
-                result_type=WarmupPoll,
-                schedule_to_close_timeout=warmup_sc2,
-                start_to_close_timeout=warmup_s2c,
-                retry_policy=warmup_retry_policy(),
-            )
+            poll = await _poll()
             if poll.is_terminal:
                 terminal = poll.error
                 break
@@ -2944,22 +3009,7 @@ async def _run_preflight_gate(
     _set_health_line("")
 
     if terminal is not None:
-        # A typed AUTH / PERMISSION / NOT_FOUND raise: a verdict on the source
-        # like any handler raise, so category gating under the gate posture.
-        blocks = gate_blocks(mode, terminal.category)
-        _emit_row(
-            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
-            terminal.code,
-            PreflightClassification.SOURCE_UNVERIFIABLE,
-            _elapsed_ms(),
-            attempt=0,
-            audience=terminal.audience.value,
-            primary=terminal,
-            tier=CheckTier.WARMUP,
-            warmup_seen=_wait(WarmupOutcome.FAILED),
-        )
-        if blocks:
-            raise build_workflow_block(terminal, [], app_name, 0)
+        _terminal(terminal)
         return
 
     if seen.state is WarmupState.READY and not late_ready:

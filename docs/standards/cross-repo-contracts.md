@@ -287,7 +287,8 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   once for the `preflight` tier and once more for the `warmup` tier, and each
   dispatch persists its own verdict over only that tier's checks. A run whose
   first probe is `READY` (every app that does not override `warmup`) writes one
-  row, as before. `payload.preflight.checks[].tier` is on the wire only for a
+  row, as before. The probe itself is a separate `{app}:preflight_warmup`
+  activity that persists nothing. `payload.preflight.checks[].tier` is on the wire only for a
   `warmup` check; a `preflight` check, the default, carries no `tier` key, so an
   untiered app's payload is byte-for-byte what it was. A reader that counts runs
   must group on `workflow_slug` and the run, not count rows. The warmup phase's
@@ -315,7 +316,8 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
 
 Every value here is additive for a caller that does not know about tiers: a
 `/check` without `tiers` never probes and never answers `pending`, an app that
-does not override `Handler.warmup` writes the gate row it always did, and a
+does not override `Handler.warmup` writes the gate row it always did
+(its run gains one `{app}:preflight_warmup` activity, which writes no row), and a
 `preflight` check is serialised exactly as an untiered check was. A consumer
 that does read them must treat `pending` as "not yet verified", never as a
 pass or a failure, and must not branch on `source_state`, which is the

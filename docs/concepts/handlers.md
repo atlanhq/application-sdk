@@ -184,7 +184,7 @@ A request with no `tiers` runs every check and never calls `warmup`. That covers
 
 The SDK checks every returned row's tier against the tiers the handler was asked for. A row outside them means the handler ran a check it was told not to, so it gets no verdict rather than a silent drop: `/check` answers `500` with an unverifiable `INTERNAL` verdict, and the gate records `no_verdict` / `gate_broken`. Read `input.tiers` and skip the checks outside it.
 
-The injected gate probes `warmup` at gate start for every app. `READY` runs every check in the gate's one dispatch, as before. Otherwise the gate runs the `PREFLIGHT` tier, polls `warmup` on durable timers, and runs the `WARMUP` tier once it reports `ready`. A typed AUTH, PERMISSION or NOT_FOUND raise from `warmup` ends the gate's wait at once; any other raise, or a probe that overruns its timeout, reads as `warming` and is polled again. See [Waiting for a warmup](apps.md#waiting-for-a-warmup-opt-in).
+The injected gate probes `warmup` at gate start for every app, in its own `{app}:preflight_warmup` activity ahead of the check activity, so the probe never spends the check budget. `READY` is followed by one check dispatch with every tier, as before. Otherwise the gate runs the `PREFLIGHT` tier, polls `warmup` on durable timers, and runs the `WARMUP` tier once it reports `ready`. A typed AUTH, PERMISSION or NOT_FOUND raise from `warmup` ends the gate's wait at once; any other raise, or a probe that overruns its timeout, reads as `warming` and is polled again. See [Waiting for a warmup](apps.md#waiting-for-a-warmup-opt-in).
 
 ##### The tier model
 
@@ -210,7 +210,7 @@ Two rules follow from this:
 
 ##### The warmup probe
 
-`warmup` is stateless and idempotent. Each call both pushes the warmup forward and reports where it is, and the SDK holds no warmup state between calls: it calls `warmup` once per `/warmup` request, once per `/check` that asks for the `warmup` tier, and once per gate poll. A query-probe app submits its probe query, waits up to `input.probe_timeout_seconds` (`App.preflight_warmup_probe_timeout_seconds`, default 10s), and reports `ready` if it answered, `warming` or `queued` if not. The SDK cancels a probe that overruns the timeout and reads it as `warming`. Whether to cancel a probe query still pending at the timeout is the app's call; each poll submits again, so the default guidance is to cancel.
+`warmup` is stateless and idempotent. Each call both pushes the warmup forward and reports where it is, and the SDK holds no warmup state between calls: it calls `warmup` once per `/warmup` request, once per `/check` that asks for the `warmup` tier, and once per gate probe activity (the first at gate start, then each poll). A query-probe app submits its probe query, waits up to `input.probe_timeout_seconds` (`App.preflight_warmup_probe_timeout_seconds`, default 10s), and reports `ready` if it answered, `warming` or `queued` if not. The SDK cancels a probe that overruns the timeout and reads it as `warming`. Whether to cancel a probe query still pending at the timeout is the app's call; each poll submits again, so the default guidance is to cancel.
 
 | `WarmupState` | Meaning | What the caller does |
 | --- | --- | --- |

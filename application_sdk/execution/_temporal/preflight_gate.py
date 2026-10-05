@@ -711,16 +711,18 @@ class PreflightGateInput(BaseModel):
     """The check tiers this dispatch runs. Set by the workflow, never read off
     the extraction input.
 
-    ``None`` is the first dispatch: the activity probes ``Handler.warmup`` once,
-    then runs every tier if the source is ``READY`` (one handler call, exactly
-    as before tiers) or only ``PREFLIGHT`` if not, returning the observation on
-    :attr:`PreflightOutput.warmup` so the workflow knows to wait.
-    ``{WARMUP}`` is the second dispatch, once the wait reports ``READY``."""
+    ``None`` runs every tier in one handler call, exactly as before tiers:
+    what the workflow sends when the warmup probe that precedes it reported
+    ``READY``. ``{PREFLIGHT}`` when it did not; ``{WARMUP}`` once the wait
+    reports ``READY``. The check activity never probes the warmup itself: that
+    is ``{app}:preflight_warmup``, its own activity with its own timeout."""
 
     warmup: WarmupWait | None = None
-    """What the workflow saw of the warmup wait, for the row the ``WARMUP``
-    dispatch writes. ``None`` on the first dispatch. Set by the workflow; never
-    read by the handler."""
+    """What the workflow saw of the warmup, for the row this dispatch writes:
+    ``WARMING`` / ``UNAVAILABLE`` on a ``{PREFLIGHT}`` dispatch, the wait's
+    outcome on the ``{WARMUP}`` one, ``BROKEN`` on a ``None`` dispatch whose
+    probe itself failed, and ``None`` when the probe reported ``READY``. Set by
+    the workflow; never read by the handler."""
 
     workflow_slug: str = ""
     """AE's slug for the workflow being gated, copied from
@@ -1150,18 +1152,6 @@ def log_gate_posture(
     enforce: bool | None = None,
 ) -> None:
     """Emit the queryable boot-time posture row for one gate-registered app.
-
-    **Warmup (first dispatch).** With ``input.tiers`` unset, the activity
-    first probes ``Handler.warmup`` once, for at most
-    ``warmup_probe_timeout_seconds`` out of the budget. ``READY`` — what every
-    app that does not override ``warmup`` answers — runs every tier in one
-    handler call, exactly as before tiers. Anything else runs only the
-    ``PREFLIGHT`` tier and returns the observation on
-    :attr:`PreflightOutput.warmup`, which sends the workflow into its warmup
-    wait. A typed AUTH / PERMISSION / NOT_FOUND raise from the probe is a
-    verdict on the source like any handler raise. After every handler call,
-    a returned row outside the requested tiers is no verdict (the gate's own
-    plumbing, which fails open), never a silent drop.
 
     ``enforce`` is the deprecated spelling of ``mode``; see
     :func:`_mode_from_deprecated_enforce`. ``mode`` is keyword-required in
@@ -2034,7 +2024,6 @@ def build_preflight_gate_activity(
     attempts: int = GATE_ATTEMPTS_DEFAULT,
     verify_storage: bool = False,
     enforce: bool | None = None,
-    warmup_probe_timeout_seconds: int = WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
 
@@ -2078,6 +2067,14 @@ def build_preflight_gate_activity(
     interrupted. Temporal then ends the frame, and the workflow applies the mode
     to that from the failure chain (:func:`classify_gate_failure`). Handlers
     must keep their probes awaitable and bounded.
+
+    **Tiers.** ``input.tiers`` is set by the workflow from the warmup probe
+    that ran before this activity, as its own ``{app}:preflight_warmup``
+    activity: ``None`` (every tier, exactly as before tiers), ``{PREFLIGHT}``
+    or ``{WARMUP}``. This activity never calls ``Handler.warmup``, so the
+    probe never spends this budget. After the handler call, a returned row
+    outside the requested tiers is no verdict (the gate's own plumbing, which
+    fails open), never a silent drop.
 
     ``enforce`` is the deprecated spelling of ``mode``; see
     :func:`_mode_from_deprecated_enforce`. ``mode`` defaults to ``None`` rather
@@ -2258,12 +2255,18 @@ def build_preflight_gate_activity(
 
         started = time.monotonic()
         budget = _effective_budget(budget_seconds)
-        # What the outcome row reports of tiers and the warmup wait. The first
-        # dispatch learns it from its own probe below; a READY probe leaves both
-        # unset, so that run's row is exactly the row it always was.
-        row_tier: CheckTier | None = CheckTier.WARMUP if input.tiers else None
+        # What the outcome row reports of tiers and the warmup, both decided by
+        # the workflow. A run whose probe reported READY sends neither, so its
+        # row is exactly the row it always was.
+        run_tiers = input.tiers or ALL_CHECK_TIERS
+        row_tier: CheckTier | None = (
+            None
+            if input.tiers is None
+            else CheckTier.WARMUP
+            if CheckTier.WARMUP in input.tiers
+            else CheckTier.PREFLIGHT
+        )
         row_warmup: WarmupWait | None = input.warmup
-        warmup_seen: WarmupObservation | None = None
 
         from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
             auto_heartbeat_loop,
@@ -2342,48 +2345,12 @@ def build_preflight_gate_activity(
                 if verify_storage
                 else 0.0
             )
-            run_tiers = input.tiers or ALL_CHECK_TIERS
-            if input.tiers is None:
-                # First dispatch: probe the warmup before the checks, so a cold
-                # warehouse starts resuming while the PREFLIGHT tier runs and the
-                # WARMUP tier waits for it. A typed terminal raise is a verdict;
-                # it is handled after this try, like any handler raise.
-                try:
-                    warmup_seen = await _probe_warmup(
-                        handler,
-                        input,
-                        credentials,
-                        credentials_by_name,
-                        min(
-                            float(warmup_probe_timeout_seconds),
-                            max(0.0, remaining - reserved - 1),
-                        ),
-                        app_name,
-                    )
-                except _TransientWarmupRaise:
-                    warmup_seen = WarmupObservation(state=WarmupState.WARMING)
-                except Exception as e:
-                    return _no_verdict(e)
-                if warmup_seen.state is WarmupState.READY:
-                    warmup_seen = None
-                else:
-                    run_tiers = frozenset({CheckTier.PREFLIGHT})
-                    row_tier = CheckTier.PREFLIGHT
-                    row_warmup = WarmupWait(
-                        outcome=WarmupOutcome.UNAVAILABLE
-                        if warmup_seen.state is WarmupState.UNAVAILABLE
-                        else WarmupOutcome.WARMING
-                    )
-                remaining = budget - (time.monotonic() - started)
             handler_budget = max(1, int(remaining - reserved))
             # What is actually left, not the nominal budget: resolution above has
             # already spent part of it. A handler sizing probes to this number is
             # sizing to the deadline the wait below really enforces.
             preflight_input, all_creds = _gate_preflight_input(
-                input.model_copy(update={"tiers": run_tiers}),
-                credentials,
-                credentials_by_name,
-                handler_budget,
+                input, credentials, credentials_by_name, handler_budget
             )
             # _no_verdict raises in hard mode, so it must never be called from inside
             # this try — the raise would be re-caught below and _no_verdict would run
@@ -2448,8 +2415,6 @@ def build_preflight_gate_activity(
                         app_name,
                         _current_attempt(),
                     )
-                if warmup_seen is not None:
-                    result = result.model_copy(update={"warmup": warmup_seen})
             if timed_out:
                 return _no_verdict(
                     AppTimeoutError(
@@ -2466,11 +2431,11 @@ def build_preflight_gate_activity(
             # Appends checks and may downgrade READY → NOT_READY, so it must run
             # before the verdict evaluation below. Never raises; see its docstring
             # for the fail-open/verdict taxonomy note.
-            # Once per run: the first dispatch probes storage; the WARMUP one
-            # does not.
+            # Once per run: the first check dispatch (every tier, or PREFLIGHT)
+            # probes storage; the WARMUP one does not.
             if (
                 verify_storage
-                and input.tiers is None
+                and row_tier is not CheckTier.WARMUP
                 and await _append_storage_checks(result, budget, started)
             ):
                 # A failed probe only becomes a verdict once the app's retry

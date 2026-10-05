@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Any
 from unittest import mock
 
+import pytest
+
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
@@ -27,6 +29,7 @@ from application_sdk.execution._temporal.preflight_transport import (
 from application_sdk.execution._temporal.worker import create_worker
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import (
+    CheckTier,
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
@@ -45,9 +48,12 @@ class _RecordingTransport:
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.calls.append(("preflight_check", input))
+        # Answers only the tiers asked for, as the post-call tier check requires.
         return PreflightOutput(
             status=PreflightStatus.READY,
-            checks=[PreflightCheck(name="reachable", passed=True)],
+            checks=[PreflightCheck(name="reachable", passed=True)]
+            if CheckTier.PREFLIGHT in input.tiers
+            else [],
         )
 
     async def warmup(self, input: WarmupInput) -> WarmupObservation:
@@ -68,9 +74,23 @@ class TestTheGateCallsOnlyTheTransport:
             result = await gate(PreflightGateInput(entrypoint="crawl"))
         assert result.status is PreflightStatus.READY
         assert [c.name for c in result.checks] == ["reachable"]
-        # The first dispatch probes the warmup, then runs the checks.
-        assert [op for op, _ in transport.calls] == ["warmup", "preflight_check"]
+        # The probe is its own activity: the check activity never calls warmup.
+        assert [op for op, _ in transport.calls] == ["preflight_check"]
         assert all(seen.entrypoint == "crawl" for _, seen in transport.calls)
+
+    @pytest.mark.parametrize(
+        "tiers",
+        [None, frozenset({CheckTier.PREFLIGHT}), frozenset({CheckTier.WARMUP})],
+        ids=["every-tier", "preflight", "warmup"],
+    )
+    async def test_no_check_dispatch_calls_warmup(
+        self, tiers: frozenset[CheckTier] | None
+    ) -> None:
+        transport = _RecordingTransport()
+        gate = build_preflight_gate_activity(_as_transport(transport), "myapp")
+        with mock.patch.object(preflight_gate, "logger"):
+            await gate(PreflightGateInput(entrypoint="crawl", tiers=tiers))
+        assert [op for op, _ in transport.calls] == ["preflight_check"]
 
     async def test_the_warmup_activity_calls_the_warmup_operation(self) -> None:
         transport = _RecordingTransport()

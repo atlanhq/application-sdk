@@ -53,6 +53,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
     NotFoundError,
 )
+from application_sdk.execution._temporal import preflight_gate
 from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
     preflight_gate_activity_name,
@@ -311,7 +312,7 @@ def _poll(app_cls: type[App]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# READY on the first probe: the gate is what it was before warmup existed
+# READY on the first probe: one probe activity, then every tier at once
 # ---------------------------------------------------------------------------
 
 
@@ -325,19 +326,23 @@ class TestReadyAtTheFirstProbe:
         )
         assert run.ran is True
         assert fake.calls == ["probe", "check:preflight+warmup"]
-        assert await _activities(run) == [_gate(HardGateApp)]
+        # The probe is its own activity, ahead of the checks: it never spends
+        # the check budget.
+        assert await _activities(run) == [_poll(HardGateApp), _gate(HardGateApp)]
         assert await _timers(run) == []
         row = gate_rows.one
         assert row["outcome"] == "proceeded"
-        # Identical to a pre-warmup row: no tier, no warmup fields.
+        # The row is the one a run without tiers emits: no tier, no warmup fields.
         assert GATE_TIER_KEY not in row
         assert WARMUP_OUTCOME_KEY not in row
 
-    async def test_its_history_replays_with_no_new_commands(
+    async def test_its_history_replays_on_this_build(
         self, run_worker, executor, reregister_app, temporal_client
     ):
-        """A READY run's history has a pre-warmup run's shape — one check
-        activity, no timer — and replays against this build unchanged."""
+        """A READY run's history — probe activity, check activity, no timer —
+        replays on the build that wrote it. A history from a build without the
+        probe would not (its first command was the check activity); workers
+        are PINNED, so such a run never replays here."""
         run = await _run(
             run_worker,
             executor,
@@ -348,6 +353,47 @@ class TestReadyAtTheFirstProbe:
         )
         assert run.ran is True
         await _replay(run)
+
+    async def test_a_broken_first_probe_runs_every_tier_and_says_so(
+        self,
+        run_worker,
+        executor,
+        reregister_app,
+        temporal_client,
+        gate_rows,
+        monkeypatch,
+    ):
+        """The probe activity's own plumbing fails — here its credential
+        lookup, refused on every attempt the activity's retry policy allows —
+        so the probe never reaches the handler. The run still gets its
+        verdict: one check dispatch with every tier, its row marked broken."""
+        real = preflight_gate._resolve_gate_credentials
+        refusals = {"left": preflight_gate.WARMUP_ATTEMPTS}
+
+        async def _refuse_the_probe_attempts(
+            input: preflight_gate.PreflightGateInput,
+        ) -> Any:
+            if refusals["left"] > 0:
+                refusals["left"] -= 1
+                raise ConnectionError("secret store refused the lookup")
+            return await real(input)
+
+        monkeypatch.setattr(
+            preflight_gate, "_resolve_gate_credentials", _refuse_the_probe_attempts
+        )
+        fake = warming_fake(COLD)
+        run = await _run(
+            run_worker, executor, reregister_app, temporal_client, HardGateApp, fake
+        )
+        assert run.ran is True
+        assert refusals["left"] == 0
+        assert fake.calls == ["check:preflight+warmup"]
+        assert await _activities(run) == [_poll(HardGateApp), _gate(HardGateApp)]
+        assert await _timers(run) == []
+        row = gate_rows.one
+        assert row["outcome"] == "proceeded"
+        assert GATE_TIER_KEY not in row
+        assert row[WARMUP_OUTCOME_KEY] == "broken"
 
 
 async def _replay(run: Run) -> None:
@@ -389,7 +435,7 @@ class TestColdThenReady:
             "check:warmup",
         ]
         gate, poll = _gate(HardGateApp), _poll(HardGateApp)
-        assert await _activities(run) == [gate, poll, poll, gate]
+        assert await _activities(run) == [poll, gate, poll, poll, gate]
         # 5s doubling: the wait is on durable timers, not in an activity.
         assert await _timers(run) == [5.0, 10.0]
 
@@ -575,7 +621,7 @@ class TestUnavailable:
         # Soft warmup posture: reported, and the run goes on.
         assert run.ran is True
         assert fake.calls == ["probe", "check:preflight"]
-        assert await _activities(run) == [_gate(HardGateApp)]
+        assert await _activities(run) == [_poll(HardGateApp), _gate(HardGateApp)]
         first, last = gate_rows.rows
         assert first[WARMUP_OUTCOME_KEY] == "unavailable"
         assert last["outcome"] == "would_block"
@@ -641,7 +687,7 @@ class TestTypedRaise:
         assert run.ran is not blocks
         # No checks, no wait: the probe's raise is the verdict.
         assert fake.calls == ["probe"]
-        assert await _activities(run) == [_gate(app_cls)]
+        assert await _activities(run) == [_poll(app_cls)]
         row = gate_rows.one
         assert row["outcome"] == ("blocked" if blocks else "would_block")
         assert row["reason"] == "AUTH"

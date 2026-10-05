@@ -788,7 +788,6 @@ def create_worker(
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),
-                warmup_probe_timeout_seconds=probe_timeout,
             )
         )
         gate_activities.append(

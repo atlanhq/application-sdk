@@ -2,8 +2,8 @@
 name: adopt-preflight-gate
 description: >
   Bump a v3 app to the latest application-sdk and adopt the SDK-native
-  preflight gate safely. The gate runs the app's preflight_check handler as the
-  mandatory first activity of every extraction workflow and always reports the
+  preflight gate safely. The gate runs the app's preflight_check handler as a
+  mandatory activity at the start of every extraction workflow and always reports the
   verdict; by default it is soft (every outcome is reported but the run
   proceeds), and blocking real runs is a per-app opt-in (preflight_gate_mode =
   "hard"). Hard mode applies to everything the gate can attribute to the
@@ -75,8 +75,10 @@ status. Read its `app/handler.py` before proposing changes.
 
 ## What changed (context you state to the developer up front)
 
-- The SDK injects `{app}:preflight` as the first activity of every extraction
-  workflow. It calls the app's one `Handler.preflight_check`.
+- The SDK injects two activities at the start of every extraction workflow:
+  `{app}:preflight_warmup`, one `Handler.warmup` probe (the default answers
+  `READY` at once, so an app without a warmup notices nothing), then
+  `{app}:preflight`, which calls the app's one `Handler.preflight_check`.
 - `PreflightOutput.status` is the gate verdict: `NOT_READY` is always reported
   (as `outcome="would_block"`), and **aborts the run** only when the app has
   opted into hard mode (`preflight_gate_mode = "hard"`, typed `PreflightFailed`,
@@ -264,7 +266,7 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 | `gate_timeout_seconds` | the budget in force, so headroom needs no join |
 | `check_matrix` | per-check name/passed/error_code/duration_ms, plus `tier` on a `warmup` check (a `preflight` check, the default, has none); `[]` where no check ran |
 | `gate_tier` | runs that waited on a warmup only: `preflight` / `warmup`, which dispatch wrote the row |
-| `warmup_outcome` | runs that waited on a warmup only: `warming` on the `preflight` row (`unavailable` when the first probe said so); on the `warmup` row `ready` / `unavailable` / `failed` / `exhausted` / `broken` |
+| `warmup_outcome` | runs that waited on a warmup only: `warming` on the `preflight` row (`unavailable` when the first probe said so); on the `warmup` row `ready` / `unavailable` / `failed` / `exhausted` / `broken`; also `broken`, with no `gate_tier`, on the single row of a run whose first probe activity failed |
 | `warmup_duration_ms` / `warmup_transitions` | runs that waited on a warmup, once the wait ended: workflow-clock wait, and the JSON list of observed states with offsets (`{"state", "at_ms"}`) |
 
 **Splitting `warming` out of `no_verdict`.** A run whose newest row is the
@@ -272,7 +274,9 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 getting ready — cancelled, or its worker lost mid-wait. Count it, and every
 `warmup_exhausted` row, in their own `warming` bucket, not in `no_verdict`; a
 `no_verdict` row with `warmup_outcome = 'broken'` is the gate's own warmup
-plumbing and stays there. A `warmup_exhausted` or warmup `unavailable` row
+plumbing and stays there. A `broken` row with no `gate_tier` is a run whose
+first probe activity failed; the gate ran every tier in one dispatch, so that
+row carries a real verdict and counts like any other. A `warmup_exhausted` or warmup `unavailable` row
 stamps `gate_mode` with the app's `preflight_warmup_mode`, the posture that
 decided it, not with `preflight_gate_mode`.
 
