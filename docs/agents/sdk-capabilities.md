@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    d6d4e9b1fe5200a8edd78db7ac99180a4ae5fbb5
-source-date:   2026-10-05T17:06:13+01:00
+source-sha:    8ee1dccc4b3cb2c9dbc89483860dbc2b9b167702
+source-date:   2026-10-05T23:09:51+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7759,7 +7759,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.handler.contracts import WarmupObservation`
 - **Summary:** What one warmup probe saw — the return type of ``Handler.warmup``.
 - **Fields:**
-  - `state: WarmupState` — Where the source's compute is.
+  - `state: WarmupState` `= WarmupState.READY` — Where the source's compute is. Defaults to ``READY``, what
   - `source_state: str` `= ''` — The source's own label for its state (e.g. Snowflake ``RESUMING``).
   - `queued_queries: int | None` `= Field(default=None, ge=0)` — How many statements are waiting on the source's compute for a slot (e.g.
   - `next_poll_seconds: int | None` `= Field(default=None, ge=0)` — The source's own suggestion for when to ask again. The gate honours it
