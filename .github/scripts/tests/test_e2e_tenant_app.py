@@ -1047,7 +1047,7 @@ def test_build_identity_ids_agree() -> None:
     this whole change removes, so it gets a test rather than a comment.
     """
     root = Path(__file__).resolve().parents[3]
-    sdk = (root / "application_sdk" / "app" / "build_identity.py").read_text()
+    sdk = (root / "application_sdk" / "common" / "build_identity.py").read_text()
     assert f'BUILD_IDENTITY_CONFIGMAP_ID = "{app.BUILD_IDENTITY_CONFIGMAP_ID}"' in sdk
     assert f'BUILD_ID_ENV = "{stamp_build_identity.BUILD_ID_ARG}"' in sdk
 
