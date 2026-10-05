@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -27,7 +28,12 @@ from lens import review as review_mod  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
 from lens.bundle import group  # noqa: E402
 from lens.config import Config, load_config, validate  # noqa: E402
-from lens.diff import anchor, parse_unified_diff, snippet_in_text  # noqa: E402
+from lens.diff import (  # noqa: E402
+    FileDiff,
+    anchor,
+    parse_unified_diff,
+    snippet_in_text,
+)
 from lens.event import decide  # noqa: E402
 from lens.findings import Finding, PRState, merge_new  # noqa: E402
 from lens.github import GitHubError  # noqa: E402
@@ -4375,6 +4381,314 @@ def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
     assert (
         "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml"
         in json.dumps(verify)
+    )
+
+
+# ---- removals judged against the last release (FND-3340) -----------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+RELEASED_THING = "def shipped(): ...\n\ndef call(a, b=1): ...\n"
+
+
+@pytest.fixture
+def released_checkout(tmp_path: Path) -> Path:
+    """lens's checkout, as the workflow makes it: the base branch at depth 1 with
+    no tags. `origin` has released v1.0.0 (with `shipped`), a later rc, and moved
+    on; the checkout must fetch the stable tag itself to have a baseline."""
+    origin = tmp_path / "origin"
+    (origin / "application_sdk").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "-b", "main", "origin")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "application_sdk" / "__init__.py").write_text("")
+    (origin / "application_sdk" / "thing.py").write_text(RELEASED_THING)
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "release")
+    _git(origin, "tag", "v1.0.0")
+    (origin / "application_sdk" / "later.py").write_text("def unreleased(): ...\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "next")
+    _git(origin, "tag", "v1.1.0-rc1")
+    _git(tmp_path, "clone", "-q", "--depth=1", "--no-tags", origin.as_uri(), "root")
+    root = tmp_path / "root"
+    assert not subprocess.run(
+        ["git", "tag"], cwd=root, capture_output=True, text=True
+    ).stdout, "the checkout must start tagless, as in the workflow"
+    return root
+
+
+def _released(root: Path, files: list[FileDiff], head: dict[str, str]) -> str:
+    return review_mod.surface.released_surface_removals(root, files, head, head.get)
+
+
+def _removal_finding() -> Finding:
+    return Finding(
+        "application_sdk/testing/warming.py",
+        1,
+        "critical",
+        "compatibility",
+        "Public name WarmingSource removed without deprecation",
+        "WarmingSource was public and is gone with no deprecated alias.",
+        "class SourceState: ...",
+    )
+
+
+def _verify_input(repo: Path, f: Finding, released: str) -> str:
+    ws, _ = _ws(repo)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    review_mod._verify(client, ws, [f], "--- a.py", released=released)
+    return script.requests[0]["messages"][1]["content"]
+
+
+def test_a_name_added_and_reshaped_within_the_pr_is_not_a_released_removal(
+    released_checkout: Path, repo: Path
+):
+    """The incident shape: a module new in this PR whose names were reshaped
+    between commits. Nothing in it shipped, so the block lists nothing, and the
+    verify call is told so and can close the removal finding."""
+    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
+    head = {"application_sdk/testing/warming.py": "class SourceState: ...\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released == (
+        "baseline v1.0.0: none (no public name that shipped in v1.0.0 and is still "
+        "on the base branch is removed or narrowed by this PR)"
+    )
+    user = _verify_input(repo, _removal_finding(), released)
+    assert f"<released_surface_removals>\n{released}\n</released_surface_removals>" in (
+        user
+    )
+    assert user.index("<released_surface_removals>") < user.index(
+        "<changes_this_round>"
+    )
+    assert "released_surface_removals" in review_mod.prompts.VERIFY_SYSTEM
+
+
+def test_a_released_name_removed_without_deprecation_is_listed(
+    released_checkout: Path, repo: Path
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {
+        "application_sdk/thing.py": "def renamed(): ...\n\ndef call(a, *, b=1): ...\n"
+    }
+
+    released = _released(released_checkout, files, head)
+
+    lines = released.splitlines()
+    assert lines[0] == "baseline v1.0.0"
+    assert "removed: application_sdk.thing:shipped" in lines
+    assert any(
+        line.startswith("narrowed: application_sdk.thing:call — parameter(s) hardened")
+        for line in lines
+    )
+    assert "renamed" not in released  # added, not removed
+    user = _verify_input(repo, _removal_finding(), released)
+    assert "removed: application_sdk.thing:shipped" in user
+
+
+def test_a_released_name_kept_as_a_deprecated_alias_is_not_listed(
+    released_checkout: Path,
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {
+        "application_sdk/thing.py": RELEASED_THING.replace(
+            "def shipped", "@deprecated('use renamed; removed in v2.0.0')\ndef shipped"
+        )
+    }
+    assert "none" in _released(released_checkout, files, head)
+
+
+def test_deleting_or_renaming_away_a_released_module_lists_its_names(
+    released_checkout: Path,
+):
+    deleted = [FileDiff(path="application_sdk/thing.py", status="deleted")]
+    assert "removed: application_sdk.thing:shipped" in _released(
+        released_checkout, deleted, {"application_sdk/thing.py": ""}
+    )
+    moved = [
+        FileDiff(
+            path="application_sdk/things.py",
+            old_path="application_sdk/thing.py",
+            status="renamed",
+        )
+    ]
+    released = _released(
+        released_checkout, moved, {"application_sdk/things.py": RELEASED_THING}
+    )
+    assert "removed: application_sdk.thing:shipped" in released
+
+
+def test_base_branch_drift_in_a_module_the_pr_does_not_touch_is_not_listed(
+    released_checkout: Path,
+):
+    """The checkout is the base branch, not the release: a name the base branch
+    removed since the release is not this PR's removal."""
+    (released_checkout / "application_sdk" / "thing.py").write_text("")
+    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
+    released = _released(
+        released_checkout, files, {"application_sdk/testing/warming.py": "X = 1\n"}
+    )
+    assert "application_sdk.thing:shipped" not in released
+
+
+def _base_branch_removes_shipped(root: Path) -> None:
+    """A commit on the base branch after the tag: `shipped` is gone there."""
+    (root / "application_sdk" / "thing.py").write_text("def call(a, b=1): ...\n")
+    _git(
+        root,
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qam",
+        "drop",
+    )
+
+
+def test_a_removal_the_base_branch_made_is_not_the_prs_in_a_module_it_edits(
+    released_checkout: Path,
+):
+    """Release has thing.shipped; the base branch removed it after the tag; the
+    PR edits thing.py for an unrelated reason. The name is gone at the head, but
+    not by this PR, so nothing is listed."""
+    _base_branch_removes_shipped(released_checkout)
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.startswith("baseline v1.0.0: none"), released
+
+
+def test_a_released_name_still_on_the_base_branch_removed_by_the_pr_is_listed(
+    released_checkout: Path,
+):
+    """The converse: the base branch still has `shipped`; the PR removes it."""
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.splitlines() == [
+        "baseline v1.0.0",
+        "removed: application_sdk.thing:shipped",
+    ]
+
+
+def test_a_pr_that_changes_no_package_module_gets_no_block(tmp_path: Path):
+    files = parse_unified_diff(RENAME_DIFF)
+    assert (
+        review_mod.surface.released_surface_removals(
+            tmp_path, files, {}, lambda p: None
+        )
+        == ""
+    )
+
+
+@pytest.mark.parametrize(
+    ("head", "reason"),
+    [
+        ({"application_sdk/thing.py": "def broken(:\n"}, "cannot parse"),
+        ({}, "could not read application_sdk/thing.py"),  # head text unreadable
+    ],
+)
+def test_a_snapshot_failure_falls_back_without_raising(
+    released_checkout: Path, head: dict[str, str], reason: str
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    released = _released(released_checkout, files, head)
+    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
+    assert reason in released
+
+
+def test_no_release_tag_falls_back_without_raising(repo: Path):
+    """`repo` is not a git checkout: no tag, no origin to list one from."""
+    files = parse_unified_diff(DIFF)
+    released = review_mod.surface.released_surface_removals(
+        repo, files, {"application_sdk/storage/fetch.py": SRC_V2}, lambda p: None
+    )
+    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
+
+
+def _review_context(script: Script) -> str:
+    """The line review's user context (it opens with <background>)."""
+    return next(
+        m["content"]
+        for r in script.requests
+        for m in r["messages"]
+        if isinstance(m.get("content"), str) and m["content"].startswith("<background>")
+    )
+
+
+def test_run_gives_the_block_to_every_bundle_and_to_verify(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Through `run`: computed once per round, then threaded into the line
+    review's context and the verify call, as `<paths_removed_by_this_pr>` is."""
+    calls: list[str] = []
+
+    def fake(root, files, head_text, fetch):  # noqa: ANN001, ANN202
+        calls.append(fetch("application_sdk/storage/fetch.py") or "")
+        return "baseline v9.9.9\nremoved: application_sdk.storage.fetch:gone"
+
+    monkeypatch.setattr(review_mod.surface, "released_surface_removals", fake)
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first_script = _review_script()
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(first_script),
+    )
+    block = (
+        "<released_surface_removals>\nbaseline v9.9.9\n"
+        "removed: application_sdk.storage.fetch:gone\n</released_surface_removals>"
+    )
+    assert block in _review_context(first_script)
+    assert calls == [SRC_V2], "head text is read at the PR head, once per round"
+
+    assert first.state.findings, "round 1 must leave a finding open to re-check"
+    _round_two_elsewhere(gh)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    assert block in verify["messages"][1]["content"]
+    assert len(calls) == 2
+
+
+def test_run_survives_a_checkout_with_no_release(repo: Path):
+    """The real computation over a non-git root: the review still runs, and the
+    reviewer is told the baseline is unavailable rather than nothing."""
+    gh = FakeGitHub()
+    script = _review_script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    assert res.action == "reviewed"
+    assert f"<released_surface_removals>\n{review_mod.surface.UNAVAILABLE}: " in (
+        _review_context(script)
     )
 
 

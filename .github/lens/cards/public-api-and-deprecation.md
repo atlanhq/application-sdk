@@ -1,5 +1,6 @@
 # public-api-and-deprecation: Importable surface, env vars, cross-repo values
-- Flag: a public name, method, kwarg or `application_sdk.testing` helper removed/renamed without being deprecated in the previous release (`docs/standards/symbols.md`); a red Symbol Removal Check is an obligation.
+- Flag: a public name, method, kwarg or `application_sdk.testing` helper removed/renamed without being deprecated in the previous release (`docs/standards/symbols.md`) — only when `<released_surface_removals>` lists it; a red Symbol Removal Check is an obligation.
+- Don't flag: a removed/reshaped name absent from `<released_surface_removals>` (never released: added earlier in this PR or on an unreleased branch); verify closes such a finding. If the block says "release baseline unavailable", judge from the diff.
 - Flag: a deprecation that doesn't delegate, or the wrong marker: `@deprecated` or an `__init__` `DeprecationWarning` (classes/functions), `__deprecated_members__` (enum members), `_DEPRECATED_CONSTANTS` + `__getattr__` (constants; no module-scope re-export).
 - Flag: a deliberate break not declared `feat!:`/`BREAKING CHANGE:`; a new required param, changed default, or moved symbol without re-export.
 - Flag: a new public symbol not in `__all__`; a new `__init__.py` export with no test.
