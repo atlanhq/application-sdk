@@ -2752,10 +2752,8 @@ thread affinity.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `async def`, a `with` statement constructs a `ThreadPoolExecutor` bound to a
-name and the body offloads work to it with `.run_in_executor(<that name>, ...)`:
-
-``python with ThreadPoolExecutor() as pool:     await loop.run_in_executor(pool,
-blocking_call) ``
+name and the body offloads work to it with `.run_in_executor(<that name>, ...)`, e.g.
+`with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)`.
 
 A task cancelled inside that `with` block leaves through `pool.shutdown(wait=True)`,
 which runs on the event loop thread and blocks until the driver call returns — freezing
@@ -2770,6 +2768,7 @@ different threads), keep a dedicated executor created **without** `with` and cal
 
 `run_in_executor(None, ...)` is P031, not this rule; a `with`-scoped executor that only
 calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception
-with `# conformance: ignore[P054] <reason>`.
+on the `with` line (the finding anchors there, not on the `run_in_executor` call) with
+`# conformance: ignore[P054] <reason>`.
 
 ---

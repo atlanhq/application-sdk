@@ -554,12 +554,8 @@ RULES: tuple[RuleDefinition, ...] = (
         full_description=(
             "Inside an ``async def``, a ``with`` statement constructs a\n"
             "``ThreadPoolExecutor`` bound to a name and the body offloads work to it\n"
-            "with ``.run_in_executor(<that name>, ...)``:\n"
-            "\n"
-            "```python\n"
-            "with ThreadPoolExecutor() as pool:\n"
-            "    await loop.run_in_executor(pool, blocking_call)\n"
-            "```\n"
+            "with ``.run_in_executor(<that name>, ...)``, e.g.\n"
+            "``with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)``.\n"
             "\n"
             "A task cancelled inside that ``with`` block leaves through\n"
             "``pool.shutdown(wait=True)``, which runs on the event loop thread and\n"
@@ -576,7 +572,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "``run_in_executor(None, ...)`` is P031, not this rule; a ``with``-scoped\n"
             "executor that only calls ``pool.submit(...)`` is out of scope.  Land as\n"
-            "``WARN``; suppress a reviewed exception with\n"
+            "``WARN``; suppress a reviewed exception on the ``with`` line (the finding\n"
+            "anchors there, not on the ``run_in_executor`` call) with\n"
             "``# conformance: ignore[P054] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p054",

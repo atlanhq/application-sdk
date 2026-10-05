@@ -47,9 +47,10 @@ _THREAD_POOLS = frozenset(
     }
 )
 
-# A final name distinctive enough to match on its own, catching the
-# `import concurrent.futures; concurrent.futures.ThreadPoolExecutor()` form the
-# import-binding collector maps to `concurrent.futures.ThreadPoolExecutor` anyway.
+# A final name distinctive enough to match on its own. Needed because the
+# import-binding collector resolves `import concurrent.futures;
+# concurrent.futures.ThreadPoolExecutor()` to a wrong dotted name; same fallback
+# as P036.
 _THREAD_POOL_NAMES = frozenset({"ThreadPoolExecutor"})
 
 _EXECUTOR_ATTR = "run_in_executor"

@@ -752,9 +752,10 @@ drafting.
   class.  Leave `AsyncAtlanClient` usage untouched.
 
 **Execution-seam rules (P031, P036, P054)** — suggest-only, WARN-tier;
-`classification` is always `"judgment"`.  Both replace a hand-rolled
-concurrency primitive with the SDK seam that owns its lifecycle, and both need
-`result.evidence` citing the seam's own path plus the reference-app call site —
+`classification` is always `"judgment"`.  Each replaces a hand-rolled
+concurrency primitive with a shape whose lifecycle is safe on the event loop,
+and each needs `result.evidence` citing that shape's own path plus the
+reference call site —
 the blind gate cannot tell a correct hop from a plausible one.
 
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
