@@ -91,6 +91,28 @@ def test_ledger_records_every_sdk_contract_base_field(sdk_root: Path) -> None:
     assert expected <= recorded
 
 
+def test_sdk_ledger_retires_no_field_before_origin_is_recorded(
+    sdk_root: Path,
+) -> None:
+    """No SDK field may be 'sunset' until consumer ledgers record field origin (FND-3277).
+
+    B005 waives a removed field when the SDK ledger retires one of the same name
+    and type, but a consumer ledger cannot yet tell an inherited field from one
+    the app declared itself. The first SDK sunset would let an app drop its own
+    shipped field unflagged. Land FND-3277, then delete this test.
+    """
+    sunset = sorted(
+        f"{f.contract}.{f.field}"
+        for f in load_ledger(sdk_root / _LEDGER_NAME).fields
+        if f.status == "sunset"
+    )
+    assert not sunset, (
+        f"the SDK ledger retires {sunset}, but consumer ledgers do not record "
+        "field origin yet, so B005 would also waive an app's removal of its "
+        "own same-named field. Land FND-3277 before retiring an SDK field."
+    )
+
+
 def test_installed_package_ships_the_root_ledger_byte_identical(
     sdk_root: Path,
 ) -> None:
