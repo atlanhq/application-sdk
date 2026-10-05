@@ -5,15 +5,14 @@ This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
 """
 
-import asyncio
-import concurrent
+import functools
 import hashlib
-from collections.abc import AsyncIterator, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Union, cast
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import run_in_thread, submit_in_thread
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
@@ -38,6 +37,8 @@ from application_sdk.errors import AppError, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+T = TypeVar("T")
 
 
 def _escape_colons_for_text(query: str) -> str:
@@ -402,41 +403,58 @@ class BaseSQLClient(ClientInterface):
         if not self.engine:
             raise EngineNotInitializedError()
 
-        loop = asyncio.get_running_loop()
         logger.debug(
             "Running query (sha=%s, len=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
         )
 
-        # Use context manager for automatic connection cleanup
-        with self.engine.connect() as connection:
+        connection = self.engine.connect()
+        # Driver calls go through run_in_thread, so a cancelled caller stops
+        # waiting at once — but the thread keeps using the connection until the
+        # call returns. The lock keeps the close (below) from running on the
+        # connection while an abandoned call still holds it.
+        in_use = threading.Lock()
+
+        def _holding_connection(func: Callable[..., T]) -> Callable[..., T]:
+            @functools.wraps(func)  # keeps the callee's name for run_in_thread's label
+            def call(*args: Any) -> T:
+                with in_use:
+                    return func(*args)
+
+            return call
+
+        try:
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
-            with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(_escape_colons_for_text(query))
-                )
-                if not cursor or not cursor.cursor:
-                    raise UnsupportedSqlCursorError()
-                column_names: list[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+            cursor = await run_in_thread(
+                _holding_connection(connection.execute),
+                text(_escape_colons_for_text(query)),
+            )
+            if not cursor or not cursor.cursor:
+                raise UnsupportedSqlCursorError()
+            column_names: list[str] = [
+                description.name.lower() for description in cursor.cursor.description
+            ]
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
+            fetchmany = _holding_connection(cursor.fetchmany)
+            while True:
+                rows = await run_in_thread(fetchmany, batch_size)
+                if not rows:
+                    break
 
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            # Connection automatically closed by context manager
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
+        except BaseException:
+            # Cancellation, an early aclose(), or a failure. A driver call may
+            # still be running, so closing here on the loop would block it on
+            # that call; hand the close to the pool to run once the call ends.
+            submit_in_thread(_holding_connection(connection.close))
+            raise
+        connection.close()
 
         logger.info("Query execution completed")
 
@@ -528,11 +546,12 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_running_loop().run_in_executor(
-                    executor, self._execute_query, query, chunksize
-                )
+            # run_in_thread, not a per-call ThreadPoolExecutor: leaving that
+            # executor's `with` block on cancellation calls shutdown(wait=True)
+            # on the loop thread, which freezes the loop until the query ends.
+            # The shared pool lets a cancelled read return at once while its
+            # thread drains on its own.
+            return await run_in_thread(self._execute_query, query, chunksize)
 
     async def get_batched_results(
         self,
