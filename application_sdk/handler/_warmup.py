@@ -125,16 +125,30 @@ async def bounded_warmup_probe(
     Deliberately not ``asyncio.wait_for``: that cancels the probe and then
     awaits it, so a probe that swallows ``CancelledError`` would hold the caller
     past its bound. The overrunning task is cancelled and abandoned instead, its
-    eventual exception consumed so asyncio does not log it on GC. A raise from
-    the probe propagates.
+    eventual exception consumed so asyncio does not log it on GC. The same
+    happens when the caller itself is cancelled, before the cancellation
+    propagates. A raise from the probe propagates.
     """
     task = asyncio.ensure_future(probe)
-    done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+    try:
+        done, _ = await asyncio.wait({task}, timeout=timeout_seconds)
+    except asyncio.CancelledError:
+        # The caller was cancelled (an activity cancelled, an HTTP client gone):
+        # the probe must not outlive it, or repeated cancellations stack
+        # concurrent probes against the source.
+        _abandon(task)
+        raise
     if done:
         return task.result()
+    _abandon(task)
+    return None
+
+
+def _abandon(task: asyncio.Future[WarmupObservation]) -> None:
+    """Cancel *task* without awaiting it, consuming whatever it later raises so
+    asyncio does not log it on GC."""
     task.cancel()
     task.add_done_callback(lambda f: None if f.cancelled() else f.exception())
-    return None
 
 
 def warmup_progress_line(observation: WarmupObservation) -> str:

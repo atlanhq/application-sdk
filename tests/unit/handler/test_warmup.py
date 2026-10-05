@@ -867,6 +867,28 @@ class TestBoundedWarmupProbe:
         await asyncio.wait_for(finished.wait(), timeout=5)
         assert cancelled.is_set()
 
+    async def test_a_cancelled_caller_cancels_the_probe(self) -> None:
+        """An activity or request cancelled mid-probe must not leave the probe
+        running against the source (F-4378c6)."""
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def probe() -> WarmupObservation:
+            started.set()
+            try:
+                await asyncio.sleep(30)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+            return _WARMING
+
+        caller = asyncio.ensure_future(bounded_warmup_probe(probe(), 30.0))
+        await asyncio.wait_for(started.wait(), timeout=5)
+        caller.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await caller
+        await asyncio.wait_for(cancelled.wait(), timeout=5)
+
 
 class TestWarmupUnavailableError:
     def test_names_the_source_state_and_queue(self) -> None:
