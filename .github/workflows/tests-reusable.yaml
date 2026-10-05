@@ -3061,6 +3061,7 @@ jobs:
           UNIT_COVERAGE: unit-evidence/coverage.json
           INTEGRATION_JUNIT: integration-evidence/results/test-results.xml
           INTEGRATION_COVERAGE: integration-evidence/coverage.json
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
           # Quoted through to the CLI, which expands it: the legs' artifact
           # directories are only known at download time, and expanding it in the
           # shell would need a loop this file is not allowed to contain
