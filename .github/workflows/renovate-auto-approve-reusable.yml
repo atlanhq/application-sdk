@@ -82,6 +82,20 @@
 # Trigger rationale lives in the caller — each consumer lists the workflow names
 # that produce its required status checks, which differ per repo.
 #
+# Fan-in, once per SHA (FND-3317). A caller listing N upstream workflows used to
+# start N billed runs per Renovate push, N-1 of them only to find a check still
+# pending. Current callers instead gate the job with an `if:` on event-payload
+# fields alone (a job skipped by `if:` is never billed): run on the ANCHOR
+# workflow — the one that usually finishes last — or on any re-run
+# (workflow_run.run_attempt > 1, so re-running a flaked workflow still
+# re-evaluates). The anchor run passes checks_wait_minutes, so if some other
+# required check is still running when it fires, the gate waits for it here
+# instead of relying on that workflow's completion to fire again. One wait
+# budget covers every PR at the SHA. If it runs out with a check still pending,
+# a caller that sets follow_up_when_pending gets one dispatch with pr_number
+# (a follow-up evaluation with a fresh wait); a follow-up never dispatches
+# another.
+#
 # No dashboard dispatch. This workflow used to trigger a single-repo
 # renovate-dashboard.yaml run after every gate evaluation; at four workflow_run
 # completions per Renovate push that was ~770 runs an hour against the fleet
@@ -120,6 +134,31 @@ on:
         required: false
         default: ""
         type: string
+      checks_wait_minutes:
+        description: >
+          Fan-in wait (FND-3317). How long the gate keeps polling while
+          ruleset-required checks are still PENDING before judging them. Set it
+          when the caller fires once per SHA (on its anchor workflow only)
+          rather than once per upstream workflow; nothing else would re-fire
+          the gate for a check still running at that moment. Leave 0 in a caller
+          that still fires on every upstream workflow, or each of those runs
+          waits and bills. Clamped to 15 by the gate script.
+        required: false
+        default: 0
+        type: number
+      follow_up_when_pending:
+        description: >
+          Fan-in follow-up (FND-3317). When the wait runs out with a required
+          check still pending, dispatch the caller once with pr_number, so the
+          PR is re-evaluated when that check finishes. Set it in a caller whose
+          `if:` skips non-anchor first-attempt completions: there, nothing else
+          re-fires the gate for a check that finishes after the anchor's wait.
+          Only an anchor (workflow_run) run dispatches; a follow-up never
+          dispatches another. Needs the caller to declare workflow_dispatch
+          with a pr_number input.
+        required: false
+        default: false
+        type: boolean
     secrets:
       org_pat:
         description: >
@@ -150,10 +189,17 @@ jobs:
     # Renovate path never pays for. The render runs in a pinned uv container
     # (resync_approval_conditions.RENDER_IMAGE), never on this host, because
     # this job holds the atlan-ci PAT. See resync_approval_conditions.py.
-    timeout-minutes: 10
+    # 25 = that 10 plus the 15-minute ceiling on the fan-in wait
+    # (checks_wait_minutes / MAX_CHECKS_WAIT_SECONDS), which a caller may ask
+    # for. A run that does not wait is unaffected; this is only a hang bound.
+    timeout-minutes: 25
     # Serialize concurrent runs for the same SHA so the idempotency check
     # is reliable — two workflow completions for the same HEAD can't both
-    # pass the "no approval yet" guard in parallel.
+    # pass the "no approval yet" guard in parallel. A fan-in follow-up
+    # dispatch carries head_sha for exactly this reason: keyed on pr_number it
+    # would sit in a different group from a re-run of the same commit. cancel-in-progress stays
+    # false: a cancelled run has already been billed, so it would save nothing,
+    # and the run it cancels may be the one mid-way through approving.
     concurrency:
       group: renovate-auto-approve-${{ inputs.head_sha || inputs.pr_number }}
       cancel-in-progress: false
@@ -195,4 +241,9 @@ jobs:
           RUN_SHA: ${{ inputs.head_sha }}
           DISPATCH_PR: ${{ inputs.pr_number }}
           EXTRA_DEP_PATTERN: ${{ inputs.extra_dep_file_pattern }}
+          CHECKS_WAIT_MINUTES: ${{ inputs.checks_wait_minutes }}
+          FOLLOW_UP_WHEN_PENDING: ${{ inputs.follow_up_when_pending }}
+          # The workflow a follow-up dispatches: in a reusable,
+          # github.workflow_ref names the CALLER.
+          CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
         run: python3 .sdk-scripts/.github/scripts/renovate_approval_conditions.py
