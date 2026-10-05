@@ -951,7 +951,9 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
 BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
 
 
-def at_base_branch(ws: Workspace, f: Finding, head_sym: Symbol | None) -> str:
+def at_base_branch(
+    ws: Workspace, f: Finding, head_sym: Symbol | None, head_line: int = 0
+) -> str:
     """The finding's enclosing function or class as it is on the BASE branch.
 
     The checkout is the base branch; `ws.text` overlays the PR head, so the
@@ -959,7 +961,9 @@ def at_base_branch(ws: Workspace, f: Finding, head_sym: Symbol | None) -> str:
     shipped from one against an intermediate commit of this PR: without it
     the call sees only the PR head and the round's diff. The symbol is found
     at the head (enclosing the finding's line), then looked up in the base
-    file by its dotted name, which survives a rename of the file."""
+    file by its dotted name, which survives a rename of the file. A finding
+    outside any function or class (a module constant) gets the base lines
+    around its quoted code instead."""
     fd = ws.diffs.get(f.path)
     rel = (
         fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
@@ -968,14 +972,25 @@ def at_base_branch(ws: Workspace, f: Finding, head_sym: Symbol | None) -> str:
     path = (root / rel).resolve()
     if not rel or root not in path.parents or not path.is_file():
         return f"absent on base: {rel or f.path} (the file does not exist there)"
-    if head_sym is None:
-        return "(no enclosing function or class at the PR head to compare)"
-    dotted = head_sym.qualname.split(":", 1)[1]
     try:
         text = path.read_text(encoding="utf-8")
         ast.parse(text)
     except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
         return f"(the base copy of {rel} could not be read or parsed)"
+    lines = text.splitlines()
+
+    def window(lo: int, hi: int) -> str:
+        return "\n".join(
+            f"{i:>5} {lines[i - 1]}" for i in range(max(lo, 1), min(hi, len(lines)) + 1)
+        )
+
+    if head_sym is None:
+        # Module level: no symbol to look up, so the quote locates the site.
+        at = locate_in_text(text, f.evidence)
+        if not at:
+            return f"absent on base: the quoted code is not in {rel}"
+        return f"{rel}: module level\n{window(at - 15, at + 15)}"
+    dotted = head_sym.qualname.split(":", 1)[1]
     idx = Index(root=str(root))
     index_source(idx, rel, text)
     base_sym = next(
@@ -988,16 +1003,16 @@ def at_base_branch(ws: Workspace, f: Finding, head_sym: Symbol | None) -> str:
     )
     if base_sym is None:
         return f"absent on base: {dotted} in {rel}"
-    lines = text.splitlines()
     lo, hi = base_sym.start, base_sym.end
     if hi - lo >= BASE_EXCERPT_LINES:
         at = locate_in_text(text, f.evidence)
-        mid = at if lo <= at <= hi else lo
+        if not lo <= at <= hi:
+            # The quote is PR-only: take the same offset into the base symbol
+            # as the finding has into the head symbol, not the symbol's top.
+            at = lo + max(head_line - head_sym.start, 0)
+        mid = min(at, hi)
         lo, hi = max(mid - 15, lo), min(mid + 15, hi)
-    body = "\n".join(
-        f"{i:>5} {lines[i - 1]}" for i in range(lo, min(hi, len(lines)) + 1)
-    )
-    return f"{rel}: {dotted}\n{body}"
+    return f"{rel}: {dotted}\n{window(lo, hi)}"
 
 
 VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
@@ -1113,7 +1128,7 @@ def _verify_batch(
             f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
             f"<code_now>\n{code}\n</code_now>\n"
-            f"<at_base_branch>\n{at_base_branch(ws, f, sym)}\n</at_base_branch>\n</finding>"
+            f"<at_base_branch>\n{at_base_branch(ws, f, sym, at)}\n</at_base_branch>\n</finding>"
         )
     messages = [
         {"role": "system", "content": prompts.VERIFY_SYSTEM},

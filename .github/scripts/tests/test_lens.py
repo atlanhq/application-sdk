@@ -4761,6 +4761,58 @@ def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
     assert "<at_base_branch>\nabsent on base: application_sdk/storage/new.py" in user
 
 
+def _base_and_head_ws(tmp_path: Path, rel: str, base: str, head: str) -> Workspace:
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(base)
+    overlay = {rel: head}
+    return Workspace(
+        root=tmp_path,
+        head_text=overlay,
+        diffs={},
+        index=build_index(tmp_path, overrides=overlay),
+    )
+
+
+def test_a_module_level_finding_gets_the_base_lines_around_its_quote(tmp_path: Path):
+    rel = "application_sdk/keys.py"
+    ws = _base_and_head_ws(
+        tmp_path,
+        rel,
+        "A = 1\nKEY = 'v1'\n\n\ndef f():\n    return KEY\n",
+        "A = 1\nKEY = 'v2'\n\n\ndef f():\n    return KEY\n",
+    )
+    f = Finding(rel, 1, "medium", "compatibility", "t", "b", "A = 1")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == f"{rel}: module level"
+    assert "KEY = 'v1'" in block and "'v2'" not in block
+
+    pr_only = Finding(rel, 2, "medium", "compatibility", "t", "b", "KEY = 'v2'")
+    user, _ = _verify_user(ws, pr_only)
+    assert f"absent on base: the quoted code is not in {rel}" in user
+
+
+def test_a_pr_only_quote_in_a_long_base_symbol_gets_the_matching_window(
+    tmp_path: Path,
+):
+    """The quote exists only at the head, so it cannot be found in the base
+    copy; the window is taken at the same offset into the symbol, not its top."""
+    rel = "application_sdk/long.py"
+    body = "".join(f"    x_{i} = {i}\n" for i in range(200))
+    base = f"def long():\n{body}    return 0\n"
+    head = base.replace("    x_150 = 150\n", "    x_150 = 'new'\n")
+    ws = _base_and_head_ws(tmp_path, rel, base, head)
+    f = Finding(rel, 152, "medium", "compatibility", "t", "b", "x_150 = 'new'")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert "x_150 = 150" in block
+    assert "def long():" not in block
+
+
 def test_the_prompts_state_the_base_branch_rule():
     for prompt in (review_mod.prompts.REVIEW_SYSTEM, review_mod.prompts.VERIFY_SYSTEM):
         flat = " ".join(prompt.split())
