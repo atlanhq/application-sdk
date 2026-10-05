@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.40.0
-source-sha:    a8606b386b9dd9802eda8e765a93796963f23058
-source-date:   2026-10-01T00:03:04+01:00
+sdk-version:   3.41.0
+source-sha:    a53cf963e53e9c31221ebfcaa4439abfe3e58b53
+source-date:   2026-10-05T16:11:28+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -33,7 +33,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
@@ -3236,6 +3236,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Import:** `from application_sdk.storage import StorageConfigError`
 - **Signature:** `class StorageConfigError(message: str, ...)`
 - **Summary:** Storage configuration is invalid (e.g., missing bucket name).
+- **Defined in:** `application_sdk/storage/errors.py`
+
+#### `StorageDiskFullError`
+
+- **Import:** `from application_sdk.storage import StorageDiskFullError`
+- **Signature:** `class StorageDiskFullError(message: str, ...)`
+- **Summary:** A download could not be written because the local volume is full.
 - **Defined in:** `application_sdk/storage/errors.py`
 
 #### `StorageError`
