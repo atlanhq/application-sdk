@@ -1090,14 +1090,6 @@ async def upload_file(
     return digest
 
 
-def _declared_size(result: Any) -> int | None:
-    """The object's size as the store declared it with the GET, or None."""
-    try:
-        return int(result.meta["size"])
-    except (AttributeError, KeyError, TypeError, ValueError):
-        return None
-
-
 async def download_file(
     key: str,
     local_path: str | Path,
@@ -1235,9 +1227,8 @@ async def download_file(
             # The declared size is known before the first byte arrives, so a
             # volume that plainly cannot hold the object fails here, in seconds,
             # and the message can say what was needed.
-            declared = _declared_size(result)
-            if declared:
-                ensure_free_space(path, declared, operation="download")
+            declared = result.meta["size"]
+            ensure_free_space(path, declared, operation="download")
             with disk_full_guard(path, operation="download", required_bytes=declared):
                 staging_dir = path.parent / PARTIAL_DIRNAME
                 # mode hardens only the first creation (ignored when the directory

@@ -15,6 +15,7 @@ from typing import ClassVar
 
 from application_sdk.errors import (
     STORAGE_CONFIG,
+    STORAGE_DISK_FULL,
     STORAGE_EMPTY_UPLOAD,
     STORAGE_GATEWAY_AUTH,
     STORAGE_HANDOFF_INCOMPLETE,
@@ -843,6 +844,7 @@ class StorageDiskFullError(DiskFullError, StorageError):
     # The same value as DiskFullError's, declared here as the typed-error
     # prescription requires: consumers that classify a full disk by this code
     # (alerting, RCA tooling) must match both classes.
+    DEFAULT_ERROR_CODE: ClassVar[ErrorCode] = STORAGE_DISK_FULL
     code: ClassVar[str] = "RESOURCE_EXHAUSTED_DISK_FULL"
 
     def __init__(
@@ -890,7 +892,7 @@ class StorageDiskFullError(DiskFullError, StorageError):
         )
 
     def __str__(self) -> str:
-        parts = [f"[{self.code}] {self.message}"]
+        parts = [f"[{self.error_code.code}] {self.message}"]
         if self.key:
             parts.append(f"key={self.key}")
         if self.cause:

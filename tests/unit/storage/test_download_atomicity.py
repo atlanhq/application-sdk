@@ -18,7 +18,7 @@ import obstore
 import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
-from application_sdk.errors import DiskFullError
+from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
 from application_sdk.storage._concurrency import _run_bounded
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.chunked import (
@@ -849,6 +849,15 @@ class TestDiskFullDuringDownload:
             == "RESOURCE_EXHAUSTED_DISK_FULL"
         )
 
+    def test_the_legacy_error_code_is_its_own_not_the_generic_storage_one(
+        self,
+    ) -> None:
+        """Every typed storage error declares its own legacy code; inheriting
+        StorageError's would label a full disk as a generic store failure."""
+        err = StorageDiskFullError("no space", key="k")
+        assert err.error_code is STORAGE_DISK_FULL
+        assert str(err).startswith(f"[{STORAGE_DISK_FULL.code}] no space")
+
     async def test_concurrent_downloads_surface_the_typed_error_not_a_group(
         self, tmp_path
     ) -> None:
@@ -881,7 +890,7 @@ class TestDiskFullDuringDownload:
     async def test_download_prefix_surfaces_the_typed_error_not_a_group(
         self, store, tmp_path
     ) -> None:
-        """The path Chris named: a prefix download fans out through `_run_bounded`,
+        """The fan-out path end to end: a prefix download runs through `_run_bounded`,
         and a volume that fills during it must reach the caller typed."""
         for i in range(3):
             await _put(f"pfx/f{i}.bin", b"x" * 8, store, normalize=False)
