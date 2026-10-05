@@ -665,3 +665,34 @@ def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
     pushes = [c for c in runner.calls if c[:2] == ["git", "push"]]
     assert pushes and pushes[0][-1] == f"HEAD:refs/heads/{gate.RESYNC_BRANCH}"
     assert any(c[:3] == ["git", "add", "-A"] and "a.yaml" in c for c in runner.calls)
+
+
+def test_a_foreign_pr_opened_during_the_render_is_never_pushed_over(monkeypatch):
+    runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
+    listing = (
+        "gh",
+        "api",
+        f"repos/{REPO}/pulls?state=open&per_page=100",
+        "--paginate",
+        "--slurp",
+    )
+    scans = []
+
+    def late_foreign(cmd, **kwargs):
+        if tuple(cmd) == listing:
+            scans.append(1)
+            prs = (
+                []
+                if len(scans) == 1
+                else [_pr(5, gate.RESYNC_BRANCH, author="someone")]
+            )
+            return subprocess.CompletedProcess(cmd, 0, json.dumps([prs]), "")
+        return FakeRunner.__call__(runner, cmd, **kwargs)
+
+    result = _drive(late_foreign)
+    assert result["action"] == "skipped" and "#5" in result["reason"]
+    assert len(scans) == 2
+    assert not any(c[:2] == ["git", "push"] for c in runner.calls)
+    assert not any(
+        c[:4] == ["gh", "api", f"repos/{REPO}/pulls", "-X"] for c in runner.calls
+    )

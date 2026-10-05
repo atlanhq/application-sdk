@@ -226,6 +226,13 @@ def split_lane_prs(prs: list[dict]) -> tuple[dict | None, list[dict], dict | Non
     return keep, dupes, foreign
 
 
+def foreign_pr_now(repo: str, runner: Runner) -> dict | None:
+    """Re-run the foreign-PR scan right before a push. The window left between
+    this read and the push is one API round trip, not a whole render."""
+    _keep, _dupes, foreign = split_lane_prs(open_prs(repo, runner))
+    return foreign
+
+
 def repo_of(pr: dict) -> str | None:
     return (pr.get("base") or {}).get("repo", {}).get("full_name")
 
@@ -753,6 +760,20 @@ def process_repo(
             return result
 
         if not (same_content and keep):
+            # The foreign-PR scan ran before the render, which can take
+            # minutes. A person may have opened a PR from the existing branch
+            # since; the lease guards only the ref value, not a new PR on it.
+            late = foreign_pr_now(repo, runner)
+            if late:
+                step(
+                    f"#{late['number']} on {gate.RESYNC_BRANCH} was opened by someone "
+                    "else during the render — not pushing over it."
+                )
+                result.update(
+                    action="skipped",
+                    reason=f"foreign PR #{late['number']} on {gate.RESYNC_BRANCH}",
+                )
+                return result
             lease = f"--force-with-lease=refs/heads/{gate.RESYNC_BRANCH}:{remote_sha}"
             git(
                 [
