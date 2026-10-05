@@ -2515,7 +2515,10 @@ def warmup_activity_timeouts() -> tuple[timedelta, timedelta]:
 
     Same geometry as :func:`gate_timeouts`: headroom over the call budget so the
     activity's own wait fires before Temporal's, and a schedule window that
-    fits every attempt plus backoff.
+    fits every attempt plus backoff. The call budget covers credential
+    resolution *and* the hook — they share one deadline in
+    :func:`build_preflight_warmup_activities` — so a slow resolution shortens
+    the hook's time rather than pushing the call past ``start_to_close``.
     """
     start_to_close = WARMUP_CALL_BUDGET_SECONDS + GATE_ACTIVITY_HEADROOM_SECONDS
     return (

@@ -454,13 +454,15 @@ def _is_type_checking_guard(node: ast.stmt) -> bool:
 
 
 def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
-    """The string literals a module ``__getattr__`` names, or ``None`` without one.
+    """Names in the allowlists a module ``__getattr__`` reads, or ``None`` without one.
 
-    A literal counts when it appears in the ``__getattr__`` body itself, or in
-    a module-level assignment whose name that body reads (the
+    Only a module-level collection the getter reads counts, such as the
     ``_SERVICE_NAMES = frozenset({...})`` allowlist ``handler/__init__``
-    keeps). A static scan cannot run the getter, but a name it never mentions
-    is a name it cannot be relied on to serve.
+    keeps. String literals in the getter's own body do not: there they are as
+    likely to reject a name (``raise AttributeError("x was removed")``) as to
+    serve it, and telling the two apart means modelling the getter. A declared
+    allowlist is checkable; a static scan cannot run the getter. The runtime
+    backstop is a test that every ``__all__`` name of such a module resolves.
     """
     getter = next(
         (
@@ -473,16 +475,8 @@ def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
     )
     if getter is None:
         return None
-
-    def _literals(node: ast.AST) -> set[str]:
-        return {
-            n.value
-            for n in ast.walk(node)
-            if isinstance(n, ast.Constant) and isinstance(n.value, str)
-        }
-
-    served = _literals(getter)
     read = {n.id for n in ast.walk(getter) if isinstance(n, ast.Name)}
+    served: set[str] = set()
     for node in tree.body:
         targets: Sequence[ast.expr]
         if isinstance(node, ast.Assign):
@@ -491,8 +485,15 @@ def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
             targets = [node.target]
         else:
             continue
-        if any(isinstance(t, ast.Name) and t.id in read for t in targets):
-            served |= _literals(node.value)
+        if node.value is None or not any(
+            isinstance(t, ast.Name) and t.id in read for t in targets
+        ):
+            continue
+        served.update(
+            n.value
+            for n in ast.walk(node.value)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        )
     return frozenset(served)
 
 
@@ -502,10 +503,10 @@ def _lazy_reexports(
     """Names a package serves lazily through PEP 562 ``__getattr__``.
 
     The shape is ``if TYPE_CHECKING: from .impl import name`` for type
-    checkers, a module ``__getattr__`` that names it (see
+    checkers, the name in an allowlist the module ``__getattr__`` reads (see
     :func:`_getattr_served`), and the name listed in ``__all__``. All three
     must hold: the ``TYPE_CHECKING`` import alone binds nothing at runtime, and
-    a getter that never mentions a name gives no evidence it serves it. A name
+    a getter's allowlist is the only static evidence that it serves a name. A name
     that passes all three was declared as surface, so removing it is a removal
     like any other.
     """

@@ -260,6 +260,25 @@ def test_a_getter_that_never_names_the_export_is_a_removal():
     assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
 
 
+def test_a_getter_that_names_the_export_only_to_reject_it_is_a_removal():
+    """A literal in the getter body is not evidence it serves the name.
+
+    `raise AttributeError("create_service was removed")` mentions the name and
+    serves nothing. Only an allowlist the getter reads counts.
+    """
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "def __getattr__(name):\n"
+        "    if name == 'create_service':\n"
+        "        raise AttributeError('create_service was removed')\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = ['create_service']\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
+
+
 def test_lazy_name_missing_from_all_is_still_a_removal():
     """Without the `__all__` declaration the gate cannot tell it is served."""
     base = snap("from application_sdk.thing.service import create_service")
