@@ -34,9 +34,9 @@ from conformance.suite.checks._ast_common import (
     make_finding,
 )
 from conformance.suite.checks._entrypoint_contract_classes import (
-    _base_name,
     _extract_wire_name,
 )
+from conformance.suite.checks._entrypoint_contract_fields import _base_name
 from conformance.suite.checks.prescriptions._contract_common import (
     _unwrap_annotated,
     _unwrap_optional_node,
