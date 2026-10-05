@@ -21,6 +21,23 @@ permissions:
   contents: read
   pull-requests: read
 
+# A new commit on a PR retires the previous commit's run (FND-3314) — without
+# this every push, and every Renovate rebase, ran all series to completion.
+#
+# The group is shared only on a PR ref. Everywhere else — main, schedule,
+# workflow_dispatch and above all merge_group — it is run-unique, because a
+# shared group holds ONE pending run and a third arrival evicts it (FND-218,
+# docs/standards/ci.md "`concurrency:` is not a lock, and not a queue").
+#
+# Only `synchronize` cancels. That event always brings a new head SHA, so the
+# `cancelled` check runs it leaves land on a commit that is no longer head.
+# Cancelling on a same-SHA event (`opened` racing `reopened`) would park a
+# `cancelled` check on the head itself, and Renovate never merges a branch
+# with one (see commits.yaml in application-sdk) — those queue instead.
+concurrency:
+  group: conformance-${{ startsWith(github.ref, 'refs/pull/') && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+
 jobs:
   suite:
     uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
