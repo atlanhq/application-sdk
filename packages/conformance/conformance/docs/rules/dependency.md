@@ -388,12 +388,17 @@ transformer module nothing imports any more, or frozen reference code kept durin
 port.  Adding `[sql]` there ships an unused `duckdb` to production for no runtime
 benefit.
 
-* dead code (nothing imports the module): delete it.  The finding   clears because its
-cause is gone, with no dependency change; * code the repo keeps on purpose (e.g.
-reference code for an   in-progress port): suppress D010 inline on that import line, so
-the suppression leaves with the code and a later live import   still fails the check; *
-a live import: change the SDK reference to   `atlan-application-sdk[sql]` (or
-`[incremental]` for the   incremental analytics stack) in `[project.dependencies]` and
+*Dead code* (nothing imports the module): delete it.  The finding clears because its
+cause is gone, with no dependency change.
+
+*Code the repo keeps on purpose* (e.g. reference code for an in-progress port): suppress
+D010 with a trailing `# conformance: ignore[D010] <reason>` on the SDK dependency line
+in `pyproject.toml`.  The finding is anchored there and only that file's suppressions
+are read, so a directive on the Python import line has no effect.  Name the dead import
+path in the reason, and remove the suppression when that code is deleted.
+
+*A live import*: change the SDK reference to `atlan-application-sdk[sql]` (or
+`[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
 relock (`uv lock`).  That is the fix.
 
 Declaring `duckdb` directly is a discouraged fallback, not a co-equal option: it clears

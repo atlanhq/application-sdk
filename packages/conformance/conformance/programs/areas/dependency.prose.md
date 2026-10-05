@@ -422,9 +422,12 @@ for human confirmation):
   `migration_brief` is to delete that module (and the templates only it
   reads), with no dependency change — adding `[sql]` would ship an unused
   `duckdb` to production.  If the repo keeps that code on purpose (frozen
-  reference code for an in-progress port), the brief is an inline
-  `# conformance: ignore[D010] <reason>` on the import line, naming the
-  owner.  Only for a live import, continue below.
+  reference code for an in-progress port), the brief is a trailing
+  `# conformance: ignore[D010] <reason>` on the SDK dependency line in
+  `pyproject.toml`, naming the dead import path and the owner.  The
+  finding is anchored there and only that file's suppressions are read, so
+  a directive on the Python import line has no effect.  Only for a live
+  import, continue below.
 
   **Check the extra on that line before proposing anything.**  If the app pins
   `atlan-application-sdk[daft]`, the defect is the SDK's, not the app's: that

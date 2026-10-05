@@ -2332,7 +2332,33 @@ def test_d010_message_says_to_check_the_import_site_is_live_first(
     message = findings[0].message
     assert "dead code" in message
     assert "delete" in message
+    assert "pyproject.toml" in message
     assert message.index("dead code") < message.index("[sql]' (or [incremental])")
+
+
+def test_d010_suppression_is_read_from_the_pyproject_anchor_line(
+    tmp_path: Path,
+) -> None:
+    lock = '[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n'
+    directive = "  # conformance: ignore[D010] only frozen reference code imports it"
+    anchored = _D010_PYPROJECT_NO_EXTRA.splitlines(keepends=True)
+    anchored[4] = anchored[4].rstrip("\n") + directive + "\n"
+    (tmp_path / "anchor").mkdir()
+    (tmp_path / "import").mkdir()
+    (on_anchor,) = _d010_scan(
+        tmp_path / "anchor",
+        pyproject="".join(anchored),
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=lock,
+    )
+    (on_import,) = _d010_scan(
+        tmp_path / "import",
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT.rstrip("\n") + directive + "\n",
+        uv_lock=lock,
+    )
+    assert on_anchor.suppressed
+    assert not on_import.suppressed
 
 
 def test_d010_full_description_says_to_check_the_import_site_is_live_first() -> None:
@@ -2343,6 +2369,7 @@ def test_d010_full_description_says_to_check_the_import_site_is_live_first() -> 
     assert "dead code" in remediation
     assert "delete" in remediation
     assert "suppress" in remediation
+    assert "pyproject.toml" in remediation
 
 
 def test_d010_silent_when_lock_resolves_duckdb_for_the_app(tmp_path: Path) -> None:
