@@ -312,6 +312,13 @@ uiConfig = new UIConfig {
           credentialType = "atlan-connectors-full-featured"
           excludePatterns = List("information_schema")
         }
+        // Preflight checks; keep the SageV2 widget last in the final step.
+        // warmup = true declares that the app's handler overrides
+        // Handler.warmup, so the setup UI runs the warmup flow first.
+        ["preflight-check"] = new SageV2 {
+          title = ""
+          warmup = true
+        }
       }
     }
   }
