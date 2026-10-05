@@ -36,7 +36,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [K019](#k019) | `FormKeyMissingFromManifestArgs` | `warn` | `app` | `contract-toolkit` | yes | 0.24.0 |
 | [K020](#k020) | `ManifestArgsLegacyNestedEnvelope` | `warn` | `app` | `contract-toolkit` | — | 0.24.0 |
 | [K021](#k021) | `FilterFieldRejectsAeString` | `warn` | `app` | `contract-toolkit` | yes | 0.26.0 |
-| [K027](#k027) | `EntrypointContractClassNameCollision` | `warn` | `app` | `contract-toolkit` | yes | 0.42.0 |
+| [K027](#k027) | `EntrypointContractClassNameCollision` | `warn` | `app` | `contract-toolkit` | yes | 0.43.0 |
 
 ---
 
@@ -1354,7 +1354,7 @@ coerced by a path the static check cannot follow.
 
 ## K027 — `EntrypointContractClassNameCollision` {#k027}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.42.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `contract-toolkit` · **Autofixable:** yes · **Since:** 0.43.0
 
 > two entrypoints bind different Input/Output contract classes that share one bare class name
 

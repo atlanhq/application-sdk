@@ -1984,7 +1984,7 @@ RULES: tuple[RuleDefinition, ...] = (
         mechanism=RuleMechanism.STATIC,
         category="contract-toolkit",
         autofixable=True,
-        since="0.42.0",
+        since="0.43.0",
         orthogonal_gate="tests",
         rationale=(
             "The contract ledger keys every entrypoint contract by its bare class "
