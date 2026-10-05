@@ -250,6 +250,18 @@
           "type": "array"
         },
         "default": "{}"
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "warmup": true
+        }
       }
     },
     "anyOf": [
@@ -305,7 +317,8 @@
         "description": "",
         "id": "schema_selection",
         "properties": [
-          "schemas"
+          "schemas",
+          "preflight-check"
         ]
       }
     ]

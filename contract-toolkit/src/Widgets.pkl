@@ -476,6 +476,10 @@ class Widget {
   /// For connectionSelector or sage — path to the form field that receives the credential GUID.
   selectedConnectionCredentialGuidProperty: String?
 
+  /// For sageV2 — the app declares a warmup, so the setup UI runs the warmup
+  /// flow before the warmup-tier checks. Set from `SageV2.warmup`.
+  warmup: Boolean?
+
   /// For connectionSelector — when true, store full connection objects.
   shouldIncludeConnectionInfo: Boolean?
 
@@ -1274,11 +1278,28 @@ class SageV2 extends UIElement {
 
   hidden selectedCredentialGuid: String?
 
+  /// Declares that the app's handler overrides `Handler.warmup`, so the setup
+  /// UI runs the warmup flow: poll `POST /workflows/v1/warmup` until it answers
+  /// `ready`, then call `/check` with `tiers=["warmup"]`. Without it the UI
+  /// calls `/check` as before.
+  ///
+  /// Default `false` renders nothing: the widget's `ui` block is unchanged.
+  /// `true` adds `"warmup": true` to the `ui` block of the generated workflow
+  /// config. Nothing else changes: the flag is a declaration for the UI, and
+  /// the preflight gate still decides from the handler itself.
+  ///
+  /// Keep it in step with the handler. Set but no override: `/warmup` always
+  /// answers `ready`, so the UI makes one wasted round trip. Override but not
+  /// set: setup never runs the warmup-tier checks, so missing grants on them
+  /// surface only when the gate runs them on a real run.
+  hidden warmup: Boolean = false
+
   fixed ui {
     widget = "sageV2"
     config = checks
     connectorConfigName = connectorConfig
     selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+    warmup = if (outer.warmup) true else null
   }
 }
 
