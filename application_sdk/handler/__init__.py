@@ -28,8 +28,9 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 
 if TYPE_CHECKING:
@@ -78,8 +79,9 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "WarmupInput",
+    "WarmupObservation",
     "WarmupState",
-    "WarmupStatus",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

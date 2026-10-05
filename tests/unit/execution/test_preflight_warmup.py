@@ -1,11 +1,12 @@
-"""Unit tests for the preflight gate's warmup phase (FND-3039).
+"""Unit tests for the preflight gate's warmup tier (FND-3039).
 
-The end-to-end behaviour — every terminal state and the ceiling, on a real
-server with real durable timers — is pinned by
-``tests/integration/test_preflight_warmup.py``. What lives here is what that
-suite cannot reach cheaply: the replay guard, the fail-open paths for the
-gate's own plumbing, the warmup activities' reading of a hook's raise, the
-tier filter and row key on the check activity, the declared-value clamps, and
+The end-to-end behaviour — every way the wait can end, on a real server with
+real durable timers — is pinned by ``tests/integration/test_preflight_warmup.py``.
+What lives here is what that suite cannot reach cheaply: the check activity's
+first-dispatch probe and its row, the ``{app}:preflight_warmup`` poll
+activity's reading of a probe's raise, the workflow frame's wait loop on a fake
+clock (cadence, ceiling, late ``READY``, postures, health line, transitions),
+the fail-open paths for the gate's own plumbing, the declared-value clamps, and
 the worker's registration and collision guard.
 """
 
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -24,63 +26,72 @@ from application_sdk.app.base import App, _run_preflight_gate
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
-from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    AppPermissionDeniedError,
     AuthError,
     DependencyUnavailableError,
     NotFoundError,
     SourceUnavailableError,
 )
+from application_sdk.errors.wire import FailureDetails
 from application_sdk.execution._temporal import preflight_gate
 from application_sdk.execution._temporal._activity_errors import (
     WorkerActivityNameCollisionError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
     PREFLIGHT_FAILED_ERROR_TYPE,
-    WARMUP_CEILING_DEFAULT_SECONDS,
-    WARMUP_CEILING_MIN_SECONDS,
-    WARMUP_POLL_DEFAULT_SECONDS,
     WARMUP_SUGGESTED_ACTIONS,
     WARMUP_TRANSITIONS_MAX,
     PreflightGateInput,
-    WarmupObservation,
     WarmupOutcome,
+    WarmupPoll,
     WarmupTransition,
+    WarmupWait,
     build_preflight_gate_activity,
-    build_preflight_warmup_activities,
-    filter_checks_to_tier,
+    build_preflight_warmup_activity,
     gate_outcome_row,
-    gate_warmup_ceiling_seconds,
-    gate_warmup_poll_seconds,
     human_duration,
-    preflight_warmup_start_activity_name,
-    preflight_warmup_state_activity_name,
+    preflight_warmup_activity_name,
+    warmup_exhausted_details,
     warmup_unavailable_details,
     warmup_waiting_details,
 )
 from application_sdk.execution._temporal.worker import create_worker
 from application_sdk.execution.errors import ApplicationError
-from application_sdk.handler.base import DefaultHandler
+from application_sdk.handler._preflight_outcome import (
+    FAILURE_AUDIENCE_KEY,
+    FAILURE_MESSAGE_KEY,
+)
+from application_sdk.handler._warmup import (
+    WARMUP_CEILING_DEFAULT_SECONDS,
+    WARMUP_CEILING_MIN_SECONDS,
+    WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS,
+    warmup_ceiling_seconds,
+    warmup_poll_delay,
+    warmup_probe_timeout_seconds,
+)
 from application_sdk.handler.contracts import (
     CheckTier,
     PreflightCheck,
     PreflightGateMode,
-    PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
     CHECK_MATRIX_KEY,
     GATE_CLASSIFICATION_KEY,
+    GATE_MODE_KEY,
     GATE_TIER_KEY,
     WARMUP_DURATION_KEY,
     WARMUP_OUTCOME_KEY,
     WARMUP_TRANSITIONS_KEY,
 )
+from application_sdk.testing import WarmingSource, WarmingSourceHandler
 
 # ---------------------------------------------------------------------------
 # Workflow frame
@@ -93,29 +104,6 @@ class _ResolvableInput:
     extraction_method = ""
     credential_guid = ""
     agent_json = None
-
-
-class _Handle:
-    """Stand-in for the ``ActivityHandle`` ``workflow.start_activity`` returns."""
-
-    def __init__(self, result: Any = None, exc: BaseException | None = None) -> None:
-        self._result = result
-        self._exc = exc
-        self.cancelled = False
-
-    def done(self) -> bool:
-        return False
-
-    def cancel(self) -> None:
-        self.cancelled = True
-
-    def __await__(self):
-        async def _resolve() -> Any:
-            if self._exc is not None:
-                raise self._exc
-            return self._result
-
-        return _resolve().__await__()
 
 
 class _Clock:
@@ -133,12 +121,108 @@ class _Clock:
         self.now += duration
 
 
-def _rows(safe_log) -> list[dict]:
+_Answer = PreflightOutput | WarmupPoll | BaseException | None
+
+
+class _Activities:
+    """Stand-in for ``workflow.execute_activity`` over the two gate activities.
+
+    The check activity answers ``first``, then ``second``. The poll activity
+    answers ``polls`` in order, its last entry repeating. ``first_takes`` and
+    ``poll_takes`` advance the fake clock while a dispatch runs.
+    """
+
+    def __init__(
+        self,
+        clock: _Clock,
+        *,
+        first: _Answer = None,
+        polls: Sequence[WarmupPoll | BaseException] = (),
+        second: _Answer = None,
+        first_takes: float = 0.0,
+        poll_takes: float = 0.0,
+    ) -> None:
+        self._clock = clock
+        self._first = first
+        self._polls = list(polls)
+        self._second = second
+        self._first_takes = first_takes
+        self._poll_takes = poll_takes
+        self.checks: list[PreflightGateInput] = []
+        self.check_kwargs: list[dict[str, Any]] = []
+        self.polls: list[PreflightGateInput] = []
+        self.poll_kwargs: list[dict[str, Any]] = []
+
+    async def __call__(self, name: str, arg: PreflightGateInput, **kwargs: Any) -> Any:
+        answer: _Answer
+        if name == "myapp:preflight":
+            self.checks.append(arg)
+            self.check_kwargs.append(kwargs)
+            if len(self.checks) == 1:
+                self._clock.now += timedelta(seconds=self._first_takes)
+                answer = self._first
+            else:
+                answer = self._second
+        elif name == "myapp:preflight_warmup":
+            self.polls.append(arg)
+            self.poll_kwargs.append(kwargs)
+            self._clock.now += timedelta(seconds=self._poll_takes)
+            answer = self._polls[min(len(self.polls), len(self._polls)) - 1]
+        else:
+            raise AssertionError(f"unexpected activity {name}")
+        if isinstance(answer, BaseException):
+            raise answer
+        return answer
+
+    @property
+    def tiers(self) -> list[frozenset[CheckTier] | None]:
+        return [c.tiers for c in self.checks]
+
+
+def _first(
+    state: WarmupState | None,
+    *,
+    source_state: str = "",
+    next_poll_seconds: int | None = None,
+) -> PreflightOutput:
+    """The first dispatch's result: the PREFLIGHT verdict plus what the probe saw."""
+    return PreflightOutput(
+        status=PreflightStatus.READY,
+        warmup=None
+        if state is None
+        else WarmupObservation(
+            state=state,
+            source_state=source_state,
+            next_poll_seconds=next_poll_seconds,
+        ),
+    )
+
+
+def _poll(
+    state: WarmupState,
+    *,
+    source_state: str = "",
+    queued_queries: int | None = None,
+    next_poll_seconds: int | None = None,
+    error: FailureDetails | None = None,
+) -> WarmupPoll:
+    return WarmupPoll(
+        observation=WarmupObservation(
+            state=state,
+            source_state=source_state,
+            queued_queries=queued_queries,
+            next_poll_seconds=next_poll_seconds,
+        ),
+        error=error,
+    )
+
+
+def _rows(safe_log: mock.Mock) -> list[dict[str, Any]]:
     return [c.kwargs for c in safe_log.call_args_list if "outcome" in c.kwargs]
 
 
 @pytest.fixture
-def clock():
+def clock() -> Iterator[_Clock]:
     c = _Clock()
     with (
         mock.patch("application_sdk.app.base.workflow.now", side_effect=c.read),
@@ -148,411 +232,908 @@ def clock():
 
 
 @pytest.fixture
-def safe_log():
+def safe_log() -> Iterator[mock.Mock]:
     with mock.patch("application_sdk.app.base._safe_log") as m:
         yield m
 
 
-def _patched(*ids_true: str):
-    return mock.patch(
-        "application_sdk.app.base.workflow.patched",
-        side_effect=lambda patch_id: patch_id in ids_true,
+@pytest.fixture
+def health() -> Iterator[mock.Mock]:
+    with mock.patch("application_sdk.app.base.workflow.set_current_details") as m:
+        yield m
+
+
+async def _run(activities: _Activities, **kwargs: Any) -> None:
+    with (
+        mock.patch("application_sdk.app.base.workflow.patched", return_value=True),
+        mock.patch(
+            "application_sdk.app.base.workflow.execute_activity", new=activities
+        ),
+    ):
+        await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl", **kwargs)
+
+
+_READY_WAIT = frozenset({CheckTier.WARMUP})
+
+
+class TestAReadySourceIsOneDispatch:
+    @pytest.mark.parametrize(
+        "first",
+        [_first(None), _first(WarmupState.READY), None],
+        ids=["no-observation", "ready-observation", "no-result"],
     )
-
-
-def _gate(
-    *,
-    execute: Any = None,
-    start: _Handle | None = None,
-    patched: tuple[str, ...] = ("preflight-gate", "preflight-gate-warmup"),
-):
-    execute_mock = mock.AsyncMock(side_effect=execute)
-    start_mock = mock.Mock(return_value=start or _Handle(WarmupState()))
-    patches = (
-        _patched(*patched),
-        mock.patch("application_sdk.app.base.workflow.execute_activity", execute_mock),
-        mock.patch("application_sdk.app.base.workflow.start_activity", start_mock),
-    )
-    return execute_mock, start_mock, patches
-
-
-def _tiers(execute_mock: mock.AsyncMock) -> list[CheckTier | None]:
-    return [
-        call.args[1].tier
-        for call in execute_mock.call_args_list
-        if call.args[0] == "myapp:preflight"
-    ]
-
-
-class TestTheWorkflowGuards:
-    async def test_no_ceiling_means_no_warmup_and_no_patch_marker(
-        self, clock, safe_log
+    async def test_nothing_follows_the_first_dispatch(
+        self, clock, safe_log, health, first
     ) -> None:
-        execute_mock, start_mock, patches = _gate()
-        with patches[0] as patched, patches[1], patches[2]:
-            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        start_mock.assert_not_called()
-        assert _tiers(execute_mock) == [None]
-        assert [c.args[0] for c in patched.call_args_list] == ["preflight-gate"]
+        activities = _Activities(clock, first=first)
+        await _run(activities, gate_mode=PreflightGateMode.HARD)
+        assert activities.tiers == [None]
+        assert activities.checks[0].warmup is None
+        assert activities.check_kwargs[0]["result_type"] is PreflightOutput
+        assert activities.polls == []
         assert clock.slept == []
+        assert _rows(safe_log) == []
+        health.assert_not_called()
 
-    async def test_a_run_from_before_the_phase_replays_without_it(
-        self, clock, safe_log
-    ) -> None:
-        execute_mock, start_mock, patches = _gate(patched=("preflight-gate",))
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        start_mock.assert_not_called()
-        assert _tiers(execute_mock) == [None]
-        assert clock.slept == []
 
-    async def test_warmup_start_fires_with_the_fast_dispatch(
-        self, clock, safe_log
+class TestTheWaitCadence:
+    async def test_unhinted_polls_back_off_to_thirty_and_stop_at_the_ceiling(
+        self, clock, safe_log, health
     ) -> None:
-        execute_mock, start_mock, patches = _gate(
-            start=_Handle(WarmupState(status=WarmupStatus.READY))
+        activities = _Activities(
+            clock, first=_first(WarmupState.COLD), polls=[_poll(WarmupState.WARMING)]
         )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        assert start_mock.call_args.args[0] == "myapp:preflight_warmup_start"
-        assert _tiers(execute_mock) == [CheckTier.FAST, CheckTier.WARMUP]
+        await _run(activities, warmup_ceiling_seconds=120)
+        # 5, 10, 20, then the 30s cap; the last wait is cut to land on the ceiling.
+        assert clock.slept == [5.0, 10.0, 20.0, 30.0, 30.0, 25.0]
+        assert len(activities.polls) == 6
+        assert activities.tiers == [None]
+
+    async def test_a_hint_is_honoured_with_a_five_second_floor(
+        self, clock, safe_log, health
+    ) -> None:
+        """A hinted wait does not advance the unhinted backoff."""
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD, next_poll_seconds=2),
+            polls=[
+                _poll(WarmupState.WARMING, next_poll_seconds=45),
+                _poll(WarmupState.WARMING),
+                _poll(WarmupState.WARMING),
+                _poll(WarmupState.READY),
+            ],
+        )
+        await _run(activities, warmup_ceiling_seconds=120)
+        assert clock.slept == [5.0, 45.0, 5.0, 10.0]
+        assert activities.tiers == [None, _READY_WAIT]
+
+    async def test_a_hint_never_waits_past_the_ceiling(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD, next_poll_seconds=100),
+            polls=[_poll(WarmupState.WARMING)],
+        )
+        await _run(activities, warmup_ceiling_seconds=30)
+        assert clock.slept == [30.0]
+        assert len(activities.polls) == 1
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "warmup_exhausted"
+
+    async def test_the_poll_is_dispatched_with_its_own_timeouts(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock, first=_first(WarmupState.COLD), polls=[_poll(WarmupState.READY)]
+        )
+        await _run(activities, warmup_probe_timeout_seconds=7)
+        (kwargs,) = activities.poll_kwargs
+        assert kwargs["result_type"] is WarmupPoll
+        # The probe timeout, the poll's overhead, and the activity headroom.
+        assert kwargs["start_to_close_timeout"] == timedelta(seconds=17)
+        assert activities.polls[0].tiers is None
 
 
-class TestTheGatesOwnBreakageFailsOpen:
-    async def test_a_failed_warmup_start_activity_fails_open(
+class TestReadyRunsTheWarmupTier:
+    async def test_the_second_dispatch_carries_what_the_wait_saw(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[
+                _poll(WarmupState.WARMING, source_state="RESUMING"),
+                _poll(WarmupState.QUEUED, queued_queries=3),
+                _poll(WarmupState.QUEUED, queued_queries=3),
+                _poll(WarmupState.READY),
+            ],
+        )
+        await _run(activities)
+        assert clock.slept == [5.0, 10.0, 20.0, 30.0]
+        assert activities.tiers == [None, _READY_WAIT]
+        # State changes only: the repeated QUEUED poll adds nothing.
+        assert activities.checks[1].warmup == WarmupWait(
+            outcome=WarmupOutcome.READY,
+            duration_ms=65_000.0,
+            transitions=[
+                WarmupTransition(state=WarmupState.COLD, at_ms=0.0),
+                WarmupTransition(state=WarmupState.WARMING, at_ms=5_000.0),
+                WarmupTransition(state=WarmupState.QUEUED, at_ms=15_000.0),
+                WarmupTransition(state=WarmupState.READY, at_ms=65_000.0),
+            ],
+        )
+        # The frame writes no row: the WARMUP dispatch's activity does.
+        assert _rows(safe_log) == []
+
+    async def test_the_health_line_is_set_while_pending_and_cleared(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[
+                _poll(WarmupState.WARMING, source_state="RESUMING"),
+                _poll(WarmupState.QUEUED, queued_queries=3),
+                _poll(WarmupState.READY),
+            ],
+        )
+        await _run(activities)
+        assert [c.args[0] for c in health.call_args_list] == [
+            "waiting for source warmup: cold, 0s",
+            "waiting for source warmup: RESUMING, 5s",
+            "waiting for source warmup: queued, 3 queued, 15s",
+            "",
+        ]
+
+    async def test_a_health_line_that_cannot_be_set_never_fails_the_gate(
         self, clock, safe_log
     ) -> None:
-        execute_mock, _, patches = _gate(
-            start=_Handle(exc=RuntimeError("no worker polled the queue"))
+        activities = _Activities(
+            clock, first=_first(WarmupState.COLD), polls=[_poll(WarmupState.READY)]
         )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                gate_mode=PreflightGateMode.HARD,
-                warmup_ceiling_seconds=60,
-            )
+        with mock.patch(
+            "application_sdk.app.base.workflow.set_current_details",
+            side_effect=RuntimeError("not in workflow"),
+        ):
+            await _run(activities)
+        assert activities.tiers == [None, _READY_WAIT]
+
+    async def test_a_dead_warmup_dispatch_fails_open_with_the_wait(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[_poll(WarmupState.READY)],
+            second=RuntimeError("worker lost"),
+        )
+        await _run(
+            activities,
+            gate_mode=PreflightGateMode.HARD,
+            warmup_mode=PreflightGateMode.HARD,
+        )
         (row,) = _rows(safe_log)
         assert row["outcome"] == "no_verdict"
         assert row[GATE_CLASSIFICATION_KEY] == "gate_broken"
         assert row[GATE_TIER_KEY] == "warmup"
-        assert _tiers(execute_mock) == [CheckTier.FAST]
+        assert row[WARMUP_OUTCOME_KEY] == "ready"
+        assert row[WARMUP_DURATION_KEY] == 5_000.0
 
-    async def test_a_failed_warmup_state_activity_fails_open(
-        self, clock, safe_log
-    ) -> None:
-        def _execute(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "myapp:preflight_warmup_state":
-                raise RuntimeError("activity not registered")
-            return None
-
-        execute_mock, _, patches = _gate(
-            execute=_execute, start=_Handle(WarmupState(status=WarmupStatus.RUNNING))
-        )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                gate_mode=PreflightGateMode.HARD,
-                warmup_ceiling_seconds=60,
-                warmup_poll_seconds=5,
-            )
-        (row,) = _rows(safe_log)
-        assert row["outcome"] == "no_verdict"
-        assert row[GATE_CLASSIFICATION_KEY] == "gate_broken"
-        assert clock.slept == [5.0]
-        assert _tiers(execute_mock) == [CheckTier.FAST]
-
-    async def test_a_fast_block_cancels_the_pending_warmup(
-        self, clock, safe_log
+    async def test_a_block_from_the_warmup_dispatch_is_re_raised_unchanged(
+        self, clock, safe_log, health
     ) -> None:
         block = ApplicationError(
-            "Preflight failed: bad creds",
+            "Preflight failed: catalog scan found no schemas",
             type=PREFLIGHT_FAILED_ERROR_TYPE,
             non_retryable=True,
         )
-        handle = _Handle(WarmupState(status=WarmupStatus.RUNNING))
-        _, _, patches = _gate(execute=block, start=handle)
-        with patches[0], patches[1], patches[2], pytest.raises(ApplicationError):
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                gate_mode=PreflightGateMode.HARD,
-                warmup_ceiling_seconds=60,
-            )
-        assert handle.cancelled is True
-
-
-class TestTheCeilingRow:
-    @pytest.mark.parametrize(
-        ("mode", "outcome"),
-        [(PreflightGateMode.HARD, "blocked"), (PreflightGateMode.SOFT, "would_block")],
-    )
-    async def test_the_ceiling_is_a_source_attributed_row(
-        self, clock, safe_log, mode, outcome
-    ) -> None:
-        execute_mock, _, patches = _gate(
-            execute=lambda name, *a, **k: (
-                WarmupState(status=WarmupStatus.RUNNING)
-                if name.endswith("warmup_state")
-                else None
-            ),
-            start=_Handle(WarmupState(status=WarmupStatus.RUNNING)),
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[_poll(WarmupState.READY)],
+            second=block,
         )
-        with patches[0], patches[1], patches[2]:
-            if mode.enforces:
-                with pytest.raises(ApplicationError) as caught:
-                    await _run_preflight_gate(
-                        _ResolvableInput(),
-                        "myapp",
-                        "crawl",
-                        gate_mode=mode,
-                        warmup_ceiling_seconds=30,
-                        warmup_poll_seconds=10,
-                    )
-                assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
-            else:
-                await _run_preflight_gate(
-                    _ResolvableInput(),
-                    "myapp",
-                    "crawl",
-                    gate_mode=mode,
-                    warmup_ceiling_seconds=30,
-                    warmup_poll_seconds=10,
-                )
+        with pytest.raises(ApplicationError) as caught:
+            await _run(activities, gate_mode=PreflightGateMode.HARD)
+        assert caught.value is block
+        assert _rows(safe_log) == []
+
+
+class TestUnavailable:
+    @pytest.mark.parametrize(
+        ("gate_mode", "warmup_mode", "outcome"),
+        [
+            (PreflightGateMode.HARD, PreflightGateMode.SOFT, "would_block"),
+            (PreflightGateMode.HARD, None, "would_block"),
+            (PreflightGateMode.SOFT, PreflightGateMode.HARD, "blocked"),
+        ],
+    )
+    async def test_the_warmup_posture_alone_decides(
+        self, clock, safe_log, health, gate_mode, warmup_mode, outcome
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[_poll(WarmupState.UNAVAILABLE, source_state="SUSPENDED")],
+        )
+        if outcome == "blocked":
+            with pytest.raises(ApplicationError) as caught:
+                await _run(activities, gate_mode=gate_mode, warmup_mode=warmup_mode)
+            assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        else:
+            await _run(activities, gate_mode=gate_mode, warmup_mode=warmup_mode)
         (row,) = _rows(safe_log)
         assert row["outcome"] == outcome
+        assert row["reason"] == "SOURCE_UNAVAILABLE"
+        assert row[GATE_CLASSIFICATION_KEY] == "source_unverifiable"
+        # Stamped with the posture that decided the row, not the gate's.
+        assert row[GATE_MODE_KEY] == (warmup_mode or PreflightGateMode.SOFT).value
+        assert row[GATE_TIER_KEY] == "warmup"
+        assert row[WARMUP_OUTCOME_KEY] == "unavailable"
+        assert "SUSPENDED" in row[FAILURE_MESSAGE_KEY]
+        assert activities.tiers == [None]
+
+    async def test_an_unavailable_first_probe_ends_without_a_poll(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(clock, first=_first(WarmupState.UNAVAILABLE))
+        await _run(activities, gate_mode=PreflightGateMode.HARD)
+        assert activities.polls == []
+        assert clock.slept == []
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "would_block"
+        assert row[WARMUP_OUTCOME_KEY] == "unavailable"
+        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
+            {"state": "unavailable", "at_ms": 0.0}
+        ]
+
+
+class TestTheCeiling:
+    @pytest.mark.parametrize(
+        ("gate_mode", "warmup_mode", "raises"),
+        [
+            (PreflightGateMode.HARD, None, False),
+            (PreflightGateMode.HARD, PreflightGateMode.SOFT, False),
+            (PreflightGateMode.SOFT, PreflightGateMode.HARD, True),
+        ],
+    )
+    async def test_the_ceiling_is_a_warmup_exhausted_row(
+        self, clock, safe_log, health, gate_mode, warmup_mode, raises
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[_poll(WarmupState.WARMING, source_state="RESUMING")],
+        )
+        if raises:
+            with pytest.raises(ApplicationError) as caught:
+                await _run(
+                    activities,
+                    gate_mode=gate_mode,
+                    warmup_mode=warmup_mode,
+                    warmup_ceiling_seconds=30,
+                )
+            assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        else:
+            await _run(
+                activities,
+                gate_mode=gate_mode,
+                warmup_mode=warmup_mode,
+                warmup_ceiling_seconds=30,
+            )
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "warmup_exhausted"
         assert row["reason"] == "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
         assert row[GATE_CLASSIFICATION_KEY] == "source_unverifiable"
+        assert row[GATE_MODE_KEY] == (warmup_mode or PreflightGateMode.SOFT).value
         assert row[GATE_TIER_KEY] == "warmup"
-        assert row["failure.audience"] == "USER"
+        assert row[FAILURE_AUDIENCE_KEY] == "USER"
         assert row[WARMUP_OUTCOME_KEY] == "exhausted"
         assert row[WARMUP_DURATION_KEY] == 30_000.0
-        # Three polls on the timer, the last one landing on the ceiling.
-        assert clock.slept == [10.0, 10.0, 10.0]
-        assert _tiers(execute_mock) == [CheckTier.FAST]
-
-    @pytest.mark.parametrize("status", [WarmupStatus.READY, WarmupStatus.NOT_REQUIRED])
-    async def test_slow_fast_checks_do_not_overrun_an_answered_warmup(
-        self, clock, safe_log, status
-    ) -> None:
-        """warmup_start answered in time; the FAST checks then outlast the ceiling.
-
-        The ceiling bounds the wait on the warmup, not the FAST dispatch, so the
-        WARMUP checks still run with no poll and no exhausted row.
-        """
-
-        def _execute(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name == "myapp:preflight":
-                clock.now += timedelta(seconds=40)
-            return None
-
-        execute_mock, _, patches = _gate(
-            execute=_execute, start=_Handle(WarmupState(status=status))
+        assert row[FAILURE_MESSAGE_KEY] == (
+            "Source wasn't ready within 30s; last reported: RESUMING"
         )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                gate_mode=PreflightGateMode.HARD,
-                warmup_ceiling_seconds=30,
-            )
-        assert _tiers(execute_mock) == [CheckTier.FAST, CheckTier.WARMUP]
-        assert clock.slept == []
+        assert clock.slept == [5.0, 10.0, 15.0]
+        assert activities.tiers == [None]
+        health.assert_called_with("")
 
-    @pytest.mark.parametrize(("poll_takes", "tiers"), [(2, 2), (10, 1)])
-    async def test_a_ready_returned_past_the_ceiling_is_exhausted(
-        self, clock, safe_log, poll_takes, tiers
+    async def test_the_exhausted_row_names_the_last_transient_raise(
+        self, clock, safe_log, health
     ) -> None:
-        """The deadline is checked when the last poll returns, not only before it.
-
-        The poll starts at 25s against a 30s ceiling. Returning READY at 27s
-        runs the WARMUP checks; returning it at 35s is a ceiling breach.
-        """
-
-        def _execute(name: str, *args: Any, **kwargs: Any) -> Any:
-            if name.endswith("warmup_state"):
-                clock.now += timedelta(seconds=poll_takes)
-                return WarmupState(status=WarmupStatus.READY)
-            return None
-
-        execute_mock, _, patches = _gate(
-            execute=_execute, start=_Handle(WarmupState(status=WarmupStatus.RUNNING))
+        raised = DependencyUnavailableError(message="resume API 503")
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[_poll(WarmupState.WARMING, error=raised.to_failure_details())],
         )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                gate_mode=PreflightGateMode.SOFT,
-                warmup_ceiling_seconds=30,
-                warmup_poll_seconds=25,
-            )
-        assert len(_tiers(execute_mock)) == tiers
-        if tiers == 1:
+        await _run(activities, warmup_ceiling_seconds=30)
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "warmup_exhausted"
+        assert row[FAILURE_MESSAGE_KEY] == (
+            "Source wasn't ready within 30s; last reported: warming (resume API 503)"
+        )
+
+    @pytest.mark.parametrize(
+        ("poll_takes", "ran_warmup_tier"), [(2, True), (5, False), (10, False)]
+    )
+    async def test_a_ready_returned_at_or_past_the_ceiling_is_exhausted(
+        self, clock, safe_log, health, poll_takes, ran_warmup_tier
+    ) -> None:
+        """The deadline is checked when the poll returns, not only before it.
+
+        The poll starts at 25s against a 30s ceiling. READY at 27s runs the
+        WARMUP checks; READY at 30s or 35s does not buy them extra time.
+        """
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD, next_poll_seconds=25),
+            polls=[_poll(WarmupState.READY)],
+            poll_takes=poll_takes,
+        )
+        await _run(activities, warmup_ceiling_seconds=30)
+        if ran_warmup_tier:
+            assert activities.tiers == [None, _READY_WAIT]
+            assert _rows(safe_log) == []
+        else:
+            assert activities.tiers == [None]
             (row,) = _rows(safe_log)
-            assert row["outcome"] == "would_block"
+            assert row["outcome"] == "warmup_exhausted"
             assert row[WARMUP_OUTCOME_KEY] == "exhausted"
 
+    async def test_the_ceiling_runs_from_gate_start(
+        self, clock, safe_log, health
+    ) -> None:
+        """PREFLIGHT checks that outlast the ceiling leave no time to poll."""
+        activities = _Activities(clock, first=_first(WarmupState.COLD), first_takes=40)
+        await _run(activities, warmup_ceiling_seconds=30)
+        assert activities.polls == []
+        assert clock.slept == []
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "warmup_exhausted"
+        assert row[WARMUP_DURATION_KEY] == 40_000.0
+
+    async def test_transitions_are_capped(self, clock, safe_log, health) -> None:
+        """A source flapping for a whole ceiling does not grow the row per poll."""
+        flapping = [
+            _poll(
+                WarmupState.WARMING if i % 2 == 0 else WarmupState.COLD,
+                next_poll_seconds=5,
+            )
+            for i in range(200)
+        ]
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD, next_poll_seconds=5),
+            polls=flapping,
+        )
+        await _run(activities, warmup_ceiling_seconds=600)
+        assert len(activities.polls) == 120
+        (row,) = _rows(safe_log)
+        transitions = json.loads(row[WARMUP_TRANSITIONS_KEY])
+        assert len(transitions) == WARMUP_TRANSITIONS_MAX
+        # Oldest first: the cap keeps the start of the wait.
+        assert transitions[:2] == [
+            {"state": "cold", "at_ms": 0.0},
+            {"state": "warming", "at_ms": 5_000.0},
+        ]
+
+
+class TestATerminalProbeRaise:
+    @pytest.mark.parametrize(
+        ("raised", "gate_mode", "warmup_mode", "outcome"),
+        [
+            (AuthError(message="expired"), PreflightGateMode.HARD, None, "blocked"),
+            (
+                AppPermissionDeniedError(message="no grant"),
+                PreflightGateMode.HARD,
+                None,
+                "blocked",
+            ),
+            (
+                NotFoundError(message="no such warehouse"),
+                PreflightGateMode.HARD,
+                None,
+                "blocked",
+            ),
+            (
+                AuthError(message="expired"),
+                PreflightGateMode.SOFT,
+                PreflightGateMode.HARD,
+                "would_block",
+            ),
+        ],
+    )
+    async def test_category_gating_under_the_gate_mode(
+        self, clock, safe_log, health, raised, gate_mode, warmup_mode, outcome
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[
+                _poll(WarmupState.WARMING, error=raised.to_failure_details()),
+                _poll(WarmupState.READY),
+            ],
+        )
+        if outcome == "blocked":
+            with pytest.raises(ApplicationError) as caught:
+                await _run(activities, gate_mode=gate_mode, warmup_mode=warmup_mode)
+            assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        else:
+            await _run(activities, gate_mode=gate_mode, warmup_mode=warmup_mode)
+        # The wait ends on the first terminal poll.
+        assert len(activities.polls) == 1
+        assert activities.tiers == [None]
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == outcome
+        assert row["reason"] == raised.code
+        assert row[GATE_MODE_KEY] == gate_mode.value
+        assert row[GATE_CLASSIFICATION_KEY] == "source_unverifiable"
+        assert row[GATE_TIER_KEY] == "warmup"
+        assert row[WARMUP_OUTCOME_KEY] == "failed"
+
+
+class TestThePollsOwnBreakageFailsOpen:
+    async def test_a_failed_poll_activity_is_gate_broken(
+        self, clock, safe_log, health
+    ) -> None:
+        activities = _Activities(
+            clock,
+            first=_first(WarmupState.COLD),
+            polls=[RuntimeError("activity not registered")],
+        )
+        await _run(
+            activities,
+            gate_mode=PreflightGateMode.HARD,
+            warmup_mode=PreflightGateMode.HARD,
+        )
+        assert activities.tiers == [None]
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row["reason"] == "RuntimeError"
+        assert row[GATE_CLASSIFICATION_KEY] == "gate_broken"
+        assert row[GATE_TIER_KEY] == "warmup"
+        assert row[WARMUP_OUTCOME_KEY] == "broken"
+        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
+            {"state": "cold", "at_ms": 0.0}
+        ]
+        health.assert_called_with("")
+
 
 # ---------------------------------------------------------------------------
-# Warmup activities
+# The check activity
 # ---------------------------------------------------------------------------
 
 
-class _Hooks(DefaultHandler):
-    def __init__(self, start: Any = None, state: Any = None) -> None:
-        self._start = start
-        self._state = state
-        self.inputs: list[PreflightInput] = []
+class _RecordingHandler(WarmingSourceHandler):
+    """A scripted handler that keeps every ``WarmupInput`` it was probed with."""
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        self.inputs.append(input)
-        return await self._play(self._start)
+    def __init__(self, source: WarmingSource, **kwargs: Any) -> None:
+        super().__init__(source, **kwargs)
+        self.warmup_inputs: list[WarmupInput] = []
 
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        self.inputs.append(input)
-        return await self._play(self._state)
-
-    @staticmethod
-    async def _play(step: Any) -> WarmupState:
-        if isinstance(step, BaseException):
-            raise step
-        if step == "hang":
-            await asyncio.sleep(30)
-        return step
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        self.warmup_inputs.append(input)
+        return await super().warmup(input)
 
 
-def _activities(handler: DefaultHandler):
-    start, state = build_preflight_warmup_activities(handler, "myapp")
-    return start, state
+class _HangingWarmupHandler(WarmingSourceHandler):
+    """A handler whose warmup probe never answers within any test bound."""
+
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        self.calls.append("probe")
+        await asyncio.sleep(30)
+        return WarmupObservation(state=WarmupState.READY)
 
 
-class TestWarmupActivities:
-    def test_names_are_reserved_under_the_app(self) -> None:
-        start, state = _activities(DefaultHandler())
-        assert (
-            getattr(start, "__temporal_activity_definition").name
-            == preflight_warmup_start_activity_name("myapp")
-            == "myapp:preflight_warmup_start"
+def _handler(*script: Any, **kwargs: Any) -> WarmingSourceHandler:
+    return WarmingSourceHandler(WarmingSource(list(script)), **kwargs)
+
+
+class TestTheFirstDispatch:
+    async def test_a_ready_probe_is_one_call_with_every_tier_and_an_unchanged_row(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _handler(WarmupState.READY)
+        gate = build_preflight_gate_activity(handler, "myapp")
+        result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert handler.calls == ["probe", "check:preflight+warmup"]
+        assert result.warmup is None
+        assert [c.name for c in result.checks] == ["reachable", "catalogScan"]
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "proceeded"
+        for key in (
+            GATE_TIER_KEY,
+            WARMUP_OUTCOME_KEY,
+            WARMUP_DURATION_KEY,
+            WARMUP_TRANSITIONS_KEY,
+        ):
+            assert key not in row
+
+    @pytest.mark.parametrize(
+        ("state", "warmup_outcome"),
+        [
+            (WarmupState.COLD, "warming"),
+            (WarmupState.WARMING, "warming"),
+            (WarmupState.QUEUED, "warming"),
+            (WarmupState.UNAVAILABLE, "unavailable"),
+        ],
+    )
+    async def test_a_probe_not_ready_runs_only_the_preflight_tier(
+        self, capture_preflight_outcomes, state, warmup_outcome
+    ) -> None:
+        handler = _handler(state)
+        gate = build_preflight_gate_activity(handler, "myapp")
+        result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert handler.calls == ["probe", "check:preflight"]
+        assert result.warmup == WarmupObservation(state=state, source_state=state.name)
+        assert [c.name for c in result.checks] == ["reachable"]
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "proceeded"
+        assert row[GATE_TIER_KEY] == "preflight"
+        assert row[WARMUP_OUTCOME_KEY] == warmup_outcome
+        # The wait has not ended, so no duration and no transitions yet.
+        assert WARMUP_DURATION_KEY not in row
+        assert WARMUP_TRANSITIONS_KEY not in row
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            AuthError(message="expired"),
+            AppPermissionDeniedError(message="no grant"),
+            NotFoundError(message="no such warehouse"),
+        ],
+    )
+    async def test_a_terminal_probe_raise_is_gated_on_its_category(
+        self, capture_preflight_outcomes, raised
+    ) -> None:
+        handler = _handler(raised)
+        gate = build_preflight_gate_activity(
+            handler, "myapp", mode=PreflightGateMode.HARD
         )
-        assert (
-            getattr(state, "__temporal_activity_definition").name
-            == preflight_warmup_state_activity_name("myapp")
-            == "myapp:preflight_warmup_state"
-        )
+        with pytest.raises(ApplicationError) as caught:
+            await gate(PreflightGateInput(entrypoint="crawl"))
+        assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert handler.calls == ["probe"]
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "blocked"
+        assert row["reason"] == raised.code
 
-    async def test_hooks_get_the_checks_form_config(self) -> None:
-        hooks = _Hooks(start=WarmupState(status=WarmupStatus.RUNNING))
-        start, _ = _activities(hooks)
-        state = await start(
+    async def test_a_terminal_probe_raise_in_soft_mode_would_block(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _handler(AuthError(message="expired"))
+        gate = build_preflight_gate_activity(handler, "myapp")
+        result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert result.status is PreflightStatus.NOT_READY
+        assert handler.calls == ["probe"]
+        assert capture_preflight_outcomes.one["outcome"] == "would_block"
+
+    @pytest.mark.parametrize(
+        "raised",
+        [
+            DependencyUnavailableError(message="resume API 503"),
+            SourceUnavailableError(message="refused"),
+            RuntimeError("connection reset"),
+        ],
+    )
+    async def test_any_other_probe_raise_reads_as_warming(
+        self, capture_preflight_outcomes, raised
+    ) -> None:
+        handler = _handler(raised)
+        gate = build_preflight_gate_activity(
+            handler, "myapp", mode=PreflightGateMode.HARD
+        )
+        result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert handler.calls == ["probe", "check:preflight"]
+        assert result.warmup == WarmupObservation(state=WarmupState.WARMING)
+        assert capture_preflight_outcomes.one[WARMUP_OUTCOME_KEY] == "warming"
+
+    async def test_a_probe_that_overruns_reads_as_warming(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _HangingWarmupHandler(WarmingSource([WarmupState.READY]))
+        gate = build_preflight_gate_activity(
+            handler, "myapp", warmup_probe_timeout_seconds=1
+        )
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        result = await gate(PreflightGateInput(entrypoint="crawl"))
+        assert loop.time() - started < 5
+        assert handler.calls == ["probe", "check:preflight"]
+        assert result.warmup == WarmupObservation(state=WarmupState.WARMING)
+
+    async def test_the_probe_gets_the_checks_input_and_the_probe_timeout(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _RecordingHandler(WarmingSource([WarmupState.READY]))
+        gate = build_preflight_gate_activity(
+            handler, "myapp", warmup_probe_timeout_seconds=7
+        )
+        await gate(
             PreflightGateInput(
                 entrypoint="crawl", extraction_snapshot={"warehouse_name": "wh1"}
             )
         )
-        assert state.status is WarmupStatus.RUNNING
-        (seen,) = hooks.inputs
+        (seen,) = handler.warmup_inputs
+        assert seen.probe_timeout_seconds == 7
         assert seen.entrypoint == "crawl"
         assert seen.connection_config.model_dump()["warehouse_name"] == "wh1"
 
+    async def test_the_probe_timeout_never_exceeds_the_gate_budget(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _RecordingHandler(WarmingSource([WarmupState.READY]))
+        gate = build_preflight_gate_activity(
+            handler, "myapp", budget_seconds=5, warmup_probe_timeout_seconds=60
+        )
+        await gate(PreflightGateInput(entrypoint="crawl"))
+        (seen,) = handler.warmup_inputs
+        assert seen.probe_timeout_seconds < 5
+
+
+class TestTheWarmupDispatch:
+    async def test_it_does_not_probe_and_its_row_carries_the_wait(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _handler(WarmupState.COLD)
+        wait = WarmupWait(
+            outcome=WarmupOutcome.READY,
+            duration_ms=12_000.0,
+            transitions=[
+                WarmupTransition(state=WarmupState.COLD, at_ms=0.0),
+                WarmupTransition(state=WarmupState.READY, at_ms=12_000.0),
+            ],
+        )
+        gate = build_preflight_gate_activity(handler, "myapp")
+        result = await gate(
+            PreflightGateInput(entrypoint="crawl", tiers=_READY_WAIT, warmup=wait)
+        )
+        assert handler.calls == ["check:warmup"]
+        assert result.warmup is None
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "proceeded"
+        assert row[GATE_TIER_KEY] == "warmup"
+        assert row[WARMUP_OUTCOME_KEY] == "ready"
+        assert row[WARMUP_DURATION_KEY] == 12_000.0
+        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
+            {"state": "cold", "at_ms": 0.0},
+            {"state": "ready", "at_ms": 12_000.0},
+        ]
+        (matrix_row,) = capture_preflight_outcomes.matrix
+        assert matrix_row["tier"] == "warmup"
+
+    async def test_a_failing_warmup_check_is_a_verdict(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _handler(WarmupState.READY, warmup_check_passes=False)
+        gate = build_preflight_gate_activity(
+            handler, "myapp", mode=PreflightGateMode.HARD
+        )
+        with pytest.raises(ApplicationError) as caught:
+            await gate(
+                PreflightGateInput(
+                    tiers=_READY_WAIT,
+                    warmup=WarmupWait(outcome=WarmupOutcome.READY, duration_ms=1.0),
+                )
+            )
+        assert caught.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        row = capture_preflight_outcomes.one
+        assert row["outcome"] == "blocked"
+        assert row[GATE_TIER_KEY] == "warmup"
+
+
+class TestThePostCallTierCheck:
+    @pytest.mark.parametrize(
+        ("state", "tiers", "outside"),
+        [
+            (WarmupState.COLD, None, "catalogScan"),
+            (WarmupState.READY, _READY_WAIT, "reachable"),
+        ],
+        ids=["first-dispatch", "warmup-dispatch"],
+    )
+    async def test_a_row_outside_the_tiers_is_no_verdict(
+        self, capture_preflight_outcomes, state, tiers, outside
+    ) -> None:
+        handler = _handler(state, ignores_tiers=True)
+        gate = build_preflight_gate_activity(
+            handler, "myapp", mode=PreflightGateMode.HARD
+        )
+        with pytest.raises(ApplicationError) as caught:
+            await gate(PreflightGateInput(tiers=tiers))
+        assert caught.value.type == "InternalError"
+        assert outside in str(caught.value)
+        # Never a silent drop, and never a verdict row.
+        assert capture_preflight_outcomes.rows == []
+
+    async def test_every_tier_requested_means_nothing_is_outside(
+        self, capture_preflight_outcomes
+    ) -> None:
+        handler = _handler(WarmupState.READY, ignores_tiers=True)
+        gate = build_preflight_gate_activity(handler, "myapp")
+        result = await gate(PreflightGateInput())
+        assert len(result.checks) == 2
+
+    async def test_the_workflow_fails_it_open(
+        self, clock, safe_log, health, capture_preflight_outcomes
+    ) -> None:
+        gate = build_preflight_gate_activity(
+            _handler(WarmupState.COLD, ignores_tiers=True), "myapp"
+        )
+        with pytest.raises(ApplicationError) as caught:
+            await gate(PreflightGateInput())
+        activities = _Activities(clock, first=caught.value)
+        await _run(activities, gate_mode=PreflightGateMode.HARD)
+        (row,) = _rows(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == "gate_broken"
+        assert activities.polls == []
+
+
+class TestStorageVerification:
+    @pytest.mark.parametrize(
+        ("state", "tiers", "verified"),
+        [
+            (WarmupState.READY, None, True),
+            (WarmupState.COLD, None, True),
+            (WarmupState.READY, _READY_WAIT, False),
+        ],
+        ids=["first-ready", "first-warming", "warmup-dispatch"],
+    )
+    async def test_only_the_first_dispatch_verifies_storage(
+        self, capture_preflight_outcomes, state, tiers, verified
+    ) -> None:
+        storage = mock.AsyncMock(return_value=False)
+        gate = build_preflight_gate_activity(
+            _handler(state), "myapp", verify_storage=True
+        )
+        with mock.patch.object(preflight_gate, "_append_storage_checks", storage):
+            await gate(
+                PreflightGateInput(
+                    tiers=tiers,
+                    warmup=None
+                    if tiers is None
+                    else WarmupWait(outcome=WarmupOutcome.READY, duration_ms=1.0),
+                )
+            )
+        assert storage.await_count == (1 if verified else 0)
+
+
+# ---------------------------------------------------------------------------
+# The poll activity
+# ---------------------------------------------------------------------------
+
+
+def _poll_activity(handler: WarmingSourceHandler, probe_timeout_seconds: int = 10):
+    return build_preflight_warmup_activity(
+        handler, "myapp", probe_timeout_seconds=probe_timeout_seconds
+    )
+
+
+class TestThePollActivity:
+    def test_its_name_is_reserved_under_the_app(self) -> None:
+        poll = _poll_activity(_handler(WarmupState.READY))
+        assert (
+            getattr(poll, "__temporal_activity_definition").name
+            == preflight_warmup_activity_name("myapp")
+            == "myapp:preflight_warmup"
+        )
+
+    async def test_an_observation_passes_through(self) -> None:
+        seen = WarmupObservation(
+            state=WarmupState.QUEUED,
+            source_state="QUEUED",
+            queued_queries=4,
+            next_poll_seconds=20,
+        )
+        result = await _poll_activity(_handler(seen))(PreflightGateInput())
+        assert result == WarmupPoll(observation=seen)
+        assert result.is_terminal is False
+
     @pytest.mark.parametrize(
         "raised",
-        [AuthError(message="expired"), NotFoundError(message="no such warehouse")],
+        [
+            AuthError(message="expired"),
+            AppPermissionDeniedError(message="no grant"),
+            NotFoundError(message="no such warehouse"),
+        ],
     )
-    async def test_a_terminal_raise_is_failed_with_the_leaf(self, raised) -> None:
-        _, state_activity = _activities(_Hooks(state=raised))
-        state = await state_activity(PreflightGateInput())
-        assert state.status is WarmupStatus.FAILED
-        assert state.error is not None
-        assert state.error.code == raised.code
+    async def test_a_terminal_raise_is_carried_as_the_error(self, raised) -> None:
+        result = await _poll_activity(_handler(raised))(PreflightGateInput())
+        assert result.is_terminal is True
+        assert result.error is not None
+        assert result.error.code == raised.code
 
     @pytest.mark.parametrize(
         "raised",
-        [DependencyUnavailableError(message="resume API 503"), RuntimeError("reset")],
+        [
+            DependencyUnavailableError(message="resume API 503"),
+            SourceUnavailableError(message="refused"),
+            RuntimeError("connection reset"),
+        ],
     )
-    async def test_any_other_raise_is_polled_again(self, raised) -> None:
-        _, state_activity = _activities(_Hooks(state=raised))
-        state = await state_activity(PreflightGateInput())
-        assert state.status is WarmupStatus.RUNNING
-        assert state.error is not None
+    async def test_any_other_raise_is_warming_with_the_error(self, raised) -> None:
+        result = await _poll_activity(_handler(raised))(PreflightGateInput())
+        assert result.observation == WarmupObservation(state=WarmupState.WARMING)
+        assert result.error is not None
+        assert result.is_terminal is False
 
-    async def test_a_hook_that_overruns_is_polled_again(self) -> None:
-        _, state_activity = _activities(_Hooks(state="hang"))
-        with mock.patch.object(preflight_gate, "WARMUP_CALL_BUDGET_SECONDS", 1):
-            state = await state_activity(PreflightGateInput())
-        assert state.status is WarmupStatus.RUNNING
-        assert state.error is not None
-        assert state.error.code == "TIMEOUT"
-
-    async def test_resolution_and_the_hook_share_one_budget(self) -> None:
-        """Slow resolution leaves the hook only what remains of the budget.
-
-        Two separate budgets could add up past the activity's start_to_close
-        (budget + headroom), and Temporal would kill it before it reported.
-        """
-
-        async def _slow_resolution(
-            _input: object,
-        ) -> tuple[list[object], dict[str, list[object]]]:
-            await asyncio.sleep(1.5)
-            return [], {}
-
-        hooks = _Hooks(state="hang")
-        _, state_activity = _activities(hooks)
+    async def test_a_probe_that_overruns_is_warming(self) -> None:
+        handler = _HangingWarmupHandler(WarmingSource([WarmupState.READY]))
         loop = asyncio.get_running_loop()
         started = loop.time()
-        with (
-            mock.patch.object(preflight_gate, "WARMUP_CALL_BUDGET_SECONDS", 2),
-            mock.patch.object(
-                preflight_gate, "_resolve_gate_credentials", _slow_resolution
-            ),
-        ):
-            state = await state_activity(PreflightGateInput())
-        assert loop.time() - started < 2.5
-        assert state.status is WarmupStatus.RUNNING
-        assert state.error is not None
-        assert state.error.code == "TIMEOUT"
-        (seen,) = hooks.inputs
-        assert seen.timeout_seconds == 0
+        result = await _poll_activity(handler, probe_timeout_seconds=1)(
+            PreflightGateInput()
+        )
+        assert loop.time() - started < 5
+        assert result == WarmupPoll(
+            observation=WarmupObservation(state=WarmupState.WARMING)
+        )
+
+    async def test_the_probe_gets_the_checks_input_and_the_probe_timeout(
+        self,
+    ) -> None:
+        handler = _RecordingHandler(WarmingSource([WarmupState.READY]))
+        await _poll_activity(handler, probe_timeout_seconds=7)(
+            PreflightGateInput(
+                entrypoint="crawl", extraction_snapshot={"warehouse_name": "wh1"}
+            )
+        )
+        (seen,) = handler.warmup_inputs
+        assert seen.probe_timeout_seconds == 7
+        assert seen.entrypoint == "crawl"
+        assert seen.connection_config.model_dump()["warehouse_name"] == "wh1"
 
     async def test_a_credential_failure_leaves_as_plumbing(self) -> None:
-        start, _ = _activities(_Hooks(start=WarmupState()))
+        handler = _handler(WarmupState.READY)
         with mock.patch.object(
             preflight_gate,
             "_resolve_gate_credentials",
             side_effect=DependencyUnavailableError(message="vault down"),
         ):
             with pytest.raises(ApplicationError) as caught:
-                await start(PreflightGateInput())
+                await _poll_activity(handler)(PreflightGateInput())
         assert caught.value.type == "DependencyUnavailableError"
+        assert handler.probes == 0
 
-
-class TestWarmupUnavailableDetails:
-    def test_a_failed_state_keeps_its_own_error(self) -> None:
-        state = WarmupState(
-            status=WarmupStatus.FAILED, error=AuthError(message="expired")
+    @pytest.mark.parametrize(
+        ("error", "terminal"),
+        [
+            (None, False),
+            (AuthError(message="expired"), True),
+            (DependencyUnavailableError(message="503"), False),
+        ],
+    )
+    def test_is_terminal_is_keyed_on_the_category(self, error, terminal) -> None:
+        poll = WarmupPoll(
+            observation=WarmupObservation(state=WarmupState.WARMING),
+            error=None if error is None else error.to_failure_details(),
         )
-        details = warmup_unavailable_details(state, "myapp")
-        assert details.code == "AUTH"
-        assert details.app_name == "myapp"
+        assert poll.is_terminal is terminal
 
-    def test_an_untyped_failed_state_is_source_unavailable(self) -> None:
-        state = WarmupState(status=WarmupStatus.FAILED, message="decommissioned")
-        details = warmup_unavailable_details(state, "myapp")
+
+# ---------------------------------------------------------------------------
+# Attribution and the health line
+# ---------------------------------------------------------------------------
+
+
+class TestWarmupDetails:
+    def test_unavailable_is_a_source_unavailable_naming_the_source(self) -> None:
+        details = warmup_unavailable_details(
+            WarmupObservation(state=WarmupState.UNAVAILABLE, source_state="SUSPENDED"),
+            "myapp",
+        )
         assert details.code == "SOURCE_UNAVAILABLE"
-        assert details.message == "decommissioned"
+        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.app_name == "myapp"
+        assert "SUSPENDED" in details.message
 
     def test_the_ceiling_is_warmup_exhausted_naming_it(self) -> None:
-        state = WarmupState(status=WarmupStatus.RUNNING, message="RESUMING")
-        details = warmup_unavailable_details(state, "myapp", ceiling_seconds=1800)
+        details = warmup_exhausted_details(
+            WarmupObservation(state=WarmupState.WARMING, source_state="RESUMING"),
+            "myapp",
+            1800,
+        )
         assert details.code == "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
         assert details.category is FailureCategory.SOURCE_UNAVAILABLE
         assert details.audience is Audience.USER
@@ -560,53 +1141,18 @@ class TestWarmupUnavailableDetails:
             "Source wasn't ready within 30 min; last reported: RESUMING"
         )
         assert details.retryable is False
-
-    def test_unreachable_and_exhausted_get_different_remedies(self) -> None:
-        """Keyed on code: network for one, sizing and queueing for the other."""
-        unreachable = warmup_unavailable_details(
-            WarmupState(status=WarmupStatus.FAILED, message="no route"), "myapp"
-        )
-        exhausted = warmup_unavailable_details(
-            WarmupState(status=WarmupStatus.RUNNING), "myapp", ceiling_seconds=60
-        )
         assert (
-            unreachable.suggested_action
-            == WARMUP_SUGGESTED_ACTIONS["SOURCE_UNAVAILABLE"]
-        )
-        assert "private link" in (unreachable.suggested_action or "")
-        assert (
-            exhausted.suggested_action
+            details.suggested_action
             == WARMUP_SUGGESTED_ACTIONS["SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"]
         )
-        assert "queue" in (exhausted.suggested_action or "")
 
-    def test_a_typed_source_unavailable_without_a_remedy_gets_the_table_one(
-        self,
-    ) -> None:
-        state = WarmupState(
-            status=WarmupStatus.FAILED,
-            error=SourceUnavailableError(message="refused"),
+    def test_the_ceiling_names_the_queue_depth(self) -> None:
+        details = warmup_exhausted_details(
+            WarmupObservation(state=WarmupState.QUEUED, queued_queries=3), "myapp", 60
         )
-        details = warmup_unavailable_details(state, "myapp")
-        assert (
-            details.suggested_action == WARMUP_SUGGESTED_ACTIONS["SOURCE_UNAVAILABLE"]
+        assert details.message == (
+            "Source wasn't ready within 1 min; last reported: queued, 3 queued"
         )
-
-    def test_a_hooks_own_remedy_wins(self) -> None:
-        state = WarmupState(
-            status=WarmupStatus.FAILED,
-            error=SourceUnavailableError(
-                message="refused", suggested_action="Open port 443."
-            ),
-        )
-        details = warmup_unavailable_details(state, "myapp")
-        assert details.suggested_action == "Open port 443."
-
-    def test_a_code_outside_the_table_is_left_alone(self) -> None:
-        state = WarmupState(
-            status=WarmupStatus.FAILED, error=AuthError(message="expired")
-        )
-        assert warmup_unavailable_details(state, "myapp").suggested_action is None
 
 
 class TestTheHealthLine:
@@ -617,73 +1163,15 @@ class TestTheHealthLine:
     def test_durations_read_like_a_status_line(self, seconds, text) -> None:
         assert human_duration(seconds) == text
 
-    def test_waiting_names_the_hooks_progress_and_the_wait(self) -> None:
-        state = WarmupState(status=WarmupStatus.RUNNING, message="RESUMING")
-        assert warmup_waiting_details(state, 40.4) == (
+    def test_waiting_names_the_sources_own_label(self) -> None:
+        seen = WarmupObservation(state=WarmupState.WARMING, source_state="RESUMING")
+        assert warmup_waiting_details(seen, 40.4) == (
             "waiting for source warmup: RESUMING, 40s"
         )
 
-    def test_waiting_falls_back_to_the_status(self) -> None:
-        state = WarmupState(status=WarmupStatus.NOT_STARTED)
-        assert warmup_waiting_details(state, 5) == (
-            "waiting for source warmup: not_started, 5s"
-        )
-
-    async def test_the_workflow_sets_it_while_waiting_and_clears_it(
-        self, clock, safe_log
-    ) -> None:
-        polls = iter(
-            [
-                WarmupState(status=WarmupStatus.RUNNING, message="RESUMING"),
-                WarmupState(status=WarmupStatus.READY),
-            ]
-        )
-        _, _, patches = _gate(
-            execute=lambda name, *a, **k: (
-                next(polls) if name.endswith("warmup_state") else None
-            ),
-            start=_Handle(WarmupState(status=WarmupStatus.NOT_STARTED)),
-        )
-        with (
-            patches[0],
-            patches[1],
-            patches[2],
-            mock.patch(
-                "application_sdk.app.base.workflow.set_current_details"
-            ) as details,
-        ):
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                warmup_ceiling_seconds=60,
-                warmup_poll_seconds=20,
-            )
-        assert [c.args[0] for c in details.call_args_list] == [
-            "waiting for source warmup: not_started, 0s",
-            "waiting for source warmup: RESUMING, 20s",
-            "",
-        ]
-
-    async def test_a_health_line_that_cannot_be_set_never_fails_the_gate(
-        self, clock, safe_log
-    ) -> None:
-        execute_mock, _, patches = _gate(
-            start=_Handle(WarmupState(status=WarmupStatus.READY))
-        )
-        with (
-            patches[0],
-            patches[1],
-            patches[2],
-            mock.patch(
-                "application_sdk.app.base.workflow.set_current_details",
-                side_effect=RuntimeError("not in workflow"),
-            ),
-        ):
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        assert _tiers(execute_mock) == [CheckTier.FAST, CheckTier.WARMUP]
+    def test_waiting_falls_back_to_the_state(self) -> None:
+        seen = WarmupObservation(state=WarmupState.COLD)
+        assert warmup_waiting_details(seen, 5) == "waiting for source warmup: cold, 5s"
 
 
 # ---------------------------------------------------------------------------
@@ -691,153 +1179,60 @@ class TestTheHealthLine:
 # ---------------------------------------------------------------------------
 
 
-def _warmups(execute_mock: mock.AsyncMock) -> list[WarmupObservation | None]:
-    return [
-        call.args[1].warmup
-        for call in execute_mock.call_args_list
-        if call.args[0] == "myapp:preflight"
-    ]
+def _row(**kwargs: Any) -> dict[str, Any]:
+    return gate_outcome_row(
+        app_name="myapp",
+        entrypoint="crawl",
+        outcome=preflight_gate.PreflightRowOutcome.PROCEEDED,
+        reason="ready",
+        checks=kwargs.pop("checks", []),
+        mode=PreflightGateMode.SOFT,
+        classification=preflight_gate.PreflightClassification.VERDICT,
+        duration_ms=1.0,
+        budget_seconds=150,
+        attempt=1,
+        **kwargs,
+    )
 
 
 class TestTheWarmupRowFields:
-    async def test_each_dispatch_carries_what_the_workflow_saw(
-        self, clock, safe_log
-    ) -> None:
-        polls = iter(
-            [
-                WarmupState(status=WarmupStatus.RUNNING),
-                WarmupState(status=WarmupStatus.RUNNING),
-                WarmupState(status=WarmupStatus.READY),
-            ]
-        )
-        execute_mock, _, patches = _gate(
-            execute=lambda name, *a, **k: (
-                next(polls) if name.endswith("warmup_state") else None
-            ),
-            start=_Handle(WarmupState(status=WarmupStatus.NOT_STARTED)),
-        )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(),
-                "myapp",
-                "crawl",
-                warmup_ceiling_seconds=60,
-                warmup_poll_seconds=10,
-            )
-        fast, ready = _warmups(execute_mock)
-        assert fast == WarmupObservation(outcome=WarmupOutcome.WARMING)
-        assert ready is not None
-        assert ready.outcome is WarmupOutcome.READY
-        assert ready.duration_ms == 30_000.0
-        # Status changes only: the repeated RUNNING poll adds nothing.
-        assert [(t.status, t.at_ms) for t in ready.transitions] == [
-            (WarmupStatus.NOT_STARTED, 0.0),
-            (WarmupStatus.RUNNING, 10_000.0),
-            (WarmupStatus.READY, 30_000.0),
-        ]
+    def test_the_row_carries_no_tier_or_warmup_key_unless_given_one(self) -> None:
+        row = _row()
+        assert GATE_TIER_KEY not in row
+        assert WARMUP_OUTCOME_KEY not in row
 
-    async def test_an_app_without_a_warmup_dispatches_no_observation(
-        self, clock, safe_log
-    ) -> None:
-        execute_mock, _, patches = _gate()
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
-        assert _warmups(execute_mock) == [None]
-
-    async def test_a_failed_warmup_row_says_failed(self, clock, safe_log) -> None:
-        _, _, patches = _gate(
-            start=_Handle(WarmupState(status=WarmupStatus.FAILED, message="gone"))
+    def test_a_warming_row_has_no_duration_or_transitions(self) -> None:
+        row = _row(
+            tier=CheckTier.PREFLIGHT,
+            warmup=WarmupWait(outcome=WarmupOutcome.WARMING),
         )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        (row,) = _rows(safe_log)
-        assert row[WARMUP_OUTCOME_KEY] == "failed"
-        assert row["reason"] == "SOURCE_UNAVAILABLE"
-        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
-            {"status": "failed", "at_ms": 0.0}
-        ]
-
-    async def test_a_broken_warmup_row_says_broken(self, clock, safe_log) -> None:
-        _, _, patches = _gate(start=_Handle(exc=RuntimeError("no worker")))
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        (row,) = _rows(safe_log)
-        assert row["outcome"] == "no_verdict"
-        assert row[WARMUP_OUTCOME_KEY] == "broken"
-        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == []
-
-    async def test_a_fast_dispatch_that_dies_reports_warming(
-        self, clock, safe_log
-    ) -> None:
-        _, _, patches = _gate(
-            execute=RuntimeError("worker lost"),
-            start=_Handle(WarmupState(status=WarmupStatus.RUNNING)),
-        )
-        with patches[0], patches[1], patches[2]:
-            await _run_preflight_gate(
-                _ResolvableInput(), "myapp", "crawl", warmup_ceiling_seconds=60
-            )
-        (row,) = _rows(safe_log)
-        assert row[GATE_TIER_KEY] == "fast"
+        assert row[GATE_TIER_KEY] == "preflight"
         assert row[WARMUP_OUTCOME_KEY] == "warming"
         assert WARMUP_DURATION_KEY not in row
         assert WARMUP_TRANSITIONS_KEY not in row
 
-    async def test_the_activity_row_carries_the_dispatched_observation(
-        self, capture_preflight_outcomes
-    ) -> None:
-        seen = WarmupObservation(
-            outcome=WarmupOutcome.READY,
-            duration_ms=12_000.0,
-            transitions=[
-                WarmupTransition(status=WarmupStatus.RUNNING, at_ms=0.0),
-                WarmupTransition(status=WarmupStatus.READY, at_ms=12_000.0),
-            ],
-        )
-        gate = build_preflight_gate_activity(_TwoTierHandler(), "myapp")
-        await gate(PreflightGateInput(tier=CheckTier.WARMUP, warmup=seen))
-        row = capture_preflight_outcomes.one
-        assert row[WARMUP_OUTCOME_KEY] == "ready"
-        assert row[WARMUP_DURATION_KEY] == 12_000.0
-        assert json.loads(row[WARMUP_TRANSITIONS_KEY]) == [
-            {"status": "running", "at_ms": 0.0},
-            {"status": "ready", "at_ms": 12_000.0},
-        ]
-        # Per-check tier rides in the matrix for a check that set one.
-        (matrix_row,) = json.loads(row[CHECK_MATRIX_KEY])
-        assert matrix_row["tier"] == "warmup"
-
     def test_transitions_are_capped(self) -> None:
-        seen = WarmupObservation(
-            outcome=WarmupOutcome.EXHAUSTED,
-            duration_ms=1.0,
-            transitions=[
-                WarmupTransition(status=WarmupStatus.RUNNING, at_ms=float(i))
-                for i in range(WARMUP_TRANSITIONS_MAX + 10)
-            ],
-        )
-        row = gate_outcome_row(
-            app_name="myapp",
-            entrypoint="crawl",
-            outcome=preflight_gate.PreflightRowOutcome.WOULD_BLOCK,
-            reason="SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED",
-            checks=[],
-            mode=PreflightGateMode.SOFT,
-            classification=preflight_gate.PreflightClassification.SOURCE_UNVERIFIABLE,
-            duration_ms=1.0,
-            budget_seconds=150,
-            attempt=0,
-            warmup=seen,
+        row = _row(
+            warmup=WarmupWait(
+                outcome=WarmupOutcome.EXHAUSTED,
+                duration_ms=1.0,
+                transitions=[
+                    WarmupTransition(state=WarmupState.WARMING, at_ms=float(i))
+                    for i in range(WARMUP_TRANSITIONS_MAX + 10)
+                ],
+            )
         )
         assert len(json.loads(row[WARMUP_TRANSITIONS_KEY])) == WARMUP_TRANSITIONS_MAX
+
+    def test_a_preflight_tier_check_has_no_tier_in_the_matrix(self) -> None:
+        row = _row(checks=[PreflightCheck(name="reachable", passed=True)])
+        (matrix_row,) = json.loads(row[CHECK_MATRIX_KEY])
+        assert "tier" not in matrix_row
 
     def test_every_warmup_key_reaches_otlp(self) -> None:
         """Not allowlisted means dropped before export, so not queryable at all."""
         assert {
+            GATE_TIER_KEY,
             WARMUP_OUTCOME_KEY,
             WARMUP_DURATION_KEY,
             WARMUP_TRANSITIONS_KEY,
@@ -845,196 +1240,69 @@ class TestTheWarmupRowFields:
 
 
 # ---------------------------------------------------------------------------
-# The check activity's tier
+# Declared-value clamps and the poll cadence
 # ---------------------------------------------------------------------------
 
 
-class _TwoTierHandler(DefaultHandler):
-    def __init__(self) -> None:
-        self.tiers: list[CheckTier | None] = []
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        self.tiers.append(input.tier)
-        return PreflightOutput(
-            status=PreflightStatus.READY,
-            checks=[
-                PreflightCheck(name="reachable", passed=True),
-                PreflightCheck(name="catalogScan", passed=True, tier=CheckTier.WARMUP),
-            ],
-        )
-
-
-class _ColdCatalogHandler(DefaultHandler):
-    """Ignores ``input.tier``: runs both tiers and fails on the WARMUP one."""
-
-    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
-        cold = NotFoundError(message="catalog not indexed yet")
-        return PreflightOutput(
-            status=PreflightStatus.NOT_READY,
-            checks=[
-                PreflightCheck(name="reachable", passed=True),
-                PreflightCheck(
-                    name="catalogScan", passed=False, tier=CheckTier.WARMUP, error=cold
-                ),
-            ],
-            error=cold,
-        )
-
-
-def _two_tier_result(
-    *, fast_passed: bool, aggregate: AppError | None, message: str = ""
-) -> PreflightOutput:
-    fast_error = None if fast_passed else AuthError(message="token expired")
-    return PreflightOutput(
-        status=PreflightStatus.NOT_READY,
-        checks=[
-            PreflightCheck(name="reachable", passed=fast_passed, error=fast_error),
-            PreflightCheck(
-                name="catalogScan",
-                passed=False,
-                tier=CheckTier.WARMUP,
-                error=NotFoundError(message="catalog not indexed yet"),
-            ),
-        ],
-        error=aggregate,
-        message=message,
-    )
-
-
-class TestTheCheckActivityTier:
-    async def test_a_tiered_dispatch_keeps_only_its_tier(
-        self, capture_preflight_outcomes
-    ) -> None:
-        handler = _TwoTierHandler()
-        gate = build_preflight_gate_activity(handler, "myapp")
-        result = await gate(PreflightGateInput(tier=CheckTier.WARMUP))
-        assert handler.tiers == [CheckTier.WARMUP]
-        assert [c.name for c in result.checks] == ["catalogScan"]
-        assert capture_preflight_outcomes.one[GATE_TIER_KEY] == "warmup"
-
-    async def test_an_untiered_dispatch_is_unchanged(
-        self, capture_preflight_outcomes
-    ) -> None:
-        handler = _TwoTierHandler()
-        gate = build_preflight_gate_activity(handler, "myapp")
-        result = await gate(PreflightGateInput())
-        assert handler.tiers == [None]
-        assert [c.name for c in result.checks] == ["reachable", "catalogScan"]
-        assert GATE_TIER_KEY not in capture_preflight_outcomes.one
-
-    async def test_a_dropped_warmup_failure_does_not_block_the_fast_dispatch(
-        self, capture_preflight_outcomes
-    ) -> None:
-        gate = build_preflight_gate_activity(
-            _ColdCatalogHandler(), "myapp", mode=PreflightGateMode.HARD
-        )
-        result = await gate(PreflightGateInput(tier=CheckTier.FAST))
-        assert result.status is PreflightStatus.READY
-        assert [c.name for c in result.checks] == ["reachable"]
-        assert capture_preflight_outcomes.one["outcome"] == "proceeded"
-
-    def test_filter_returns_the_same_object_when_nothing_is_dropped(self) -> None:
-        result = PreflightOutput(
-            status=PreflightStatus.READY,
-            checks=[PreflightCheck(name="reachable", passed=True)],
-        )
-        assert filter_checks_to_tier(result, CheckTier.FAST) is result
-
-    def test_a_verdict_caused_only_by_a_dropped_check_becomes_ready(self) -> None:
-        result = _two_tier_result(
-            fast_passed=True, aggregate=NotFoundError(message="catalog not indexed yet")
-        )
-        fast = filter_checks_to_tier(result, CheckTier.FAST)
-        assert fast.status is PreflightStatus.READY
-        assert fast.error is None
-        assert fast.message == ""
-
-    def test_an_untyped_verdict_naming_a_dropped_check_becomes_ready(self) -> None:
-        result = _two_tier_result(
-            fast_passed=True, aggregate=None, message="catalog not indexed yet"
-        )
+class TestWarmupSettings:
+    def test_the_app_declares_the_documented_defaults(self) -> None:
+        assert App.preflight_warmup_ceiling_seconds == WARMUP_CEILING_DEFAULT_SECONDS
         assert (
-            filter_checks_to_tier(result, CheckTier.FAST).status
-            is PreflightStatus.READY
+            App.preflight_warmup_probe_timeout_seconds
+            == WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS
         )
+        assert App.preflight_warmup_mode is PreflightGateMode.SOFT
+        assert not hasattr(App, "preflight_warmup_poll_seconds")
 
-    def test_a_kept_failure_keeps_the_verdict_and_takes_the_attribution(
-        self,
+    @pytest.mark.parametrize(
+        ("raw", "value", "complains"),
+        [
+            (None, WARMUP_CEILING_DEFAULT_SECONDS, False),
+            (1, WARMUP_CEILING_MIN_SECONDS, True),
+            ("soon", WARMUP_CEILING_DEFAULT_SECONDS, True),
+            (True, WARMUP_CEILING_DEFAULT_SECONDS, True),
+            (86_400, 86_400, False),
+        ],
+    )
+    def test_the_ceiling_is_floored_never_capped(self, raw, value, complains) -> None:
+        got, complaint = warmup_ceiling_seconds(raw)
+        assert got == value
+        assert bool(complaint) is complains
+
+    @pytest.mark.parametrize(
+        ("raw", "ceiling", "value", "complains"),
+        [
+            (None, 600, WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS, False),
+            (0, 600, 1, True),
+            (120, 60, 60, True),
+            (None, 5, 5, False),
+        ],
+    )
+    def test_the_probe_timeout_is_floored_and_never_past_the_ceiling(
+        self, raw, ceiling, value, complains
     ) -> None:
-        result = _two_tier_result(
-            fast_passed=False,
-            aggregate=NotFoundError(message="catalog not indexed yet"),
-        )
-        fast = filter_checks_to_tier(result, CheckTier.FAST)
-        assert fast.status is PreflightStatus.NOT_READY
-        assert fast.error is None
-        assert [c.name for c in fast.checks if not c.passed] == ["reachable"]
+        got, complaint = warmup_probe_timeout_seconds(raw, ceiling)
+        assert got == value
+        assert bool(complaint) is complains
 
-    def test_the_handlers_own_reason_stands(self) -> None:
-        """An aggregate reason that is no check's failure is about the source."""
-        result = _two_tier_result(
-            fast_passed=True, aggregate=AuthError(message="account locked")
-        )
-        fast = filter_checks_to_tier(result, CheckTier.FAST)
-        assert fast.status is PreflightStatus.NOT_READY
-        assert fast.error is not None
-        assert fast.error.message == "account locked"
-
-    def test_the_row_carries_no_tier_key_unless_given_one(self) -> None:
-        row = gate_outcome_row(
-            app_name="myapp",
-            entrypoint="crawl",
-            outcome=preflight_gate.PreflightRowOutcome.PROCEEDED,
-            reason="ready",
-            checks=[],
-            mode=PreflightGateMode.SOFT,
-            classification=preflight_gate.PreflightClassification.VERDICT,
-            duration_ms=1.0,
-            budget_seconds=150,
-            attempt=1,
-        )
-        assert GATE_TIER_KEY not in row
-        assert WARMUP_OUTCOME_KEY not in row
-
-    def test_an_untiered_check_has_no_tier_in_the_matrix(self) -> None:
-        row = gate_outcome_row(
-            app_name="myapp",
-            entrypoint="crawl",
-            outcome=preflight_gate.PreflightRowOutcome.PROCEEDED,
-            reason="ready",
-            checks=[PreflightCheck(name="reachable", passed=True)],
-            mode=PreflightGateMode.SOFT,
-            classification=preflight_gate.PreflightClassification.VERDICT,
-            duration_ms=1.0,
-            budget_seconds=150,
-            attempt=1,
-        )
-        (matrix_row,) = json.loads(row[CHECK_MATRIX_KEY])
-        assert "tier" not in matrix_row
-
-
-# ---------------------------------------------------------------------------
-# Declared-value clamps
-# ---------------------------------------------------------------------------
-
-
-class TestWarmupClamps:
-    def test_an_undeclared_ceiling_is_no_warmup(self) -> None:
-        assert gate_warmup_ceiling_seconds(None) == (None, "")
-
-    def test_a_ceiling_below_the_floor_is_clamped(self) -> None:
-        value, complaint = gate_warmup_ceiling_seconds(1)
-        assert value == WARMUP_CEILING_MIN_SECONDS
-        assert complaint
-
-    def test_an_unusable_ceiling_still_declares_a_warmup(self) -> None:
-        value, complaint = gate_warmup_ceiling_seconds("soon")
-        assert value == WARMUP_CEILING_DEFAULT_SECONDS
-        assert complaint
-
-    def test_the_poll_defaults_and_clamps(self) -> None:
-        assert gate_warmup_poll_seconds(None) == (WARMUP_POLL_DEFAULT_SECONDS, "")
-        assert gate_warmup_poll_seconds(0)[0] == 1
+    @pytest.mark.parametrize(
+        ("unhinted", "hint", "remaining", "delay"),
+        [
+            (0, None, 600, 5.0),
+            (1, None, 600, 10.0),
+            (2, None, 600, 20.0),
+            (3, None, 600, 30.0),
+            (50, None, 600, 30.0),
+            (0, 0, 600, 5.0),
+            (0, 3, 600, 5.0),
+            (5, 45, 600, 45.0),
+            (0, 100, 30, 30.0),
+            (3, None, 12.5, 12.5),
+            (0, None, -1, 0.0),
+        ],
+    )
+    def test_the_poll_delay(self, unhinted, hint, remaining, delay) -> None:
+        assert warmup_poll_delay(unhinted, hint, remaining) == delay
 
 
 # ---------------------------------------------------------------------------
@@ -1060,7 +1328,7 @@ def _mock_client() -> mock.MagicMock:
 
 
 def _registered_names() -> list[str]:
-    captured: dict[str, list] = {}
+    captured: dict[str, list[Any]] = {}
 
     def _capture(*args: Any, **kwargs: Any) -> mock.MagicMock:
         captured["activities"] = list(kwargs.get("activities", []))
@@ -1077,6 +1345,10 @@ def _registered_names() -> list[str]:
     ]
 
 
+def _app_name() -> str:
+    return AppRegistry.get_instance().list_all()[0].name
+
+
 class TestWorkerRegistration:
     def setup_method(self) -> None:
         AppRegistry.reset()
@@ -1086,33 +1358,30 @@ class TestWorkerRegistration:
         AppRegistry.reset()
         TaskRegistry.reset()
 
-    def test_an_app_with_a_ceiling_registers_both_warmup_activities(self) -> None:
+    def test_an_app_that_declares_nothing_registers_the_poll(self) -> None:
+        class _PlainApp(App):
+            async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
+                return _WarmupWorkerOutput()
+
+        names = _registered_names()
+        assert names.count(f"{_app_name()}:preflight") == 1
+        assert names.count(f"{_app_name()}:preflight_warmup") == 1
+
+    def test_an_app_that_declares_a_ceiling_registers_the_same_poll(self) -> None:
         class _WarmApp(App):
             preflight_warmup_ceiling_seconds = 120
 
             async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
                 return _WarmupWorkerOutput()
 
-        name = AppRegistry.get_instance().list_all()[0].name
         names = _registered_names()
-        assert f"{name}:preflight_warmup_start" in names
-        assert f"{name}:preflight_warmup_state" in names
+        assert names.count(f"{_app_name()}:preflight_warmup") == 1
+        assert not [n for n in names if n.endswith(("_start", "_state"))]
 
-    def test_an_app_without_a_ceiling_registers_none(self) -> None:
-        class _ColdApp(App):
-            async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
-                return _WarmupWorkerOutput()
-
-        names = _registered_names()
-        assert not [n for n in names if "warmup" in n]
-        assert any(n.endswith(":preflight") for n in names)
-
-    def test_a_task_named_like_a_warmup_activity_is_rejected(self) -> None:
-        class _CollidingWarmApp(App):
-            preflight_warmup_ceiling_seconds = 120
-
+    def test_a_task_named_like_the_poll_is_rejected_for_any_app(self) -> None:
+        class _CollidingApp(App):
             @task(timeout_seconds=60)
-            async def preflight_warmup_state(
+            async def preflight_warmup(
                 self, input: _WarmupWorkerInput
             ) -> _WarmupWorkerOutput:
                 return _WarmupWorkerOutput()
@@ -1122,23 +1391,42 @@ class TestWorkerRegistration:
 
         with pytest.raises(WorkerActivityNameCollisionError) as caught:
             create_worker(_mock_client(), enable_sdr=False)
-        assert "preflight_warmup_state" in str(caught.value)
+        assert "preflight_warmup" in str(caught.value)
 
-    def test_the_same_task_name_is_free_for_an_app_without_a_warmup(self) -> None:
-        class _ColdAppWithTheName(App):
-            @task(timeout_seconds=60)
-            async def preflight_warmup_state(
-                self, input: _WarmupWorkerInput
-            ) -> _WarmupWorkerOutput:
-                return _WarmupWorkerOutput()
+    def test_clamped_declarations_are_logged(self) -> None:
+        class _MisdeclaredApp(App):
+            preflight_warmup_ceiling_seconds = 1
+            preflight_warmup_probe_timeout_seconds = 0
 
             async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
                 return _WarmupWorkerOutput()
 
-        names = _registered_names()
-        assert (
-            names.count(
-                f"{AppRegistry.get_instance().list_all()[0].name}:preflight_warmup_state"
-            )
-            == 1
-        )
+        with mock.patch("application_sdk.execution._temporal.worker.logger") as log:
+            _registered_names()
+        complaints = {
+            c.args[0]: c.args[2]
+            for c in log.warning.call_args_list
+            if c.args and str(c.args[0]).startswith("preflight_warmup_")
+        }
+        assert complaints == {
+            "preflight_warmup_ceiling_seconds: %s; using %ds": (
+                WARMUP_CEILING_MIN_SECONDS
+            ),
+            "preflight_warmup_probe_timeout_seconds: %s; using %ds": 1,
+        }
+
+    def test_valid_declarations_are_not_logged(self) -> None:
+        class _WellDeclaredApp(App):
+            preflight_warmup_ceiling_seconds = 900
+            preflight_warmup_probe_timeout_seconds = 20
+
+            async def run(self, input: _WarmupWorkerInput) -> _WarmupWorkerOutput:
+                return _WarmupWorkerOutput()
+
+        with mock.patch("application_sdk.execution._temporal.worker.logger") as log:
+            _registered_names()
+        assert not [
+            c
+            for c in log.warning.call_args_list
+            if c.args and str(c.args[0]).startswith("preflight_warmup_")
+        ]

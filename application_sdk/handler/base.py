@@ -26,8 +26,9 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 
 if TYPE_CHECKING:
@@ -125,7 +126,7 @@ class Handler(ABC):
             raise AppContextError(
                 "Handler context is not set. "
                 "Access self.context only inside a handler method "
-                "(test_auth, preflight_check, fetch_metadata, warmup_start, warmup_state)."
+                "(test_auth, preflight_check, fetch_metadata, warmup)."
             )
         return ctx
 
@@ -198,44 +199,36 @@ class Handler(ABC):
         """
         ...
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        """Start the warmup that ``WARMUP``-tier preflight checks wait on.
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        """Probe the source's compute, pushing its warmup forward.
 
-        Optional. The default means "no warmup": it returns
-        ``WarmupStatus.NOT_REQUIRED``, and an app that does not override it
-        behaves exactly as it did before warmup existed.
+        Optional. The default reports ``READY``, so an app that does not
+        override it passes on the first probe and behaves exactly as it did
+        before warmup existed.
 
-        Served by ``POST /workflows/v1/warmup`` with the same body as
-        ``/check``. Return promptly: kick the work off (an asyncio task, a
-        resume call to the source) and report its state, rather than awaiting
-        it — the UI polls :meth:`warmup_state` for completion. Must be
-        idempotent: a second call while a warmup is running reports that
-        warmup instead of starting another.
+        Idempotent and stateless: each call both pushes the warmup forward and
+        reports where it is, and the SDK holds no warmup state between calls.
+        The gate calls it once per poll on durable timers, and
+        ``POST /workflows/v1/warmup`` once per request. A query-probe app
+        submits its probe query (which wakes a suspended warehouse), waits up to
+        ``input.probe_timeout_seconds``, and reports ``READY`` if it answered,
+        ``WARMING`` / ``QUEUED`` if not. Whether to cancel a probe still pending
+        at the timeout is the app's call; each poll submits again, so the
+        default guidance is to cancel.
 
-        Args:
-            input: Credentials and connection config, as sent to ``/check``.
-
-        Returns:
-            The warmup's state after the start request.
-        """
-        return WarmupState(status=WarmupStatus.NOT_REQUIRED)
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        """Report the state of the warmup :meth:`warmup_start` began.
-
-        Optional; the default returns ``WarmupStatus.NOT_REQUIRED``. Served by
-        ``POST /workflows/v1/warmup/state``, and consulted by ``/check`` when
-        a request names a ``tier``: a ``FAST`` answer carries the state and its
-        ``pending_checks``, and a ``WARMUP`` request is refused until the state
-        is ``READY``. Must not start a warmup itself.
+        Raise a typed AUTH / PERMISSION / NOT_FOUND ``AppError`` for a failure
+        no amount of waiting fixes; return ``UNAVAILABLE`` for a source that
+        will not get ready on its own. Never use privileges beyond what the
+        app's checks already verify.
 
         Args:
-            input: Credentials and connection config, as sent to ``/check``.
+            input: Credentials and connection config, as sent to ``/check``,
+                plus the probe timeout.
 
         Returns:
-            The warmup's current state.
+            What this probe saw.
         """
-        return WarmupState(status=WarmupStatus.NOT_REQUIRED)
+        return WarmupObservation(state=WarmupState.READY)
 
 
 class DefaultHandler(Handler):

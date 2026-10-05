@@ -1,4 +1,4 @@
-"""Unit tests for the scripted warming source (FND-3042)."""
+"""Unit tests for the scripted warming source (FND-3237)."""
 
 from __future__ import annotations
 
@@ -8,43 +8,27 @@ from fastapi.testclient import TestClient
 from application_sdk.errors import FailureCategory
 from application_sdk.errors.leaves import AuthError
 from application_sdk.handler.contracts import (
+    ALL_CHECK_TIERS,
     CheckTier,
     PreflightInput,
     PreflightStatus,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 from application_sdk.handler.service import create_app_handler_service
-from application_sdk.testing import SourceState, WarmingSource, WarmingSourceHandler
+from application_sdk.testing import WarmingSource, WarmingSourceHandler
 from application_sdk.testing._errors import WarmingScriptEmptyError
 
 _FULL_WARMUP = [
-    SourceState.COLD,
-    SourceState.WARMING,
-    SourceState.QUEUED,
-    SourceState.READY,
+    WarmupState.COLD,
+    WarmupState.WARMING,
+    WarmupState.QUEUED,
+    WarmupState.READY,
 ]
 
-
-class TestSourceState:
-    @pytest.mark.parametrize(
-        ("state", "status"),
-        [
-            (SourceState.COLD, WarmupStatus.NOT_STARTED),
-            (SourceState.WARMING, WarmupStatus.RUNNING),
-            (SourceState.QUEUED, WarmupStatus.RUNNING),
-            (SourceState.READY, WarmupStatus.READY),
-            (SourceState.UNAVAILABLE, WarmupStatus.FAILED),
-        ],
-    )
-    def test_maps_onto_warmup_status(
-        self, state: SourceState, status: WarmupStatus
-    ) -> None:
-        assert state.warmup_status is status
-
-    def test_every_state_is_mapped(self) -> None:
-        for state in SourceState:
-            assert isinstance(state.warmup_status, WarmupStatus)
+_PREFLIGHT_ONLY = PreflightInput(tiers=frozenset({CheckTier.PREFLIGHT}))
+_WARMUP_ONLY = PreflightInput(tiers=frozenset({CheckTier.WARMUP}))
 
 
 class TestWarmingSource:
@@ -52,151 +36,195 @@ class TestWarmingSource:
         with pytest.raises(WarmingScriptEmptyError):
             WarmingSource([])
 
-    def test_a_cold_source_stays_cold_until_started(self) -> None:
+    def test_walks_the_script_one_step_per_probe(self) -> None:
         source = WarmingSource(_FULL_WARMUP)
-        for _ in range(3):
-            assert source.poll().status is WarmupStatus.NOT_STARTED
-        assert source.started is False
-        assert source.current is SourceState.COLD
+        assert [source.probe().state for _ in range(4)] == _FULL_WARMUP
+        assert source.reported == _FULL_WARMUP
+        assert source.probes == 4
 
-    def test_walks_the_script_one_state_per_call(self) -> None:
-        source = WarmingSource(_FULL_WARMUP)
-        assert source.start().message == "WARMING"
-        assert source.poll().message == "QUEUED"
-        assert source.poll().status is WarmupStatus.READY
-        assert source.reported == [
-            WarmupStatus.RUNNING,
-            WarmupStatus.RUNNING,
-            WarmupStatus.READY,
-        ]
-        assert source.calls == ["start", "poll", "poll"]
-        assert source.polls == 2
+    def test_a_state_step_reports_its_name_as_the_source_state(self) -> None:
+        observation = WarmingSource([WarmupState.QUEUED]).probe()
+        assert observation == WarmupObservation(
+            state=WarmupState.QUEUED, source_state="QUEUED"
+        )
 
-    def test_the_last_state_repeats(self) -> None:
-        source = WarmingSource([SourceState.COLD, SourceState.WARMING])
-        source.start()
+    def test_the_last_step_repeats(self) -> None:
+        source = WarmingSource([WarmupState.COLD, WarmupState.WARMING])
+        source.probe()
         for _ in range(5):
-            assert source.poll().status is WarmupStatus.RUNNING
+            assert source.probe().state is WarmupState.WARMING
+        assert source.current is WarmupState.WARMING
 
-    def test_a_second_start_reports_without_advancing(self) -> None:
+    def test_current_is_the_step_the_next_probe_answers(self) -> None:
         source = WarmingSource(_FULL_WARMUP)
-        assert source.start().message == "WARMING"
-        assert source.start().message == "WARMING"
-        assert source.current is SourceState.WARMING
+        assert source.current is WarmupState.COLD
+        source.probe()
+        assert source.current is WarmupState.WARMING
 
-    def test_unavailable_is_a_typed_failure(self) -> None:
-        source = WarmingSource(
-            [SourceState.COLD, SourceState.WARMING, SourceState.UNAVAILABLE]
+    def test_an_observation_step_is_returned_as_is(self) -> None:
+        scripted = WarmupObservation(
+            state=WarmupState.QUEUED,
+            source_state="RESUMING",
+            queued_queries=4,
+            next_poll_seconds=20,
         )
-        source.start()
-        state = source.poll()
-        assert state.status is WarmupStatus.FAILED
-        assert state.error is not None
-        assert state.error.code == "SOURCE_UNAVAILABLE"
-        assert state.message == state.error.message
-
-    def test_pending_checks_are_reported_until_ready(self) -> None:
-        source = WarmingSource(
-            [SourceState.COLD, SourceState.WARMING, SourceState.READY],
-            pending_checks=["catalogScan"],
-        )
-        assert source.poll().pending_checks == ["catalogScan"]
-        assert source.start().pending_checks == ["catalogScan"]
-        assert source.poll().pending_checks == []
+        source = WarmingSource([scripted])
+        assert source.probe() is scripted
+        assert source.reported == [WarmupState.QUEUED]
 
     def test_an_exception_step_is_raised_and_not_reported(self) -> None:
         source = WarmingSource(
-            [SourceState.COLD, RuntimeError("socket reset"), SourceState.READY]
+            [WarmupState.COLD, RuntimeError("socket reset"), WarmupState.READY]
         )
+        source.probe()
         with pytest.raises(RuntimeError, match="socket reset"):
-            source.start()
-        assert source.poll().status is WarmupStatus.READY
-        assert source.reported == [WarmupStatus.READY]
-        assert source.calls == ["start", "poll"]
-
-    def test_a_literal_warmup_state_is_returned_as_is(self) -> None:
-        literal = WarmupState(status=WarmupStatus.NOT_REQUIRED, message="always warm")
-        source = WarmingSource([SourceState.COLD, literal])
-        assert source.start() is literal
+            source.probe()
+        assert source.probe().state is WarmupState.READY
+        assert source.reported == [WarmupState.COLD, WarmupState.READY]
+        assert source.probes == 3
 
 
 class TestWarmingSourceHandler:
-    async def test_hooks_drive_the_source(self) -> None:
+    async def test_warmup_probes_the_source(self) -> None:
         handler = WarmingSourceHandler(WarmingSource(_FULL_WARMUP))
-        assert (await handler.warmup_state(PreflightInput())).status is (
-            WarmupStatus.NOT_STARTED
-        )
-        assert (await handler.warmup_start(PreflightInput())).status is (
-            WarmupStatus.RUNNING
-        )
-        assert handler.source.calls == ["poll", "start"]
+        assert (await handler.warmup(WarmupInput())).state is WarmupState.COLD
+        assert (await handler.warmup(WarmupInput())).state is WarmupState.WARMING
+        assert handler.calls == ["probe", "probe"]
+        assert handler.probes == 2
+        assert handler.source.probes == 2
 
-    async def test_answers_both_tiers_and_records_the_tier_asked(self) -> None:
-        handler = WarmingSourceHandler(WarmingSource([SourceState.READY]))
-        output = await handler.preflight_check(PreflightInput(tier=CheckTier.FAST))
-        await handler.preflight_check(PreflightInput())
+    async def test_every_tier_answers_both_rows(self) -> None:
+        handler = WarmingSourceHandler(WarmingSource([WarmupState.READY]))
+        output = await handler.preflight_check(PreflightInput())
         assert output.status is PreflightStatus.READY
         assert [(c.name, c.tier) for c in output.checks] == [
-            ("reachable", CheckTier.FAST),
+            ("reachable", CheckTier.PREFLIGHT),
             ("catalogScan", CheckTier.WARMUP),
         ]
-        assert handler.check_tiers == ["fast", "all"]
+        assert handler.check_tiers == ["preflight+warmup"]
+
+    async def test_answers_only_the_requested_tiers(self) -> None:
+        handler = WarmingSourceHandler(WarmingSource([WarmupState.READY]))
+        preflight = await handler.preflight_check(_PREFLIGHT_ONLY)
+        warmup = await handler.preflight_check(_WARMUP_ONLY)
+        assert [c.name for c in preflight.checks] == ["reachable"]
+        assert [c.name for c in warmup.checks] == ["catalogScan"]
+        assert handler.check_tiers == ["preflight", "warmup"]
+        assert handler.calls == ["check:preflight", "check:warmup"]
+        assert handler.probes == 0
 
     async def test_a_failing_warmup_check_is_typed_and_not_ready(self) -> None:
         handler = WarmingSourceHandler(
-            WarmingSource([SourceState.READY]), warmup_check_passes=False
+            WarmingSource([WarmupState.READY]),
+            warmup_check_passes=False,
+            warmup_check_message="no warehouse grant",
         )
-        output = await handler.preflight_check(PreflightInput(tier=CheckTier.WARMUP))
+        output = await handler.preflight_check(_WARMUP_ONLY)
         assert output.status is PreflightStatus.NOT_READY
-        failed = output.checks[1]
+        failed = output.checks[0]
         assert failed.passed is False
         assert failed.error is not None
         assert failed.error.category is FailureCategory.PRECONDITION
-        assert failed.resolved_message == "catalog scan found no schemas"
+        assert failed.resolved_message == "no warehouse grant"
 
-    async def test_a_fast_request_stays_ready_when_the_warmup_check_fails(
+    async def test_a_preflight_request_stays_ready_when_the_warmup_check_fails(
         self,
     ) -> None:
         handler = WarmingSourceHandler(
-            WarmingSource([SourceState.READY]), warmup_check_passes=False
+            WarmingSource([WarmupState.READY]), warmup_check_passes=False
         )
-        output = await handler.preflight_check(PreflightInput(tier=CheckTier.FAST))
+        output = await handler.preflight_check(_PREFLIGHT_ONLY)
         assert output.status is PreflightStatus.READY
+
+    async def test_ignores_tiers_answers_both_rows_whatever_was_asked(
+        self,
+    ) -> None:
+        handler = WarmingSourceHandler(
+            WarmingSource([WarmupState.READY]), ignores_tiers=True
+        )
+        output = await handler.preflight_check(_PREFLIGHT_ONLY)
+        assert {c.tier for c in output.checks} == ALL_CHECK_TIERS
+        assert handler.check_tiers == ["preflight"]
 
 
 class TestThroughTheHandlerService:
     """The UI's sequence against the real routes, with the source scripted."""
 
-    def test_warmup_tier_is_refused_until_the_source_is_ready(self) -> None:
-        source = WarmingSource(_FULL_WARMUP, pending_checks=["catalogScan"])
-        client = TestClient(
-            create_app_handler_service(
-                WarmingSourceHandler(source), app_name="test-app"
-            )
+    @staticmethod
+    def _client(handler: WarmingSourceHandler) -> TestClient:
+        return TestClient(create_app_handler_service(handler, app_name="test-app"))
+
+    def test_the_warmup_tier_is_pending_until_the_source_is_ready(self) -> None:
+        handler = WarmingSourceHandler(
+            WarmingSource([WarmupState.COLD, WarmupState.WARMING, WarmupState.READY])
         )
-        body = {"credentials": []}
+        client = self._client(handler)
+        body = {"credentials": [], "tiers": ["preflight", "warmup"]}
 
-        started = client.post("/workflows/v1/warmup", json=body)
-        assert started.status_code == 202
-        assert started.json()["data"]["message"] == "WARMING"
+        probed = client.post("/workflows/v1/warmup", json={"credentials": []})
+        assert probed.json()["data"]["state"] == "cold"
 
-        # /check consults warmup_state, which moves the script on: QUEUED.
-        early = client.post("/workflows/v1/check", json={**body, "tier": "warmup"})
-        assert early.status_code == 412
-        assert early.json()["preflight"]["warmup"]["pending_checks"] == ["catalogScan"]
+        early = client.post("/workflows/v1/check", json=body).json()
+        assert early["preflight"]["status"] == "pending"
+        assert early["preflight"]["warmup"]["source_state"] == "WARMING"
+        assert [c["name"] for c in early["preflight"]["checks"]] == ["reachable"]
 
-        ready = client.post("/workflows/v1/check", json={**body, "tier": "warmup"})
-        assert ready.status_code == 200
-        names = [c["name"] for c in ready.json()["preflight"]["checks"]]
-        assert names == ["catalogScan"]
-        assert source.calls == ["start", "poll", "poll"]
+        ready = client.post("/workflows/v1/check", json=body).json()
+        assert ready["preflight"]["status"] == "ready"
+        assert [c["name"] for c in ready["preflight"]["checks"]] == [
+            "reachable",
+            "catalogScan",
+        ]
+        assert handler.calls == [
+            "probe",
+            "probe",
+            "check:preflight",
+            "probe",
+            "check:preflight+warmup",
+        ]
+
+    def test_a_preflight_only_check_never_probes(self) -> None:
+        handler = WarmingSourceHandler(WarmingSource([WarmupState.COLD]))
+        body = (
+            self._client(handler)
+            .post(
+                "/workflows/v1/check",
+                json={"credentials": [], "tiers": ["preflight"]},
+            )
+            .json()
+        )
+        assert body["preflight"]["status"] == "pending"
+        assert body["preflight"]["warmup"] is None
+        assert handler.calls == ["check:preflight"]
+
+    def test_an_unavailable_source_is_not_ready(self) -> None:
+        handler = WarmingSourceHandler(
+            WarmingSource([WarmupState.WARMING, WarmupState.UNAVAILABLE])
+        )
+        client = self._client(handler)
+        client.post("/workflows/v1/warmup", json={"credentials": []})
+        body = client.post(
+            "/workflows/v1/check", json={"credentials": [], "tiers": ["warmup"]}
+        ).json()
+        assert body["preflight"]["status"] == "not_ready"
+        assert body["preflight"]["warmup"]["state"] == "unavailable"
+        assert handler.check_tiers == []
+
+    def test_a_handler_ignoring_tiers_is_caught_by_the_post_call_check(
+        self,
+    ) -> None:
+        handler = WarmingSourceHandler(
+            WarmingSource([WarmupState.READY]), ignores_tiers=True
+        )
+        response = self._client(handler).post(
+            "/workflows/v1/check", json={"credentials": [], "tiers": ["preflight"]}
+        )
+        assert response.status_code == 500
+        assert response.json()["preflight"]["status"] == "not_ready"
 
     def test_a_typed_raise_from_the_source_is_its_http_status(self) -> None:
-        source = WarmingSource([SourceState.COLD, AuthError(message="token expired")])
-        client = TestClient(
-            create_app_handler_service(
-                WarmingSourceHandler(source), app_name="test-app"
-            )
+        source = WarmingSource([AuthError(message="token expired")])
+        response = self._client(WarmingSourceHandler(source)).post(
+            "/workflows/v1/warmup", json={"credentials": []}
         )
-        response = client.post("/workflows/v1/warmup", json={"credentials": []})
         assert response.status_code == 401

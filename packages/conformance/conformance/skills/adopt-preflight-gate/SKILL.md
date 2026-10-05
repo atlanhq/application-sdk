@@ -255,23 +255,26 @@ and `LogAttributes` is a `Map`, so `LogAttributes['outcome']` works directly whi
 
 | attribute | meaning |
 | --- | --- |
-| `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped` |
+| `outcome` | `proceeded` / `would_block` / `blocked` / `no_verdict` / `skipped`, and `warmup_exhausted` when the source was still warming at the app's warmup ceiling |
 | `reason` | the verdict status on a clean proceed; the first failed check's error code on a proceed past a failed check (a `PARTIAL` from a 429 reads `RATE_LIMITED_API`, not `partial`); the primary code on a block; the underlying fault on a `no_verdict` |
 | `gate_mode` | resolved posture, on every row including the workflow-emitted ones |
 | `gate_classification` | `verdict` / `source_unverifiable` / `frame_lost` / `gate_broken` / `deprecated_fail_open` (a raised transient in the pre-3.35 fail-open set, proceeds until 3.40.0) / `not_run` (skipped) |
 | `gate_attempt` | the attempt that ran, on every row; `0` only when none did (skipped, or no worker ever started it) |
 | `gate_duration_ms` | **SDK-measured** elapsed; the only number that can size a budget |
 | `gate_timeout_seconds` | the budget in force, so headroom needs no join |
-| `check_matrix` | per-check name/passed/error_code/duration_ms, plus `tier` on a check whose handler set one; `[]` where no check ran |
-| `gate_tier` | warmup apps only: `fast` / `warmup`, which dispatch wrote the row |
-| `warmup_outcome` | warmup apps only: `warming` on the `fast` row; on the `warmup` row `ready` / `not_required` / `failed` / `exhausted` / `broken` |
-| `warmup_duration_ms` / `warmup_transitions` | warmup apps, once the wait ended: workflow-clock wait, and the JSON list of observed statuses with offsets |
+| `check_matrix` | per-check name/passed/error_code/duration_ms, plus `tier` on a `warmup` check (a `preflight` check, the default, has none); `[]` where no check ran |
+| `gate_tier` | runs that waited on a warmup only: `preflight` / `warmup`, which dispatch wrote the row |
+| `warmup_outcome` | runs that waited on a warmup only: `warming` on the `preflight` row (`unavailable` when the first probe said so); on the `warmup` row `ready` / `unavailable` / `failed` / `exhausted` / `broken` |
+| `warmup_duration_ms` / `warmup_transitions` | runs that waited on a warmup, once the wait ended: workflow-clock wait, and the JSON list of observed states with offsets (`{"state", "at_ms"}`) |
 
-**Splitting `warming` out of `no_verdict`.** A warmup app's run whose newest row
-is the `fast` one (`warmup_outcome = 'warming'`) ended while the source was still
-getting ready — cancelled, or its worker lost mid-wait. Count it in its own
-`warming` bucket, not in `no_verdict`; a `no_verdict` row with
-`warmup_outcome = 'broken'` is the gate's own warmup plumbing and stays there.
+**Splitting `warming` out of `no_verdict`.** A run whose newest row is the
+`preflight` one (`warmup_outcome = 'warming'`) ended while the source was still
+getting ready — cancelled, or its worker lost mid-wait. Count it, and every
+`warmup_exhausted` row, in their own `warming` bucket, not in `no_verdict`; a
+`no_verdict` row with `warmup_outcome = 'broken'` is the gate's own warmup
+plumbing and stays there. A `warmup_exhausted` or warmup `unavailable` row
+stamps `gate_mode` with the app's `preflight_warmup_mode`, the posture that
+decided it, not with `preflight_gate_mode`.
 
 Every key above the `gate_tier` row is present on **every** outcome, the workflow-emitted rows included, so
 parse unconditionally rather than branching on field presence — a branch

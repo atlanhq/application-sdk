@@ -609,21 +609,22 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
-        build_preflight_warmup_activities,
+        build_preflight_warmup_activity,
         gate_attempts,
         gate_budget_seconds,
-        gate_warmup_ceiling_seconds,
-        gate_warmup_poll_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
-        preflight_warmup_start_activity_name,
-        preflight_warmup_state_activity_name,
+        preflight_warmup_activity_name,
         resolve_gate_mode,
     )
     from application_sdk.execution._temporal.preflight_transport import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
         InProcessPreflightTransport,
     )
-    from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
+    from application_sdk.handler._warmup import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        warmup_ceiling_seconds,
+        warmup_probe_timeout_seconds,
+    )
+    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
@@ -645,24 +646,16 @@ def create_worker(
     ]
     name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
 
-    # Apps that declare a warmup (FND-3039) also get the two warmup activities;
-    # every other app gets none, so its registered set is exactly as before.
-    warmup_app_names = [
-        name
-        for name in gate_app_names
-        if gate_warmup_ceiling_seconds(
-            getattr(name_to_app_cls.get(name), "preflight_warmup_ceiling_seconds", None)
-        )[0]
-        is not None
-    ]
+    # Every app gets the warmup poll activity (FND-3039): whether an app has a
+    # warmup is its handler's answer at run time (Handler.warmup's default
+    # reports READY), not a declaration, so the name is reserved for all and
+    # dispatched only when a run's first probe was not READY.
     gate_activity_names = [
-        preflight_gate_activity_name(name) for name in gate_app_names
-    ] + [
         activity_name
-        for name in warmup_app_names
+        for name in gate_app_names
         for activity_name in (
-            preflight_warmup_start_activity_name(name),
-            preflight_warmup_state_activity_name(name),
+            preflight_gate_activity_name(name),
+            preflight_warmup_activity_name(name),
         )
     ]
 
@@ -685,8 +678,8 @@ def create_worker(
                 "reserves for the injected preflight gate. Rename the offending @task "
                 "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
                 "fold a readiness check into Handler.preflight_check; a warmup step into "
-                "Handler.warmup_start / warmup_state). A worker cannot register two "
-                "activities with the same name."
+                "Handler.warmup). A worker cannot register two activities with the "
+                "same name."
             ),
             field="task_name",
         )
@@ -769,6 +762,24 @@ def create_worker(
                 name,
                 budget_seconds,
             )
+        ceiling, ceiling_complaint = warmup_ceiling_seconds(
+            getattr(app_cls, "preflight_warmup_ceiling_seconds", None)
+        )
+        if ceiling_complaint:
+            logger.warning(
+                "preflight_warmup_ceiling_seconds: %s; using %ds",
+                ceiling_complaint,
+                ceiling,
+            )
+        probe_timeout, probe_complaint = warmup_probe_timeout_seconds(
+            getattr(app_cls, "preflight_warmup_probe_timeout_seconds", None), ceiling
+        )
+        if probe_complaint:
+            logger.warning(
+                "preflight_warmup_probe_timeout_seconds: %s; using %ds",
+                probe_complaint,
+                probe_timeout,
+            )
         gate_activities.append(
             build_preflight_gate_activity(
                 InProcessPreflightTransport(gate_handler),
@@ -777,38 +788,16 @@ def create_worker(
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),
+                warmup_probe_timeout_seconds=probe_timeout,
             )
         )
-        if name in warmup_app_names:
-            ceiling_complaint = gate_warmup_ceiling_seconds(
-                getattr(app_cls, "preflight_warmup_ceiling_seconds", None)
-            )[1]
-            if ceiling_complaint:
-                logger.warning(
-                    "preflight_warmup_ceiling_seconds: %s; clamped", ceiling_complaint
-                )
-            poll_complaint = gate_warmup_poll_seconds(
-                getattr(app_cls, "preflight_warmup_poll_seconds", None)
-            )[1]
-            if poll_complaint:
-                logger.warning(
-                    "preflight_warmup_poll_seconds: %s; clamped", poll_complaint
-                )
-            if type(gate_handler).warmup_state is Handler.warmup_state:
-                # Not fatal: the default reports not_required, so the gate runs
-                # the WARMUP checks straight away. But a declared ceiling with no
-                # hook is almost always a half-finished adoption.
-                logger.warning(
-                    "App %r declares preflight_warmup_ceiling_seconds but its "
-                    "handler does not override warmup_state; the gate will run "
-                    "the warmup-tier checks without waiting",
-                    name,
-                )
-            gate_activities.extend(
-                build_preflight_warmup_activities(
-                    InProcessPreflightTransport(gate_handler), name
-                )
+        gate_activities.append(
+            build_preflight_warmup_activity(
+                InProcessPreflightTransport(gate_handler),
+                name,
+                probe_timeout_seconds=probe_timeout,
             )
+        )
     task_activities = [*task_activities, *gate_activities]
 
     # SDR (the control-plane test_auth/preflight_check/fetch_metadata workflows)

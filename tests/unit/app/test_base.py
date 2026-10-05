@@ -46,6 +46,7 @@ from application_sdk.app.registry import AppNotFoundError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
+from application_sdk.handler.contracts import PreflightGateMode
 
 # =============================================================================
 # Test fixtures
@@ -1554,8 +1555,8 @@ class TestGenerateWorkflowClass:
     ) -> None:
         """When the gate returns (READY, PARTIAL, soft would_block, fail-open),
         extraction runs once, and the gate is handed the app's declared
-        budget, attempts, mode and warmup ceiling/poll (undeclared ceiling:
-        ``None``, no warmup) — the same ClassVars the worker reads."""
+        budget, attempts, mode and warmup ceiling / probe timeout / posture
+        (the SDK defaults here) — the same ClassVars the worker reads."""
         GatedApp, wf_cls = self._counting_gate_app()
         gate = mock.AsyncMock(return_value=None)
 
@@ -1574,7 +1575,14 @@ class TestGenerateWorkflowClass:
         assert isinstance(out, _BLDXOutput) and out.result == "extracted"
         assert GatedApp.calls == 1
         gate.assert_awaited_once()
-        assert gate.await_args.args[3:] == (42, 2, "hard", None, 15)
+        assert gate.await_args.args[3:] == (
+            42,
+            2,
+            "hard",
+            600,
+            10,
+            PreflightGateMode.SOFT,
+        )
 
 
 # =============================================================================

@@ -9,8 +9,8 @@ Holds the row vocabulary (:class:`PreflightSurface`, :class:`PreflightRowOutcome
 the ``failure.*`` keys), the attribution ladder that turns a verdict into the one
 :class:`~application_sdk.errors.wire.FailureDetails` a row names
 (:func:`_primary_failure`, :func:`_proceeded_failure`, :func:`_failure_fields`),
-the interactive-surface emitters, and the tier filter ``/check`` and the gate
-share. Nothing here touches Temporal.
+the interactive-surface emitters, and the post-call tier check ``/check`` and
+the gate share. Nothing here touches Temporal.
 """
 
 from __future__ import annotations
@@ -88,7 +88,7 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
     the aggregate was NOT_READY; a failed check on a ``proceeded`` run is
     advisory by the handler's own choice).
 
-    ``tier`` appears only on a check whose handler set one, the same rule
+    ``tier`` appears only on a ``WARMUP`` check, the same rule
     :meth:`PreflightCheck.to_wire` follows, so an app that never tiers its
     checks emits exactly the matrix it did before tiers existed.
     """
@@ -107,7 +107,7 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
             if math.isfinite(check.duration_ms) and check.duration_ms >= 0
             else -1.0,
         }
-        if check.tier is not None:
+        if check.tier is not CheckTier.PREFLIGHT:
             row["tier"] = check.tier.value
         rows.append(row)
     return orjson.dumps(rows).decode()
@@ -289,6 +289,11 @@ class PreflightRowOutcome(SerializableEnum):
     SKIPPED = "skipped"
     CRASHED = "crashed"
     CLIENT_FAULT = "client_fault"
+    WARMUP_EXHAUSTED = "warmup_exhausted"
+    """Gate row only: the source was still warming at the app's warmup ceiling,
+    so the ``WARMUP``-tier checks never ran. Whether the run stopped is the
+    warmup posture's call, stamped as the row's ``gate_mode``. Connector-pulse
+    buckets it as "warming", apart from ``no_verdict``."""
 
 
 class PreflightSurface(SerializableEnum):
@@ -541,54 +546,16 @@ def emit_preflight_crash_outcome(
     )
 
 
-def filter_checks_to_tier(result: PreflightOutput, tier: CheckTier) -> PreflightOutput:
-    """``result`` keeping only the checks in ``tier``.
+def rows_outside_tiers(
+    result: PreflightOutput, tiers: frozenset[CheckTier]
+) -> list[str]:
+    """Names of the checks *result* returned outside the requested *tiers*.
 
-    One rule for ``/check`` and the gate: a handler that ignores
-    ``PreflightInput.tier`` still answers a tiered request with the right rows,
-    and a ``WARMUP`` probe it ran anyway cannot decide the ``FAST`` dispatch.
-
-    So a ``NOT_READY`` aggregate is re-derived when the reason for it was a
-    dropped check. That is the case when the aggregate ``error`` describes a
-    dropped failed check (same ``code`` and ``message``), or when there is no
-    aggregate ``error`` and the ``message`` is empty or is a dropped failed
-    check's own line. The verdict then follows the kept rows: still
-    ``NOT_READY``, attributed to them, if any kept check failed, else
-    ``READY``. An aggregate reason that matches no dropped check is the
-    handler's own verdict about the source, so it stands. ``READY`` and
-    ``PARTIAL`` are left alone.
+    The post-call tier check ``/check`` and the gate share. Handlers do not
+    reliably filter (none of the canonical apps reads ``checks_to_run``), so the
+    SDK checks what came back instead of trusting it. A non-empty answer means
+    the handler ran a check it was told not to (a ``WARMUP`` probe against
+    compute that is not ready), so its verdict cannot be read as one about the
+    requested tiers: the caller treats it as no verdict, never as a silent drop.
     """
-    kept = [check for check in result.checks if check.effective_tier is tier]
-    if len(kept) == len(result.checks):
-        return result
-    update: dict[str, object] = {"checks": kept}
-    dropped_failed = [
-        c for c in result.checks if c.effective_tier is not tier and not c.passed
-    ]
-    if result.status is PreflightStatus.NOT_READY and _reason_is_among(
-        result, dropped_failed
-    ):
-        kept_failed = any(not c.passed for c in kept)
-        update.update(
-            status=PreflightStatus.NOT_READY if kept_failed else PreflightStatus.READY,
-            error=None,
-            message="",
-        )
-    return result.model_copy(update=update)
-
-
-def _reason_is_among(result: PreflightOutput, checks: list[PreflightCheck]) -> bool:
-    """Whether ``result``'s aggregate reason is one of ``checks``' failures."""
-    if not checks:
-        return False
-    if result.error is not None:
-        return any(
-            c.error is not None
-            and c.error.code == result.error.code
-            and c.error.message == result.error.message
-            for c in checks
-        )
-    return not result.message or any(
-        result.message in (c.message, c.error.message if c.error else None)
-        for c in checks
-    )
+    return [check.name for check in result.checks if check.tier not in tiers]

@@ -66,15 +66,16 @@ class PreflightInput(BaseModel):
     credentials_by_name: dict[str, list[HandlerCredential]] = {}  # multi-credential apps: per named ref
     connection_config: dict[str, Any] = {}     # host, port, database, etc.
     checks_to_run: list[str] = []              # specific checks (empty = all)
-    tier: CheckTier | None = None              # run one cost tier (None = all; the gate sends None unless the app declares a warmup)
+    tiers: frozenset[CheckTier] = ALL_CHECK_TIERS  # run only these tiers; skip checks outside them (default = every tier)
     timeout_seconds: int = 60                  # on the gate path the SDK stamps the real per-attempt budget (~25s); advisory on HTTP/SDR
 
 class PreflightOutput(BaseModel):
-    status: PreflightStatus           # READY or NOT_READY; PARTIAL is deprecated (removal anchored at v3.40.0)
+    status: PreflightStatus           # READY or NOT_READY; PARTIAL is deprecated (removal anchored at v3.40.0); PENDING is set by the SDK, never by a handler
     checks: list[PreflightCheck] = [] # individual check results
     message: str = ""                 # human-readable summary (used when error is unset)
     error: FailureDetails | None = None  # typed aggregate failure; wins over message
     total_duration_ms: float = 0.0    # total time for all checks
+    warmup: WarmupObservation | None = None  # set by the SDK on a PENDING /check verdict; a handler leaves it unset
 ```
 
 `PreflightOutput.error` is additive (`None` by default). Handlers that only set `message` keep working. When `error` is set, `resolved_message` prefers it over `message` — the same precedence `PreflightCheck.error` already uses. Pass a `FailureDetails` (or a bare `AppError`, which is coerced).
@@ -155,62 +156,73 @@ told apart from "nothing to resolve". Tracked in
 
 #### Check tiers and warmup
 
-Some checks are too expensive to run every time the user clicks **Test**: resuming a suspended warehouse, indexing a large catalog. An app can mark those checks `tier=CheckTier.WARMUP` and implement two optional `Handler` methods:
+Some checks need source compute to answer: a query against a suspended warehouse, a probe that waits for a job-queue slot. Running them on every **Test** click makes every click cost compute. An app marks those checks `tier=CheckTier.WARMUP` and overrides one optional `Handler` method, `warmup`:
 
 ```python
 class MyHandler(Handler):
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        self._resume_task = self._resume_task or asyncio.create_task(resume(input))
-        return WarmupState(status=WarmupStatus.RUNNING, pending_checks=["catalogScan"])
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        ...  # READY once the resume has finished; FAILED with error=... if it raised
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        # SELECT 1 also resumes a suspended warehouse, so the probe pushes the
+        # warmup forward and reports it in one call.
+        if await self.client.probe(input, timeout=input.probe_timeout_seconds):
+            return WarmupObservation(state=WarmupState.READY)
+        warehouse = await self.client.warehouse_status(input)
+        return WarmupObservation(
+            state=WarmupState.QUEUED if warehouse.queued else WarmupState.WARMING,
+            source_state=warehouse.state,  # e.g. "RESUMING"
+            queued_queries=warehouse.queued,
+        )
 ```
 
-Both default to `WarmupStatus.NOT_REQUIRED`, so an app that does not override them behaves exactly as before. A check with no `tier` is `FAST`, and an untiered check is serialised without a `tier` key, so an app that never sets a tier emits byte-identical `/check` output.
+The default `warmup` answers `READY`, so an app that does not override it behaves exactly as before. A check's tier defaults to `CheckTier.PREFLIGHT`, and a `PREFLIGHT` check is serialised without a `tier` key, so an app that never sets a tier emits byte-identical `/check` output.
 
 | Route | Body | Answer |
 | --- | --- | --- |
-| `POST /workflows/v1/warmup` | same as `/check` | `warmup_start`'s `WarmupState` under `data`; `202` while `not_started` / `running`, else `200`; `success` is `false` only for `failed` |
-| `POST /workflows/v1/warmup/state` | same as `/check` | `warmup_state`'s `WarmupState`, same status codes |
-| `POST /workflows/v1/check` with `tier` | `/check` body plus `"tier": "fast"` or `"warmup"` | only the checks in that tier; when the app has a warmup, its state under `preflight.warmup` (including `pending_checks`) |
+| `POST /workflows/v1/warmup` | same as `/check` | one `warmup` probe; its `WarmupObservation` plus the app's `ceiling_seconds` under `data`; `success` is `false` only for `unavailable` |
+| `POST /workflows/v1/check` with `tiers` | `/check` body plus `"tiers": ["preflight"]`, `["warmup"]` or both | only the checks in those tiers; `pending` while the `warmup` tier could not run, with the observation under `preflight.warmup` |
 
-A `tier: "warmup"` request whose warmup is not `ready` does not run the handler. It answers `412` with the same unverified verdict a raise produces (`not_ready` plus a `preflightVerdict` row carrying a typed `PreconditionError` that names the actual state) and the state under `preflight.warmup`. A request with no `tier` never consults the warmup. That covers every caller written before tiers, and the injected gate for an app that declares no warmup.
+A request with no `tiers` runs every check and never calls `warmup`. That covers every caller written before tiers. A request whose `tiers` includes `warmup` probes once before any check runs: on `ready` the handler runs every requested tier, otherwise it runs the rest and the verdict is `pending`, or `not_ready` when the probe reported `unavailable`. A request for `["preflight"]` alone never probes, so it never starts compute. See [`POST /workflows/v1/check`](../reference/http-api.md#post-workflowsv1check) for the full rules.
 
-The injected gate uses the same two hooks once an app declares `App.preflight_warmup_ceiling_seconds`: it fires `warmup_start` at gate start alongside a `tier=fast` check, polls `warmup_state` on durable timers, and runs the `tier=warmup` checks once it reports `ready`. A typed AUTH, PERMISSION or NOT_FOUND raise from either hook ends the gate's wait at once; any other raise is polled again. See [Waiting for a warmup](apps.md#waiting-for-a-warmup-opt-in).
+The SDK checks every returned row's tier against the tiers the handler was asked for. A row outside them means the handler ran a check it was told not to, so it gets no verdict rather than a silent drop: `/check` answers `500` with an unverifiable `INTERNAL` verdict, and the gate records `no_verdict` / `gate_broken`. Read `input.tiers` and skip the checks outside it.
 
-`warmup_start` must return promptly and be idempotent. The UI polls `warmup/state`, so start the work and report it rather than awaiting it. The SDK also drops any returned row outside the requested tier, so a handler that ignores `input.tier` still answers with the right rows. It just runs slower.
+The injected gate probes `warmup` at gate start for every app. `READY` runs every check in the gate's one dispatch, as before. Otherwise the gate runs the `PREFLIGHT` tier, polls `warmup` on durable timers, and runs the `WARMUP` tier once it reports `ready`. A typed AUTH, PERMISSION or NOT_FOUND raise from `warmup` ends the gate's wait at once; any other raise, or a probe that overruns its timeout, reads as `warming` and is polled again. See [Waiting for a warmup](apps.md#waiting-for-a-warmup-opt-in).
 
 ##### The tier model
 
 | Tier | Runs | When the gate runs it | Typical checks |
 | --- | --- | --- | --- |
-| `FAST` (or no tier) | on every `/check`, with no preparation | at gate start | DNS / TCP reachability, authentication, a grant read from a system catalog, server version |
-| `WARMUP` | only once the warmup reports `ready` | after the warmup wait, up to `preflight_warmup_ceiling_seconds` | a query that needs a running warehouse, a scan of a catalog that must be indexed first, a job that must leave a queue |
+| `PREFLIGHT` (the default) | on every `/check`, with no preparation | at gate start | DNS / TCP reachability, authentication, a grant read from a system catalog, server version |
+| `WARMUP` | only once `warmup` reports `ready` | at gate start when the first probe answers `ready`; otherwise after the warmup wait, up to `preflight_warmup_ceiling_seconds` | a query that needs a running warehouse, a scan of a catalog that must be indexed first, a job that must leave a queue |
 
-A check is `FAST` unless you mark it. Leave it that way unless you have a reason to change it. The cost of a wrong `WARMUP` mark is real: the check stops running on the user's first **Test**, and the gate only reaches it after a wait.
+A check is `PREFLIGHT` unless you mark it. Leave it that way unless you have a reason to change it. The cost of a wrong `WARMUP` mark is real: the check stops running on the user's first **Test**, and the gate only reaches it after a wait.
 
 ##### Does this check need source compute?
 
 Ask one question per check: **can the source answer it without starting, resuming, or queueing for compute it bills for?**
 
-- **Yes → `FAST`.** The source answers from its control plane or metadata service: login, a token introspection, `SHOW GRANTS`, an `information_schema` read the service handles without a running warehouse, a REST listing, the reachability of an endpoint. These answer in seconds whether or not the source is warm.
+- **Yes → `PREFLIGHT`.** The source answers from its control plane or metadata service: login, a token introspection, `SHOW GRANTS`, an `information_schema` read the service handles without a running warehouse, a REST listing, the reachability of an endpoint. These answer in seconds whether or not the source is warm.
 - **No → `WARMUP`.** The answer only exists once compute is running: anything that executes on a suspended warehouse or cluster (`SELECT` against a table, even `SELECT 1` on engines that resume for it), a probe that has to wait for a slot in a job queue, a scan that needs an index built first.
 - **Not sure? Measure it.** Run the check against a source you have just suspended. If it either fails or takes far longer than it does against a warm source, it needs compute. A check that is only slow because it fans out over many schemas is a sizing problem, not a warmup. Bound it (see [Sizing the check budget](apps.md#sizing-the-check-budget)) rather than moving it to `WARMUP`.
 
 Two rules follow from this:
 
-1. **Never make the auth check `WARMUP`.** Bad credentials must fail on the first click and at gate start, not after a ten-minute resume. If the source can only authenticate by running a query, split the check: authenticate against the control plane in `FAST` and keep the query in `WARMUP`.
-2. **Do not resume the source from a `FAST` check.** A `FAST` check that quietly wakes the warehouse makes every **Test** click cost compute, and that cost is what the tiers exist to avoid. The resume belongs in `warmup_start`.
+1. **Never make the auth check `WARMUP`.** Bad credentials must fail on the first click and at gate start, not after a ten-minute resume. If the source can only authenticate by running a query, split the check: authenticate against the control plane in `PREFLIGHT` and keep the query in `WARMUP`.
+2. **Do not resume the source from a `PREFLIGHT` check.** A `PREFLIGHT` check that quietly wakes the warehouse makes every **Test** click cost compute, and that cost is what the tiers exist to avoid. The resume belongs in `warmup`.
 
-##### The warmup methods
+##### The warmup probe
 
-| Method | Called by | Must | Must not |
-| --- | --- | --- | --- |
-| `warmup_start(input)` | `POST /workflows/v1/warmup`, and the gate once at gate start | start the resume (an asyncio task, a resume API call) and return its state at once; report the running warmup on a second call | await the resume, or start a second one |
-| `warmup_state(input)` | `POST /workflows/v1/warmup/state`, any `/check` that names a `tier`, and every gate poll | report where the warmup is, with `pending_checks` until `ready` | start a warmup |
+`warmup` is stateless and idempotent. Each call both pushes the warmup forward and reports where it is, and the SDK holds no warmup state between calls: it calls `warmup` once per `/warmup` request, once per `/check` that asks for the `warmup` tier, and once per gate poll. A query-probe app submits its probe query, waits up to `input.probe_timeout_seconds` (`App.preflight_warmup_probe_timeout_seconds`, default 10s), and reports `ready` if it answered, `warming` or `queued` if not. The SDK cancels a probe that overruns the timeout and reads it as `warming`. Whether to cancel a probe query still pending at the timeout is the app's call; each poll submits again, so the default guidance is to cancel.
 
-Return `WarmupStatus` values honestly. `not_started` and `running` keep the caller waiting, `ready` releases the `WARMUP` checks, and `not_required` says there is nothing to wait for (a source that is already warm may answer it). `failed` ends the wait, and it should carry `error=` with a typed leaf: `SourceUnavailableError` for a source that will not come back, or `AuthError` / `AppPermissionDeniedError` when the resume itself was refused. Put a short progress line in `message`, such as `RESUMING` or `QUEUED (3 ahead)`. The gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait.
+| `WarmupState` | Meaning | What the caller does |
+| --- | --- | --- |
+| `cold` | compute is suspended or not started | waits and probes again |
+| `warming` | compute is starting | waits and probes again |
+| `queued` | compute is up, but statements wait for a slot | waits and probes again |
+| `ready` | the `WARMUP` checks can run | runs them |
+| `unavailable` | the source will not get ready on its own | stops waiting; the failure is attributed to the source |
+
+Raise a typed `AuthError`, `AppPermissionDeniedError` or `NotFoundError` for a failure no amount of waiting fixes. Return `unavailable` for a source that will not come back, such as a dropped or disabled warehouse. Never use privileges beyond what the app's checks already verify.
+
+The other fields are for the user and the poll cadence; nothing branches on them. `source_state` is the source's own label (`RESUMING`): the gate puts it on the run's health line and in the exhausted-ceiling error, so it is what the user reads while they wait. `queued_queries` is how many statements are waiting for a slot, a count rather than a duration. `next_poll_seconds` is the source's own suggestion for when to ask again; the gate honours it with a 5s floor and never polls past the ceiling, and without it backs off from 5s, doubling to 30s.
 
 ### MetadataInput / MetadataOutput
 
@@ -384,8 +396,7 @@ from application_sdk.handler.context import HandlerContext
 async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
 async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
 async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
-async def warmup_start(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...  # optional
-async def warmup_state(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...  # optional
+async def warmup(input: WarmupInput, ctx: HandlerContext) -> WarmupObservation: ...  # optional
 ```
 
 These are **module-level `async` functions** taking `(input, ctx)` — not methods on the `Handler` class.
@@ -407,11 +418,11 @@ Imports run **worker → handler only**. The worker may import and call the hand
 
 `tests/unit/handler/test_import_boundary.py` enforces this. It imports `application_sdk.handler`, `.contracts`, `.base`, `.service` and `application_sdk._runtime.offload` in a fresh interpreter and lists any worker module that loaded. When it fails, move the shared piece down into a neutral module (`handler/`, `contracts`, `errors`, `common`, `_runtime`) and have the worker import it from there. Don't import worker code lazily from the handler: that hides the edge from the test without removing it.
 
-- The `/check` route's outcome-row helpers (`PreflightSurface`, `emit_preflight_check_outcome`, `emit_preflight_crash_outcome`, `filter_checks_to_tier`) live in `application_sdk/handler/_preflight_outcome.py`. The gate and SDR import them from there.
+- The `/check` route's outcome-row helpers (`PreflightSurface`, `emit_preflight_check_outcome`, `emit_preflight_crash_outcome`, `rows_outside_tiers`) live in `application_sdk/handler/_preflight_outcome.py`. The gate and SDR import them from there.
 - `application_sdk.handler` serves `create_app_handler_service` and `run_app_handler_service` lazily, so importing a contract never loads the HTTP server.
 - **Temporary allowance:** `temporalio.client` and everything it imports (which includes `temporalio.activity`) are allowed, because the `/workflows/v1/start` route starts workflows with it. That route is expected to go away in the shared-server migration. Delete the allowance in the test together with the route.
 
-The gate reaches the handler through one seam, `PreflightTransport` (`application_sdk/execution/_temporal/preflight_transport.py`). It has three methods, `preflight_check`, `warmup_start` and `warmup_state`, each taking a `PreflightInput` and returning a `PreflightOutput` or a `WarmupState`. The worker uses `InProcessPreflightTransport(handler)`. Those contracts already serialise as JSON on the `/check` and `/warmup` routes, so an HTTP transport can implement the same protocol later without changing the gate's budgets, cancellation or failure attribution.
+The gate reaches the handler through one seam, `PreflightTransport` (`application_sdk/execution/_temporal/preflight_transport.py`). It has two methods: `preflight_check`, taking a `PreflightInput` and returning a `PreflightOutput`, and `warmup`, taking a `WarmupInput` and returning a `WarmupObservation`. The worker uses `InProcessPreflightTransport(handler)`. Those contracts already serialise as JSON on the `/check` and `/warmup` routes, so an HTTP transport can implement the same protocol later without changing the gate's budgets, cancellation or failure attribution.
 
 ## Testing Handlers
 
@@ -439,29 +450,27 @@ async def test_auth_success(infra):
 
 ### Testing a warmup without a warehouse
 
-`WarmingSource` plays a source that warms up from a script, so warmup tests need no real warehouse and no wait. The script is the sequence of states the source passes through: `COLD`, `WARMING`, `QUEUED`, `READY` or `UNAVAILABLE`, a literal `WarmupState`, or an exception to raise. The source stays on its first state until `start()` is called. `start()` moves one state on, and only once. Each `poll()` after that moves one more, and the last state repeats when the script runs out.
+`WarmingSource` plays a source that warms up from a script, so warmup tests need no real warehouse and no wait. The script is the sequence of answers the source gives, one per probe. Each step is a `WarmupState`, a full `WarmupObservation` (to script a `source_state`, a queue depth or a poll hint), or an exception to raise. Each `probe()` answers the current step and moves one step on, and the last step repeats when the script runs out, so a script that ends in `WARMING` warms forever and reaches the gate's ceiling. `probes` counts the calls and `reported` lists the state each one returned.
 
-Back your source-client fake with it, so the handler's real `warmup_start` / `warmup_state` run against the script. `start()` and `poll()` are synchronous, so wrap them for an async client:
+Back your source-client fake with it, so the handler's real `warmup` runs against the script. `probe()` is synchronous and takes no arguments, so wrap it for an async client:
 
 ```python
 from unittest.mock import AsyncMock
 
-from application_sdk.handler.contracts import PreflightInput, WarmupStatus
-from application_sdk.testing import SourceState, WarmingSource
+from application_sdk.handler.contracts import WarmupInput, WarmupState
+from application_sdk.testing import WarmingSource
 
 async def test_warmup_reports_queued_then_ready(fake_client):
-    source = WarmingSource(
-        [SourceState.COLD, SourceState.WARMING, SourceState.QUEUED, SourceState.READY]
-    )
-    fake_client.resume_warehouse = AsyncMock(side_effect=source.start)
-    fake_client.warehouse_state = AsyncMock(side_effect=source.poll)
+    source = WarmingSource([WarmupState.COLD, WarmupState.QUEUED, WarmupState.READY])
+    fake_client.warehouse_probe = AsyncMock(side_effect=lambda *_, **__: source.probe())
     handler = MyHandler(client=fake_client)
 
-    assert (await handler.warmup_start(PreflightInput())).status is WarmupStatus.RUNNING
-    assert (await handler.warmup_state(PreflightInput())).status is WarmupStatus.RUNNING
-    assert (await handler.warmup_state(PreflightInput())).status is WarmupStatus.READY
+    assert (await handler.warmup(WarmupInput())).state is WarmupState.COLD
+    assert (await handler.warmup(WarmupInput())).state is WarmupState.QUEUED
+    assert (await handler.warmup(WarmupInput())).state is WarmupState.READY
+    assert source.probes == 3
 ```
 
-`start()` and `poll()` return a `WarmupState`. If your client returns the source's own state instead, such as a warehouse status string, have the client fake translate it. The state's `message` is the `SourceState` name.
+`probe()` returns a `WarmupObservation`; a bare `WarmupState` step comes back with the state's name as its `source_state`. If your client returns the source's own state instead, such as a warehouse status string, have the client fake translate it.
 
-To test the gate itself, pass `WarmingSourceHandler(source)` as the worker's handler. It answers one `FAST` and one `WARMUP` row and records every call the gate makes in `calls`. `tests/integration/test_preflight_warmup.py` runs the whole gate wait this way, ending at `ready`, `failed`, a typed raise or the ceiling.
+To test the gate itself, pass `WarmingSourceHandler(source)` as the worker's handler. Its `warmup` probes the source, and its `preflight_check` answers one `PREFLIGHT` row (`reachable`) and one `WARMUP` row (`catalogScan`), each only when its tier is requested; `ignores_tiers=True` returns both whatever was asked, to exercise the post-call tier check. It records every call the gate makes in `calls` (`"probe"`, `"check:preflight+warmup"`). `tests/integration/test_preflight_warmup.py` runs the whole gate wait this way, through a real worker on a time-skipping server.

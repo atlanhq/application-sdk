@@ -566,19 +566,24 @@ class TestThePreflightResultsRouteContract:
             "app_version",
         }
 
-    def test_a_tiered_check_carries_its_tier_and_an_untiered_one_does_not(self):
-        """FND-3041: per-check ``tier`` tells a warmup app's two rows apart, and
-        an app that never tiers its checks sends exactly what it did before."""
+    def test_a_warmup_check_carries_its_tier_and_a_preflight_one_does_not(self):
+        """FND-3041: per-check ``tier`` tells a warmup run's two rows apart, and
+        an app that never tiers its checks (every row ``PREFLIGHT``, the
+        default) sends exactly what it did before."""
         result = PreflightOutput(
             status=PreflightStatus.READY,
             checks=[
-                PreflightCheck(name="reach", passed=True, tier=CheckTier.FAST),
+                PreflightCheck(name="scan", passed=True, tier=CheckTier.WARMUP),
                 PreflightCheck(name="grants", passed=True),
+                PreflightCheck(name="reach", passed=True, tier=CheckTier.PREFLIGHT),
             ],
         )
-        tiered, untiered = persist.verdict_payload(result)["preflight"]["checks"]
-        assert tiered["tier"] == "fast"
-        assert "tier" not in untiered
+        warmup, default, explicit = persist.verdict_payload(result)["preflight"][
+            "checks"
+        ]
+        assert warmup["tier"] == "warmup"
+        assert "tier" not in default
+        assert "tier" not in explicit
 
     def test_no_warmup_phase_field_crosses(self):
         """The warmup's own outcome and timing stay on the log row."""

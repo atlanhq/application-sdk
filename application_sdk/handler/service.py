@@ -5,9 +5,8 @@ operations for a single app. Each app runs its own handler service.
 
 Routes:
     POST /workflows/v1/auth - Test authentication
-    POST /workflows/v1/check - Run preflight checks (optionally one ``tier``)
-    POST /workflows/v1/warmup - Start the warmup WARMUP-tier checks wait on
-    POST /workflows/v1/warmup/state - Report that warmup's state
+    POST /workflows/v1/check - Run preflight checks (optionally only some ``tiers``)
+    POST /workflows/v1/warmup - Probe the source's compute once (stateless)
     POST /workflows/v1/metadata - Fetch metadata
     POST /workflows/v1/start - Start workflow execution
     POST /workflows/v1/stop/{workflow_id}/{run_id:path} - Stop workflow
@@ -43,7 +42,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from types import ModuleType
-from typing import TYPE_CHECKING, Annotated, Any, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Annotated, Any, TypeVar, cast
 from uuid import uuid4
 
 import orjson
@@ -91,7 +90,13 @@ from application_sdk.handler._preflight_outcome import (
     PreflightSurface,
     emit_preflight_check_outcome,
     emit_preflight_crash_outcome,
-    filter_checks_to_tier,
+    rows_outside_tiers,
+)
+from application_sdk.handler._warmup import (
+    bounded_warmup_probe,
+    warmup_ceiling_seconds,
+    warmup_probe_timeout_seconds,
+    warmup_unavailable_error,
 )
 from application_sdk.handler.base import Handler, HandlerError
 from application_sdk.handler.context import HandlerContext, bind_handler_context
@@ -105,9 +110,11 @@ from application_sdk.handler.contracts import (
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
     SubscriptionConfig,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 from application_sdk.handler.contracts import (
     flatten_credentials_to_pairs as _flatten_to_pairs,
@@ -301,6 +308,10 @@ def _summarize_check(check: PreflightCheck) -> dict[str, Any]:
     # no duration rather than a negative one.
     if dumped.get("duration_ms", 0) < 0:
         del dumped["duration_ms"]
+    # The default tier stays off the wire, as in PreflightCheck.to_wire, so an
+    # app that never tiers its checks answers exactly as before tiers existed.
+    if check.tier is CheckTier.PREFLIGHT:
+        del dumped["tier"]
     dumped["message"] = check.resolved_message
     if check.resolved_suggested_action:
         dumped["suggested_action"] = check.resolved_suggested_action
@@ -334,7 +345,9 @@ def _preflight_response(
     response = _wrap_response(
         data,
         message=result.message or f"Preflight check {result.status.value}",
-        success=len(result.checks) > 0 if success is None else success,
+        success=(len(result.checks) > 0 or result.status is PreflightStatus.PENDING)
+        if success is None
+        else success,
     )
     response["preflight"] = _preflight_runtime_summary(result)
     return response
@@ -384,51 +397,64 @@ def _preflight_failure_body(
 def _preflight_runtime_summary(result: PreflightOutput) -> dict[str, Any]:
     """Runtime metadata kept outside the SageV2 ``data`` map.
 
-    ``status`` is the gate verdict (``ready`` / ``not_ready`` / ``partial``);
+    ``status`` is the verdict (``ready`` / ``not_ready`` / ``partial``, and
+    ``pending`` on a tiered request whose warmup-tier checks have not run);
     ``not_ready`` means blocked. Per-check ``message``/``suggested_action`` follow
     the precedence rule (typed ``error`` wins). Consumed for display/diagnostics.
     """
-    return {
+    summary: dict[str, Any] = {
         "status": result.status.value,
         "message": result.message,
         "total_duration_ms": result.total_duration_ms,
         "checks": [_summarize_check(check) for check in result.checks],
     }
+    # ``warmup`` is present exactly when it explains the verdict: always on
+    # PENDING (``null`` when warmup was not probed), and whenever an observation
+    # was taken. An untiered request never has one, so its body is unchanged.
+    if result.status is PreflightStatus.PENDING or result.warmup is not None:
+        summary["warmup"] = (
+            _warmup_body(result.warmup) if result.warmup is not None else None
+        )
+    return summary
 
 
-def _warmup_summary(state: WarmupState) -> dict[str, Any]:
-    """A warmup state as the HTTP caller sees it — no ``cause_repr``.
+def _warmup_body(observation: WarmupObservation) -> dict[str, Any]:
+    """An observation as the HTTP caller sees it."""
+    return observation.model_dump(mode="json", exclude_none=True)
 
-    ``cause_repr`` is the exception text behind a typed error; it stays in the
-    server log, as it does for a preflight check (see :func:`_summarize_check`).
+
+def _with_warmup_verdict(
+    result: PreflightOutput,
+    observation: WarmupObservation | None,
+    app_name: str,
+    *,
+    warmup_pending: bool,
+) -> PreflightOutput:
+    """*result* with the warmup folded into a tiered ``/check`` verdict.
+
+    ``NOT_READY`` always wins. An ``UNAVAILABLE`` observation is a ``NOT_READY``
+    of its own, attributed to the source. Otherwise, when the ``WARMUP``-tier
+    checks did not run (``warmup_pending``), the verdict is ``PENDING`` and
+    carries the observation that explains why, or ``None`` when warmup was not
+    probed. No placeholder rows: the UI shows one line for the source compute.
     """
-    return state.model_dump(
-        mode="json", exclude_none=True, exclude={"error": {"cause_repr"}}
-    )
-
-
-def _warmup_pending_response(state: WarmupState, app_name: str) -> JSONResponse:
-    """The ``/check`` body for a ``WARMUP``-tier request that arrived too early.
-
-    The checks were not run, so this is the unverified-source verdict
-    (``not_ready`` plus one ``preflightVerdict`` row) carrying a typed
-    ``PreconditionError`` that names the warmup's actual state, with the state
-    itself under ``preflight.warmup`` so the UI can keep polling from it.
-    """
-    error = PreconditionError(
-        message=f"Warmup is {state.status.value}; warmup checks run once it is ready.",
-        suggested_action=(
-            "Start the warmup with POST /workflows/v1/warmup and retry once "
-            "POST /workflows/v1/warmup/state reports ready."
-        ),
-        app_name=app_name,
-        resource="warmup",
-        expected_state=WarmupStatus.READY.value,
-        actual_state=state.status.value,
-    )
-    body = _preflight_failure_body(error, app_name)
-    body["preflight"]["warmup"] = _warmup_summary(state)
-    return JSONResponse(status_code=_app_error_to_http_status(error), content=body)
+    if result.status is PreflightStatus.NOT_READY:
+        return result.model_copy(update={"warmup": observation})
+    if observation is not None and observation.state is WarmupState.UNAVAILABLE:
+        error = warmup_unavailable_error(observation, app_name)
+        return result.model_copy(
+            update={
+                "status": PreflightStatus.NOT_READY,
+                "message": error.message,
+                "error": error.to_failure_details(),
+                "warmup": observation,
+            }
+        )
+    if warmup_pending:
+        return result.model_copy(
+            update={"status": PreflightStatus.PENDING, "warmup": observation}
+        )
+    return result
 
 
 if TYPE_CHECKING:
@@ -607,7 +633,7 @@ _ENTRYPOINT_NAME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9_-]*$")
 
 # Per-entry-point hook signatures resolved by the discovery helpers below.
 # ``HandlerFn`` is the per-entry-point handler convention
-# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata,warmup_*}``); the
+# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata,warmup}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
 # ``fn_name`` at call time. ``_ComputeManifestFn`` is the dynamic-manifest hook
 # (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
@@ -727,16 +753,14 @@ def _discover_handler_fn(entrypoint: str, fn_name: str) -> HandlerFn | None:
     Convention: ``app.<segment>.handler.<fn_name>`` where ``segment`` is
     :func:`~application_sdk.app.entrypoint.entrypoint_module_segment` of the
     entry-point name and ``fn_name`` is one of ``"test_auth"``,
-    ``"preflight_check"``, ``"fetch_metadata"``, ``"warmup_start"``,
-    ``"warmup_state"``. Multi-entrypoint apps that
+    ``"preflight_check"``, ``"fetch_metadata"``, ``"warmup"``. Multi-entrypoint apps that
     need *per-entrypoint* lifecycle hooks drop a ``handler.py`` next to their
     package's hand-written code with::
 
         async def test_auth(input: AuthInput, ctx: HandlerContext) -> AuthOutput: ...
         async def preflight_check(input: PreflightInput, ctx: HandlerContext) -> PreflightOutput: ...
         async def fetch_metadata(input: MetadataInput, ctx: HandlerContext) -> MetadataOutput: ...
-        async def warmup_start(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...
-        async def warmup_state(input: PreflightInput, ctx: HandlerContext) -> WarmupState: ...
+        async def warmup(input: WarmupInput, ctx: HandlerContext) -> WarmupObservation: ...
 
     The dispatch is best-effort: if the per-entrypoint module / attribute
     is absent, the route falls through to the app-level ``Handler`` instance
@@ -2961,23 +2985,46 @@ def create_app_handler_service(
             _secret_store=_secret_store,
         )
 
-    async def _warmup_state(
-        entrypoint: str, preflight_input: PreflightInput, context: HandlerContext
-    ) -> WarmupState:
-        """``warmup_state`` for the entry point — its module hook, else the app's."""
-        ep_fn = _discover_handler_fn(entrypoint, "warmup_state") if entrypoint else None
-        if ep_fn is not None:
-            return await ep_fn(preflight_input, context)
-        return await handler.warmup_state(preflight_input)
+    # The warmup tier's two numbers, clamped by the same functions the gate
+    # uses so the route and the gate cannot disagree about them.
+    _warmup_ceiling, _ = warmup_ceiling_seconds(
+        getattr(app_class, "preflight_warmup_ceiling_seconds", None)
+    )
+    _warmup_probe_timeout, _ = warmup_probe_timeout_seconds(
+        getattr(app_class, "preflight_warmup_probe_timeout_seconds", None),
+        _warmup_ceiling,
+    )
 
-    async def _warmup_start(
-        entrypoint: str, preflight_input: PreflightInput, context: HandlerContext
-    ) -> WarmupState:
-        """``warmup_start`` for the entry point — its module hook, else the app's."""
-        ep_fn = _discover_handler_fn(entrypoint, "warmup_start") if entrypoint else None
-        if ep_fn is not None:
-            return await ep_fn(preflight_input, context)
-        return await handler.warmup_start(preflight_input)
+    def _has_warmup(entrypoint: str) -> bool:
+        """Whether the entry point has a warmup probe of its own (its module
+        hook, or an app handler that overrides ``Handler.warmup``)."""
+        if entrypoint and _discover_handler_fn(entrypoint, "warmup") is not None:
+            return True
+        return type(handler).warmup is not Handler.warmup
+
+    async def _probe_warmup(
+        entrypoint: str, source: PreflightInput, context: HandlerContext
+    ) -> WarmupObservation:
+        """One ``warmup`` probe for the entry point, bounded by the app's probe
+        timeout. A probe still running at the bound reads as ``WARMING``."""
+        warmup_input = WarmupInput.model_validate(
+            {
+                **{
+                    name: getattr(source, name)
+                    for name in WarmupInput.model_fields
+                    if name in PreflightInput.model_fields
+                },
+                "probe_timeout_seconds": _warmup_probe_timeout,
+            }
+        )
+        ep_fn = _discover_handler_fn(entrypoint, "warmup") if entrypoint else None
+        probe = (
+            ep_fn(warmup_input, context)
+            if ep_fn is not None
+            else handler.warmup(warmup_input)
+        )
+        seen = await bounded_warmup_probe(probe, _warmup_probe_timeout)
+        return seen or WarmupObservation(state=WarmupState.WARMING)
 
     # ------------------------------------------------------------------
     # Auth
@@ -3115,40 +3162,54 @@ def create_app_handler_service(
                 )
                 # Per-entrypoint dispatch (see test_auth above for rationale).
                 entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                # A tiered request also reports the warmup. An untiered one
-                # (the gate, and every caller predating tiers) never consults
-                # it, so its response is exactly what it was before warmup.
-                tier = preflight_input.tier
-                warmup = (
-                    await _warmup_state(entrypoint, preflight_input, context)
-                    if tier is not None
-                    else None
-                )
-                if (
-                    tier is CheckTier.WARMUP
-                    and warmup is not None
-                    and warmup.status.is_pending
-                ):
-                    logger.info(
-                        "Preflight warmup checks deferred: app=%s request=%s warmup=%s",
-                        app_name,
-                        context.request_id_str,
-                        warmup.status.value,
+                # Without ``tiers`` the request is today's: every tier, no
+                # warmup probe. ``tiers`` naming WARMUP probes the warmup first
+                # (the caller asked for compute); ``tiers`` without it never
+                # starts compute (the design's cost policy).
+                requested = preflight_input.tiers
+                tiered = "tiers" in preflight_input.model_fields_set
+                observation: WarmupObservation | None = None
+                run_tiers = requested
+                if tiered and CheckTier.WARMUP in requested:
+                    observation = await _probe_warmup(
+                        entrypoint, preflight_input, context
                     )
-                    return _warmup_pending_response(warmup, app_name)
-                ep_fn = (
-                    _discover_handler_fn(entrypoint, "preflight_check")
-                    if entrypoint
-                    else None
-                )
-                if ep_fn is not None:
-                    result = await ep_fn(preflight_input, context)
+                    if observation.state is not WarmupState.READY:
+                        run_tiers = requested - {CheckTier.WARMUP}
+                if run_tiers:
+                    call_input = preflight_input.model_copy(update={"tiers": run_tiers})
+                    ep_fn = (
+                        _discover_handler_fn(entrypoint, "preflight_check")
+                        if entrypoint
+                        else None
+                    )
+                    if ep_fn is not None:
+                        result = await ep_fn(call_input, context)
+                    else:
+                        result = await handler.preflight_check(call_input)
                 else:
-                    result = await handler.preflight_check(preflight_input)
-                if tier is not None:
-                    # Re-derives a NOT_READY the dropped rows caused, so a
-                    # WARMUP failure cannot fail a tier=fast response.
-                    result = filter_checks_to_tier(result, tier)
+                    result = PreflightOutput(status=PreflightStatus.READY)
+                outside = rows_outside_tiers(result, run_tiers)
+                if outside:
+                    # Post-call tier check: the handler ran a check it was told
+                    # not to, so its verdict is not one about these tiers.
+                    raise InternalError(
+                        message=(
+                            "Preflight handler returned checks outside the "
+                            f"requested tiers: {', '.join(sorted(outside))}"
+                        ),
+                        app_name=app_name,
+                        retryable=False,
+                        component="preflight_handler",
+                    )
+                if tiered:
+                    result = _with_warmup_verdict(
+                        result,
+                        observation,
+                        app_name,
+                        warmup_pending=CheckTier.WARMUP not in run_tiers
+                        and (observation is not None or _has_warmup(entrypoint)),
+                    )
                 emit_preflight_check_outcome(
                     logger,
                     app_name,
@@ -3157,13 +3218,7 @@ def create_app_handler_service(
                     entrypoint=entrypoint,
                     request_id=context.request_id_str,
                 )
-                response = _preflight_response(result)
-                if (
-                    warmup is not None
-                    and warmup.status is not WarmupStatus.NOT_REQUIRED
-                ):
-                    response["preflight"]["warmup"] = _warmup_summary(warmup)
-                return JSONResponse(content=response)
+                return JSONResponse(content=_preflight_response(result))
             except HandlerError as e:
                 # TODO(signal-over-noise): [P13] Deprecated path — HandlerError is an
                 # AppError subclass caught here first so http_status is preserved.
@@ -3231,15 +3286,15 @@ def create_app_handler_service(
     # Warmup
     # ------------------------------------------------------------------
 
-    async def _serve_warmup(
-        request: Request,
-        operation: Literal["start", "state"],
-        call: Callable[[str, PreflightInput, HandlerContext], Awaitable[WarmupState]],
-    ) -> JSONResponse:
-        """Run one warmup operation behind the ``/check`` request shape.
+    @app.post("/workflows/v1/warmup")
+    async def warmup(request: Request) -> JSONResponse:
+        """Probe the source's compute once and report what it saw.
 
-        The body is ``/check``'s, normalised the same way, so the UI sends one
-        payload to all three routes. A warmup still in progress answers 202.
+        Stateless and idempotent: the UI polls it, sending ``/check``'s body
+        each time, until ``state`` is ``ready``, then calls ``/check`` with
+        ``tiers=["warmup"]``. No request is held longer than one probe timeout.
+        ``ceiling_seconds`` is the app's warmup ceiling, so the UI has a stop
+        condition of its own.
         """
         body = _normalize_preflight_request(await request.json())
         preflight_input = _validate_request(PreflightInput, body)
@@ -3251,31 +3306,27 @@ def create_app_handler_service(
         with bind_handler_context(context):
             try:
                 entrypoint = _validated_entrypoint(preflight_input.entrypoint)
-                state = await call(entrypoint, preflight_input, context)
+                observation = await _probe_warmup(entrypoint, preflight_input, context)
                 logger.info(
-                    "Warmup %s: app=%s request=%s status=%s",
-                    operation,
+                    "Warmup probed: app=%s request=%s state=%s",
                     app_name,
                     context.request_id_str,
-                    state.status.value,
-                )
-                in_progress = state.status in (
-                    WarmupStatus.NOT_STARTED,
-                    WarmupStatus.RUNNING,
+                    observation.state.value,
                 )
                 return JSONResponse(
-                    status_code=202 if in_progress else 200,
                     content=_wrap_response(
-                        _warmup_summary(state),
-                        message=state.message or f"Warmup {state.status.value}",
-                        success=state.status is not WarmupStatus.FAILED,
+                        {
+                            **_warmup_body(observation),
+                            "ceiling_seconds": _warmup_ceiling,
+                        },
+                        message=f"Warmup {observation.state.value}",
+                        success=observation.state is not WarmupState.UNAVAILABLE,
                     ),
                 )
             except AppError as e:
                 # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Warmup %s failed for app %s (request %s): %s\n%s",
-                    operation,
+                    "Warmup failed for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
                     sanitize_cause_repr(e),
@@ -3291,8 +3342,7 @@ def create_app_handler_service(
             except Exception as e:
                 # conformance: ignore[L009] boundary handler logs the redacted exception and traceback plus request_id then raises a sanitized HTTPException `from None`; the log is the only server-side record.
                 logger.error(
-                    "Warmup %s failed unexpectedly for app %s (request %s): %s\n%s",
-                    operation,
+                    "Warmup failed unexpectedly for app %s (request %s): %s\n%s",
                     app_name,
                     context.request_id_str,
                     sanitize_cause_repr(e),
@@ -3301,14 +3351,6 @@ def create_app_handler_service(
                 raise HTTPException(
                     status_code=500, detail="Internal server error"
                 ) from None
-
-    @app.post("/workflows/v1/warmup")
-    async def warmup_start(request: Request) -> JSONResponse:
-        return await _serve_warmup(request, "start", _warmup_start)
-
-    @app.post("/workflows/v1/warmup/state")
-    async def warmup_state(request: Request) -> JSONResponse:
-        return await _serve_warmup(request, "state", _warmup_state)
 
     # ------------------------------------------------------------------
     # Metadata

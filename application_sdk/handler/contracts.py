@@ -5,8 +5,8 @@ Provides Pydantic models for the three core handler operations:
 - Preflight checks (preflight_check)
 - Metadata discovery (fetch_metadata)
 
-plus the optional warmup that gates expensive preflight checks
-(warmup_start / warmup_state).
+plus the optional warmup probe that gates compute-dependent preflight checks
+(warmup).
 
 Plus supporting types for credentials, log streaming, and file uploads.
 
@@ -392,6 +392,12 @@ class PreflightStatus(SerializableEnum):
     READY = "ready"
     NOT_READY = "not_ready"
     PARTIAL = "partial"
+    PENDING = "pending"
+    """Set by the SDK on ``/check``, never by a handler, and never by the gate:
+    the checks that ran passed, but the ``WARMUP``-tier checks have not, because
+    the source's compute is not ``READY`` yet (or was not probed).
+    :attr:`PreflightOutput.warmup` says which. ``NOT_READY`` always wins over it.
+    The gate treats a handler-returned ``PENDING`` like ``READY``."""
 
 
 class PreflightGateMode(SerializableEnum):
@@ -413,83 +419,72 @@ class PreflightGateMode(SerializableEnum):
 
 
 class CheckTier(SerializableEnum):
-    """Cost tier of a preflight check — when the UI can afford to run it.
+    """Which tier a preflight check belongs to — what it needs in order to answer.
 
-    ``FAST`` checks run on demand from ``/check`` with no preparation
-    (reachability, authentication, basic grants). ``WARMUP`` checks need a
-    warmup the app starts through :meth:`Handler.warmup_start
-    <application_sdk.handler.base.Handler.warmup_start>` first (a cold
-    warehouse to resume, a catalog to index) and run only once that warmup
-    reports :attr:`WarmupStatus.READY`.
-
-    A check with no tier (``PreflightCheck.tier is None``) is ``FAST``; see
-    :attr:`PreflightCheck.effective_tier`. The injected preflight gate sends no
-    tier and runs every check, unless the app declares a warmup
-    (``App.preflight_warmup_ceiling_seconds``): then it runs ``FAST`` at gate
-    start and ``WARMUP`` once the warmup reports ``READY``.
+    ``PREFLIGHT`` checks need only the source's control plane (reachability,
+    authentication, grant listing) and run straight away. ``WARMUP`` checks need
+    source compute (a warehouse, a cluster, a pool) and run only once
+    :meth:`Handler.warmup <application_sdk.handler.base.Handler.warmup>`
+    reports :attr:`WarmupState.READY`. A check belongs to exactly one tier: the
+    same query never runs in two.
     """
 
-    FAST = "fast"
+    PREFLIGHT = "preflight"
     WARMUP = "warmup"
 
 
-class WarmupStatus(SerializableEnum):
-    """Where an app's warmup is, as reported by ``warmup_start`` / ``warmup_state``.
+ALL_CHECK_TIERS: frozenset[CheckTier] = frozenset(CheckTier)
+"""Every tier — :attr:`PreflightInput.tiers`' default, for callers that do not
+know about tiers."""
 
-    ``NOT_REQUIRED`` is the default handler's answer: the app has no warmup,
-    so there is nothing to start or wait for and every check is runnable now.
+
+class WarmupState(SerializableEnum):
+    """Where a source's compute is, as one warmup probe observed it.
+
+    ``READY`` lets the ``WARMUP``-tier checks run. ``COLD``, ``WARMING`` and
+    ``QUEUED`` mean "ask again": the gate polls on durable timers until the
+    app's ceiling. ``UNAVAILABLE`` means the source will not get there on its
+    own; the gate stops waiting and attributes the failure to the source.
     """
 
-    NOT_REQUIRED = "not_required"
-    NOT_STARTED = "not_started"
-    RUNNING = "running"
+    COLD = "cold"
+    WARMING = "warming"
+    QUEUED = "queued"
     READY = "ready"
-    FAILED = "failed"
+    UNAVAILABLE = "unavailable"
 
     @property
     def is_pending(self) -> bool:
-        """Whether warmup-tier checks must still wait on this warmup."""
-        return self in (
-            WarmupStatus.NOT_STARTED,
-            WarmupStatus.RUNNING,
-            WarmupStatus.FAILED,
-        )
+        """Whether a later probe may still report ``READY``."""
+        return self in (WarmupState.COLD, WarmupState.WARMING, WarmupState.QUEUED)
 
 
-class WarmupState(BaseModel):
-    """An app's warmup state — the return type of ``warmup_start`` / ``warmup_state``."""
+class WarmupObservation(BaseModel):
+    """What one warmup probe saw — the return type of ``Handler.warmup``.
 
-    status: WarmupStatus = WarmupStatus.NOT_REQUIRED
-    """Where the warmup is. ``NOT_REQUIRED`` means the app has no warmup."""
+    Frozen: an observation is a fact about one moment. The gate and the
+    ``/warmup`` route branch only on :attr:`state`; the other fields are for
+    the customer-facing line and the poll cadence.
+    """
 
-    message: str = ""
-    """Human-readable progress line for the UI."""
+    model_config = ConfigDict(frozen=True)
 
-    pending_checks: list[str] = Field(default_factory=list)
-    """Names of the ``WARMUP``-tier checks that cannot run until this warmup is
-    ``READY``. ``/check`` reports them so the UI can render them as pending
-    rather than omit them. Empty once the warmup is ``READY``."""
+    state: WarmupState
+    """Where the source's compute is."""
 
-    estimated_duration_ms: float | None = None
-    """The app's estimate of how long the warmup takes end to end, so the UI
-    can tell the user what they are waiting for. ``None`` means no estimate."""
+    source_state: str = ""
+    """The source's own label for its state (e.g. Snowflake ``RESUMING``).
+    Displayed, never branched on."""
 
-    error: FailureDetails | None = None
-    """Typed reason for a ``FAILED`` warmup. A bare ``AppError`` is coerced.
-    Its ``message`` replaces :attr:`message` on a failed state."""
+    queued_queries: int | None = Field(default=None, ge=0)
+    """How many statements are waiting on the source's compute for a slot (e.g.
+    Snowflake ``SHOW WAREHOUSES.queued``). A count, not a duration. ``None``
+    when the source does not report it."""
 
-    @field_validator("error", mode="before")
-    @classmethod
-    def _coerce_error(cls, value: Any) -> Any:
-        if isinstance(value, AppError):
-            return value.to_failure_details()
-        return value
-
-    @model_validator(mode="after")
-    def _error_message_wins(self) -> "WarmupState":
-        if self.error is not None and self.status is WarmupStatus.FAILED:
-            self.message = self.error.message
-        return self
+    next_poll_seconds: int | None = Field(default=None, ge=0)
+    """The source's own suggestion for when to ask again. The gate honours it
+    with a 5s floor and never polls past the ceiling. ``None``: no hint, so the
+    gate backs off 5s doubling to 30s."""
 
 
 class PreflightCheck(BaseModel):
@@ -501,10 +496,11 @@ class PreflightCheck(BaseModel):
     passed: bool = False
     """Whether the check passed."""
 
-    tier: CheckTier | None = None
-    """Cost tier this check belongs to. ``None`` is treated as ``FAST`` and is
-    left off the wire, so an app that never sets a tier emits exactly the
-    payload it did before tiers existed."""
+    tier: CheckTier = CheckTier.PREFLIGHT
+    """Tier this check belongs to. ``PREFLIGHT`` (the default) is left off the
+    wire, so an app that never tiers its checks emits exactly the payload it
+    did before tiers existed. A check that needs source compute to answer is
+    ``WARMUP``."""
 
     message: str = ""
     """Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
@@ -536,11 +532,6 @@ class PreflightCheck(BaseModel):
         return value
 
     @property
-    def effective_tier(self) -> CheckTier:
-        """The tier this check runs in: :attr:`tier`, or ``FAST`` when unset."""
-        return self.tier or CheckTier.FAST
-
-    @property
     def resolved_message(self) -> str:
         """Message under the precedence rule: a failed check's ``error`` wins."""
         if self.error is not None and not self.passed:
@@ -566,11 +557,15 @@ class PreflightCheck(BaseModel):
         """
         dumped = self.model_dump(mode="json", exclude_none=True)
         dumped["message"] = self.resolved_message
+        if self.tier is CheckTier.PREFLIGHT:
+            del dumped["tier"]
         return dumped
 
 
-class PreflightInput(BaseModel):
-    """Input for the preflight_check handler operation."""
+class _SourceRequestInput(BaseModel):
+    """The fields every source-probing handler operation takes — ``/check``'s
+    body, shared by :class:`PreflightInput` and :class:`WarmupInput` so the UI
+    sends one payload to both routes."""
 
     credentials: list[HandlerCredential] = []
     """Credentials to use during preflight."""
@@ -626,29 +621,6 @@ class PreflightInput(BaseModel):
     are accepted for backward compatibility via ``extra="allow"``.
     """
 
-    checks_to_run: list[str] = []
-    """Specific checks to run (empty = run all)."""
-
-    tier: CheckTier | None = None
-    """Run only the checks in this cost tier. ``None`` (the default, and what
-    the injected gate sends for an app with no warmup) runs every check, as
-    before tiers existed.
-
-    A handler should skip checks outside the requested tier — the expensive
-    ``WARMUP`` probes are what ``tier="fast"`` exists to avoid. ``/check``
-    also drops any returned row outside the tier, so a handler that ignores
-    this field still answers with the right rows, only slower."""
-
-    timeout_seconds: int = 60
-    """Maximum seconds the handler has to run all checks.
-
-    On the injected gate path this is what remains of the app's gate budget
-    after credential resolution, and the gate cancels the handler when it
-    elapses. A handler that bounds every probe to this value returns its own
-    typed verdict before the cancel; one that does not is ended by the gate with
-    no check evidence. Advisory on the HTTP ``/check`` and SDR paths, which are
-    not bounded by the gate."""
-
     agent_json: AgentCredentialSpec | None = Field(
         default=None,
         validation_alias=AliasChoices("agent_json", "agentJson", "agent-json"),
@@ -663,6 +635,54 @@ class PreflightInput(BaseModel):
     exactly as the injected preflight gate does. ``None`` on the HTTP / direct
     path, where :attr:`credentials` already carries resolved values.
     Backward-compatible: absent ⇒ behavior is unchanged."""
+
+
+class PreflightInput(_SourceRequestInput):
+    """Input for the preflight_check handler operation."""
+
+    checks_to_run: list[str] = []
+    """Specific checks to run (empty = run all)."""
+
+    tiers: frozenset[CheckTier] = ALL_CHECK_TIERS
+    """Run only the checks in these tiers. The default, every tier, is for
+    callers that do not know about tiers (``/check`` without ``tiers``, SDR),
+    the same shape as :attr:`checks_to_run`'s "empty = run all".
+
+    A handler should skip checks outside the requested tiers: an expensive
+    ``WARMUP`` probe against cold compute is what ``tiers={PREFLIGHT}`` exists
+    to avoid. The SDK checks every returned row's tier against this set after
+    the call, and a row outside it gets no verdict rather than a silent drop."""
+
+    @field_validator("tiers")
+    @classmethod
+    def _tiers_not_empty(cls, value: frozenset[CheckTier]) -> frozenset[CheckTier]:
+        # An empty set would run no check and still read as a verdict.
+        if not value:
+            raise ValueError(
+                "tiers must name at least one tier; omit it for every tier"
+            )
+        return value
+
+    timeout_seconds: int = 60
+    """Maximum seconds the handler has to run all checks.
+
+    On the injected gate path this is what remains of the app's gate budget
+    after credential resolution, and the gate cancels the handler when it
+    elapses. A handler that bounds every probe to this value returns its own
+    typed verdict before the cancel; one that does not is ended by the gate with
+    no check evidence. Advisory on the HTTP ``/check`` and SDR paths, which are
+    not bounded by the gate."""
+
+
+class WarmupInput(_SourceRequestInput):
+    """Input for the optional ``Handler.warmup`` probe: ``/check``'s body, plus
+    how long one probe may wait."""
+
+    probe_timeout_seconds: int = 10
+    """How long this probe may wait for the source to answer — the app's
+    ``App.preflight_warmup_probe_timeout_seconds``. A probe still pending at
+    this point reports ``WARMING`` (or ``QUEUED``) and returns; the SDK cancels
+    one that does not, and reads the overrun as ``WARMING``."""
 
 
 class PreflightOutput(BaseModel):
@@ -704,6 +724,15 @@ class PreflightOutput(BaseModel):
     its default must be the additive identity. ``0.0`` here means "nothing
     added yet", which is a different statement from a per-check duration that
     was never measured."""
+
+    warmup: WarmupObservation | None = None
+    """The warmup observation behind a ``PENDING`` status, set by the SDK.
+
+    On ``/check``: the probe's observation when the request asked for the
+    ``WARMUP`` tier and the source was not ``READY``; ``None`` when warmup was
+    not probed. On the gate's first dispatch: the observation that sends the
+    workflow into its warmup wait; ``None`` when there is nothing to wait for.
+    A handler leaves it unset."""
 
     @field_validator("error", mode="before")
     @classmethod

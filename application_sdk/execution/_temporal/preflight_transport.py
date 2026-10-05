@@ -1,8 +1,8 @@
 """The one seam the preflight gate reaches an app's handler through (FND-3280).
 
 Imports run worker → handler only, and the handler is moving to a shared pod
-that serves every app. The gate's three calls into the handler —
-``preflight_check``, ``warmup_start`` and ``warmup_state`` — therefore go
+that serves every app. The gate's two calls into the handler —
+``preflight_check`` and ``warmup`` — therefore go
 through :class:`PreflightTransport` rather than a ``Handler`` the gate holds
 directly, so the in-process call today and an HTTP call to the handler pod
 later are interchangeable without touching the gate.
@@ -24,7 +24,8 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.handler.contracts import (
         PreflightInput,
         PreflightOutput,
-        WarmupState,
+        WarmupInput,
+        WarmupObservation,
     )
 
 if TYPE_CHECKING:
@@ -35,9 +36,10 @@ class PreflightTransport(Protocol):
     """How the gate calls an app's preflight handler.
 
     Every input and output is an existing handler contract —
-    :class:`~application_sdk.handler.contracts.PreflightInput` in,
+    :class:`~application_sdk.handler.contracts.PreflightInput` or
+    :class:`~application_sdk.handler.contracts.WarmupInput` in,
     :class:`~application_sdk.handler.contracts.PreflightOutput` or
-    :class:`~application_sdk.handler.contracts.WarmupState` back. These are
+    :class:`~application_sdk.handler.contracts.WarmupObservation` back. These are
     already serialisable wire contracts (the ``/workflows/v1/check`` and
     ``/workflows/v1/warmup`` routes take and return them as JSON), so an HTTP
     transport is a drop-in implementation of this protocol, not a new contract.
@@ -57,12 +59,8 @@ class PreflightTransport(Protocol):
         """Run the handler's preflight checks for *input*."""
         ...
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        """Ask the handler to start the warmup ``WARMUP``-tier checks wait on."""
-        ...
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        """Ask the handler how the warmup :meth:`warmup_start` began is going."""
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        """Probe the source's compute once, pushing its warmup forward."""
         ...
 
 
@@ -79,8 +77,5 @@ class InProcessPreflightTransport:
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         return await self.handler.preflight_check(input)
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        return await self.handler.warmup_start(input)
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        return await self.handler.warmup_state(input)
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        return await self.handler.warmup(input)

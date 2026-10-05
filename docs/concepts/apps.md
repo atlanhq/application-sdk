@@ -616,55 +616,85 @@ otherwise have been cut short.
 
 #### Waiting for a warmup (opt-in)
 
-Some checks cannot run until the source is made ready — a suspended warehouse resumed, a catalog
-indexed. An app marks those checks `tier=CheckTier.WARMUP`, implements `Handler.warmup_start` /
-`warmup_state` (see [Check tiers and warmup](handlers.md#check-tiers-and-warmup)), and declares how
-long the gate may wait:
+Some checks cannot run until the source's compute is ready — a suspended warehouse resumed, a job
+queue drained. An app marks those checks `tier=CheckTier.WARMUP` and overrides `Handler.warmup`
+(see [Check tiers and warmup](handlers.md#check-tiers-and-warmup)). That is the whole opt-in: an
+app that does not override `warmup` never enters this phase, because the default answers `READY`.
+Three declarations tune it:
 
 ```python
 class MyConnector(App):
-    preflight_gate_mode = "hard"
-    preflight_warmup_ceiling_seconds = 900   # a cold warehouse can take ~10 minutes to resume
-    preflight_warmup_poll_seconds = 20       # default 15, clamped 1-300
+    preflight_warmup_ceiling_seconds = 1800      # default 600, floor 30s, no cap
+    preflight_warmup_probe_timeout_seconds = 10  # default 10, floor 1s, at most the ceiling
+    preflight_warmup_mode = PreflightGateMode.HARD  # default SOFT; no annotation
 ```
 
-With a ceiling declared (clamped 5-3600s, measured from gate start) the gate runs in two phases:
+The ceiling is how long the gate waits for `READY`, measured from gate start. The wait holds no
+worker slot, so it can be far longer than `preflight_gate_timeout_seconds`, and the gate uses all
+of it only while the source keeps reporting it is not ready. The probe timeout is how long one
+`warmup` call may take on warm compute: it reaches the handler as
+`WarmupInput.probe_timeout_seconds`, is enforced around every probe, and sizes each poll activity.
+`preflight_warmup_mode` decides whether a warmup that never got ready blocks the run, independent
+of `preflight_gate_mode` (below).
 
-1. At gate start it fires `{app}:preflight_warmup_start` and, at the same time, the check activity
-   with `tier=fast`. A `fast` verdict is enforced exactly as an untiered one is.
-2. It then polls `{app}:preflight_warmup_state` — short activities separated by durable timers, so
-   the wait holds no worker slot. `not_started` / `running` waits and polls again; `ready` (or
-   `not_required`) dispatches the check activity again with `tier=warmup`.
+The gate runs it like this:
 
-A `failed` state, or a typed AUTH, PERMISSION or NOT_FOUND raise from either hook, ends the wait at
-once; any other raise reads as "not ready yet" and is polled again. Reaching the ceiling still
-warming is `SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED` (`SourceWarmupExhaustedError`, category
-`SOURCE_UNAVAILABLE`, audience `USER`) — "Source wasn't ready within 30 min; last reported: RESUMING" —
-while a `failed` state with no typed error of its own is plain `SOURCE_UNAVAILABLE`. The two get
-different `suggested_action`s, keyed on `code` (`WARMUP_SUGGESTED_ACTIONS`): an unreachable source
-points at network access and private link, an exhausted warmup at the source's size and queue. A
-hook's own `suggested_action` always wins. Both are `source_unverifiable` rows carrying
-`gate_tier: "warmup"`, and `preflight_gate_mode` decides whether they block.
+1. The check activity, `{app}:preflight`, probes `warmup` once before it runs any check, bounded
+   by the probe timeout and what is left of the gate budget. `READY` runs every tier in that same
+   dispatch, and the run is exactly what it was before warmup existed: one dispatch, one row, no
+   `gate_tier` or warmup fields.
+2. Otherwise the activity runs only the `PREFLIGHT` tier, enforced like any verdict, and hands the
+   observation to the workflow. Once that dispatch lets the run go on, the workflow polls
+   `{app}:preflight_warmup` — one probe per short activity, separated by durable timers, so the
+   wait holds no worker slot. The wait between polls is 5s doubling to 30s, or the source's
+   `next_poll_seconds` with a 5s floor, and never runs past the ceiling.
+3. On `READY` within the ceiling it dispatches the check activity again with only the `WARMUP`
+   tier. That verdict is enforced like any other, by category under `preflight_gate_mode`.
+
+A typed AUTH, PERMISSION or NOT_FOUND raise from the probe ends the wait at once. It is a verdict on
+the source like any handler raise, so `preflight_gate_mode` gates it on its category. Any other
+raise, or a probe that overruns its timeout, reads as `WARMING` and is polled again.
+
+Two outcomes are attributed to the source's compute, and `preflight_warmup_mode` alone decides
+them: `SOFT` reports and lets the run proceed, `HARD` stops it, whatever `preflight_gate_mode` says.
+`UNAVAILABLE` ends the wait as `SOURCE_UNAVAILABLE` — "The source reported its compute as
+unavailable (SUSPENDED)" — with a row outcome of `would_block` or `blocked`. Reaching the ceiling
+still pending, or a `READY` that arrives only after it, is `SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED`
+(`SourceWarmupExhaustedError`, category `SOURCE_UNAVAILABLE`, audience `USER`) — "Source wasn't
+ready within 30 min; last reported: RESUMING", plus the last transient raise when there was one.
+Its row outcome is `warmup_exhausted` under either posture, and its `suggested_action` points at the
+source's size and queue, or at raising the ceiling. Both rows are `source_unverifiable`, and both
+stamp `gate_mode` with the warmup posture rather than the gate's, so a reader can tell a stopped run
+from a reported one without the app's config.
 
 While it waits, the workflow sets its Temporal current details — the line the run's health view
-shows — to `waiting for source warmup: <the hook's message, else its status>, <elapsed>`, e.g.
+shows — to `waiting for source warmup: <source_state, else the state>[, N queued], <elapsed>`, e.g.
 `waiting for source warmup: RESUMING, 40s`, and clears it when the wait ends. The warmup reads as
-the source getting ready, not as the connector failing. A warmup activity that itself fails — a lost worker, a credential lookup the secret store
-refused — is the gate's own plumbing and fails open as `no_verdict` / `gate_broken`.
+the source getting ready, not as the connector failing. A warmup activity that itself fails — a
+lost worker, a credential lookup the secret store refused — is the gate's own plumbing and fails
+open as `no_verdict` / `gate_broken`.
 
-Every row of a warmup app carries `gate_tier` (`fast` or `warmup`), so one run has up to two rows
-with the same `gate_attempt`; dedupe on `(workflow_run_id, gate_tier, gate_attempt)`. They also
-carry `warmup_outcome`: `warming` on the `fast` row (written while the warmup is still in flight,
-so a run that ends there reads as warming, not as a missing verdict), and on the `warmup` row the
-state that ended the wait — `ready`, `not_required`, `failed`, `exhausted` (the ceiling) or `broken`
-(a warmup activity failed). Once the wait has ended the row adds `warmup_duration_ms` (gate start to
-that state, on the workflow clock) and `warmup_transitions`, a JSON list of the statuses the polls
-observed with their offsets. Each check in `check_matrix` carries its `tier` when the handler set
-one. The storage
-probes (below) run once, with the `fast` dispatch. An app that declares no ceiling gets none of this:
-no warmup activity, no timer, no `gate_tier` key, and the check activity runs every check untiered.
-The two activity names are reserved: a `@task` named `preflight_warmup_start` or
-`preflight_warmup_state` on an app with a ceiling fails worker boot.
+The rows of a run that waited carry `gate_tier`: `preflight` on the first dispatch's row, `warmup`
+on the row that ended the wait. One run therefore has up to two rows; dedupe on
+`(workflow_run_id, gate_tier, gate_attempt)`. They also carry `warmup_outcome`: `warming` on the
+`preflight` row (written while the warmup is still in flight, so a run that ends there reads as
+warming, not as a missing verdict), or `unavailable` when the first probe already said so; and on
+the `warmup` row whatever ended the wait — `ready`, `unavailable`, `failed` (a typed raise),
+`exhausted` (the ceiling) or `broken` (a warmup activity failed). Once the wait has ended the row
+adds `warmup_duration_ms` (gate start to that state, on the workflow clock) and
+`warmup_transitions`, a JSON list of `{"state", "at_ms"}` objects for each state the probes
+observed, oldest first, capped at 32. Each check in `check_matrix` carries `tier` only when it is
+`warmup`. The storage probes (below) run once, on the first dispatch.
+
+`{app}:preflight_warmup` is registered for every app, since whether an app has a warmup is its
+handler's answer at run time, not a declaration. The name is reserved: a `@task` named
+`preflight_warmup` fails worker boot, on every app.
+
+No `workflow.patched` guard covers this phase. App workers are PINNED
+(`default_versioning_behavior`), so a run drains on the build that started it, and a history from
+before the phase replays unchanged anyway: its check activity returned no observation, so the
+workflow issues no further command. If app workers ever move off PINNED, the wait loop needs a
+`workflow.patched` guard.
 
 #### Verifying artifact storage (opt-in)
 

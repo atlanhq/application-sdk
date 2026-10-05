@@ -282,11 +282,13 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   to `app_id` — agreed with the `system-workflows` owners and rolled out in the
   order the bullet above demands: header added here, released, fleet bumped,
   *then* enforced at the receiver.
-- **A warmup app writes two rows per run, told apart by per-check `tier`.**
-  An app that declares `App.preflight_warmup_ceiling_seconds` dispatches the
-  gate once per tier, and each dispatch persists its own verdict over only that
-  tier's checks. `payload.preflight.checks[].tier` (`fast` / `warmup`) is
-  therefore on the wire — but only for a check whose handler set a tier, so an
+- **A run that waits on a warmup writes two rows, told apart by per-check `tier`.**
+  When a run's first `Handler.warmup` probe is not `READY`, the gate dispatches
+  once for the `preflight` tier and once more for the `warmup` tier, and each
+  dispatch persists its own verdict over only that tier's checks. A run whose
+  first probe is `READY` (every app that does not override `warmup`) writes one
+  row, as before. `payload.preflight.checks[].tier` is on the wire only for a
+  `warmup` check; a `preflight` check, the default, carries no `tier` key, so an
   untiered app's payload is byte-for-byte what it was. A reader that counts runs
   must group on `workflow_slug` and the run, not count rows. The warmup phase's
   own outcome, duration and observed transitions are deliberately **not** sent:
@@ -301,6 +303,24 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   does not accept is a 422 and a dropped row, visible only as one WARNING
   carrying a status code. Adding a member on either side is additive; renaming
   one is not.
+
+## The warmup tier's wire values
+
+| | |
+|---|---|
+| **Produced by** | `CheckTier`, `WarmupState`, `WarmupObservation` and `PreflightStatus.PENDING` in `application_sdk/handler/contracts.py`; the `/workflows/v1/check` and `/workflows/v1/warmup` routes in `application_sdk/handler/service.py`; `PreflightRowOutcome.WARMUP_EXHAUSTED` in `application_sdk/handler/_preflight_outcome.py` and `WarmupOutcome` in `application_sdk/execution/_temporal/preflight_gate.py`, stamped on the `Preflight gate outcome` row |
+| **Shape** | Tier strings `preflight` / `warmup`, in the `/check` request's `tiers` and on a check's `tier`. A `preflight` check omits `tier` everywhere a check is serialised (`PreflightCheck.to_wire`, the `/check` body, `check_matrix`), so only a `warmup` check carries one. `preflight.status` gains `pending` on a tiered `/check`, with `preflight.warmup` set to the observation (`state`, `source_state`, and `queued_queries` / `next_poll_seconds` when set) or `null`. `POST /workflows/v1/warmup` answers `data` = the observation plus `ceiling_seconds`, `success` `false` only for `state: "unavailable"`. `WarmupState` strings are `cold` / `warming` / `queued` / `ready` / `unavailable`. On the gate row: `outcome` gains `warmup_exhausted`; `gate_tier` is `preflight` / `warmup`; `warmup_outcome` is `warming` / `ready` / `unavailable` / `failed` / `exhausted` / `broken`; `warmup_transitions` is a JSON list of `{"state", "at_ms"}` |
+| **Read by** | The connector-setup UI, which sends `tiers` to `/check`, polls `/warmup` until `ready` or `ceiling_seconds`, and renders a `pending` verdict from `preflight.warmup`; connector-pulse, which buckets `warmup_exhausted` (and a newest row with `warmup_outcome = 'warming'`) as "warming", apart from `no_verdict` |
+| **Pinned by** | `TestContracts`, `TestCheckPreflightTierOnly`, `TestCheckWarmupTier` and `TestWarmupRoute` in `tests/unit/handler/test_warmup.py`; `TestTheCeiling` and `TestTheWarmupRowFields` in `tests/unit/execution/test_preflight_warmup.py` |
+
+Every value here is additive for a caller that does not know about tiers: a
+`/check` without `tiers` never probes and never answers `pending`, an app that
+does not override `Handler.warmup` writes the gate row it always did, and a
+`preflight` check is serialised exactly as an untiered check was. A consumer
+that does read them must treat `pending` as "not yet verified", never as a
+pass or a failure, and must not branch on `source_state`, which is the
+source's own display label. The strings are shipped values: renaming one is a
+breaking change for the UI and the dashboards, adding one is not.
 
 ## The streaming event-trigger contract (`trigger_config` keys ↔ `$.event.*` args)
 

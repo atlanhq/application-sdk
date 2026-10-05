@@ -18,7 +18,7 @@ from application_sdk.execution._temporal import preflight_gate
 from application_sdk.execution._temporal.preflight_gate import (
     PreflightGateInput,
     build_preflight_gate_activity,
-    build_preflight_warmup_activities,
+    build_preflight_warmup_activity,
 )
 from application_sdk.execution._temporal.preflight_transport import (
     InProcessPreflightTransport,
@@ -31,8 +31,9 @@ from application_sdk.handler.contracts import (
     PreflightInput,
     PreflightOutput,
     PreflightStatus,
+    WarmupInput,
+    WarmupObservation,
     WarmupState,
-    WarmupStatus,
 )
 
 
@@ -40,7 +41,7 @@ class _RecordingTransport:
     """A transport with no handler behind it: records each call, answers fixed."""
 
     def __init__(self) -> None:
-        self.calls: list[tuple[str, PreflightInput]] = []
+        self.calls: list[tuple[str, PreflightInput | WarmupInput]] = []
 
     async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
         self.calls.append(("preflight_check", input))
@@ -49,13 +50,9 @@ class _RecordingTransport:
             checks=[PreflightCheck(name="reachable", passed=True)],
         )
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        self.calls.append(("warmup_start", input))
-        return WarmupState(status=WarmupStatus.RUNNING)
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        self.calls.append(("warmup_state", input))
-        return WarmupState(status=WarmupStatus.READY)
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        self.calls.append(("warmup", input))
+        return WarmupObservation(state=WarmupState.READY)
 
 
 def _as_transport(transport: PreflightTransport) -> PreflightTransport:
@@ -71,20 +68,16 @@ class TestTheGateCallsOnlyTheTransport:
             result = await gate(PreflightGateInput(entrypoint="crawl"))
         assert result.status is PreflightStatus.READY
         assert [c.name for c in result.checks] == ["reachable"]
-        ((operation, seen),) = transport.calls
-        assert operation == "preflight_check"
-        assert seen.entrypoint == "crawl"
+        # The first dispatch probes the warmup, then runs the checks.
+        assert [op for op, _ in transport.calls] == ["warmup", "preflight_check"]
+        assert all(seen.entrypoint == "crawl" for _, seen in transport.calls)
 
-    async def test_the_warmup_activities_call_their_own_operation(self) -> None:
+    async def test_the_warmup_activity_calls_the_warmup_operation(self) -> None:
         transport = _RecordingTransport()
-        start, state = build_preflight_warmup_activities(
-            _as_transport(transport), "myapp"
-        )
-        started = await start(PreflightGateInput(entrypoint="crawl"))
-        polled = await state(PreflightGateInput(entrypoint="crawl"))
-        assert started.status is WarmupStatus.RUNNING
-        assert polled.status is WarmupStatus.READY
-        assert [op for op, _ in transport.calls] == ["warmup_start", "warmup_state"]
+        poll = build_preflight_warmup_activity(_as_transport(transport), "myapp")
+        polled = await poll(PreflightGateInput(entrypoint="crawl"))
+        assert polled.observation.state is WarmupState.READY
+        assert [op for op, _ in transport.calls] == ["warmup"]
 
 
 class _Handler(DefaultHandler):
@@ -93,11 +86,8 @@ class _Handler(DefaultHandler):
             status=PreflightStatus.NOT_READY, message=input.entrypoint
         )
 
-    async def warmup_start(self, input: PreflightInput) -> WarmupState:
-        return WarmupState(status=WarmupStatus.RUNNING, message="start")
-
-    async def warmup_state(self, input: PreflightInput) -> WarmupState:
-        return WarmupState(status=WarmupStatus.READY, message="state")
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        return WarmupObservation(state=WarmupState.WARMING, source_state="probe")
 
 
 class TestTheInProcessTransport:
@@ -105,8 +95,8 @@ class TestTheInProcessTransport:
         transport = InProcessPreflightTransport(_Handler())
         input = PreflightInput(entrypoint="crawl")
         assert (await transport.preflight_check(input)).message == "crawl"
-        assert (await transport.warmup_start(input)).message == "start"
-        assert (await transport.warmup_state(input)).message == "state"
+        warmup = await transport.warmup(WarmupInput(entrypoint="crawl"))
+        assert warmup.source_state == "probe"
 
     def test_a_handler_satisfies_the_protocol(self) -> None:
         # Structural: existing callers passing a Handler keep type-checking.
@@ -136,8 +126,6 @@ class TestTheWorkerWiring:
         self,
     ) -> None:
         class _WarmApp(App):
-            preflight_warmup_ceiling_seconds = 120
-
             async def run(self, input: _In) -> _Out:
                 return _Out()
 
@@ -152,14 +140,14 @@ class TestTheWorkerWiring:
             return real_warmups(transport, *args, **kwargs)
 
         real_gate = preflight_gate.build_preflight_gate_activity
-        real_warmups = preflight_gate.build_preflight_warmup_activities
+        real_warmups = preflight_gate.build_preflight_warmup_activity
         client = mock.MagicMock()
         client.namespace = "default"
         client.service_client.config.target_host = "localhost:7233"
         with (
             mock.patch.object(preflight_gate, "build_preflight_gate_activity", _gate),
             mock.patch.object(
-                preflight_gate, "build_preflight_warmup_activities", _warmups
+                preflight_gate, "build_preflight_warmup_activity", _warmups
             ),
             mock.patch("application_sdk.execution._temporal.worker.Worker"),
         ):

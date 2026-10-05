@@ -144,8 +144,9 @@ _HANDLER_EXPORTS = (
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "WarmupInput",
+    "WarmupObservation",
     "WarmupState",
-    "WarmupStatus",
     "create_app_handler_service",
     "run_app_handler_service",
 )
@@ -193,7 +194,7 @@ def test_moved_names_resolve_to_the_same_objects_at_their_old_paths() -> None:
         "PreflightRowOutcome",
         "emit_preflight_check_outcome",
         "emit_preflight_crash_outcome",
-        "filter_checks_to_tier",
+        "rows_outside_tiers",
         "warn_if_partial",
     ):
         assert getattr(preflight_gate, name) is getattr(_preflight_outcome, name), name
