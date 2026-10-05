@@ -306,6 +306,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "it ``deprecated`` or ``sunset`` in the Pkl widget definition, regenerate\n"
             "the contract, run ``gen-contract-ledger`` to record the new status, and\n"
             "commit the updated ledger in the same PR.\n"
+            "\n"
+            "A field keeps its recorded type for life: the ledger keys entries by\n"
+            "contract and field name, so a retype cannot be recorded under the same\n"
+            "name. To change a type deliberately, either revert it, or retire the\n"
+            "field (``sunset``) and add a new field under a new name with the new\n"
+            "type, moving producers to it. Replacing an untyped object\n"
+            "(``dict[str, Any]``) with a model is such a retype — the model requires\n"
+            "keys that payloads already in flight may lack — and not the in-place\n"
+            "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
     ),

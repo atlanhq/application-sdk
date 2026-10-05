@@ -330,9 +330,9 @@ signal in the observability stack.
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
 preferred but not required.  Flag if the module is expected to be present (will fail
-later with a confusing AttributeError).
-A cause-preserving re-raise on every path (including a typed error raised from the
-ImportError) surfaces the failure and does not need a duplicate log.
+later with a confusing AttributeError). A cause-preserving re-raise on every path
+(including a typed error raised from the ImportError) surfaces the failure and does not
+need a duplicate log.
 
 ---
 
