@@ -12,7 +12,7 @@ from uuid import uuid4
 from loguru import logger as _loguru_logger
 from temporalio import workflow as _workflow
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import CancelHandle, run_in_thread
 from application_sdk._runtime.progress import holding_progress
 from application_sdk.app.base_errors import (
     SecretStoreNotConfiguredError,
@@ -672,7 +672,11 @@ class TaskExecutionContext:
         return None
 
     async def run_in_thread(
-        self, func: Callable[..., T], *args: Any, **kwargs: Any
+        self,
+        func: Callable[..., T],
+        *args: Any,
+        cancel: CancelHandle | None = None,
+        **kwargs: Any,
     ) -> T:
         """Last-resort escape hatch: run a blocking function in a thread pool.
 
@@ -718,6 +722,10 @@ class TaskExecutionContext:
         Args:
             func: Blocking function to run. MUST have internal timeout handling.
             *args: Positional arguments for ``func``.
+            cancel: :class:`~application_sdk.execution.heartbeat.CancelHandle`
+                fired if this task is cancelled, so the driver call can be
+                cancelled too. Register the driver's cancel on it from inside
+                ``func``. ``None`` leaves cancellation unchanged.
             **kwargs: Keyword arguments for ``func``.
 
         Returns:
@@ -734,7 +742,7 @@ class TaskExecutionContext:
         See Also:
             ``docs/adr/0010-async-first-blocking-code.md`` for full rationale.
         """
-        return await run_in_thread(func, *args, **kwargs)
+        return await run_in_thread(func, *args, cancel=cancel, **kwargs)
 
     def holding_progress(
         self, label: str, *, timeout: float | None

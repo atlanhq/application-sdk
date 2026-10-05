@@ -66,6 +66,132 @@ _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="sdk-blocking-",
 )
 
+# Executor for CancelHandle actions — a driver cancel (cursor.cancel(), a
+# statement-cancel request) fired when the task awaiting a run_in_thread call is
+# cancelled.
+#
+# Why not _BLOCKING_EXECUTOR?
+#   The cancel matters most when that pool is saturated by the very calls being
+#   abandoned. Queued behind them, the cancel would run only once one of them
+#   finished on its own — which is what it exists to avoid.
+#
+# Why not the loop?
+#   A driver cancel is a blocking network round trip.
+#
+# Small, because an action is one short call; created at import like the pool
+# above, and for the same reason.
+_CANCEL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="sdk-cancel-",
+)
+
+
+class CancelHandle:
+    """Cancel a blocking call at the driver when its awaiting task is cancelled.
+
+    ``run_in_thread`` cannot stop its worker thread: Python has no way to kill
+    one. Cancelling the awaiting task hands the loop back at once, but the
+    thread runs on, holding a pool slot, a connection and server-side compute
+    until the call returns by itself. A handle closes that gap for calls whose
+    driver *can* be told to stop::
+
+        handle = CancelHandle()
+
+        def _query() -> list[Row]:
+            cursor = connection.cursor()
+            handle.set(cursor.cancel)  # from the worker thread, once it exists
+            cursor.execute(sql)
+            return cursor.fetchall()
+
+        rows = await run_in_thread(_query, cancel=handle)
+
+    When the awaiting task is cancelled, ``run_in_thread`` calls
+    :meth:`request`, which runs the registered action on a small dedicated
+    ``sdk-cancel-`` pool — never on the event loop, and never on the
+    ``sdk-blocking-`` pool, which is likely full of exactly the calls being
+    abandoned. The driver call then fails or returns early in its own thread,
+    and the thread and its pool slot are freed.
+
+    **The action is set from the worker thread**, because that is usually the
+    only place the driver handle exists, and often only part-way through the
+    call (a query id known only after submit). If a cancel was requested before
+    :meth:`set` is called, the action is fired as soon as it is set.
+
+    Each action fires at most once. A failing action is logged at WARNING and
+    never raised: by then the caller has already been cancelled.
+
+    Thread-safe. One handle per call; it is not reusable across calls.
+
+    **Never stop or suspend a warehouse from an action.** A cancel stops *this*
+    statement. A warehouse that the statement started resuming keeps resuming,
+    and stopping it would take it away from every other user of it.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._action: Callable[[], None] | None = None
+        self._requested = False
+
+    @property
+    def requested(self) -> bool:
+        """Whether a cancel has been requested.
+
+        Worker code checks this between steps (a ``fetchmany`` loop, a batch of
+        statements) to stop work nobody is waiting for.
+        """
+        return self._requested
+
+    def set(self, action: Callable[[], None]) -> None:
+        """Register the driver-level cancel for the call in progress.
+
+        Call this from the worker thread as soon as the driver handle exists.
+        A later ``set`` replaces an action that has not fired. If a cancel was
+        already requested, ``action`` is fired immediately instead of stored.
+
+        Args:
+            action: Zero-argument callable that tells the driver to stop, e.g.
+                ``cursor.cancel``. Must not stop or suspend a warehouse.
+        """
+        with self._lock:
+            if not self._requested:
+                self._action = action
+                return
+        _fire_cancel_action(action)
+
+    def request(self) -> None:
+        """Request a cancel: fire the registered action, if any, at most once.
+
+        Called by ``run_in_thread`` when its awaiting task is cancelled. Returns
+        without waiting for the action, which runs on the ``sdk-cancel-`` pool.
+        """
+        with self._lock:
+            self._requested = True
+            action, self._action = self._action, None
+        if action is not None:
+            _fire_cancel_action(action)
+
+
+def _fire_cancel_action(action: Callable[[], None]) -> None:
+    """Run a cancel action on the cancel pool; log, never raise, a failure."""
+    try:
+        _CANCEL_EXECUTOR.submit(_run_cancel_action, action)
+    except RuntimeError:
+        # Shut down at interpreter exit; the process is going, and its
+        # connections with it.
+        logger.debug("Cancel pool is shut down; skipped cancel action", exc_info=True)
+
+
+def _run_cancel_action(action: Callable[[], None]) -> None:
+    try:
+        action()
+    except Exception:
+        logger.warning(
+            "Cancel action %s failed; the blocking call it was meant to stop "
+            "may run to completion",
+            _offloaded_callable_name(action),
+            exc_info=True,
+        )
+
 
 #: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →
 #: *Feeding the tracker*, mechanism 2). The offloaded callable's own name is
@@ -194,7 +320,12 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
         tracker.exit_hold(hold)
 
 
-async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_in_thread(
+    func: Callable[..., T],
+    *args: Any,
+    cancel: CancelHandle | None = None,
+    **kwargs: Any,
+) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
 
     .. warning::
@@ -267,9 +398,18 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     forever, the thread runs forever — this orphans state and consumes
     pool slots even after the activity is retried.
 
+    **Cancelling at the driver.** Cancelling the awaiting task returns control
+    at once, but the thread runs on. If the driver can stop the call from
+    another thread, pass a :class:`CancelHandle` as ``cancel`` and register the
+    driver's cancel on it from inside ``func``; the handle is fired when the
+    awaiting task is cancelled, and ``CancelledError`` is re-raised as usual.
+    ``cancel`` is consumed here and never passed to ``func``.
+
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
         *args: Positional arguments for ``func``.
+        cancel: Handle to fire if the awaiting task is cancelled. ``None``
+            (the default) leaves cancellation behaving as it always has.
         **kwargs: Keyword arguments for ``func``.
 
     Returns:
@@ -303,7 +443,14 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     if scopes:
         call = _tracked_offload(call, scopes, label)
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
-        return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+        if cancel is None:
+            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+        try:
+            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+        except asyncio.CancelledError:
+            # Non-blocking: the action is handed to the cancel pool.
+            cancel.request()
+            raise
 
 
 #: The open :func:`tracking_offloads` scopes, innermost last. A tuple rather

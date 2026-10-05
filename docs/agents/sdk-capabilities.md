@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    b1bc04acef38809f58d7a13f104f7a2ad978cad0
-source-date:   2026-10-04T23:25:34+01:00
+source-sha:    b04d203c4998ad8420a16c8088df96edcaeb9a19
+source-date:   2026-10-05T09:19:06+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -25,7 +25,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 70 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 47 |
 | `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 26 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
@@ -2110,6 +2110,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Signature:** `class BrokenProcessPool()`
 - **Summary:** Raised when a process in a ProcessPoolExecutor terminated abruptly _(re-exported from `concurrent.futures.process.BrokenProcessPool`)_
 
+#### `CancelHandle`
+
+- **Import:** `from application_sdk.execution.heartbeat import CancelHandle`
+- **Signature:** `class CancelHandle()`
+- **Summary:** Cancel a blocking call at the driver when its awaiting task is cancelled.
+- **Defined in:** `application_sdk/_runtime/offload.py`
+
 #### `ClosedHold`
 
 - **Import:** `from application_sdk.execution.progress import ClosedHold`
@@ -2364,7 +2371,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `run_in_thread`
 
 - **Import:** `from application_sdk.execution.heartbeat import run_in_thread`
-- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any)`
+- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, cancel: CancelHandle | None = None, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
