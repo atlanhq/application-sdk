@@ -552,7 +552,7 @@ class BaseSQLClient(ClientInterface):
             cursor = await run_in_thread(
                 _holding_connection(connection.execute),
                 text(_escape_colons_for_text(query)),
-                cancel=handle,
+                cancel_handle=handle,
             )
             if not cursor or not cursor.cursor:
                 raise UnsupportedSqlCursorError()
@@ -562,7 +562,7 @@ class BaseSQLClient(ClientInterface):
 
             fetchmany = _holding_connection(cursor.fetchmany)
             while True:
-                rows = await run_in_thread(fetchmany, batch_size, cancel=handle)
+                rows = await run_in_thread(fetchmany, batch_size, cancel_handle=handle)
                 if not rows:
                     break
 
@@ -690,7 +690,7 @@ class BaseSQLClient(ClientInterface):
                     return execute_query(query, chunksize)
 
             return await run_in_thread(
-                _cancellable_query, query, chunksize, cancel=handle
+                _cancellable_query, query, chunksize, cancel_handle=handle
             )
 
     async def get_batched_results(

@@ -1214,7 +1214,7 @@ class App(ABC):
         self,
         func: Callable[..., Any],
         *args: Any,
-        cancel: CancelHandle | None = None,
+        cancel_handle: CancelHandle | None = None,
         **kwargs: Any,
     ) -> Any:
         """Run a blocking function in a thread pool.
@@ -1231,7 +1231,7 @@ class App(ABC):
         Args:
             func: Blocking function to run.
             *args: Positional arguments for func.
-            cancel: Handle fired if this task is cancelled, so the driver call
+            cancel_handle: Handle fired if this task is cancelled, so the driver call
                 can be cancelled too; see :class:`~application_sdk.execution.heartbeat.CancelHandle`.
             **kwargs: Keyword arguments for func.
 
@@ -1246,7 +1246,7 @@ class App(ABC):
                 "run_in_thread() can only be called inside @task methods."
             )
         return await self._task_context.run_in_thread(
-            func, *args, cancel=cancel, **kwargs
+            func, *args, cancel_handle=cancel_handle, **kwargs
         )
 
     def holding_progress(

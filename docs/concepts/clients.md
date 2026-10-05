@@ -82,7 +82,7 @@ class SnowflakeClient(BaseSQLClient):
 
 ### Cancelling a running query
 
-`get_results`, `get_batched_results` and `run_query` run the driver call on a worker thread through `run_in_thread(..., cancel=handle)` (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). When the awaiting task is cancelled:
+`get_results`, `get_batched_results` and `run_query` run the driver call on a worker thread through `run_in_thread(..., cancel_handle=handle)` (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). When the awaiting task is cancelled:
 
 1. The read hands control back to the event loop at once.
 2. `cancel_cursor(dbapi_cursor)` is called on the `sdk-cancel-` pool with the DBAPI cursor the statement is running on. The cursor is registered by a SQLAlchemy `before_cursor_execute` listener the client attaches to its engine, from inside the worker thread.

@@ -1,4 +1,4 @@
-"""``run_in_thread(..., cancel=)`` fires a driver-level cancel when its task is cancelled.
+"""``run_in_thread(..., cancel_handle=)`` fires a driver-level cancel when its task is cancelled.
 
 Real threads throughout: the behaviour under test is which thread an action
 runs on and whether it still runs when the ``sdk-blocking-`` pool is full, and
@@ -87,7 +87,7 @@ def saturated_pool() -> Iterator[int]:
 async def test_cancel_fires_action_once_off_the_loop_and_unwinds_promptly() -> None:
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel=handle))
+    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel_handle=handle))
     await _wait_for(driver.started)
 
     elapsed = await _cancel_and_time(task)
@@ -120,7 +120,7 @@ async def test_action_runs_while_blocking_pool_is_full(saturated_pool: int) -> N
     # Take the last free slot, so the pool is wholly occupied by blocked calls.
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel=handle))
+    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel_handle=handle))
     await _wait_for(driver.started)
 
     await _cancel_and_time(task)
@@ -159,7 +159,7 @@ async def test_unblocked_call_frees_its_pool_slot(saturated_pool: int) -> None:
     """Once the action unblocks the driver, its thread exits and the slot is reusable."""
     handle = CancelHandle()
     driver = _Driver(handle)
-    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel=handle))
+    task = asyncio.ensure_future(run_in_thread(driver.execute, cancel_handle=handle))
     await _wait_for(driver.started)
 
     await _cancel_and_time(task)
@@ -179,7 +179,7 @@ async def test_completed_call_never_fires_the_action() -> None:
         handle.set(fired.set)
         return 42
 
-    assert await run_in_thread(_work, cancel=handle) == 42
+    assert await run_in_thread(_work, cancel_handle=handle) == 42
     assert not handle.requested
     await asyncio.sleep(0.05)
     assert not fired.is_set()
@@ -190,3 +190,18 @@ async def test_without_cancel_func_kwargs_pass_through() -> None:
         return value * scale
 
     assert await run_in_thread(_echo, 2, scale=3) == 6
+
+
+async def test_a_func_cancel_kwarg_is_forwarded_not_taken() -> None:
+    """The SDK's keyword is ``cancel_handle``, so ``func``'s own ``cancel=`` survives.
+
+    Before FND-3269 every keyword after ``func`` reached it. A reserved
+    ``cancel`` keyword would have bound a caller's token to the SDK and dropped
+    it from ``func``'s call.
+    """
+    token = object()
+
+    def _execute(sql: str, *, cancel: object) -> object:
+        return cancel
+
+    assert await run_in_thread(_execute, "SELECT 1", cancel=token) is token

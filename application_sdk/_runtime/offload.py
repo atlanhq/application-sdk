@@ -103,7 +103,7 @@ class CancelHandle:
             cursor.execute(sql)
             return cursor.fetchall()
 
-        rows = await run_in_thread(_query, cancel=handle)
+        rows = await run_in_thread(_query, cancel_handle=handle)
 
     When the awaiting task is cancelled, ``run_in_thread`` calls
     :meth:`request`, which runs the registered action on a small dedicated
@@ -323,7 +323,7 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
 async def run_in_thread(
     func: Callable[..., T],
     *args: Any,
-    cancel: CancelHandle | None = None,
+    cancel_handle: CancelHandle | None = None,
     **kwargs: Any,
 ) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
@@ -400,15 +400,16 @@ async def run_in_thread(
 
     **Cancelling at the driver.** Cancelling the awaiting task returns control
     at once, but the thread runs on. If the driver can stop the call from
-    another thread, pass a :class:`CancelHandle` as ``cancel`` and register the
+    another thread, pass a :class:`CancelHandle` as ``cancel_handle`` and register the
     driver's cancel on it from inside ``func``; the handle is fired when the
     awaiting task is cancelled, and ``CancelledError`` is re-raised as usual.
-    ``cancel`` is consumed here and never passed to ``func``.
+    ``cancel_handle`` is consumed here and never passed to ``func``; it is
+    named so that a ``func`` taking its own ``cancel=`` keeps receiving it.
 
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
         *args: Positional arguments for ``func``.
-        cancel: Handle to fire if the awaiting task is cancelled. ``None``
+        cancel_handle: Handle to fire if the awaiting task is cancelled. ``None``
             (the default) leaves cancellation behaving as it always has.
         **kwargs: Keyword arguments for ``func``.
 
@@ -443,13 +444,13 @@ async def run_in_thread(
     if scopes:
         call = _tracked_offload(call, scopes, label)
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
-        if cancel is None:
+        if cancel_handle is None:
             return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
         try:
             return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
         except asyncio.CancelledError:
             # Non-blocking: the action is handed to the cancel pool.
-            cancel.request()
+            cancel_handle.request()
             raise
 
 

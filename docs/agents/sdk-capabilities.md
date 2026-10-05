@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    3d6787870de74694ba727664e116502d84ff41c4
-source-date:   2026-10-05T14:28:14+01:00
+source-sha:    ea25b3f43ed827287d8aa6950e36b883959c3fbd
+source-date:   2026-10-05T15:04:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -2406,7 +2406,7 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 #### `run_in_thread`
 
 - **Import:** `from application_sdk.execution.heartbeat import run_in_thread`
-- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, cancel: CancelHandle | None = None, **kwargs: Any)`
+- **Signature:** `run_in_thread(func: Callable[..., T], *args: Any, cancel_handle: CancelHandle | None = None, **kwargs: Any)`
 - **Summary:** Last-resort escape hatch: run a blocking function in a thread pool.
 - **Defined in:** `application_sdk/_runtime/offload.py`
 
@@ -7705,7 +7705,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `status: WarmupStatus` `= WarmupStatus.NOT_REQUIRED` — Where the warmup is. ``NOT_REQUIRED`` means the app has no warmup.
   - `message: str` `= ''` — Human-readable progress line for the UI.
-  - `pending_checks: list[str]` `= []` — Names of the ``WARMUP``-tier checks that cannot run until this warmup is
+  - `pending_checks: list[str]` `= Field(default_factory=list)` — Names of the ``WARMUP``-tier checks that cannot run until this warmup is
   - `estimated_duration_ms: float | None` — The app's estimate of how long the warmup takes end to end, so the UI
   - `error: FailureDetails | None` — Typed reason for a ``FAILED`` warmup. A bare ``AppError`` is coerced.
 - **Defined in:** `application_sdk/handler/contracts.py`

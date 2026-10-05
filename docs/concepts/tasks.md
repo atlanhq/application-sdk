@@ -379,7 +379,7 @@ def _query() -> list[tuple[object, ...]]:
     cursor.execute(sql)
     return cursor.fetchall()
 
-rows = await self.task_context.run_in_thread(_query, cancel=handle)
+rows = await self.task_context.run_in_thread(_query, cancel_handle=handle)
 ```
 
 - When the awaiting task is cancelled, `run_in_thread` calls `handle.request()` and re-raises `CancelledError` immediately, exactly as without a handle.
@@ -387,7 +387,7 @@ rows = await self.task_context.run_in_thread(_query, cancel=handle)
 - If the cancel was requested before `set()` (a statement id known only after submit, say), `set()` fires the action straight away.
 - A failing action is logged at WARNING, never raised.
 - `handle.requested` lets worker code stop between steps, e.g. in a `fetchmany` loop.
-- Without `cancel=`, behaviour is unchanged.
+- Without `cancel_handle=`, behaviour is unchanged.
 
 After a cancel, don't return the connection to a pool: invalidate it. `BaseSQLClient` already does this for its own read paths — see [Clients](clients.md#cancelling-a-running-query).
 
