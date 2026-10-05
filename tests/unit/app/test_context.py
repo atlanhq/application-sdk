@@ -877,6 +877,22 @@ class TestTaskExecutionContextRunInThread:
         result = await tec.run_in_thread(add, 2, 3, mult=10)
         assert result == 50
 
+    @pytest.mark.asyncio
+    async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
+        """No keyword is the SDK's: ``cancel=`` reaches func."""
+        ctx = AppContext(app_name="a", app_version="1")
+        tec = TaskExecutionContext(
+            app_context=ctx,
+            task_name="t",
+            heartbeat_controller=MockHeartbeatController(),
+        )
+        token = object()
+
+        def execute(sql: str, *, cancel: object) -> object:
+            return cancel
+
+        assert await tec.run_in_thread(execute, "SELECT 1", cancel=token) is token
+
     def test_run_in_thread_delegates_to_the_substrate_primitive(self) -> None:
         """``context.py`` offloads through the substrate, not a private copy.
 

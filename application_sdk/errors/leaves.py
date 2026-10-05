@@ -368,6 +368,22 @@ class SourceUnavailableError(AppError):
     audience: ClassVar[Audience] = Audience.USER
 
 
+@dataclass(kw_only=True)
+class SourceWarmupExhaustedError(SourceUnavailableError):
+    """The source answered but did not finish warming up within the gate's ceiling.
+
+    Raised (as evidence) by the injected preflight gate when an app's warmup —
+    a suspended warehouse resuming, a queued job starting — is still pending
+    when ``App.preflight_warmup_ceiling_seconds`` runs out. Distinct from a bare
+    :class:`SourceUnavailableError` because the remedy differs: an unreachable
+    source is a network or private-link problem, a slow warmup is a sizing or
+    queueing one, and a consumer routes the two on ``code``. Same category, so
+    every ``SOURCE_UNAVAILABLE`` filter and catch site still holds it.
+    """
+
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED"
+
+
 # Temporal wire type string for worker-pod eviction. Set as
 # ``ApplicationError.type`` by the activity wrapper so workflow code can
 # recognise the failure by string match across the Temporal boundary

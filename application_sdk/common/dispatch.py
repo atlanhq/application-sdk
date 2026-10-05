@@ -13,9 +13,34 @@ collapse every run of a session onto one shared prefix).
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol
 
 from pydantic import ValidationError
+
+
+class EntryPointIdentity(Protocol):
+    """The two fields of an entry point its workflow type is derived from.
+
+    Structural, so this module — read by the handler, which must not import
+    the ``app`` package (FND-3280) — never needs
+    :class:`~application_sdk.app.entrypoint.EntryPointMetadata`, which satisfies
+    it.
+    """
+
+    @property
+    def name(self) -> str: ...
+
+    @property
+    def implicit(self) -> bool: ...
+
+
+def canonical_workflow_type(app_name: str, ep: EntryPointIdentity) -> str:
+    """The convention-derived Temporal workflow type for *ep*.
+
+    ``{app-name}`` for the implicit (run()-derived) entry point, and
+    ``{app-name}:{entry-point-name}`` for every explicit ``@entrypoint``.
+    """
+    return app_name if ep.implicit else f"{app_name}:{ep.name}"
 
 
 class StampFailurePolicy(StrEnum):

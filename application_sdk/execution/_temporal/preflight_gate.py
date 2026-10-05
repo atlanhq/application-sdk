@@ -36,7 +36,6 @@ deterministic workflow only forwards the secret-free :class:`PreflightGateInput`
 from __future__ import annotations
 
 import asyncio
-import math
 import time
 import warnings
 from collections.abc import Awaitable, Callable, Iterable, Iterator
@@ -67,32 +66,133 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.credentials.resolver import CredentialResolver
     from application_sdk.credentials.routing import find_prebuilt_credential_ref
     from application_sdk.credentials.spec import AgentCredentialSpec
-    from application_sdk.errors.base import (
-        AppError,
-        redact_and_cap,
-        redact_secrets,
-        sanitize_cause_repr,
-    )
+    from application_sdk.errors.base import AppError
+    from application_sdk.errors.base import redact_and_cap as redact_and_cap
+    from application_sdk.errors.base import redact_secrets, sanitize_cause_repr
     from application_sdk.errors.categories import FailureCategory
     from application_sdk.errors.leaves import (
         AppTimeoutError,
         DependencyUnavailableError,
-        PreconditionError,
+        InternalError,
+    )
+    from application_sdk.errors.leaves import PreconditionError as PreconditionError
+    from application_sdk.errors.leaves import (
+        SourceUnavailableError,
+        SourceWarmupExhaustedError,
     )
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
         persist_check_result,
     )
+
+    # Handler-side since FND-3280 so ``/check`` can emit its row without
+    # importing this module. ``X as X`` marks each as a deliberate re-export: the
+    # names keep resolving here, where the gate and its tests have always used them.
+    # ``redact_and_cap`` and ``PreconditionError`` above are kept as ``X as X``
+    # for the same reason: every release before FND-3280 imported them here.
+    from application_sdk.handler._preflight_outcome import (
+        _CLIENT_FAULT_CATEGORIES as _CLIENT_FAULT_CATEGORIES,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _INTERACTIVE_ROW_IS_LOUD as _INTERACTIVE_ROW_IS_LOUD,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _LOG_ROW_IS_ONLY_CHANNEL as _LOG_ROW_IS_ONLY_CHANNEL,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        EMPTY_CHECK_MATRIX as EMPTY_CHECK_MATRIX,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        FAILURE_AUDIENCE_KEY as FAILURE_AUDIENCE_KEY,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        FAILURE_CHECK_KEY as FAILURE_CHECK_KEY,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        FAILURE_MESSAGE_KEY as FAILURE_MESSAGE_KEY,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        FAILURE_SUGGESTED_ACTION_KEY as FAILURE_SUGGESTED_ACTION_KEY,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        INTERACTIVE_RAISE_OUTCOMES as INTERACTIVE_RAISE_OUTCOMES,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        PREFLIGHT_FALLBACK_CODE as PREFLIGHT_FALLBACK_CODE,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        PreflightRowOutcome as PreflightRowOutcome,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        PreflightSurface as PreflightSurface,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _attributed_check as _attributed_check,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _check_matrix_json as _check_matrix_json,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _failure_fields as _failure_fields,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _fallback_failure as _fallback_failure,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _fallback_message as _fallback_message,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _is_client_fault as _is_client_fault,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _log_row_is_only_channel as _log_row_is_only_channel,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _primary_failure as _primary_failure,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        _proceeded_failure as _proceeded_failure,
+    )
+    from application_sdk.handler._preflight_outcome import _stamped as _stamped
+    from application_sdk.handler._preflight_outcome import (
+        emit_preflight_check_outcome as emit_preflight_check_outcome,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        emit_preflight_crash_outcome as emit_preflight_crash_outcome,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        rows_outside_tiers as rows_outside_tiers,
+    )
+    from application_sdk.handler._preflight_outcome import (
+        warn_if_partial as warn_if_partial,
+    )
+    from application_sdk.handler._warmup import (
+        WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS,
+        WARMUP_TERMINAL_CATEGORIES,
+        bounded_warmup_probe,
+    )
+    from application_sdk.handler._warmup import (
+        clamp_declared_int as _clamp_declared_int,
+    )
+    from application_sdk.handler._warmup import (
+        warmup_progress_line,
+        warmup_unavailable_error,
+    )
     from application_sdk.handler.context import bind_invocation_context
     from application_sdk.handler.contracts import (
+        ALL_CHECK_TIERS,
         BaseConnectionConfig,
         BaseMetadataConfig,
+        CheckTier,
         HandlerCredential,
         PreflightCheck,
         PreflightGateMode,
         PreflightInput,
         PreflightOutput,
         PreflightStatus,
+        WarmupInput,
+        WarmupObservation,
+        WarmupState,
         unverifiable_preflight_result,
     )
     from application_sdk.infrastructure.context import get_infrastructure
@@ -107,7 +207,9 @@ with workflow.unsafe.imports_passed_through():
     # unanswerable from outcomes alone, and that is exactly the app whose broken
     # guarantee we most need to find.
     from application_sdk.observability.events import (
-        PREFLIGHT_CHECK_EVENT,
+        PREFLIGHT_CHECK_EVENT as PREFLIGHT_CHECK_EVENT,
+    )
+    from application_sdk.observability.events import (
         PREFLIGHT_OUTCOME_EVENT,
         PREFLIGHT_POSTURE_EVENT,
     )
@@ -117,30 +219,25 @@ with workflow.unsafe.imports_passed_through():
         GATE_CLASSIFICATION_KEY,
         GATE_DURATION_KEY,
         GATE_MODE_KEY,
+        GATE_TIER_KEY,
         GATE_TIMEOUT_KEY,
-        PREFLIGHT_SURFACE_KEY,
-        AtlanLoggerAdapter,
-        get_logger,
     )
+    from application_sdk.observability.logger_adaptor import (
+        PREFLIGHT_SURFACE_KEY as PREFLIGHT_SURFACE_KEY,
+    )
+    from application_sdk.observability.logger_adaptor import (
+        WARMUP_DURATION_KEY,
+        WARMUP_OUTCOME_KEY,
+        WARMUP_TRANSITIONS_KEY,
+    )
+    from application_sdk.observability.logger_adaptor import (
+        AtlanLoggerAdapter as AtlanLoggerAdapter,
+    )
+    from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
 PREFLIGHT_FAILED_ERROR_TYPE = "PreflightFailed"
-
-# Contract sentinel stamped as the primary FailureDetails.code on a fallback block
-# (a handler that returned NOT_READY without a typed check error). It replaces the
-# generic PRECONDITION code so the outcome event's ``reason`` distinguishes an
-# un-migrated block from a typed one (whose reason is the handler error's own code,
-# e.g. AUTH). category/audience/retryable are unchanged.
-PREFLIGHT_FALLBACK_CODE = "PREFLIGHT_CHECK_FAILED"
-
-# The check matrix for an outcome where no check ran — a skipped gate, or a
-# fail-open the workflow reports without ever seeing the activity's result.
-# Emitted rather than omitted so ``check_matrix`` is present on *every* outcome:
-# a consumer can then parse it unconditionally instead of branching on presence,
-# and a branch mishandled in the dropping direction is how a gate that never
-# reached a verdict vanishes from the numerator it belongs in.
-EMPTY_CHECK_MATRIX = "[]"
 
 
 def _iter_chain(exc: BaseException | None) -> Iterator[BaseException]:
@@ -501,10 +598,86 @@ def _prebuilt_credential_ref(input_data: object) -> CredentialRef | None:
 
 
 if TYPE_CHECKING:
+    from application_sdk.execution._temporal.preflight_transport import (
+        PreflightTransport,
+    )
     from application_sdk.execution.errors import ApplicationError
-    from application_sdk.handler.base import Handler
     from application_sdk.infrastructure.secrets import SecretStore
     from application_sdk.storage.preflight import ObjectStoreCheckResult
+
+
+class WarmupOutcome(SerializableEnum):
+    """What the gate's warmup phase came to; the ``warmup_outcome`` wire values.
+
+    Stamped only on the rows of a run whose first warmup probe was not
+    ``READY`` (a run that was ready straight away writes the row it always
+    did). ``WARMING`` is the ``preflight``-tier row's value: that row is written
+    while the warmup is still in flight, so a run that ends there — cancelled,
+    or its worker lost mid-wait — reads as still warming rather than as a
+    missing verdict. The other values are what ended the wait: ``READY``,
+    ``UNAVAILABLE`` (the source said so), ``FAILED`` (a typed AUTH / PERMISSION
+    / NOT_FOUND raise), ``EXHAUSTED`` for the ceiling, and ``BROKEN`` for a
+    warmup activity that itself failed (the gate's plumbing, which fails open).
+    Values are shipped wire strings and must not be reworded: dashboards filter
+    on them.
+    """
+
+    WARMING = "warming"
+    READY = "ready"
+    UNAVAILABLE = "unavailable"
+    FAILED = "failed"
+    EXHAUSTED = "exhausted"
+    BROKEN = "broken"
+
+
+class WarmupTransition(BaseModel):
+    """One warmup state the workflow observed, and when, from gate start."""
+
+    state: WarmupState
+    at_ms: float
+
+
+#: The most transitions a row records. A source that flaps between two states
+#: for a whole ceiling would otherwise grow the row with every poll.
+WARMUP_TRANSITIONS_MAX = 32
+
+
+class WarmupWait(BaseModel):
+    """What the workflow saw of the warmup wait, for the rows that report it.
+
+    Built in the workflow off ``workflow.now()``, so every value is replay-safe,
+    and handed to the ``warmup``-tier check dispatch on
+    :attr:`PreflightGateInput.warmup` because that activity, not the workflow,
+    writes the row its verdict produces.
+    """
+
+    outcome: WarmupOutcome
+    duration_ms: float | None = None
+    """Gate start to the state that ended the wait. ``None`` while warming."""
+
+    transitions: list[WarmupTransition] = Field(default_factory=list)
+    """Each state change the probes observed, first one included, oldest first,
+    capped at :data:`WARMUP_TRANSITIONS_MAX`."""
+
+
+class WarmupPoll(BaseModel):
+    """What one ``{app}:preflight_warmup`` activity hands the workflow.
+
+    ``error`` is the typed reason behind a probe that raised. One whose category
+    is in :data:`WARMUP_TERMINAL_CATEGORIES` ends the wait (:attr:`is_terminal`);
+    any other rides along on a ``WARMING`` observation, so a ceiling that
+    arrives later can name the last thing the probe said.
+    """
+
+    observation: WarmupObservation
+    error: FailureDetails | None = None
+
+    @property
+    def is_terminal(self) -> bool:
+        """Whether the probe raised something no amount of waiting fixes."""
+        return (
+            self.error is not None and self.error.category in WARMUP_TERMINAL_CATEGORIES
+        )
 
 
 class PreflightGateInput(BaseModel):
@@ -533,6 +706,23 @@ class PreflightGateInput(BaseModel):
 
     entrypoint: str = ""
     """Bare entry-point name of the gated workflow (for per-entrypoint checks)."""
+
+    tiers: frozenset[CheckTier] | None = None
+    """The check tiers this dispatch runs. Set by the workflow, never read off
+    the extraction input.
+
+    ``None`` runs every tier in one handler call, exactly as before tiers:
+    what the workflow sends when the warmup probe that precedes it reported
+    ``READY``. ``{PREFLIGHT}`` when it did not; ``{WARMUP}`` once the wait
+    reports ``READY``. The check activity never probes the warmup itself: that
+    is ``{app}:preflight_warmup``, its own activity with its own timeout."""
+
+    warmup: WarmupWait | None = None
+    """What the workflow saw of the warmup, for the row this dispatch writes:
+    ``WARMING`` / ``UNAVAILABLE`` on a ``{PREFLIGHT}`` dispatch, the wait's
+    outcome on the ``{WARMUP}`` one, ``BROKEN`` on a ``None`` dispatch whose
+    probe itself failed, and ``None`` when the probe reported ``READY``. Set by
+    the workflow; never read by the handler."""
 
     workflow_slug: str = ""
     """AE's slug for the workflow being gated, copied from
@@ -651,6 +841,21 @@ def preflight_gate_activity_name(app_name: str) -> str:
     return get_activity_name(app_name, "preflight")
 
 
+def preflight_warmup_activity_name(app_name: str) -> str:
+    """Activity name for the gate's warmup poll: ``{app}:preflight_warmup``.
+
+    Registered for every app, because which apps have a warmup is decided by
+    the handler at run time, not declared; and reserved against its ``@task``
+    names by the same worker guard as ``{app}:preflight``. Dispatched only when
+    a run's first probe was not ``READY``.
+    """
+    from application_sdk.app.registry import (  # noqa: PLC0415 — avoid import cycle at module load
+        get_activity_name,
+    )
+
+    return get_activity_name(app_name, "preflight_warmup")
+
+
 # The handler's check budget, in seconds. Per-app via ``App.preflight_gate_timeout_seconds``
 # and clamped by ``gate_budget_seconds`` — a slow source is an app-specific
 # fact, so a fleet-wide bump is the wrong lever (it costs every app's
@@ -679,6 +884,12 @@ GATE_ATTEMPTS_DEFAULT = 2
 GATE_ATTEMPTS_MIN = 1
 GATE_ATTEMPTS_MAX = 3
 
+# What a warmup poll activity adds to the app's probe timeout: credential
+# resolution and slack, sharing one deadline (see
+# build_preflight_warmup_activity). Not a budget anyone sizes to.
+WARMUP_POLL_OVERHEAD_SECONDS = 5
+WARMUP_ATTEMPTS = 2
+
 # Slack between the budget the handler gets and Temporal's start_to_close, so the
 # gate's own ``asyncio.wait_for`` always fires first. If Temporal won the race the
 # activity would be killed before its ``except`` ran, losing both the classification
@@ -703,12 +914,13 @@ GATE_HEARTBEAT_TIMEOUT_SECONDS = 60
 #: through. 2s suppresses that geometry while tolerating realistic NTP drift.
 GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 
-# One release train for the pre-3.35 raise idiom. The gate used to treat a typed
-# leaf in these categories, raised from ``preflight_check``, as its own plumbing
-# and failed open; every hard-mode app that predates the origin rule documents
-# and tests that idiom. Until the removal version such a raise still proceeds,
-# with a DeprecationWarning and its own row classification, so the flip to
-# blocking is made against a fleet count rather than an audit.
+# The pre-3.35 raise idiom. The gate used to treat a typed leaf in these
+# categories, raised from ``preflight_check``, as its own plumbing and failed
+# open. Until the removal version such a raise keeps its own row classification
+# and a DeprecationWarning, because it loses the check row a returned verdict
+# would carry. The set itself is policy, not a shim (FND-3040): every member is
+# in GATE_NEVER_BLOCKING_CATEGORIES, so after the removal version the raise is
+# reported as an unverifiable source and still never blocks a hard gate.
 DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     {
         FailureCategory.DEPENDENCY_UNAVAILABLE,
@@ -718,6 +930,44 @@ DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     }
 )
 DEPRECATED_FAIL_OPEN_REMOVED_IN = "3.40.0"
+
+# What a hard gate blocks on (FND-3040): failures that are deterministic and that
+# the customer can act on. Waiting will not fix a wrong password or a missing
+# grant, and the customer is the one who can. An allowlist, so a category added
+# to FailureCategory later proceeds until someone decides it should block.
+GATE_BLOCKING_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {
+        FailureCategory.AUTH,
+        FailureCategory.PERMISSION,
+        FailureCategory.INVALID_INPUT,
+        FailureCategory.PRECONDITION,
+        FailureCategory.NOT_FOUND,
+    }
+)
+
+# What a hard gate never blocks on, whoever reports it: transient or Atlan-side
+# failures a retry, not the customer, resolves. A subset of everything outside
+# GATE_BLOCKING_CATEGORIES, published so the guarantee is a value a test pins
+# rather than a consequence of the allowlist. A warmup the source reports
+# UNAVAILABLE, or that outlives its ceiling, is SOURCE_UNAVAILABLE too, but the
+# warmup posture (App.preflight_warmup_mode) decides those, so they never reach
+# gate_blocks.
+GATE_NEVER_BLOCKING_CATEGORIES: frozenset[FailureCategory] = (
+    DEPRECATED_FAIL_OPEN_CATEGORIES
+    | {FailureCategory.TIMEOUT, FailureCategory.SOURCE_UNAVAILABLE}
+)
+
+
+def gate_blocks(mode: PreflightGateMode, category: FailureCategory) -> bool:
+    """Whether a gate in ``mode`` blocks the run on a failure in ``category``.
+
+    The block decision for a verdict or an unverifiable source: both the posture
+    and the attributed failure's category must say so. Soft never blocks; hard
+    blocks only on :data:`GATE_BLOCKING_CATEGORIES`, and anything else is
+    reported as ``would_block`` and the run proceeds.
+    """
+    return mode.enforces and category in GATE_BLOCKING_CATEGORIES
+
 
 # Floor on what's left after credential resolution. Below this there is no point
 # calling the handler: resolution has eaten the budget, which is a plumbing
@@ -783,27 +1033,6 @@ class PreflightClassification(SerializableEnum):
     NOT_RUN = "not_run"
 
 
-# Who must act, stamped on the outcome row (FND-901). Same key and values the log
-# interceptor projects from raised AppErrors, riding the OTel ``failure.``
-# passthrough — but stamped here explicitly, because the row is emitted before
-# the block is raised and would otherwise carry no audience.
-FAILURE_AUDIENCE_KEY = "failure.audience"
-
-# The failing check's name and its human line. Conditional, like
-# FAILURE_AUDIENCE_KEY and unlike GATE_OUTCOME_ROW_KEYS: a row with nothing
-# failed carries neither. ``reason`` is a code so dashboards can separate fault
-# classes, and ``check_matrix`` deliberately holds no messages, so without these
-# the sentence lived only on the adjacent "Completing activity as failed" record
-# under ``exception.message`` — one record away, under a key nobody searches.
-# They use the ``failure.`` prefix the logger already passes through, so neither
-# needs an entry in ``_KNOWN_EXTRA_KEYS``.
-FAILURE_CHECK_KEY = "failure.check"
-FAILURE_MESSAGE_KEY = "failure.message"
-# The envelope's own remediation line, when the handler gave one. The
-# escalation's search included the remediation text; keeping it a distinct
-# key means "what happened" and "what to do" stay separately queryable.
-FAILURE_SUGGESTED_ACTION_KEY = "failure.suggested_action"
-
 # Error type for a retryable no-verdict on a non-final attempt. Deliberately not
 # PREFLIGHT_FAILED_ERROR_TYPE: the workflow must not treat it as the deliberate
 # block and abort before the retry has had its turn.
@@ -840,12 +1069,18 @@ def gate_outcome_row(
     attempt: int,
     audience: str | None = None,
     primary: FailureDetails | None = None,
+    tier: CheckTier | None = None,
+    warmup: WarmupWait | None = None,
 ) -> dict[str, Any]:
     """The one ``Preflight gate outcome`` row shape, for the activity and the workflow.
 
     Both frames emit through this builder so a consumer parsing ``gate_mode`` or
     ``gate_duration_ms`` never finds a row missing the key it filters on.
     ``check_matrix`` is present on every row, ``[]`` where no check ran.
+    ``gate_tier`` and ``warmup_outcome`` are conditional, like
+    ``failure.audience``: only the rows of a run that waited on a warmup carry
+    them. ``warmup_duration_ms`` and ``warmup_transitions`` follow once the wait
+    has ended — a ``warming`` row has neither.
     """
     row: dict[str, Any] = {
         "app_name": app_name,
@@ -862,8 +1097,27 @@ def gate_outcome_row(
     }
     if audience is not None:
         row[FAILURE_AUDIENCE_KEY] = audience
+    if tier is not None:
+        row[GATE_TIER_KEY] = tier.value
+    if warmup is not None:
+        row.update(_warmup_fields(warmup))
     row.update(_failure_fields(checks, primary))
     return row
+
+
+def _warmup_fields(warmup: WarmupWait) -> dict[str, Any]:
+    """*warmup* as row attributes. ``warmup_transitions`` is one JSON string,
+    like ``check_matrix``, so it lands as a single ``JSONExtract``-able value."""
+    fields: dict[str, Any] = {WARMUP_OUTCOME_KEY: warmup.outcome.value}
+    if warmup.duration_ms is not None:
+        fields[WARMUP_DURATION_KEY] = warmup.duration_ms
+        fields[WARMUP_TRANSITIONS_KEY] = orjson.dumps(
+            [
+                {"state": t.state.value, "at_ms": t.at_ms}
+                for t in warmup.transitions[:WARMUP_TRANSITIONS_MAX]
+            ]
+        ).decode()
+    return fields
 
 
 def gate_outcome_level(
@@ -924,37 +1178,6 @@ def log_gate_posture(
             GATE_TIMEOUT_KEY: budget_seconds,
         },
     )
-
-
-def _clamp_declared_int(
-    raw: object, *, low: int, high: int, default: int, unit: str
-) -> tuple[int, str]:
-    """Coerce and clamp a declared ``ClassVar`` int. Returns ``(value, complaint)``.
-
-    Pure and silent so the warn-once boot path and the per-run workflow path can
-    share it and cannot disagree about the resulting number. ``complaint`` is
-    empty when the declaration was already valid.
-    """
-    if raw is None:
-        return default, ""
-    # bool is an int subclass; True would otherwise clamp to the floor and read
-    # as a deliberate declaration.
-    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-        return default, f"{raw!r} is not a number"
-    try:
-        value = int(float(raw))
-    # OverflowError, not ValueError, for inf / "1e400" — and this runs on the
-    # workflow path, where an escaping exception becomes a workflow *task*
-    # failure that Temporal retries indefinitely.
-    except (TypeError, ValueError, OverflowError):
-        return default, f"{raw!r} is not a usable number"
-    clamped = max(low, min(high, value))
-    if clamped != value:
-        return (
-            clamped,
-            f"{value}{unit} is outside the supported {low}-{high}{unit} range",
-        )
-    return clamped, ""
 
 
 def gate_budget_seconds(raw: object) -> tuple[int, str]:
@@ -1086,101 +1309,6 @@ def _config_from_snapshot(
     return config
 
 
-def _check_matrix_json(checks: list[PreflightCheck]) -> str:
-    """Compact per-check matrix for the outcome event, as one JSON string.
-
-    Lands as a single ``LogAttributes`` value in ClickHouse, so connector-pulse
-    can pattern-match verdicts against workflow outcomes (``JSONExtract``) with
-    no schema change. Small fixed fields only — messages and evidence stay in
-    the Temporal activity result. Blocking intent is not a per-check field: it
-    is observable from the outcome itself (``would_block``/``blocked`` means
-    the aggregate was NOT_READY; a failed check on a ``proceeded`` run is
-    advisory by the handler's own choice).
-    """
-    rows = []
-    for check in checks:
-        rows.append(
-            {
-                "name": check.name,
-                "passed": check.passed,
-                "error_code": check.error.code if check.error else "",
-                # Publish only a plausible elapsed time; nan/inf (orjson would
-                # emit null) and negatives collapse to the -1.0 "not measured"
-                # sentinel so the ClickHouse row stays numeric for JSONExtract
-                # and garbage never reads as a real duration. Never raise — a
-                # raise here fails the gate open and loses the whole event.
-                "duration_ms": check.duration_ms
-                if math.isfinite(check.duration_ms) and check.duration_ms >= 0
-                else -1.0,
-            }
-        )
-    return orjson.dumps(rows).decode()
-
-
-def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
-    """The ``FailureDetails`` a NOT_READY-shaped verdict is attributed to.
-
-    The handler's typed aggregate ``result.error`` when present, else the first
-    failed check's typed ``error``, else the first failed check's message wrapped
-    in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
-    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated
-    block). Prefers the aggregate because it is the reason the verdict is
-    NOT_READY and stays pinned to the real cause even when a non-fatal row is
-    inserted ahead of it in ``checks``.
-    """
-    failed = [c for c in result.checks if not c.passed]
-    primary_error = result.error or next(
-        (c.error for c in failed if c.error is not None), None
-    )
-    if primary_error is not None:
-        return _stamped(primary_error, app_name)
-    return _fallback_failure(_fallback_message(result), app_name)
-
-
-def _fallback_message(result: PreflightOutput) -> str:
-    """The sentence an untyped ``NOT_READY`` verdict is attributed to.
-
-    The aggregate's own line first — a handler that sets ``result.message`` is
-    describing the verdict, and the docstring on :attr:`PreflightOutput.error`
-    has always promised this rung; every failed check's line joined next, so a
-    multi-failure verdict loses none of them; a fixed line last. One source for
-    two consumers: the untyped ``details[0].message`` (via
-    :func:`_fallback_failure`) and the raised error's message in
-    :func:`_gate_error`, so for an untyped verdict the row, the wire envelope,
-    ``exception.message`` and the interceptor's ``Body`` line carry one string
-    by construction. Not redacted here — each consumer redacts where it lands
-    (the envelope validator; ``_gate_error`` explicitly).
-    """
-    failed = [c for c in result.checks if not c.passed]
-    joined = "; ".join(m for m in (c.resolved_message for c in failed) if m)
-    return result.resolved_message or joined or "Preflight check failed"
-
-
-def _stamped(details: FailureDetails, app_name: str) -> FailureDetails:
-    """``details`` with ``app_name`` filled in if the producer left it empty."""
-    if details.app_name is None:
-        return details.model_copy(update={"app_name": app_name})
-    return details
-
-
-def _fallback_failure(message: str, app_name: str) -> FailureDetails:
-    """The synthesized primary for a failure nobody typed.
-
-    ``PreconditionError`` carrying the untyped check's own line, stamped with
-    the ``PREFLIGHT_FALLBACK_CODE`` sentinel so the row's ``reason`` marks an
-    un-migrated handler rather than passing off a guess as a real code.
-    """
-    return (
-        PreconditionError(
-            message=message or "Preflight check failed",
-            app_name=app_name,
-            retryable=False,
-        )
-        .to_failure_details()
-        .model_copy(update={"code": PREFLIGHT_FALLBACK_CODE})
-    )
-
-
 def _gate_payload(
     status: PreflightStatus | None, checks: list[PreflightCheck], attempt: int
 ) -> dict[str, Any]:
@@ -1229,80 +1357,6 @@ def _gate_error(
         type=error_type,
         non_retryable=non_retryable,
     )
-
-
-def _attributed_check(
-    failed: list[PreflightCheck], primary: FailureDetails
-) -> PreflightCheck | None:
-    """The failed check ``primary`` describes, or ``None`` when that is a guess.
-
-    Never identity. The workflow frame recovers its evidence off the failure
-    chain, so the object it holds crossed the wire and is not the one any check
-    carries; a handler may also hand one ``AppError`` to both the aggregate and
-    a check, which ``PreflightOutput`` and ``PreflightCheck`` coerce separately
-    into two distinct ``FailureDetails``. ``==`` fails both times, because
-    :func:`_primary_failure` stamps ``app_name`` on the copy it returns.
-
-    ``(code, message)`` survives both round-trips. A lone failed check is
-    unambiguous whether or not it matches. Anything else — several failed
-    checks and no match, or several matching equally — has no answer, and a
-    wrong name is worse than none: it would contradict ``reason`` on the same
-    row and send a reader after the wrong check.
-    """
-    matched = [
-        c
-        for c in failed
-        if (
-            c.error is not None
-            and c.error.code == primary.code
-            and c.error.message == primary.message
-        )
-        or (
-            # An un-migrated check: the fallback primary was built from the
-            # failed lines, so a check whose own line is that sentence is the
-            # one it describes. Compared redacted, as the envelope stored it.
-            c.error is None
-            and bool(c.resolved_message)
-            and redact_secrets(c.resolved_message) == primary.message
-        )
-    ]
-    if len(matched) == 1:
-        return matched[0]
-    if not matched and len(failed) == 1:
-        return failed[0]
-    return None
-
-
-def _failure_fields(
-    checks: list[PreflightCheck], primary: FailureDetails | None
-) -> dict[str, str]:
-    """The attributed failure's human line, and the check it belongs to.
-
-    ``primary`` is whatever the caller derived ``reason`` from —
-    :func:`_primary_failure` for a block, :func:`_proceeded_failure` for a run
-    that went ahead, the recovered evidence for a dead frame — or ``None`` when
-    ``reason`` is just the status. Nothing is re-derived here, so the row cannot
-    name a cause its own ``reason`` disagrees with.
-
-    ``failure.message`` follows ``primary`` whenever there is one, checks or no
-    checks: a lost frame has an empty check list and a fully populated primary,
-    and it is the case a reader most needs the sentence for. The message is
-    capped and redacted (the envelope already redacts; this is the cap, and a
-    second pass costs nothing). ``failure.check`` is best-effort and may be
-    absent — see :func:`_attributed_check`.
-    """
-    if primary is None:
-        return {}
-    fields: dict[str, str] = {}
-    if primary.message:
-        fields[FAILURE_MESSAGE_KEY] = redact_and_cap(primary.message)
-    if primary.suggested_action:
-        fields[FAILURE_SUGGESTED_ACTION_KEY] = redact_and_cap(primary.suggested_action)
-    failed = [c for c in checks if not c.passed]
-    named = _attributed_check(failed, primary) if failed else None
-    if named is not None:
-        fields[FAILURE_CHECK_KEY] = named.name
-    return fields
 
 
 def _build_block_error(
@@ -1380,296 +1434,6 @@ def _plumbing_error(
         _gate_payload(None, [], attempt),
         type=converted.type,
         non_retryable=converted.non_retryable,
-    )
-
-
-def _proceeded_failure(result: PreflightOutput, app_name: str) -> FailureDetails | None:
-    """The failure a proceeded row is attributed to, or ``None`` when none failed.
-
-    A run that proceeds past a failed advisory check is the one the dashboards
-    need to rank, and a reason of ``PARTIAL`` hides which check failed. So the
-    *first* failed check is the attribution — its typed error, or the same
-    fallback an untyped block gets — and the row's ``reason``, ``failure.check``
-    and ``failure.message`` all come off this one object. Unlike
-    :func:`_primary_failure` this does not prefer ``result.error``: a proceeded
-    verdict's aggregate, when a handler sets one, describes why it proceeded,
-    not which check failed.
-    """
-    failed = next((c for c in result.checks if not c.passed), None)
-    if failed is None:
-        return None
-    if failed.error is not None:
-        return _stamped(failed.error, app_name)
-    return _fallback_failure(failed.resolved_message, app_name)
-
-
-class PreflightRowOutcome(SerializableEnum):
-    """The ``outcome`` vocabulary the SDK's own machinery stamps on preflight rows.
-
-    Enumerated for the same reason :class:`PreflightSurface` is — dashboards
-    filter on these wire strings, so the set must be discoverable and pinned,
-    not scattered literals. The gate row (``Preflight gate outcome``) uses the
-    first five; the interactive row (``Preflight check outcome``) uses
-    :class:`PreflightStatus` values for verdicts and ``CRASHED`` for a handler
-    that raised. Values are shipped wire strings and must not be reworded.
-    """
-
-    PROCEEDED = "proceeded"
-    BLOCKED = "blocked"
-    WOULD_BLOCK = "would_block"
-    NO_VERDICT = "no_verdict"
-    SKIPPED = "skipped"
-    CRASHED = "crashed"
-    CLIENT_FAULT = "client_fault"
-
-
-class PreflightSurface(SerializableEnum):
-    """Which surface ran ``Handler.preflight_check`` outside a gated run.
-
-    Stamped as ``preflight_surface`` on the interactive outcome row, and the
-    input to the level policy below — so this is an enumerated vocabulary, not
-    free text. Values are the wire strings already shipped in that attribute
-    and must not be reworded: dashboards filter on them.
-    """
-
-    #: The ``/workflows/v1/check`` endpoint behind the setup form.
-    HTTP = "http"
-    #: The ``sdr:preflight_check`` Temporal activity (test-connection).
-    SDR = "sdr"
-
-
-#: Per surface: is the outcome row the customer's *only* sight of the verdict?
-#:
-#: The level policy turns on this, not on how expected the verdict is. HTTP
-#: returns the verdict as the response body the setup form renders, so its row
-#: is a duplicate and stays INFO. An SDR failure travels back through a workflow
-#: whose run log the customer reads at the default ERROR filter, so that row
-#: mirrors the gate's levels or the failure is invisible — the hole FND-901
-#: exists to close.
-#:
-#: A table rather than a branch so the policy is *enumerable*:
-#: ``test_every_surface_has_a_level_policy`` asserts these keys cover
-#: ``PreflightSurface``, which fails CI for a new member nobody routed. An
-#: exhaustive ``if``/``assert_never`` would only warn here — this repo sets
-#: ``reportArgumentType = "warning"``, so pyright flags the gap without failing
-#: on it.
-_LOG_ROW_IS_ONLY_CHANNEL: dict[PreflightSurface, bool] = {
-    PreflightSurface.HTTP: False,
-    PreflightSurface.SDR: True,
-}
-
-
-def _log_row_is_only_channel(surface: PreflightSurface) -> bool:
-    """Look up ``surface``'s level policy, defaulting an unrouted one to loud.
-
-    Never raises on a miss: this is the emit path, and losing the row entirely
-    is strictly worse than logging it one level too loud. The test above is what
-    keeps the miss from happening.
-    """
-    return _LOG_ROW_IS_ONLY_CHANNEL.get(surface, True)
-
-
-def warn_if_partial(result: PreflightOutput) -> None:
-    """Emit the deprecation signal where the SDK acts on a ``PARTIAL`` verdict."""
-    if result.status is PreflightStatus.PARTIAL:
-        warnings.warn(
-            PreflightStatus.__deprecated_members__["PARTIAL"],
-            DeprecationWarning,
-            stacklevel=3,
-        )
-
-
-def emit_preflight_check_outcome(
-    log: AtlanLoggerAdapter,
-    app_name: str,
-    result: PreflightOutput,
-    *,
-    surface: PreflightSurface,
-    entrypoint: str | None = None,
-    request_id: str | None = None,
-) -> None:
-    """Emit the interactive-surface sibling of the gate's outcome row (FND-901).
-
-    One attribute schema for every surface that runs ``Handler.preflight_check``,
-    so the setup funnel (HTTP form check, SDR test-connection) is queryable next
-    to run-time gate verdicts. The level follows whether the log is the delivery
-    channel — see :func:`_log_row_is_only_channel`. A surface whose row is the
-    only channel mirrors the gate's map (``not_ready`` at ERROR, a passed
-    verdict carrying a failed advisory check at WARNING, clean at INFO); one
-    that returns the verdict by another route stays INFO throughout. Handler
-    crashes additionally emit a crash-marked row via
-    :func:`emit_preflight_crash_outcome`. Callers pass their module logger so
-    the row keeps the surface's source.
-    """
-    warn_if_partial(result)
-    failed = [c for c in result.checks if not c.passed]
-    # The same two ladders the gate row uses, so the two surfaces attribute a
-    # verdict identically: a block to _primary_failure (the aggregate wins —
-    # SDR inserts a non-fatal row ahead of the real failure and pins the real
-    # one on result.error), a run that went ahead to _proceeded_failure.
-    primary: FailureDetails | None
-    if result.status is PreflightStatus.NOT_READY:
-        primary = _primary_failure(result, app_name)
-    else:
-        primary = _proceeded_failure(result, app_name)
-    # Off the same object as failure.check / failure.message / failure.audience,
-    # never re-derived — the row's four attributed fields cannot disagree. A
-    # partial used to report the status here while the gate row reported the
-    # failed check's code for the identical verdict; the argument _proceeded_failure
-    # makes ("a reason of PARTIAL hides which check failed") is not surface-specific,
-    # and `outcome` carries the status on the same row either way. Only a row with a
-    # failed check changes: with nothing failed there is no primary and the status
-    # stands.
-    reason = primary.code if primary is not None else result.status.value
-    extra: dict[str, Any] = {}
-    if primary is not None:
-        extra[FAILURE_AUDIENCE_KEY] = primary.audience.value
-    if request_id is not None:
-        extra["request_id"] = request_id
-    extra.update(_failure_fields(result.checks, primary))
-    if not _log_row_is_only_channel(surface):
-        emit = log.info
-    elif result.status is PreflightStatus.NOT_READY:
-        emit = log.error
-    elif failed:
-        emit = log.warning
-    else:
-        emit = log.info
-    emit(
-        PREFLIGHT_CHECK_EVENT,
-        outcome=result.status.value,
-        reason=reason,
-        app_name=app_name,
-        entrypoint=entrypoint or "<implicit>",
-        checks=len(result.checks),
-        **{
-            CHECK_MATRIX_KEY: _check_matrix_json(result.checks),
-            PREFLIGHT_SURFACE_KEY: surface.value,
-        },
-        **extra,
-    )
-
-
-#: Categories the HTTP boundary answers with a 4xx (``service.py``'s
-#: ``_CATEGORY_TO_HTTP``): the response working as designed, not a handler
-#: crash. A wrong password (AUTH → 401) is the single most common preflight
-#: failure; counting it as a crash would let setup-form typos dominate the
-#: crash series and the metric would stop measuring handler health. A
-#: consistency test pins this set against the HTTP mapping so the two
-#: judgements cannot drift.
-_CLIENT_FAULT_CATEGORIES = frozenset(
-    {
-        FailureCategory.AUTH,
-        FailureCategory.PERMISSION,
-        FailureCategory.NOT_FOUND,
-        FailureCategory.ALREADY_EXISTS,
-        FailureCategory.INVALID_INPUT,
-        FailureCategory.PRECONDITION,
-        FailureCategory.RATE_LIMITED,
-        FailureCategory.CANCELLED,
-    }
-)
-
-
-#: Per ``(outcome, row-is-only-channel)``: is the interactive row loud (ERROR)?
-#:
-#: A table rather than a branch for the same reason as
-#: ``_LOG_ROW_IS_ONLY_CHANNEL`` above — the policy has to be *enumerable*, so
-#: ``test_every_interactive_outcome_has_a_level_policy`` fails CI for an
-#: outcome added to ``INTERACTIVE_RAISE_OUTCOMES`` without both surface
-#: entries. A real crash is evidence about handler health and is
-#: loud everywhere; a client fault is the response working as designed, so it
-#: stays quiet where the response carries it (HTTP) and goes loud only where
-#: the row is the customer's only sight of it (SDR).
-_INTERACTIVE_ROW_IS_LOUD: dict[tuple[PreflightRowOutcome, bool], bool] = {
-    (PreflightRowOutcome.CRASHED, False): True,
-    (PreflightRowOutcome.CRASHED, True): True,
-    (PreflightRowOutcome.CLIENT_FAULT, False): False,
-    (PreflightRowOutcome.CLIENT_FAULT, True): True,
-}
-
-#: The outcomes :func:`emit_preflight_crash_outcome` can attribute a raise to.
-#: The gate's own verdict values never reach that site.
-INTERACTIVE_RAISE_OUTCOMES: tuple[PreflightRowOutcome, ...] = (
-    PreflightRowOutcome.CRASHED,
-    PreflightRowOutcome.CLIENT_FAULT,
-)
-
-
-def _is_client_fault(exc: BaseException) -> bool:
-    """Whether ``exc`` is a client-facing input error, not a handler crash.
-
-    An explicit sub-500 ``http_status`` (a ``HandlerError`` the caller already
-    judged client-facing) or a typed category the HTTP boundary maps to a 4xx
-    means the failure is the response working as designed.
-    """
-    status = getattr(exc, "http_status", None)
-    if isinstance(status, int) and status < 500:
-        return True
-    return isinstance(exc, AppError) and type(exc).category in _CLIENT_FAULT_CATEGORIES
-
-
-def emit_preflight_crash_outcome(
-    log: AtlanLoggerAdapter,
-    app_name: str,
-    exc: BaseException,
-    *,
-    surface: PreflightSurface,
-    entrypoint: str | None = None,
-    request_id: str | None = None,
-) -> None:
-    """Emit the outcome row for a raise on an interactive surface.
-
-    A raise (HTTP form check, SDR test connection) produces no verdict body
-    anywhere, so without this row the failure is invisible to the setup-funnel
-    metrics built on the event — the case drops out of the denominator. Every
-    raise is therefore *counted*, but attribution is split so the crash series
-    keeps measuring handler health:
-
-    - a real crash (untyped, or a 5xx-class typed error) emits
-      ``outcome="crashed"`` at ERROR on every surface;
-    - a client-input error (:func:`_is_client_fault` — an explicit sub-500
-      ``http_status`` or a typed 4xx-class category, e.g. a wrong password)
-      emits ``outcome="client_fault"`` instead, at the level
-      ``_INTERACTIVE_ROW_IS_LOUD`` routes it to: ERROR where the row is the
-      only channel (SDR), INFO where the response already carries the failure
-      (HTTP). Dropping these entirely would
-      re-open the denominator hole for the boundary steps (secret-store probe,
-      credential resolution) the SDR surface wraps.
-
-    Emitted in addition to (never instead of) each surface's own boundary
-    error handling. ``reason`` is the typed wire code for an ``AppError``, the
-    class name otherwise. The split lives here, at the single emit site, so
-    every surface applies the same judgement.
-    """
-    outcome = (
-        PreflightRowOutcome.CLIENT_FAULT
-        if _is_client_fault(exc)
-        else PreflightRowOutcome.CRASHED
-    )
-    # Default-loud on a table miss, mirroring :func:`_log_row_is_only_channel`:
-    # one level too loud beats losing the row.
-    loud = _INTERACTIVE_ROW_IS_LOUD.get(
-        (outcome, _log_row_is_only_channel(surface)), True
-    )
-    emit = log.error if loud else log.info
-    extra: dict[str, Any] = {}
-    if isinstance(exc, AppError):
-        extra[FAILURE_AUDIENCE_KEY] = type(exc).audience.value
-    if request_id is not None:
-        extra["request_id"] = request_id
-    emit(
-        PREFLIGHT_CHECK_EVENT,
-        outcome=outcome.value,
-        reason=exc.code if isinstance(exc, AppError) else type(exc).__name__,
-        app_name=app_name,
-        entrypoint=entrypoint or "<implicit>",
-        checks=0,
-        **{
-            CHECK_MATRIX_KEY: EMPTY_CHECK_MATRIX,
-            PREFLIGHT_SURFACE_KEY: surface.value,
-        },
-        **extra,
     )
 
 
@@ -1805,10 +1569,11 @@ def _deprecated_fail_open_leaf(exc: BaseException) -> AppError | None:
 
 def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
-        f"{app_name}: preflight_check raised {leaf} ({code}). The gate fails open on "
-        f"this category only until application-sdk {DEPRECATED_FAIL_OPEN_REMOVED_IN}; "
-        "return READY with the failed check as an advisory row instead. From "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise blocks a hard gate."
+        f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
+        "is deprecated until application-sdk "
+        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; return READY with the failed check as "
+        f"an advisory row instead. From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)
     logger.warning(message)
@@ -2216,8 +1981,42 @@ async def _resolve_gate_credentials(
     return HandlerCredential.list_from_raw(raw), {}
 
 
+def _gate_preflight_input(
+    input: PreflightGateInput,
+    credentials: list[HandlerCredential],
+    credentials_by_name: dict[str, list[HandlerCredential]],
+    timeout_seconds: int,
+) -> tuple[PreflightInput, list[HandlerCredential]]:
+    """The ``PreflightInput`` a gate activity hands the handler, and every secret in it.
+
+    One builder for the check and the warmup probe, so ``warmup`` sees the
+    same credentials and form config the checks it gates will see. Form config
+    comes from the extraction-input snapshot here, in the activity frame, so app
+    field reads stay outside the deterministic workflow. The second element is
+    every resolved credential — the single-triple list and every named group —
+    for the redaction context.
+    """
+    metadata_dump = _config_from_snapshot(
+        input.extraction_snapshot, input.credential_ref_fields.values()
+    )
+    preflight_input = PreflightInput(
+        credentials=credentials,
+        credentials_by_name=credentials_by_name,
+        entrypoint=input.entrypoint,
+        metadata=BaseMetadataConfig(**metadata_dump),
+        connection_config=BaseConnectionConfig(**metadata_dump),
+        tiers=input.tiers or ALL_CHECK_TIERS,
+        timeout_seconds=timeout_seconds,
+    )
+    all_creds = [
+        *credentials,
+        *(c for group in credentials_by_name.values() for c in group),
+    ]
+    return preflight_input, all_creds
+
+
 def build_preflight_gate_activity(
-    handler: Handler,
+    handler: PreflightTransport,
     app_name: str,
     *,
     mode: PreflightGateMode | None = None,
@@ -2227,6 +2026,13 @@ def build_preflight_gate_activity(
     enforce: bool | None = None,
 ) -> Callable[..., Awaitable[Any]]:
     """Build the injected preflight-gate activity (``{app}:preflight``).
+
+    ``handler`` is how the activity reaches the app's handler — the only way
+    it does (:class:`~application_sdk.execution._temporal.preflight_transport.PreflightTransport`).
+    The worker passes :class:`~application_sdk.execution._temporal.preflight_transport.InProcessPreflightTransport`;
+    a ``Handler`` satisfies the protocol too, so it may be passed directly. The
+    parameter keeps the name ``handler`` it shipped with, so ``handler=``
+    callers keep working; any ``PreflightTransport`` is accepted.
 
     ``verify_storage`` is the per-app opt-in (``App.preflight_verify_storage``)
     to also probe the run's artifact object store(s) after the handler's source
@@ -2241,7 +2047,9 @@ def build_preflight_gate_activity(
     stays honest ``NOT_READY``, the run proceeds, and the dodged block is emitted
     as ``outcome="would_block"`` so connector-pulse can rank apps whose checks
     would have blocked real runs. Hard is the per-app opt-in: it raises and
-    aborts the run. The handler is never consulted about posture — verdict and
+    aborts the run, but only on a failure in :data:`GATE_BLOCKING_CATEGORIES`
+    (see :func:`gate_blocks`); anything else is a ``would_block`` row there
+    too. The handler is never consulted about posture — verdict and
     enforcement are deliberately separate concerns.
 
     ``budget_seconds`` is the handler's check budget, already clamped by
@@ -2260,6 +2068,14 @@ def build_preflight_gate_activity(
     to that from the failure chain (:func:`classify_gate_failure`). Handlers
     must keep their probes awaitable and bounded.
 
+    **Tiers.** ``input.tiers`` is set by the workflow from the warmup probe
+    that ran before this activity, as its own ``{app}:preflight_warmup``
+    activity: ``None`` (every tier, exactly as before tiers), ``{PREFLIGHT}``
+    or ``{WARMUP}``. This activity never calls ``Handler.warmup``, so the
+    probe never spends this budget. After the handler call, a returned row
+    outside the requested tiers is no verdict (the gate's own plumbing, which
+    fails open), never a silent drop.
+
     ``enforce`` is the deprecated spelling of ``mode``; see
     :func:`_mode_from_deprecated_enforce`. ``mode`` defaults to ``None`` rather
     than to ``SOFT`` only so that "caller passed a posture" stays distinguishable
@@ -2271,7 +2087,6 @@ def build_preflight_gate_activity(
         enforce=enforce,
         default=PreflightGateMode.SOFT,
     )
-    enforce = mode.enforces
 
     @activity.defn(name=preflight_gate_activity_name(app_name))
     async def preflight_gate(input: PreflightGateInput) -> PreflightOutput:
@@ -2344,6 +2159,8 @@ def build_preflight_gate_activity(
                 attempt=_current_attempt(),
                 audience=audience,
                 primary=primary,
+                tier=row_tier,
+                warmup=row_warmup,
             )
             if exc_info is not None:
                 row["exc_info"] = exc_info
@@ -2386,8 +2203,8 @@ def build_preflight_gate_activity(
         def _no_verdict(exc: BaseException) -> PreflightOutput:
             """Apply gate mode to a source we could not verify, on any attempt.
 
-            Raises the deliberate block in hard mode, returns the honest
-            ``NOT_READY`` in soft. Everything that escapes the handler lands
+            Raises the deliberate block when :func:`gate_blocks` says so, else
+            returns the honest ``NOT_READY``. Everything that escapes the handler lands
             here: a typed leaf is the handler's statement about the source, and
             an untyped crash is an app fault — neither is the gate's plumbing,
             so neither may fail open. Only the gate's own frames (credential
@@ -2416,9 +2233,10 @@ def build_preflight_gate_activity(
                 )
                 return unverifiable
             block_error = _build_block_error(unverifiable, app_name, _current_attempt())
+            blocks = gate_blocks(mode, block_error.details[0].category)
             _emit_outcome(
                 PreflightRowOutcome.BLOCKED
-                if enforce
+                if blocks
                 else PreflightRowOutcome.WOULD_BLOCK,
                 block_error.details[0].code,
                 unverifiable,
@@ -2431,12 +2249,24 @@ def build_preflight_gate_activity(
                 # nothing — on the one path where the cause is the whole diagnostic.
                 exc_info=exc,
             )
-            if enforce:
+            if blocks:
                 raise block_error
             return unverifiable
 
         started = time.monotonic()
         budget = _effective_budget(budget_seconds)
+        # What the outcome row reports of tiers and the warmup, both decided by
+        # the workflow. A run whose probe reported READY sends neither, so its
+        # row is exactly the row it always was.
+        run_tiers = input.tiers or ALL_CHECK_TIERS
+        row_tier: CheckTier | None = (
+            None
+            if input.tiers is None
+            else CheckTier.WARMUP
+            if CheckTier.WARMUP in input.tiers
+            else CheckTier.PREFLIGHT
+        )
+        row_warmup: WarmupWait | None = input.warmup
 
         from application_sdk.execution.heartbeat import (  # noqa: PLC0415 — lazy: preserves the auto_heartbeat_loop patch seam, same idiom as activities.py
             auto_heartbeat_loop,
@@ -2516,28 +2346,12 @@ def build_preflight_gate_activity(
                 else 0.0
             )
             handler_budget = max(1, int(remaining - reserved))
-            # Build form config from the extraction-input snapshot in the activity
-            # frame so app field reads stay outside the deterministic workflow.
-            metadata_dump = _config_from_snapshot(
-                input.extraction_snapshot, input.credential_ref_fields.values()
+            # What is actually left, not the nominal budget: resolution above has
+            # already spent part of it. A handler sizing probes to this number is
+            # sizing to the deadline the wait below really enforces.
+            preflight_input, all_creds = _gate_preflight_input(
+                input, credentials, credentials_by_name, handler_budget
             )
-            preflight_input = PreflightInput(
-                credentials=credentials,
-                credentials_by_name=credentials_by_name,
-                entrypoint=input.entrypoint,
-                metadata=BaseMetadataConfig(**metadata_dump),
-                connection_config=BaseConnectionConfig(**metadata_dump),
-                # What is actually left, not the nominal budget: resolution above has
-                # already spent part of it. A handler sizing probes to this number is
-                # sizing to the deadline the wait_for below really enforces.
-                timeout_seconds=handler_budget,
-            )
-            # Redact every resolved secret from logs — the single-triple list and
-            # every named group, without assuming which path populated which.
-            all_creds = [
-                *credentials,
-                *(c for group in credentials_by_name.values() for c in group),
-            ]
             # _no_verdict raises in hard mode, so it must never be called from inside
             # this try — the raise would be re-caught below and _no_verdict would run
             # a second time, double-emitting the outcome row and reclassifying the
@@ -2581,6 +2395,26 @@ def build_preflight_gate_activity(
                     raise
                 return _no_verdict(e)
 
+            if not timed_out:
+                outside = rows_outside_tiers(result, run_tiers)
+                if outside:
+                    # Post-call tier check: the handler ran checks it was told
+                    # not to (handlers do not reliably filter), so this is no
+                    # verdict about the requested tiers. The gate's own
+                    # plumbing, so it fails open; never a silent drop.
+                    raise _plumbing_error(
+                        InternalError(
+                            message=(
+                                "Preflight handler returned checks outside the "
+                                f"requested tiers: {', '.join(sorted(outside))}"
+                            ),
+                            app_name=app_name,
+                            retryable=False,
+                            component="preflight_handler",
+                        ),
+                        app_name,
+                        _current_attempt(),
+                    )
             if timed_out:
                 return _no_verdict(
                     AppTimeoutError(
@@ -2597,7 +2431,13 @@ def build_preflight_gate_activity(
             # Appends checks and may downgrade READY → NOT_READY, so it must run
             # before the verdict evaluation below. Never raises; see its docstring
             # for the fail-open/verdict taxonomy note.
-            if verify_storage and await _append_storage_checks(result, budget, started):
+            # Once per run: the first check dispatch (every tier, or PREFLIGHT)
+            # probes storage; the WARMUP one does not.
+            if (
+                verify_storage
+                and row_tier is not CheckTier.WARMUP
+                and await _append_storage_checks(result, budget, started)
+            ):
                 # A failed probe only becomes a verdict once the app's retry
                 # attempts are exhausted — one flaky probe must not block a
                 # hard-mode run on its first attempt. Same deferral the handler
@@ -2617,9 +2457,12 @@ def build_preflight_gate_activity(
             # attempt-1 + attempt-2 pair, which is CONNECT-1170 gap 1.
             if result.status is PreflightStatus.NOT_READY:
                 block_error = _build_block_error(result, app_name, _current_attempt())
+                # Decided on details[0], the failure the row's reason names, so
+                # the row and the decision cannot point at different checks.
+                blocks = gate_blocks(mode, block_error.details[0].category)
                 _emit_outcome(
                     PreflightRowOutcome.BLOCKED
-                    if enforce
+                    if blocks
                     else PreflightRowOutcome.WOULD_BLOCK,
                     block_error.details[0].code,
                     result,
@@ -2627,10 +2470,11 @@ def build_preflight_gate_activity(
                     audience=block_error.details[0].audience.value,
                     primary=block_error.details[0],
                 )
-                if enforce:
+                if blocks:
                     raise block_error
-                # Soft: the verdict stays honest NOT_READY; the gate just does not
-                # enforce it. The would_block row above is the loud record.
+                # Soft, or hard on a category it does not block on: the verdict
+                # stays honest NOT_READY; the gate just does not enforce it. The
+                # would_block row above is the loud record.
                 return result
             proceeded = _proceeded_failure(result, app_name)
             _emit_outcome(
@@ -2647,6 +2491,271 @@ def build_preflight_gate_activity(
             )
 
     return preflight_gate
+
+
+def warmup_activity_timeouts(
+    probe_timeout_seconds: int,
+) -> tuple[timedelta, timedelta]:
+    """``(start_to_close, schedule_to_close)`` for one warmup poll activity.
+
+    Same geometry as :func:`gate_timeouts`: headroom over the call's own
+    deadline (the probe timeout plus :data:`WARMUP_POLL_OVERHEAD_SECONDS`) so
+    the activity's wait fires before Temporal's, and a schedule window that
+    fits every attempt plus backoff.
+    """
+    start_to_close = (
+        probe_timeout_seconds
+        + WARMUP_POLL_OVERHEAD_SECONDS
+        + GATE_ACTIVITY_HEADROOM_SECONDS
+    )
+    return (
+        timedelta(seconds=start_to_close),
+        timedelta(seconds=WARMUP_ATTEMPTS * start_to_close + 10),
+    )
+
+
+def warmup_retry_policy() -> RetryPolicy:
+    """Retries for a warmup poll activity: the gate's own plumbing only.
+
+    A probe that raises never reaches this policy — the activity turns the
+    raise into a :class:`WarmupPoll` — so a retry here is a lost worker or a
+    refused credential lookup, the same faults the check activity retries.
+    """
+    return RetryPolicy(maximum_attempts=WARMUP_ATTEMPTS, backoff_coefficient=2)
+
+
+async def _probe_warmup(
+    transport: PreflightTransport,
+    input: PreflightGateInput,
+    credentials: list[HandlerCredential],
+    credentials_by_name: dict[str, list[HandlerCredential]],
+    timeout_seconds: float,
+    app_name: str,
+) -> WarmupObservation:
+    """One ``Handler.warmup`` probe from the gate, bounded by *timeout_seconds*.
+
+    A probe still running at the bound, or one that raised anything but a
+    typed AUTH / PERMISSION / NOT_FOUND leaf, reads as ``WARMING``: the wait
+    goes on, and only the ceiling turns it into a failure. Those terminal
+    leaves propagate — no amount of waiting fixes them.
+    """
+    preflight_input, all_creds = _gate_preflight_input(
+        input, credentials, credentials_by_name, max(1, int(timeout_seconds))
+    )
+    warmup_input = WarmupInput.model_validate(
+        {
+            **{
+                name: getattr(preflight_input, name)
+                for name in WarmupInput.model_fields
+                if name in PreflightInput.model_fields
+            },
+            "probe_timeout_seconds": max(1, int(timeout_seconds)),
+        }
+    )
+    with bind_invocation_context(app_name, all_creds):
+        try:
+            seen = await bounded_warmup_probe(
+                transport.warmup(warmup_input), timeout_seconds
+            )
+        except AppError as e:
+            if e.category in WARMUP_TERMINAL_CATEGORIES:
+                raise
+            logger.warning(
+                "Preflight warmup probe raised for app %s; polling again: %s",
+                app_name,
+                sanitize_cause_repr(e),
+            )
+            raise _TransientWarmupRaise(e) from e
+        except Exception as e:
+            logger.warning(
+                "Preflight warmup probe raised for app %s; polling again: %s",
+                app_name,
+                sanitize_cause_repr(e),
+            )
+            raise _TransientWarmupRaise(e) from e
+    if seen is None:
+        logger.info(
+            "Preflight warmup probe overran its %ss timeout for app %s; reading "
+            "it as warming",
+            timeout_seconds,
+            app_name,
+        )
+        return WarmupObservation(state=WarmupState.WARMING)
+    # Only a source that is not ready is news: every app without a warmup
+    # answers READY on every run, and a line per run would be noise.
+    if seen.state is not WarmupState.READY:
+        logger.info(
+            "Preflight warmup: app=%s entrypoint=%s state=%s",
+            app_name,
+            input.entrypoint or "<implicit>",
+            seen.state.value,
+        )
+    return seen
+
+
+class _TransientWarmupRaise(Exception):
+    """A probe raise the wait absorbs: carries the original for the record."""
+
+    def __init__(self, cause: BaseException) -> None:
+        super().__init__(sanitize_cause_repr(cause))
+        self.cause = cause
+
+
+def build_preflight_warmup_activity(
+    transport: PreflightTransport,
+    app_name: str,
+    *,
+    probe_timeout_seconds: int = WARMUP_PROBE_TIMEOUT_DEFAULT_SECONDS,
+    has_warmup: bool = True,
+) -> Callable[..., Awaitable[Any]]:
+    """Build the gate's warmup poll activity (``{app}:preflight_warmup``).
+
+    One ``Handler.warmup`` probe per call, with the ``PreflightInput`` the
+    gate's checks get. The workflow owns the wait — durable timers between
+    short polls, so a long warmup holds no worker slot — and this activity owns
+    one probe. It returns a :class:`WarmupPoll` for everything the *probe* does:
+    an observation, a terminal typed raise (``error``, :attr:`WarmupPoll.is_terminal`),
+    any other raise (``WARMING`` with ``error``), an overrun (``WARMING``). So
+    anything that leaves this activity as an error is the gate's own plumbing
+    (credential resolution, a lost worker), and the workflow fails that open,
+    exactly as it does for the check activity.
+
+    Credential resolution and the probe share one deadline
+    (``probe_timeout_seconds + WARMUP_POLL_OVERHEAD_SECONDS``), so together they
+    always finish inside :func:`warmup_activity_timeouts`' ``start_to_close``.
+
+    ``has_warmup=False`` is the worker's statement that the app's handler does
+    not override ``Handler.warmup``, whose default answers ``READY``. The
+    activity then answers ``READY`` itself, without resolving credentials or
+    calling the handler, so an app without a warmup pays for the activity but
+    not for a second secret-store read on every run.
+    """
+
+    @activity.defn(name=preflight_warmup_activity_name(app_name))
+    async def preflight_warmup(input: PreflightGateInput) -> WarmupPoll:
+        if not has_warmup:
+            return WarmupPoll(observation=WarmupObservation(state=WarmupState.READY))
+        loop = asyncio.get_running_loop()
+        call_budget = float(probe_timeout_seconds + WARMUP_POLL_OVERHEAD_SECONDS)
+        deadline = loop.time() + call_budget
+        try:
+            credentials, credentials_by_name = await asyncio.wait_for(
+                _resolve_gate_credentials(input), timeout=call_budget
+            )
+        except Exception as e:
+            raise _plumbing_error(e, app_name, _current_attempt()) from e
+        probe_budget = max(0.0, min(probe_timeout_seconds, deadline - loop.time()))
+        try:
+            seen = await _probe_warmup(
+                transport,
+                input,
+                credentials,
+                credentials_by_name,
+                probe_budget,
+                app_name,
+            )
+        except _TransientWarmupRaise as e:
+            return WarmupPoll(
+                observation=WarmupObservation(state=WarmupState.WARMING),
+                error=unverifiable_preflight_result(e.cause, app_name).checks[0].error,
+            )
+        except Exception as e:
+            return WarmupPoll(
+                observation=WarmupObservation(state=WarmupState.WARMING),
+                error=unverifiable_preflight_result(e, app_name).checks[0].error,
+            )
+        return WarmupPoll(observation=seen)
+
+    return preflight_warmup
+
+
+#: The remediation a warmup failure gets when its evidence carries none, keyed
+#: on ``code`` because that is what separates the two: a source the gate could
+#: not reach is a network problem, a source that answered but never finished
+#: starting is a sizing or queueing one, and the same advice for both sends the
+#: customer to the wrong team. Both are ``audience=USER``.
+WARMUP_SUGGESTED_ACTIONS: dict[str, str] = {
+    SourceUnavailableError.code: (
+        "Check that Atlan can reach the source: network access, firewall "
+        "allowlists, and any private link or agent the connection goes through."
+    ),
+    SourceWarmupExhaustedError.code: (
+        "The source answered but was still starting up. Check its size and "
+        "queue (a warehouse that resumes slowly, jobs queued ahead of this "
+        "one), or raise preflight_warmup_ceiling_seconds if it is known to take "
+        "longer."
+    ),
+}
+
+
+def human_duration(seconds: float) -> str:
+    """*seconds* as a person reads it on a status line: ``40s``, ``30 min``,
+    ``2 min 5s``. Whole seconds; pure, so the workflow can call it."""
+    whole = max(0, int(seconds))
+    minutes, rest = divmod(whole, 60)
+    if minutes == 0:
+        return f"{rest}s"
+    return f"{minutes} min" if rest == 0 else f"{minutes} min {rest}s"
+
+
+def warmup_waiting_details(
+    observation: WarmupObservation, elapsed_seconds: float
+) -> str:
+    """The workflow's health line while the gate waits on a warmup.
+
+    The warmup is the source getting ready, not the connector failing, so the
+    line says what is being waited on and for how long — ``waiting for source
+    warmup: RESUMING, 40s`` — in the source's own words where it gave some.
+    """
+    return (
+        f"waiting for source warmup: {warmup_progress_line(observation)}, "
+        f"{human_duration(elapsed_seconds)}"
+    )
+
+
+def _with_warmup_suggestion(details: FailureDetails) -> FailureDetails:
+    """*details* with :data:`WARMUP_SUGGESTED_ACTIONS`' line when it has none."""
+    if details.suggested_action is not None:
+        return details
+    suggested = WARMUP_SUGGESTED_ACTIONS.get(details.code)
+    if suggested is None:
+        return details
+    return details.model_copy(update={"suggested_action": suggested})
+
+
+def warmup_exhausted_details(
+    observation: WarmupObservation,
+    app_name: str,
+    ceiling_seconds: int,
+    last_error: FailureDetails | None = None,
+) -> FailureDetails:
+    """What a warmup still pending at the ceiling is attributed to.
+
+    :class:`SourceWarmupExhaustedError` — the source was answering and simply
+    did not get ready in time — naming the ceiling and the last thing the probe
+    reported, plus the last transient raise when there was one (naming it beats
+    a bare timeout). ``audience=USER``. Pure: runs in the workflow, so it builds
+    and never raises.
+    """
+    raised = f" ({last_error.message})" if last_error is not None else ""
+    return _with_warmup_suggestion(
+        SourceWarmupExhaustedError(
+            message=(
+                f"Source wasn't ready within {human_duration(ceiling_seconds)}"
+                f"; last reported: {warmup_progress_line(observation)}{raised}"
+            ),
+            app_name=app_name,
+            retryable=False,
+        ).to_failure_details()
+    )
+
+
+def warmup_unavailable_details(
+    observation: WarmupObservation, app_name: str
+) -> FailureDetails:
+    """What an ``UNAVAILABLE`` observation is attributed to: the source, in the
+    same words ``/check`` uses. Pure: runs in the workflow."""
+    return warmup_unavailable_error(observation, app_name).to_failure_details()
 
 
 # ---------------------------------------------------------------------------
