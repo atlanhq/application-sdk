@@ -88,10 +88,6 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
 )
-from conformance.suite.checks.prescriptions._typed_boundaries import (
-    _annotation_terminal_name,
-    _get_non_self_params,
-)
 from conformance.suite.schema.findings import Finding
 
 from ._manifest_args import ManifestArgs, collect_arg_keys
@@ -434,29 +430,17 @@ def _inherited_template_run(
 
 
 def _entrypoint_owner(
-    target: EntrypointContract,
-    by_name: dict[str, ClassRecord],
-    trees: dict[str, ast.AST],
+    target: EntrypointContract, by_name: dict[str, ClassRecord]
 ) -> ClassRecord | None:
-    """The in-repo class in *target*'s file whose method takes its Input type."""
-    tree = trees.get(target.filename)
-    aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+    """The in-repo class whose body defines *target*'s entrypoint method.
 
-    def takes_input(item: ast.stmt) -> bool:
-        if not isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            return False
-        params = _get_non_self_params(item)
-        if not params or params[0].annotation is None:
-            return False
-        name = _annotation_terminal_name(params[0].annotation)
-        return name is not None and aliases.get(name, name) == target.input_class_name
-
-    owners = [
-        rec
-        for rec in by_name.values()
-        if rec.file == target.filename and any(takes_input(i) for i in rec.node.body)
-    ]
-    return min(owners, key=lambda r: r.node.lineno) if owners else None
+    Matched by node identity, not by which methods take the Input type: a
+    helper class earlier in the file with a method annotated with the same
+    Input is not the entrypoint's owner.
+    """
+    if target.owner is None:
+        return None
+    return next((rec for rec in by_name.values() if rec.node is target.owner), None)
 
 
 def _pair_manifests_with_contracts(
@@ -494,7 +478,7 @@ def _pair_manifests_with_contracts(
             if rec is not None:
                 pairs.append(_Pairing(manifest, rec, rec.name, input_rec=rec))
             elif target.input_class_name in SDK_TEMPLATE_CONTRACT_FIELDS and (
-                anchor := _entrypoint_owner(target, by_name, trees)
+                anchor := _entrypoint_owner(target, by_name)
             ):
                 pairs.append(_Pairing(manifest, anchor, target.input_class_name))
         return pairs

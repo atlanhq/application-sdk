@@ -1850,6 +1850,28 @@ def test_b005_lookalike_base_from_a_non_sdk_module_is_not_exempt(
     }
 
 
+def test_b005_third_party_base_is_not_resolved_through_a_same_named_repo_class(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """An in-repo ConnectorBase does not lend its SDK ancestry to a vendor's."""
+    app = _SDK_RETIRED_VIA_BASE.replace(
+        "from base import ConnectorBase", "from vendor.models import ConnectorBase"
+    )
+    assert "from vendor.models import ConnectorBase" in app
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": app},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
 def test_b005_in_repo_base_field_removed_still_fires(
     tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
 ) -> None:

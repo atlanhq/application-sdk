@@ -9,12 +9,13 @@ are also caught.
 from __future__ import annotations
 
 import ast
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
     make_finding,
-    non_sdk_import_bindings,
+    non_sdk_import_roots,
     sdk_app_base_bindings,
 )
 from conformance.suite.checks.error_handling._helpers import _get_name
@@ -63,9 +64,10 @@ class ClassRecord:
     Import provenance is file-local, so it is captured here, where the class is
     defined; a scan of a subclass in another file cannot recover it from the
     bare base name."""
-    non_sdk_bases: frozenset[str] = frozenset()
+    non_sdk_bases: Mapping[str, str | None] = field(default_factory=dict)
     """Entries of :attr:`bases` that the defining module binds by a ``from …
-    import`` of a module outside ``application_sdk``."""
+    import`` of a module outside ``application_sdk``, each mapped to that
+    module's top-level package (``None`` for a relative import)."""
 
 
 # The ONE method that, when overridden, takes the emitted code out of ``code``'s
@@ -289,13 +291,13 @@ def collect_classes(
     """
     records: list[ClassRecord] = []
     sdk_bindings = sdk_app_base_bindings(tree)
-    foreign_bindings = non_sdk_import_bindings(tree)
+    foreign_roots = non_sdk_import_roots(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         bases: list[str] = []
         sdk_app_bases: set[str] = set()
-        non_sdk_bases: set[str] = set()
+        non_sdk_bases: dict[str, str | None] = {}
         for base in node.bases:
             n = _get_name(base)
             if n is None:
@@ -303,8 +305,8 @@ def collect_classes(
             bases.append(aliases.get(n, n))
             if isinstance(base, ast.Name) and base.id in sdk_bindings:
                 sdk_app_bases.add(bases[-1])
-            if isinstance(base, ast.Name) and base.id in foreign_bindings:
-                non_sdk_bases.add(bases[-1])
+            if isinstance(base, ast.Name) and base.id in foreign_roots:
+                non_sdk_bases[bases[-1]] = foreign_roots[base.id]
         code_value, code_node = _extract_code(node)
         records.append(
             ClassRecord(
@@ -316,7 +318,7 @@ def collect_classes(
                 code_node=code_node,
                 overrides_emission=_overrides_emission(node),
                 sdk_app_bases=frozenset(sdk_app_bases),
-                non_sdk_bases=frozenset(non_sdk_bases),
+                non_sdk_bases=non_sdk_bases,
             )
         )
     return records

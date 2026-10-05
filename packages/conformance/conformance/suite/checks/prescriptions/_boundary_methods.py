@@ -9,7 +9,9 @@ any class that (transitively) subclasses ``App``.
 
 A base counts as ``App``-family when it is
 
-* the name ``App``;
+* the name ``App``, unless the module binds ``App`` itself (a top-level
+  definition or a non-SDK ``from … import``), in which case only that class's
+  own bases decide;
 * a name the module binds to an SDK ``App``-family class by an absolute
   ``from application_sdk[.<sub>] import <X>`` (see
   :func:`~conformance.suite.checks._ast_common.sdk_app_base_bindings`); or
@@ -31,7 +33,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal, NamedTuple
 
-from conformance.suite.checks._ast_common import sdk_app_base_bindings
+from conformance.suite.checks._ast_common import (
+    module_shadowing_bindings,
+    sdk_app_base_bindings,
+)
 
 from ._decorator_provenance import (
     ImportProvenance,
@@ -64,6 +69,9 @@ class BoundaryScope:
     by_name: Mapping[str, ClassRecord]
     app_cache: dict[str, bool | None]
     sdk_bases: frozenset[str]
+    shadowed: frozenset[str] = frozenset()
+    """Local names the module binds to something other than an SDK class: a
+    top-level definition or a non-SDK ``from … import``."""
 
     @classmethod
     def for_module(
@@ -81,6 +89,7 @@ class BoundaryScope:
             by_name=by_name,
             app_cache=app_cache,
             sdk_bases=sdk_app_base_bindings(tree),
+            shadowed=module_shadowing_bindings(tree),
         )
 
 
@@ -111,19 +120,25 @@ def classify_boundary_method(
 def is_app_family_class(class_node: ast.ClassDef, scope: BoundaryScope) -> bool:
     """True if a base of *class_node* is, or transitively reaches, an ``App``-family class."""
     for base in class_node.bases:
+        trust_app_name = True
         if isinstance(base, ast.Name):
             if base.id in scope.sdk_bases:
                 return True
             name = base.id
+            trust_app_name = name not in scope.shadowed
         elif isinstance(base, ast.Attribute):
             name = base.attr
         else:
             continue
         name = scope.aliases.get(name, name)
-        if (
-            name == "App"
-            or reaches_app_family(name, scope.by_name, scope.app_cache, set()) is True
-        ):
+        reached = reaches_app_family(
+            name,
+            scope.by_name,
+            scope.app_cache,
+            set(),
+            trust_app_name=trust_app_name,
+        )
+        if reached is True:
             return True
     return False
 
@@ -133,14 +148,21 @@ def reaches_app_family(
     by_name: Mapping[str, ClassRecord],
     cache: dict[str, bool | None],
     visiting: set[str],
+    *,
+    trust_app_name: bool = True,
 ) -> bool | None:
     """Resolve whether the in-repo class *name* reaches an ``App``-family base.
 
     Same ``True``/``False``/``None`` contract, memoisation and cycle handling as
     ``resolve_ancestor(name, "App", ...)``, with one extra stop: a base that the
     class's own module imported from the SDK ``App`` family is ``True``.
+
+    The bare name ``App`` is ``True`` without a lookup only when
+    *trust_app_name* holds. A caller passes ``False`` when the referring module
+    binds ``App`` itself, from a non-SDK import or a top-level definition, so
+    the name is only as App-family as the in-repo class it resolves to.
     """
-    if name == "App":
+    if name == "App" and trust_app_name:
         return True
     if name in cache:
         return cache[name]
@@ -160,7 +182,14 @@ def reaches_app_family(
         if base == name:
             same_name_base = True
             continue
-        if reaches_app_family(base, by_name, cache, visiting) is True:
+        reached = reaches_app_family(
+            base,
+            by_name,
+            cache,
+            visiting,
+            trust_app_name=base not in rec.non_sdk_bases,
+        )
+        if reached is True:
             result = True
             break
     visiting.discard(name)

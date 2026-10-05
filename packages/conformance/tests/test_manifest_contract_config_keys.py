@@ -835,6 +835,33 @@ def test_k018_pairs_run_override_typed_with_an_sdk_template_input(
     assert all(f.file == "app/workflow.py" for f in findings)
 
 
+def test_k018_run_override_anchors_on_the_entrypoint_class_not_a_helper(
+    tmp_path: Path,
+) -> None:
+    """A helper class above the app, taking the same Input, is not the owner."""
+    src = _TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP.format(
+        base="SqlMetadataExtractor", alias="", name="ExtractionInput"
+    ).replace(
+        "class MyApp(",
+        "class Helper:\n"
+        "    def describe(self, input: ExtractionInput) -> str:\n"
+        "        return ''\n"
+        "\n"
+        "# conformance: ignore[K018] tracked elsewhere\n"
+        "class MyApp(",
+    )
+    paths = _write_py(
+        tmp_path,
+        {"app/workflow.py": src, "app/generated/_input.py": _GENERATED_INPUT_STUB},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"not_on_input": "{{not-on-input}}"})},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert findings and all(f.suppressed for f in findings)
+
+
 # ---------------------------------------------------------------------------
 # K018 — run() inherited unchanged from an SDK template (FND-3110)
 # ---------------------------------------------------------------------------

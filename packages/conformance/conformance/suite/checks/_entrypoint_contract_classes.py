@@ -106,6 +106,9 @@ class EntrypointContract:
     filename: str = ""
     """Repo-relative path of the file the entrypoint method is defined in."""
 
+    owner: ast.ClassDef | None = field(default=None, compare=False, repr=False)
+    """The class whose body defines the entrypoint method."""
+
 
 @dataclass
 class CodeContractScan:
@@ -171,5 +174,6 @@ def scan_file_for_entrypoint_contracts(
                     output_class_name=output_name,
                     input_class_name=input_name,
                     filename=filename,
+                    owner=class_node,
                 )
             )

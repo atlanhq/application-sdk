@@ -126,6 +126,68 @@ def test_installed_package_ships_the_root_ledger_byte_identical(
     )
 
 
+def _load_ledger_build_hook(monkeypatch: pytest.MonkeyPatch) -> type:
+    """Import ``hatch_build_ledger`` against a stub ``BuildHookInterface``.
+
+    hatchling is a build-time requirement only, so it is absent from the test
+    environment; the hook uses nothing of its base class but ``self.root``.
+    """
+    import importlib.util
+    import sys
+    import types
+
+    class BuildHookInterface:
+        def __init__(self, root: str) -> None:
+            self.root = root
+
+    names = (
+        "hatchling",
+        "hatchling.builders",
+        "hatchling.builders.hooks",
+        "hatchling.builders.hooks.plugin",
+        "hatchling.builders.hooks.plugin.interface",
+    )
+    for name in names:
+        monkeypatch.setitem(sys.modules, name, types.ModuleType(name))
+    sys.modules[names[-1]].BuildHookInterface = BuildHookInterface  # type: ignore[attr-defined]
+    path = Path(__file__).resolve().parents[1] / "hatch_build_ledger.py"
+    spec = importlib.util.spec_from_file_location("hatch_build_ledger", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.LedgerBuildHook
+
+
+@pytest.mark.parametrize("target", ["wheel", "sdist"])
+def test_build_hook_is_registered_for_every_build_target(target: str) -> None:
+    """The hook only packages the ledger if pyproject wires it into the build."""
+    import tomllib
+
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    targets = tomllib.loads(pyproject.read_text(encoding="utf-8"))["tool"]["hatch"][
+        "build"
+    ]["targets"]
+    assert targets[target]["hooks"]["custom"]["path"] == "hatch_build_ledger.py"
+
+
+def test_build_hook_packages_the_root_ledger_into_a_standard_wheel(
+    sdk_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The check the editable-install skip above cannot make in CI.
+
+    CI installs conformance editable, so no built wheel is ever inspected; this
+    drives the hook directly the way a ``uv build`` from the checkout does.
+    """
+    hook = _load_ledger_build_hook(monkeypatch)(
+        str(sdk_root / "packages" / "conformance")
+    )
+    build_data: dict[str, dict[str, str]] = {"force_include": {}}
+    hook.initialize("standard", build_data)
+    assert build_data["force_include"] == {
+        str(sdk_root / _LEDGER_NAME): f"conformance/data/{_LEDGER_NAME}"
+    }
+
+
 def test_no_ledger_copy_is_committed_inside_the_package(sdk_root: Path) -> None:
     """The packaged copy is a build output; a second committed ledger drifts (FND-3108)."""
     import shutil

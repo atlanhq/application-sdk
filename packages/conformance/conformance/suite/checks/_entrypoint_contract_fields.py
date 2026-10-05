@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
@@ -465,14 +466,30 @@ def sdk_contract_ancestors(
     source. A name declared in the scanned repo is never included, so an SDK
     self-scan (where the templates are in-repo) yields an empty set, and
     neither is a base its defining module imports from a non-SDK module.
+
+    A base imported from a third-party package (one whose top-level package no
+    scanned file lives under) is not resolved through a same-named in-repo
+    class either: the name match would be a coincidence, and following it
+    would credit the importing contract with an unrelated class's SDK
+    ancestors.
     """
     found: set[str] = set()
     seen: set[str] = {classdef.name}
+    records = (
+        [r for recs in by_name_all.values() for r in recs]
+        if by_name_all
+        else list(by_name.values())
+    )
+    repo_packages = {
+        part for rec in records for part in Path(rec.file).with_suffix("").parts
+    }
 
-    def walk(name: str, foreign: frozenset[str]) -> None:
+    def walk(name: str, foreign: Mapping[str, str | None]) -> None:
         if name in seen:
             return
         seen.add(name)
+        if name in foreign and foreign[name] not in (None, *repo_packages):
+            return
         recs = (by_name_all or {}).get(name)
         if not recs:
             rec_one = by_name.get(name)
@@ -488,9 +505,9 @@ def sdk_contract_ancestors(
             found.update(SDK_TEMPLATE_CONTRACT_BASES.get(name, ()))
 
     candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
-    own_foreign = next(
+    own_foreign: Mapping[str, str | None] = next(
         (r.non_sdk_bases for r in candidates if r is not None and r.node is classdef),
-        frozenset(),
+        {},
     )
     for base in classdef.bases:
         bname = _base_name(base)
