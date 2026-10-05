@@ -620,6 +620,9 @@ def create_worker(
         preflight_warmup_state_activity_name,
         resolve_gate_mode,
     )
+    from application_sdk.execution._temporal.preflight_transport import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        InProcessPreflightTransport,
+    )
     from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
@@ -768,7 +771,7 @@ def create_worker(
             )
         gate_activities.append(
             build_preflight_gate_activity(
-                gate_handler,
+                InProcessPreflightTransport(gate_handler),
                 name,
                 mode=mode,
                 budget_seconds=budget_seconds,
@@ -802,7 +805,9 @@ def create_worker(
                     name,
                 )
             gate_activities.extend(
-                build_preflight_warmup_activities(gate_handler, name)
+                build_preflight_warmup_activities(
+                    InProcessPreflightTransport(gate_handler), name
+                )
             )
     task_activities = [*task_activities, *gate_activities]
 

@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    b04d203c4998ad8420a16c8088df96edcaeb9a19
-source-date:   2026-10-05T09:19:06+01:00
+source-sha:    11cfa55abd4450053c24e420ce06b78e04497c5b
+source-date:   2026-10-05T10:10:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,7 +20,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 51 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
 | `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
@@ -261,16 +261,16 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `build_identity`
 
 - **Import:** `from application_sdk.app.build_identity import build_identity`
-- **Signature:** `build_identity() -> str`
+- **Signature:** `build_identity()`
 - **Summary:** Return this image's build identity, or ``""`` when it carries none.
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
-- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointIdentity)`
 - **Summary:** The convention-derived Temporal workflow type for *ep*.
-- **Defined in:** `application_sdk/app/entrypoint.py`
+- **Defined in:** `application_sdk/common/dispatch.py`
 
 #### `entrypoint_module_segment`
 
@@ -314,21 +314,21 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
 - **Signature:** `BUILD_ID_ENV`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `BUILD_IDENTITY_CONFIGMAP_ID`
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
 - **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `BUILD_INFO_BUILD_ID_KEY`
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
 - **Signature:** `BUILD_INFO_BUILD_ID_KEY`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `InteractionUnfinishedPolicy`
 
@@ -629,6 +629,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `build_identity`
+
+- **Import:** `from application_sdk.common.build_identity import build_identity`
+- **Signature:** `build_identity() -> str`
+- **Summary:** Return this image's build identity, or ``""`` when it carries none.
+- **Defined in:** `application_sdk/common/build_identity.py`
+
 #### `classify_unwritable_oserror`
 
 - **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
@@ -834,6 +841,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/entity_envelope.py`
 
 ### Constants and Enums
+
+#### `BUILD_ID_ENV`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_ID_ENV`
+- **Signature:** `BUILD_ID_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
+
+#### `BUILD_IDENTITY_CONFIGMAP_ID`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
+- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
+
+#### `BUILD_INFO_BUILD_ID_KEY`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `DEFAULT_ENVELOPE`
 
