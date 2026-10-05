@@ -43,3 +43,22 @@ def test_first_party_post_upgrade_tasks_run_per_update() -> None:
         tasks = rule.get("postUpgradeTasks")
         if tasks:
             assert tasks["executionMode"] == "update"
+
+
+def test_slow_lanes_rebase_only_on_conflict() -> None:
+    # FND-3316: behind-base reruns are redundant under a merge queue, so the
+    # default is `conflicted`; only the lanes that must re-resolve opt back in.
+    assert json.loads(_PRESET.read_text())["rebaseWhen"] == "conflicted"
+
+
+def test_re_resolving_lanes_rebase_when_behind_base() -> None:
+    # Every member rule carries it, not just one: rebaseWhen is branch-level, a
+    # grouped branch takes its config from its first member, and a repo may split
+    # a member out under its own groupName (soft-mode, SDK opt-out).
+    for rule in _first_party_rules():
+        assert rule.get("rebaseWhen") == "behind-base-branch", rule
+    rules = json.loads(_PRESET.read_text())["packageRules"]
+    lock_rules = [
+        r for r in rules if r.get("matchUpdateTypes") == ["lockFileMaintenance"]
+    ]
+    assert [r.get("rebaseWhen") for r in lock_rules] == ["behind-base-branch"]
