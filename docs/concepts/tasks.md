@@ -362,6 +362,40 @@ Prefer native async libraries wherever possible. For legacy sync code that canno
 
 Every offload is automatically wrapped in an unbounded progress hold, so a long blocking call is never read as a stall — see [Progress and Stalls](progress-and-stalls.md#automatic-holds-on-offloaded-work) for how to give it a real bound instead.
 
+### Cancelling a blocking call at the driver
+
+Cancelling the task that awaits `run_in_thread` hands the event loop back at once, but the worker thread runs on: Python cannot kill a thread. Until the call returns by itself it holds a slot in the shared `sdk-blocking-` pool (`min(32, cpu + 4)` wide), a database connection, and warehouse compute. Enough abandoned calls fill the pool, and every other offload queues behind them.
+
+If the driver can stop the call from another thread, pass a `CancelHandle` and register the driver's cancel on it **from inside the worker thread**, at the moment the driver handle exists:
+
+```python
+from application_sdk.execution.heartbeat import CancelHandle
+
+handle = CancelHandle()
+
+def _query() -> list[tuple[object, ...]]:
+    cursor = connection.cursor()
+    handle.set(cursor.cancel)  # the handle exists only here, in the thread
+    cursor.execute(sql)
+    return cursor.fetchall()
+
+rows = await self.task_context.run_in_thread(_query, cancel=handle)
+```
+
+- When the awaiting task is cancelled, `run_in_thread` calls `handle.request()` and re-raises `CancelledError` immediately, exactly as without a handle.
+- The action runs at most once, on a small dedicated `sdk-cancel-` pool — never on the loop, and never behind the `sdk-blocking-` calls it is meant to stop.
+- If the cancel was requested before `set()` (a statement id known only after submit, say), `set()` fires the action straight away.
+- A failing action is logged at WARNING, never raised.
+- `handle.requested` lets worker code stop between steps, e.g. in a `fetchmany` loop.
+- Without `cancel=`, behaviour is unchanged.
+
+After a cancel, don't return the connection to a pool: invalidate it. `BaseSQLClient` already does this for its own read paths — see [Clients](clients.md#cancelling-a-running-query).
+
+!!! warning "Never stop or suspend a warehouse from a cancel action"
+    A cancel stops *this statement*. It does not stop a warehouse the statement caused to start resuming — that start was triggered server-side — and stopping or suspending the warehouse would take it from every other user of it. Cancel actions must call statement- or cursor-level cancels only.
+
+A client-side cancel is the second line of defence. The first is a server-side statement timeout set in the session (for example Snowflake's `STATEMENT_TIMEOUT_IN_SECONDS` and `STATEMENT_QUEUED_TIMEOUT_IN_SECONDS`), which bounds the statement even when the worker is gone.
+
 ## FileReference: Passing Large Data Between Tasks
 
 Temporal has a ~2 MB payload limit. Use `FileReference` for large data:

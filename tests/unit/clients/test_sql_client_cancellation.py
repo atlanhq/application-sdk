@@ -15,6 +15,7 @@ that joins the thread on cancel takes ``_RELEASE_AFTER`` to return, well past
 import asyncio
 import threading
 import time
+from collections.abc import Iterator
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -156,3 +157,132 @@ async def test_cancelling_run_query_returns_promptly_and_defers_close(
         assert time.monotonic() < deadline, "connection was never closed"
         await asyncio.sleep(0.01)
     assert execute.finished.is_set()
+
+
+# ---------------------------------------------------------------------------
+# Cancelling at the driver (FND-3269): a real engine, a real driver cancel.
+#
+# SQLite stands in for a warehouse: ``slow()`` is a UDF that makes the scan
+# take as long as the test wants, and ``sqlite3.Connection.interrupt()`` is a
+# driver cancel documented as safe from another thread. Each test releases the
+# UDF on the way out, so a regression drains in milliseconds instead of hanging.
+# ---------------------------------------------------------------------------
+
+#: A scan that only finishes once ``slow()`` is released, or is interrupted.
+_SLOW_QUERY = (
+    "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c "
+    "WHERE x < 1000000) SELECT x FROM c WHERE slow(x) < 0"
+)
+
+
+class _InterruptingClient(BaseSQLClient):
+    """A client whose per-dialect cancel interrupts the SQLite connection."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_threads: list[str] = []
+
+    def cancel_cursor(self, dbapi_cursor) -> None:  # type: ignore[override]
+        self.cancel_threads.append(threading.current_thread().name)
+        dbapi_cursor.connection.interrupt()
+
+
+class _SlowSqlite:
+    """A file-backed SQLite engine whose ``slow()`` UDF blocks until released."""
+
+    def __init__(self, path: str) -> None:
+        from sqlalchemy import create_engine, event
+
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.invalidated = threading.Event()
+        self.engine = create_engine(
+            f"sqlite:///{path}", connect_args={"check_same_thread": False}
+        )
+
+        def _slow(x: int) -> int:
+            self.started.set()
+            self.release.wait(0.001)
+            return x
+
+        @event.listens_for(self.engine, "connect")
+        def _register_udf(dbapi_connection, _record) -> None:
+            dbapi_connection.create_function("slow", 1, _slow)
+
+        @event.listens_for(self.engine, "invalidate")
+        def _record_invalidate(_dbapi_connection, _record, _exception) -> None:
+            self.invalidated.set()
+
+
+@pytest.fixture
+def slow_sqlite(tmp_path) -> "Iterator[_SlowSqlite]":
+    db = _SlowSqlite(str(tmp_path / "cancel.sqlite"))
+    try:
+        yield db
+    finally:
+        db.release.set()
+        db.engine.dispose()
+
+
+@pytest.fixture
+def interrupting_client(slow_sqlite: _SlowSqlite) -> _InterruptingClient:
+    client = _InterruptingClient()
+    client.engine = slow_sqlite.engine
+    return client
+
+
+async def _assert_cancelled_at_the_driver(
+    client: _InterruptingClient, db: _SlowSqlite
+) -> None:
+    # The driver stopped well inside the time the scan would otherwise take,
+    # and the connection it ran on was dropped rather than pooled.
+    assert db.invalidated.wait(_PROMPT), "cancelled connection was not invalidated"
+    assert not db.release.is_set()
+    assert len(client.cancel_threads) == 1
+    assert client.cancel_threads[0].startswith("sdk-cancel-")
+    # ...and the worker thread let go of it, so its pool slot is free again.
+    deadline = time.monotonic() + _PROMPT
+    while db.engine.pool.checkedout():  # type: ignore[attr-defined]
+        assert time.monotonic() < deadline, "connection never released"
+        await asyncio.sleep(0.01)
+
+
+async def test_cancelling_get_results_cancels_the_driver_and_invalidates(
+    interrupting_client: _InterruptingClient, slow_sqlite: _SlowSqlite
+):
+    task = asyncio.ensure_future(interrupting_client.get_results(_SLOW_QUERY))
+    await _wait_for_thread(slow_sqlite.started, task)
+
+    elapsed = await _cancel_and_time(task)
+
+    assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"
+    await _assert_cancelled_at_the_driver(interrupting_client, slow_sqlite)
+
+
+async def test_cancelling_run_query_cancels_the_driver_and_invalidates(
+    interrupting_client: _InterruptingClient, slow_sqlite: _SlowSqlite
+):
+    async def consume() -> None:
+        async for _ in interrupting_client.run_query(_SLOW_QUERY):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    await _wait_for_thread(slow_sqlite.started, task)
+
+    elapsed = await _cancel_and_time(task)
+
+    assert elapsed < _PROMPT, f"loop blocked {elapsed:.2f}s on cancel"
+    await _assert_cancelled_at_the_driver(interrupting_client, slow_sqlite)
+
+
+async def test_uncancelled_read_returns_its_connection_to_the_pool(
+    interrupting_client: _InterruptingClient, slow_sqlite: _SlowSqlite
+):
+    slow_sqlite.release.set()
+
+    frame = await interrupting_client.get_results("SELECT slow(1) AS x")
+
+    assert frame["x"].tolist() == [1]
+    assert slow_sqlite.engine.pool.checkedin() == 1  # type: ignore[attr-defined]
+    assert not slow_sqlite.invalidated.is_set()
+    assert interrupting_client.cancel_threads == []

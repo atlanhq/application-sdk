@@ -80,6 +80,26 @@ class SnowflakeClient(BaseSQLClient):
 **Simplified Flow:**
 `@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
 
+### Cancelling a running query
+
+`get_results`, `get_batched_results` and `run_query` run the driver call on a worker thread through `run_in_thread(..., cancel=handle)` (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). When the awaiting task is cancelled:
+
+1. The read hands control back to the event loop at once.
+2. `cancel_cursor(dbapi_cursor)` is called on the `sdk-cancel-` pool with the DBAPI cursor the statement is running on. The cursor is registered by a SQLAlchemy `before_cursor_execute` listener the client attaches to its engine, from inside the worker thread.
+3. Once the driver call returns, the connection is **invalidated** instead of being returned to the pool, so a pool with `pool_pre_ping` or a connect listener never re-validates a connection left mid-statement.
+
+DBAPI has no standard cancel, so `cancel_cursor` is a no-op by default and the statement runs to completion on its thread. Override it with your driver's thread-safe cancel:
+
+```python
+class MyClient(BaseSQLClient):
+    def cancel_cursor(self, dbapi_cursor) -> None:
+        dbapi_cursor.cancel()  # must be safe to call from another thread
+```
+
+The override runs concurrently with the blocked driver call. A failure is logged at WARNING. Never stop or suspend a warehouse from it.
+
+Clients that override these read paths (or call a driver directly with `run_in_thread`) get none of this automatically; pass your own `CancelHandle` and `set()` the driver's cancel from inside the thread. `AsyncBaseSQLClient` reads run on the event loop, not a worker thread, so they are cancelled by the async driver directly.
+
 ## Base Client (`base.py`)
 
 Provides a base implementation for clients that need to connect to non-SQL data sources with methods for HTTP GET and POST requests.
