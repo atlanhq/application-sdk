@@ -356,8 +356,7 @@ async def test_run_query_property_based(
         # Set up the connection
         sql_client.engine = MagicMock()
         mock_connection = MagicMock()
-        sql_client.connection = mock_connection
-        sql_client.connection.execute.return_value = mock_cursor
+        mock_connection.execute.return_value = mock_cursor
 
         # Mock run_in_executor to return the connection, then the cursor, then batches
         mock_get_running_loop.return_value.run_in_executor = AsyncMock(
@@ -1187,8 +1186,9 @@ async def test_execute_async_read_operation_thread_pool_branch(
     sql_client: BaseSQLClient,
 ):
     """When self.engine is a *sync* SQLAlchemy engine (not AsyncEngine),
-    _execute_async_read_operation should fall back to run_in_thread and
-    drive _execute_query. This also exercises the AsyncEngine/AsyncSession import."""
+    _execute_async_read_operation should offload _execute_query to a
+    dedicated single-thread executor. This also exercises the
+    AsyncEngine/AsyncSession import."""
     sql_client.engine = MagicMock()  # plain MagicMock — not an AsyncEngine instance
 
     with patch.object(sql_client, "_execute_query", return_value="df-sync") as mock_eq:
@@ -1544,3 +1544,50 @@ async def test_run_query_runs_every_driver_call_on_one_worker_thread(
     ]
     assert len(set(idents)) == 1
     assert idents[0] != threading.get_ident()
+
+
+@pytest.mark.asyncio
+async def test_run_query_cancel_during_connect_still_closes_connection(
+    sql_client: BaseSQLClient,
+):
+    """A cancel while connect is in flight must still close the opened connection."""
+    sql_client.engine = MagicMock()
+    conn = MagicMock()
+    conn.execution_options.return_value = conn
+
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_connect(*args, **kwargs):
+        started.set()
+        release.wait(2)
+        return conn
+
+    sql_client.engine.connect.side_effect = blocking_connect
+
+    async def consume():
+        async for _ in sql_client.run_query("SELECT 1"):
+            pass
+
+    try:
+        task = asyncio.create_task(consume())
+        deadline = time.monotonic() + 5
+        while not started.is_set() and time.monotonic() < deadline:
+            await asyncio.sleep(0.01)
+        if not started.is_set():
+            pytest.fail("driver call never started")
+
+        before = time.monotonic()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        elapsed = time.monotonic() - before
+
+        assert elapsed < 0.5
+    finally:
+        release.set()
+
+    deadline = time.monotonic() + 2
+    while not conn.close.called and time.monotonic() < deadline:
+        await asyncio.sleep(0.01)
+    conn.close.assert_called_once()

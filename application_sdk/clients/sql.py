@@ -407,6 +407,7 @@ class BaseSQLClient(ClientInterface):
         if not self.engine:
             raise EngineNotInitializedError()
 
+        engine = self.engine
         loop = asyncio.get_running_loop()
         logger.debug(
             "Running query (sha=%s, len=%d)",
@@ -417,9 +418,25 @@ class BaseSQLClient(ClientInterface):
         executor = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="sdk-sql-query-"
         )
-        connection = None
+        opened: list[Any] = []
+
+        def _connect():
+            connection = engine.connect()
+            opened.append(connection)
+            return connection
+
+        def _close_opened():
+            for connection in opened:
+                try:
+                    connection.close()
+                except Exception as exc:
+                    logger.warning(
+                        "Failed to close SQL connection: %s",
+                        sanitize_cause_repr(exc),
+                    )
+
         try:
-            connection = await loop.run_in_executor(executor, self.engine.connect)
+            connection = await loop.run_in_executor(executor, _connect)
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
@@ -444,8 +461,7 @@ class BaseSQLClient(ClientInterface):
                 results = [dict(zip(column_names, row)) for row in rows]
                 yield results
         finally:
-            if connection is not None:
-                executor.submit(connection.close)
+            executor.submit(_close_opened)
             executor.shutdown(wait=False)
 
         logger.info("Query execution completed")
@@ -538,7 +554,15 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            return await run_in_thread(self._execute_query, query, chunksize)
+            executor = ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="sdk-sql-query-"
+            )
+            try:
+                return await asyncio.get_running_loop().run_in_executor(
+                    executor, self._execute_query, query, chunksize
+                )
+            finally:
+                executor.shutdown(wait=False)
 
     async def get_batched_results(
         self,
