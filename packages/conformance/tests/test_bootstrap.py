@@ -885,6 +885,34 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
         assert " >>" not in content, f"Unresolved jinja2 placeholder in {name}"
 
 
+#: Inline required-check gates whose merge_group pass-through must be a
+#: job-level skip, mapped to that skip's exact `if:`.
+_MERGE_GROUP_SKIPPING_GATES = {
+    "release-gate.yaml": "github.event_name == 'pull_request'",
+    "connector-review-gate.yaml": "github.event_name != 'merge_group'",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "job_if"), sorted(_MERGE_GROUP_SKIPPING_GATES.items())
+)
+def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
+    """FND-3320: on merge_group these gates have nothing to check.
+
+    A job that starts only to skip every step is billed a runner minute per
+    queue entry; a job-level skip bills nothing and still files the check run
+    (conclusion `skipped`, a pass for a required check). That holds only while
+    the job `name:` is a static string, so the skipped run carries the exact
+    ruleset context, and no step re-tests the event the job already selected.
+    """
+    workflow = yaml.safe_load(render(name))
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == job_if
+    assert "${{" not in job["name"]
+    for step in job["steps"]:
+        assert "event_name" not in str(step.get("if", "")), step.get("name")
+
+
 _SUPERSEDING_CALLERS = {
     "conformance.yaml": "conformance-",
     "release-gate.yaml": "release-gate-",

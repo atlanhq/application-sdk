@@ -170,6 +170,29 @@ Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
 deliberately partial evaluator that raises on anything it does not model rather
 than guessing.
 
+## Skip whole jobs, not steps
+
+**Rule:** when a job has nothing to do on some event, actor or branch, put the
+filter on the job's `if:`, not on each of its steps or as an early exit in its
+script.
+
+**Why:** a job skipped by its own `if:` is not billed. A job that starts and
+then skips every step, or runs a script that passes at once, is billed a full
+runner minute. In a reusable that every connector calls, that minute is paid on
+every PR, push and merge-group run across the fleet (FND-3320:
+`renovate-artifacts` in `tests-reusable.yaml`, and the merge-group no-ops in
+`commits.yaml`, `release-gate.yaml` and `connector-review-gate.yaml`).
+
+**It is safe for a required check** as long as the job `name:` is a static
+string. A job-level skip still files its check run, with conclusion `skipped`,
+and GitHub counts `skipped` as a pass for a required context (see "A skipped job
+is not a silent job" below for the same-commit trap). What leaves a required
+context pending forever is no check run at all, which happens when the caller
+never dispatches on the event (no `merge_group:` trigger) or when the job name
+is an expression that renders differently on the skipping event. When a
+downstream gate reads the skipped job's `needs.<job>.result`, make it accept
+`skipped` explicitly.
+
 ## Mask secrets before writing them to `$GITHUB_ENV`
 
 **Rule:** if a step derives secret values from something else — unpacking a
