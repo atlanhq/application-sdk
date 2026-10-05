@@ -223,22 +223,36 @@ def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
     A sanitized alias only marks a redaction boundary when it is the sole route
     by which the exception reaches the log: ``logger.error("%s %s", safe, e)``
     still formats the raw exception, so there is no boundary to protect.
-    Reads nested inside a recognised sanitizer call (``redact(e)``), type-only
-    projections (``type(e).__name__``), and stable metadata projections
-    (``e.qualified_code`` / ``e.status_code``) are fine. Arbitrary exception
-    fields such as ``e.message`` remain raw.
+    Reads nested inside a recognised sanitizer call (``redact(e)``) and
+    type-only projections (``type(e).__name__``) are fine. Stable metadata
+    projections (``e.qualified_code`` / ``e.status_code``) are fine only beside
+    a sanitizer of the caught exception itself: redacting an unrelated value
+    (``redact(config)``) makes no boundary for the exception's own fields.
+    Arbitrary exception fields such as ``e.message`` remain raw.
     """
     exception_name = handler.name
     if exception_name is None:
         return False
-    pending: list[ast.AST] = [*call.args, *[kw.value for kw in call.keywords]]
+    args: list[ast.AST] = [*call.args, *[kw.value for kw in call.keywords]]
+    sanitizes_exception = any(
+        isinstance(node, ast.Call)
+        and is_sanitizer_call(node)
+        and any(
+            isinstance(inner, ast.Name) and inner.id == exception_name
+            for inner in ast.walk(node)
+        )
+        for arg in args
+        for node in ast.walk(arg)
+    )
+    pending: list[ast.AST] = list(args)
     while pending:
         node = pending.pop()
         if isinstance(node, ast.Call) and is_sanitizer_call(node):
             continue
-        if _is_type_projection(
-            node, exception_name
-        ) or _is_safe_exception_metadata_projection(node, exception_name):
+        if _is_type_projection(node, exception_name) or (
+            sanitizes_exception
+            and _is_safe_exception_metadata_projection(node, exception_name)
+        ):
             continue
         if (
             isinstance(node, ast.Name)

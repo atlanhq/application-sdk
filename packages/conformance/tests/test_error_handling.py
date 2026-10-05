@@ -3621,6 +3621,16 @@ def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
     assert "E005" in _findings(src)
 
 
+def test_e005_still_fires_when_the_sanitizer_covers_something_else() -> None:
+    # The metadata fields are only safe beside a sanitizer of the caught exception itself:
+    # redacting an unrelated value does not make the exception's own fields a boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('failed: %s %s', failure.status_code, redact(config))\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_for_typed_code_without_sanitizer() -> None:
     src = (
         "try:\n    connect()\nexcept Exception as failure:\n"
