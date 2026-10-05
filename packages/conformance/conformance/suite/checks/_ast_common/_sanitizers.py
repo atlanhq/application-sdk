@@ -234,6 +234,8 @@ def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
     if exception_name is None:
         return False
     args: list[ast.AST] = [*call.args, *[kw.value for kw in call.keywords]]
+    # The sanitizer may be called inline or bound to a local first
+    # (``detail = sanitize_cause_repr(e)``); either way it covers the exception.
     sanitizes_exception = any(
         isinstance(node, ast.Call)
         and is_sanitizer_call(node)
@@ -243,7 +245,7 @@ def call_logs_raw_exception(call: ast.Call, handler: ast.ExceptHandler) -> bool:
         )
         for arg in args
         for node in ast.walk(arg)
-    )
+    ) or _call_uses_sanitized_local_alias(call, handler)
     pending: list[ast.AST] = list(args)
     while pending:
         node = pending.pop()

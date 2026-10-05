@@ -3621,6 +3621,17 @@ def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
     assert "E005" in _findings(src)
 
 
+def test_e005_silent_for_metadata_beside_a_sanitized_local_alias() -> None:
+    # The sanitized exception may reach the log through a local first; the metadata fields
+    # beside it are as safe as when the sanitizer is called inline.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    detail = sanitize_cause_repr(failure)\n"
+        "    logger.warning('failed (%s): %s', failure.status_code, detail)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
 def test_e005_still_fires_when_the_sanitizer_covers_something_else() -> None:
     # The metadata fields are only safe beside a sanitizer of the caught exception itself:
     # redacting an unrelated value does not make the exception's own fields a boundary.
