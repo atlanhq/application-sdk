@@ -182,6 +182,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "these mark a deliberate no-traceback boundary where exc_info=True\n"
             "would serialize the raw exception past the sanitizer and can leak\n"
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
+            "\n\n**Fixing it well**\n\n"
+            '* At a catch around credential resolution, auth or a JDBC/driver call, raw ``exc_info=True`` can print a connection string or password held in the exception: log the sanitized traceback instead, as the reference apps do — ``logger.error("... failed: %s", safe_traceback(e))``, with ``sanitize_cause_repr(e)`` for the message.\n\n'
+            "* Everywhere else, ``exc_info=True`` on the existing log call is the fix.\n\n"
+            '* A site that already logs a sanitized traceback (``redact_secrets("".join(traceback.format_exception(exc)))`` passed to the logger) delivers the rationale: leave it.\n\n'
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/logging.md#l004",
     ),
@@ -753,10 +757,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "cover the following rules (or their category prefixes, or ``ALL``):\n"
             "\n"
             "* ``G001`` — ``logging.warn()`` deprecated (overlaps L020)\n"
-            "* ``G003`` — string concatenation in log message (overlaps L011)\n"
-            "* ``G004`` — f-string in log message (overlaps L001)\n"
-            "* ``T201`` — ``print()`` statement (overlaps L005)\n"
-            "* ``LOG009`` — ``logging.warn()`` deprecated (overlaps L020)\n"
+            "* ``G003`` — string concatenation in log message (overlaps L011)\n\n"
+            "* ``G004`` — f-string in log message (overlaps L001)\n\n"
+            "* ``T201`` — ``print()`` statement (overlaps L005)\n\n"
+            "* ``LOG009`` — ``logging.warn()`` deprecated (overlaps L020)\n\n"
             "\n"
             "A rule is covered if its full ID, any prefix (e.g. ``G`` covers all\n"
             "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"

@@ -190,6 +190,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n\nThe three exemptions are one principle: the exception must leave the\n"
             "frame in some inspectable form — re-raised with its trace, re-raised with a\n"
             "redacted cause, or returned as typed data."
+            "\n\n**Fixing it well**\n\n"
+            "* Before narrowing, read what the ``try`` body and its callees raise today, driver and bridge errors included (JDBC/JPype exceptions reach app code raw unless a client converts them). Narrow to those types and keep handling them the same way: the same classifier, the same check rows, the same log.\n\n"
+            "* Never narrow to ``AppError`` at a catch that raw driver errors reach: they would escape and turn a reported failure into a crash.\n\n"
+            "* Keep a shared helper a helper: change the helper's ``except``; do not inline it into each caller.\n\n"
+            "* Tests keep asserting the old behaviour (a raw driver error still becomes a failed check); never change a fake so it stops raising what the real client raises.\n\n"
         ),
         rule_interactions=(
             "The set of forms that actually clear this rule is narrower than it "
@@ -373,6 +378,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "expected to be present (will fail later with a confusing AttributeError).\n"
             "A cause-preserving re-raise on every path (including a typed error raised\n"
             "from the ImportError) surfaces the failure and does not need a duplicate log.\n"
+            "\n**Fixing it well**\n\n"
+            "* Fix it at the existing ``except ImportError`` site: log it (``logger.warning`` or ``logger.error`` with the module name and ``exc_info=True``) before falling back or re-raising, as the reference apps do.\n\n"
+            "* Keep the import where it is: moving it to module level or into a function changes when the app loads its drivers, and the repo's ruff rules then reject the new shape.\n\n"
+            "* Never add ``noqa`` to get past ruff; if ruff objects, the shape is wrong — log at the original site.\n\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
     ),

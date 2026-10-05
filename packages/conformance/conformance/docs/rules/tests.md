@@ -216,6 +216,18 @@ Suppress with `# conformance: ignore[T003] <reason>` on the class definition lin
 legitimate exception (e.g. a shim that intentionally keeps the legacy harness during
 migration).
 
+**Fixing it well**
+
+* Delete the whole SDR test folder (`tests/sdr/`, with its `__init__.py`, conftest and
+helpers) once its scenarios have a home; never leave a docstring-only or empty stub
+where the harness was.
+
+* Before deleting, move each scenario where the rationale puts it: auth, preflight and
+credential resolution to the handler unit tests; the full DAG to the generated E2E base
+(`tests/e2e/`), which the reference apps extend.
+
+* Update anything under `tests/` or the docs that points at the deleted path.
+
 ---
 
 ## T004 — `DevEntrypointRequiresAppModule` {#t004}
@@ -683,6 +695,14 @@ Suppress with `# conformance: ignore[T013] <reason>` on the file's first line fo
 intentional non-tier test infrastructure that happens to match the collection glob (rare
 — prefer a filename that doesn't match the glob for pure helpers, which also avoids
 T008-adjacent confusion).
+
+**Fixing it well**
+
+* A test that subclasses the deprecated SDR harness (`BaseSDRIntegrationTest`) is not
+moved: T003 retires it, and moving it only carries the T003 finding to the new path.
+
+* Otherwise move the file into the tier the reference apps use (`tests/unit`,
+`tests/integration`, `tests/e2e`) and update anything that imports it.
 
 ---
 
@@ -1191,9 +1211,11 @@ legacy `marketplace-releases/.github/workflows/e2e-app-test.yaml` path). The rul
 when none of those hold:
 
 * no caller exists and no workflow reaches the tier at all, or * the caller sets
-`enable-e2e: false` (skips the e2e job entirely), or * the caller leaves
-`app-image-name` empty, which disables the GHCR   image build — the e2e job has no
-connector image to start the worker   container from.
+`enable-e2e: false` (skips the e2e job entirely), or
+
+* the caller leaves `app-image-name` empty, which disables the GHCR
+
+  image build — the e2e job has no connector image to start the worker   container from.
 
 **Fix:** add or repair the caller in `.github/workflows/tests.yaml`:
 

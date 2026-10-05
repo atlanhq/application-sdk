@@ -651,7 +651,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "reference apps are copied, the bypass spreads."
         ),
         short_description=(
-            "Pyatlan asset serialized in app code without going through " "entity_bytes"
+            "Pyatlan asset serialized in app code without going through entity_bytes"
         ),
         full_description=(
             "App code under ``app/`` (``app/generated/`` excluded) turns a pyatlan\n"
