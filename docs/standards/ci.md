@@ -242,6 +242,39 @@ and the alert cannot be delivered, the run fails.
 A cost change you expect, such as a new required job, will still alert once.
 Say so in the PR so whoever reads the alert can match it to the change.
 
+### Handing a hotspot to the repo that owns it
+
+Much of the bill comes from repos this team does not own. For those, we
+measure the cost and hand it over; the owning team makes the fix. A handoff
+includes:
+
+1. **This section.** The billing model, levers and rules above apply to any
+   repo, not just the fleet.
+2. **That repo's own per-workflow report.** `actions_minutes_report.py` takes
+   `--repo` in place of fleet discovery. Run two comparable weeks so the owner
+   can see what changed:
+
+   ```shell
+   GH_TOKEN=... python3 .github/scripts/actions_minutes_report.py \
+       --repo atlanhq/<repo> --since <monday> --until <sunday> --out-dir /tmp/<repo>-<week>
+   ```
+
+   For each workflow, compare runs against billed minutes. If runs went up, the
+   trigger fires more often (lever 2). If billed minutes per run went up at
+   the same run count, the job is running longer (lever 4).
+3. **The report's blind spot.** It counts minutes on the standard-Linux rate,
+   because check runs carry no runner labels. If a repo uses larger runners or
+   macOS, its minutes cost a multiple of the figure shown. Before you rank
+   that repo against others, read the `labels` on its jobs from the REST
+   `/actions/runs/{id}/jobs` endpoint.
+4. **Whether the cost comes from us.** Check whether the repo calls a reusable
+   from this repo (`uses: atlanhq/application-sdk/...`) or is triggered by a
+   fleet event (`workflow_run`, `repository_dispatch`). If so, the fix may be
+   ours, not theirs. Minutes from a cross-repo dispatch bill to the repo that
+   runs the job, not the repo that sent it.
+
+Track each handoff and its outcome in Linear, not in this repo.
+
 ### Review checklist
 
 For any change under `.github/workflows/`, a reusable, or a bootstrap template:
