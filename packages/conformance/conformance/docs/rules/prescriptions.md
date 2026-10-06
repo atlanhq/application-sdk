@@ -1576,14 +1576,16 @@ mis-rooting class). * **Inline writers that target the deployment store only** �
 is   written, but never to the tenant bucket (observed for a key-value   store connector
 in fleet testing).
 
-**Working transfers that still fire P030.**  Two shapes move bytes but are not
-`self.upload` / `self.upload_refs` and are not the named `upload_to_atlan` bridge P042
-reports: an app task that calls `storage.transfer.upload` (against
-`create_store_from_binding` or `upstream_storage`), and a call to the inherited
-`BaseMetadataExtractor.upload_to_atlan` shim, which is a pure redirect to
-`self.upload(local_path=output_path, tier=RETAINED)`.  Convert them anyway — the private
-path skips the SDK's upstream checks, dual-write and cross-pod fallback — but treat the
-change as a refactor that must not move a key.
+**Transfers that still fire P030.**  Two shapes move bytes but are not `self.upload` /
+`self.upload_refs` and are not the named `upload_to_atlan` bridge P042 reports.  An app
+task that calls `storage.transfer.upload` (against `create_store_from_binding` or
+`upstream_storage`) skips the SDK's upstream checks, dual-write and cross-pod fallback.
+A call to the inherited `BaseMetadataExtractor.upload_to_atlan` shim forwards to
+`self.upload(local_path=output_path, tier=RETAINED)`, which writes under `App.upload`'s
+own run prefix: it works only when the app hands that same prefix downstream, and is the
+re-rooting trap above when it does not.  Convert both, as a refactor that must not move
+a key — and if the shim's keys and the published prefix differ, the conversion is the
+fix.
 
 *Conversion recipe.*  `App.upload` and `upload_refs` are tasks, so call them from the
 entrypoint, never from inside another task.  Either keep the activity and have it stage
@@ -1593,7 +1595,8 @@ for runs in flight at deploy); or declare the task outputs to `upload_refs` with
 `DeclaredFile.label` per key.  Skip empty entities (`upload_refs` raises on an empty
 declared file), keep side outputs such as `resolvable/` or miner files in a delivery,
 and upload the whole tree when downstream nodes read more than `transformed/`.  For the
-shim, the swap is its own body.
+shim, swap in its own body, and pin `storage_path` if the published prefix differs from
+the run prefix.
 
 *Verification.*  Run the full-DAG e2e on main first as a baseline, then on the change,
 and compare the Atlas inventory per type.  The inventory need not list every type a

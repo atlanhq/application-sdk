@@ -872,10 +872,13 @@ say so.
   bytes already move through a path this check does not recognise: an app
   task that calls `storage.transfer.upload` (against
   `create_store_from_binding` or `upstream_storage`), or a call to the
-  inherited `BaseMetadataExtractor.upload_to_atlan` shim (a pure redirect to
-  `self.upload(local_path=output_path, tier=RETAINED)`).  Neither is the named
-  bridge P042 reports, so both land here.  The proposal is still the
-  conversion, but framed as a refactor that must not move a key:
+  inherited `BaseMetadataExtractor.upload_to_atlan` shim.  The shim forwards to
+  `self.upload(local_path=output_path, tier=RETAINED)`, which writes under
+  `App.upload`'s own run prefix: it delivers only when the app hands that same
+  prefix downstream, and is the re-rooting trap above when it does not —
+  compare the two before calling it working.  Neither shape is the named
+  bridge P042 reports, so both land here.  The proposal is the conversion,
+  framed as a refactor that must not move a key:
 
   - `App.upload` / `upload_refs` are tasks: call them from the entrypoint,
     never inside another task;
@@ -888,7 +891,8 @@ say so.
   - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
     files) — a second private write left behind is the same bridge again;
   - upload the whole tree when downstream nodes read more than `transformed/`
-    (for example `parsed/`); for the shim, the swap is its own body.
+    (for example `parsed/`); for the shim, swap in its own body and pin
+    `storage_path` if the published prefix differs from the run prefix.
 
   Evidence: run the full-DAG e2e on main first as a baseline, then on the
   change, and compare the Atlas inventory per type; a type the inventory does
