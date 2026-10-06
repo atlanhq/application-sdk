@@ -490,7 +490,7 @@ around `finding.line` before drafting any proposal.
   object store directly: `boto3.client(...)`, `S3Store(...)`, `GCSStore(...)`,
   `AzureStore(...)`, or any `create_store_from_binding*(...)` call.  The SDK
   provides a correctly routed store (including SDR mode) via
-  `get_infrastructure().storage` (import from `application_sdk.framework`).
+  `get_infrastructure().storage` (import from `application_sdk.infrastructure.context`).
   Draft a replacement that obtains the store through the SDK seam.  If the
   original construction passes configuration parameters (region, endpoint,
   credentials) that may not be available through the SDK, note those in residue

@@ -1,4 +1,5 @@
 migrate-off-daft
 migrate-asset-modeling
 adopt-preflight-gate
+migrate-storage
 migrate-deprecated-symbols
