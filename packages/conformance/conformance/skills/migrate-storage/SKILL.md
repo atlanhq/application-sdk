@@ -125,10 +125,32 @@ async def transform(self, input: TransformInput) -> TransformOutput:
     frame = pd.read_parquet(input.data.local_path)
 ```
 
-Chunked output replaces `ParquetFileWriter` / `JsonFileWriter`
-(`atlan-trino-app` `app/artifacts.py`): a `RollingFileWriter` with a
-`flush_fn` that writes one chunk file, `await writer.append(batch)` per batch,
-`await writer.close()`, then return `writer.file_reference` in the Output.
+Chunked output replaces `ParquetFileWriter` / `JsonFileWriter` with the SDK's
+`RollingFileWriter` (none of the reference apps writes chunks; this is the
+SDK API itself):
+
+```python
+from application_sdk.storage.rolling import RollingFileWriter
+
+def flush_jsonl(batches: list[list[bytes]], path: str) -> None:
+    with open(path, "wb") as handle:
+        for batch in batches:
+            for record in batch:
+                handle.write(record + b"\n")
+
+writer: RollingFileWriter[list[bytes]] = RollingFileWriter(
+    base_path=scratch, extension=".jsonl", flush_fn=flush_jsonl, scoped_subdir_name=typename
+)
+for batch in batches:
+    await writer.append(batch)
+await writer.close()
+return ExtractOutput(data=writer.file_reference)
+```
+
+The SDK's guide "Replacing ParquetFileWriter / JsonFileWriter" in
+[`docs/agents/coding-standards.md`](https://github.com/atlanhq/application-sdk/blob/main/docs/agents/coding-standards.md)
+(in the `atlanhq/application-sdk` repo, not shipped with this package) covers
+the options in full.
 
 `run()` delivers outbound refs at a fixed prefix (`atlan-mysql-app`
 `app/mysql.py`):
