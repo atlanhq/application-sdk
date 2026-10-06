@@ -1738,6 +1738,17 @@ the cache. Teardown follows the same rule for the same reason: `teardown_method`
 submits one `connection-delete` DAG node per connection the run touched, through
 the same `AEClient`, in the same one-node shape, with `delete_type: PURGE`.
 
+**Which connections it targets.** The run's own QN first, then every seeded
+one, each **once**: a suite that seeds under its own QN gets one delete, not
+two. The run's own QN is skipped when nothing could have created it: no
+`seed_connection` create was attempted, and no DAG was submitted against it.
+A submit counts as "against some other connection" only when the run declares
+`expect_connection = False` **and** its `{{connection-qualified-name}}`
+substitution (the `ConnectionSelector` input) names other QNs, the
+connection-delete suite's shape. A crawler, or a miner with no selector,
+keeps its teardown. Skipped slots keep their ordinal, so `-teardown-<n>`
+workflow names stay stable. FND-1873, FND-3405.
+
 **Why the harness cannot do this itself.** A connection leaves four kinds of
 artifact behind, and only one of them is reachable from a CI runner:
 

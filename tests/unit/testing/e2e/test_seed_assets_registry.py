@@ -139,11 +139,11 @@ def _harness(
     harness.run_id = 1787587123
     harness._ae = object()
     harness.connection_qualified_name = _RUN_QN
-    # A run that submitted its DAG, which is what every test here but
-    # ``TestTeardownSkipsAConnectionThatWasNeverCreated`` is about: the submit is
-    # what makes the run's own connection exist, and therefore what teardown
-    # keys its delete off (FND-1873).
-    harness._dag_submitted = True
+    # A run that submitted its DAG against its own connection, which is what
+    # every test here but ``TestTeardownSkipsAConnectionThatWasNeverCreated`` is
+    # about: the submit is what makes the run's own connection exist, and
+    # therefore what teardown keys its delete off (FND-1873).
+    harness._submitted_connection_qns = [_RUN_QN]
     harness._seeded_connection_qns = []
     harness._seeded_prefixes = []
     harness._minter = SimpleNamespace(
@@ -461,6 +461,51 @@ class TestTeardownIncludesSeededConnections:
         assert harness.deleted_connections == [_RUN_QN, _SEED_QN]
 
 
+class TestTeardownDeletesEachConnectionOnce:
+    """FND-3405: a QN registered twice is deleted once.
+
+    A suite that seeds under its own QN (``SeedSpec(qualified_name=
+    self.connection_qualified_name)``) holds that name both as the run's own
+    and as a seeded connection. The second delete is a whole AE run against a
+    connection the first already purged.
+    """
+
+    def test_seeding_under_the_runs_own_qn_deletes_it_once(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, _seeded, purged, _deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec(qualified_name=_RUN_QN))
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_RUN_QN]
+        assert purged == []
+
+    def test_the_kept_delete_is_named_from_its_first_position(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Ordinals stay positional, so a later connection's teardown workflow
+        name does not depend on whether an earlier one was a duplicate."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness.seed_assets(_spec(qualified_name=_RUN_QN))
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_RUN_QN, _SEED_QN]
+        names = [plan.ae_workflow_name for plan in harness.recorded_delete_plans]
+        assert names[0].endswith("-teardown-1")
+        assert names[1].endswith("-teardown-3")
+
+    def test_an_unsubmitted_own_qn_seeded_by_the_suite_is_still_deleted(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The skip of the run's own slot must not take the seeded copy of the
+        same name with it: the seed published a real connection there."""
+        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness._submitted_connection_qns = []
+        harness.seed_assets(_spec(qualified_name=_RUN_QN))
+        harness.teardown_method(method=None)
+        assert harness.deleted_connections == [_RUN_QN]
+        assert harness.recorded_delete_plans[0].ae_workflow_name.endswith("-teardown-2")
+
+
 class TestTeardownSkipsAConnectionThatWasNeverCreated:
     """FND-1873: a run that created nothing has nothing to reclaim.
 
@@ -485,7 +530,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         harness, _seeded, purged, deleted = _harness(monkeypatch)
-        harness._dag_submitted = False
+        harness._submitted_connection_qns = []
         harness.teardown_method(method=None)
         assert harness.deleted_connections == []
         assert harness.recorded_delete_plans == []
@@ -522,7 +567,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         seed path in ``test_non_publishing_entrypoint.py``.
         """
         harness, _seeded, _purged, _deleted = _harness(monkeypatch)
-        harness._dag_submitted = False
+        harness._submitted_connection_qns = []
         harness._connection_create_attempted = True
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
@@ -536,7 +581,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         run's own connection is skipped."""
         harness, _seeded, _purged, deleted = _harness(monkeypatch)
         harness.seed_assets(_spec())
-        harness._dag_submitted = False
+        harness._submitted_connection_qns = []
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_SEED_QN]
         assert harness.recorded_delete_plans[0].ae_workflow_name.endswith("-teardown-2")
@@ -554,7 +599,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         read as "the code failed to log".
         """
         harness, _seeded, _purged, _deleted = _harness(monkeypatch)
-        harness._dag_submitted = False
+        harness._submitted_connection_qns = []
         messages: list[str] = []
 
         def _record(message: str, *args: object, **_kwargs: object) -> None:
