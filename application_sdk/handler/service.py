@@ -2956,9 +2956,21 @@ def create_app_handler_service(
         workflow_max_timeout_hours=workflow_max_timeout_hours,
     )
 
+    from fastapi.telemetry import (  # noqa: PLC0415 — cold path: only at handler service startup
+        TelemetryConfig,
+    )
+
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
         ENABLE_MCP,
     )
+
+    # FastAPI >=0.142 auto-configures OTLP/HTTP exporters on the global
+    # providers when OTEL_EXPORTER_OTLP_ENDPOINT is set. The SDK owns those
+    # providers (observability/*_adaptor.py) and exports gRPC to that endpoint,
+    # so FastAPI's exporters would race ours for the global TracerProvider and
+    # fail against the gRPC collector. Request telemetry stays with
+    # FastAPIInstrumentor below; FastAPI's native middleware defers to it.
+    fastapi_telemetry: TelemetryConfig = {"auto_configure": False}
 
     if ENABLE_MCP and app_name:
         from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
@@ -3007,9 +3019,15 @@ def create_app_handler_service(
             description=description,
             version=version,
             lifespan=_mcp_lifespan,
+            telemetry=fastapi_telemetry,
         )
     else:
-        app = FastAPI(title=title, description=description, version=version)
+        app = FastAPI(
+            title=title,
+            description=description,
+            version=version,
+            telemetry=fastapi_telemetry,
+        )
 
     from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
         FastAPIInstrumentor,

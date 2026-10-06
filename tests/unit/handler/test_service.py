@@ -8916,3 +8916,31 @@ class TestBoundaryLogRedaction:
             rendered = call.args[0] % call.args[1:]
             assert _LEAKY_SECRET not in rendered
             assert "Traceback" in rendered  # the stack survives, redacted
+
+
+class TestFastAPINativeTelemetry:
+    """FastAPI >=0.142 auto-configures OTLP/HTTP export on the global
+    providers when ``OTEL_EXPORTER_OTLP_ENDPOINT`` is set. The SDK owns those
+    providers, so the handler app must leave them untouched at startup."""
+
+    def test_startup_leaves_global_tracer_provider_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from opentelemetry import trace
+
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://127.0.0.1:4317")
+        monkeypatch.delenv("OTEL_SDK_DISABLED", raising=False)
+
+        def _processors(provider: object) -> list[object]:
+            active = getattr(provider, "_active_span_processor", None)
+            return list(getattr(active, "_span_processors", ()))
+
+        before = trace.get_tracer_provider()
+        processors_before = _processors(before)
+
+        with _make_client():
+            pass
+
+        after = trace.get_tracer_provider()
+        assert after is before
+        assert _processors(after) == processors_before
