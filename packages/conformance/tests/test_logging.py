@@ -1501,6 +1501,72 @@ def test_l004_still_fires_when_prior_trace_is_in_nested_handler() -> None:
     assert _ids(src).count("L004") == 1
 
 
+def test_l004_still_fires_when_prior_trace_is_lower_level() -> None:
+    # Under LOG_LEVEL=ERROR the WARNING is filtered but the ERROR is emitted.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.warning('operation failed: %s', safe_traceback(caught))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_silent_when_prior_trace_is_higher_level() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', safe_traceback(caught))\n"
+        "    logger.warning('failure details saved')\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_caught_is_only_a_helper_option() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('other failed: %s', "
+        "safe_traceback(other, max_len=len(str(caught))))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_silent_when_prior_trace_was_logged_via_local() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(caught)\n"
+        "    logger.error('operation failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_trace_local_is_rebound_before_log() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(caught)\n"
+        "    if retry:\n        trace_text = 'retrying'\n"
+        "    logger.error('operation failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 2
+
+
+def test_l004_still_fires_when_trace_local_is_for_another_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(other)\n"
+        "    logger.error('other failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
     # Only the log call's own arguments count — a sanitizer on another
     # statement does not exempt an unrelated bare log call.

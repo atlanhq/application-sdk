@@ -196,56 +196,73 @@ def _call_target_leaf(call: ast.Call) -> str | None:
     return None
 
 
-def _call_reads_name_without_branch(call: ast.Call, name: str) -> bool:
-    """Whether *call* consumes *name* without a conditional or rebinding."""
-    args = [*call.args, *[kw.value for kw in call.keywords]]
-    if any(
-        isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
-        for arg in args
-        for node in ast.walk(arg)
-    ):
-        return False
-    return any(
+def _is_exception_name(node: ast.expr | None, name: str) -> bool:
+    return (
         isinstance(node, ast.Name)
         and isinstance(node.ctx, ast.Load)
         and node.id == name
-        for arg in args
-        for node in ast.walk(arg)
     )
 
 
-def _logs_sanitized_traceback(call: ast.Call, exception_name: str) -> bool:
-    """True if a log argument carries this exception's redacted stack trace."""
-    args = [*call.args, *[kw.value for kw in call.keywords]]
-    for arg in args:
-        for helper_call in ast.walk(arg):
-            if not isinstance(helper_call, ast.Call):
-                continue
-            target = _call_target_leaf(helper_call)
-            if target is not None and "safe_traceback" in target.lower():
-                if _call_reads_name_without_branch(helper_call, exception_name):
-                    return True
-                continue
-            if not is_sanitizer_call(helper_call):
-                continue
-            helper_args = [
-                *helper_call.args,
-                *[kw.value for kw in helper_call.keywords],
-            ]
-            if any(
-                isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
-                for helper_arg in helper_args
-                for node in ast.walk(helper_arg)
-            ):
-                continue
-            if any(
-                isinstance(formatted, ast.Call)
-                and _call_target_leaf(formatted) == "format_exception"
-                and _call_reads_name_without_branch(formatted, exception_name)
-                for formatted in ast.walk(helper_call)
-            ):
-                return True
-    return False
+def _helper_traces_exception(helper: ast.Call, name: str) -> bool:
+    """Whether *helper*'s exception argument is the bare caught exception.
+
+    Only the argument that names the exception counts, so
+    ``safe_traceback(other, max_len=len(str(caught)))`` traces ``other``
+    even though it also reads ``caught``.  ``format_exception`` also accepts
+    the legacy ``(etype, value, tb)`` form and the ``value=`` keyword.
+    """
+    if helper.args and _is_exception_name(helper.args[0], name):
+        return True
+    if _call_target_leaf(helper) != "format_exception":
+        return False
+    if len(helper.args) >= 2 and _is_exception_name(helper.args[1], name):
+        return True
+    return any(
+        kw.arg == "value" and _is_exception_name(kw.value, name)
+        for kw in helper.keywords
+    )
+
+
+def _is_sanitized_traceback_call(node: ast.AST, exception_name: str) -> bool:
+    """True if *node* is a redaction helper producing this exception's trace."""
+    if not isinstance(node, ast.Call):
+        return False
+    target = _call_target_leaf(node)
+    if target is not None and "safe_traceback" in target.lower():
+        return _helper_traces_exception(node, exception_name)
+    if not is_sanitizer_call(node):
+        return False
+    helper_args = [*node.args, *[kw.value for kw in node.keywords]]
+    if any(
+        isinstance(inner, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+        for helper_arg in helper_args
+        for inner in ast.walk(helper_arg)
+    ):
+        return False
+    return any(
+        isinstance(formatted, ast.Call)
+        and _call_target_leaf(formatted) == "format_exception"
+        and _helper_traces_exception(formatted, exception_name)
+        for formatted in ast.walk(node)
+    )
+
+
+def _logs_sanitized_traceback(
+    call: ast.Call, exception_name: str, trace_locals: set[str]
+) -> bool:
+    """True if a log argument carries this exception's redacted stack trace.
+
+    The trace may be built inline (``safe_traceback(e)``) or read from a local
+    in *trace_locals* that was assigned such a trace earlier in the handler.
+    """
+    if any(
+        _is_sanitized_traceback_call(node, exception_name)
+        for arg in [*call.args, *[kw.value for kw in call.keywords]]
+        for node in ast.walk(arg)
+    ):
+        return True
+    return _call_uses_sanitized_local(call, trace_locals)
 
 
 def _statement_rebinds_name(statement: ast.stmt, name: str) -> bool:
@@ -282,23 +299,56 @@ def _source_position(node: ast.AST) -> tuple[int, int] | None:
     return None
 
 
+# Python's level order; a later call may only rely on a prior trace that is
+# emitted whenever the later call is (an ERROR outlives a WARNING filter).
+_LOG_METHOD_LEVELS: dict[str, int] = {"warning": 30, "error": 40}
+
+
+def _sanitized_trace_assignment(
+    statement: ast.stmt, exception_name: str, trace_locals: set[str]
+) -> str | None:
+    """Return the local a straight-line statement binds to this handler's trace."""
+    assignment = _simple_local_assignment(statement)
+    if assignment is None:
+        return None
+    name, value = assignment
+    if isinstance(value, ast.Await):
+        value = value.value
+    if value is None or _walrus_targets(statement):
+        return None
+    if _is_sanitized_traceback_call(value, exception_name):
+        return name
+    if isinstance(value, ast.Name) and value.id in trace_locals:
+        return name
+    return None
+
+
 def _handler_logged_sanitized_traceback_before(
     handler: ast.ExceptHandler,
     call: ast.Call,
     logging_module_names: set[str],
 ) -> bool:
-    """Whether an earlier top-level warning/error logged this handler's trace.
+    """Whether an earlier top-level log at this call's level or above logged the trace.
 
     Only a straight-line log of the same caught exception's sanitized traceback
-    establishes the fact.  A cause-only sanitizer, another exception, a branch,
-    or a nested handler cannot prove that this traceback was recorded first.
+    establishes the fact, either inline or through a local assigned from it
+    earlier in the handler.  A cause-only sanitizer, another exception, a
+    branch, a nested handler, or a lower-level prior log (a WARNING filtered
+    out beneath an emitted ERROR) cannot prove that this traceback was recorded.
     """
     exception_name = handler.name
     call_position = _source_position(call)
-    if exception_name is None or call_position is None:
+    if (
+        exception_name is None
+        or call_position is None
+        or not isinstance(call.func, ast.Attribute)
+    ):
+        return False
+    call_level = _LOG_METHOD_LEVELS.get(call.func.attr)
+    if call_level is None:
         return False
 
-    exception_rebound = False
+    trace_locals: set[str] = set()
     for statement in handler.body:
         statement_position = _source_position(statement)
         if statement_position is None:
@@ -306,23 +356,55 @@ def _handler_logged_sanitized_traceback_before(
         if statement_position >= call_position:
             break
 
-        if (
-            not exception_rebound
-            and isinstance(statement, ast.Expr)
-            and isinstance(statement.value, ast.Call)
-        ):
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
             prior_call = statement.value
             if (
                 is_logger_call(prior_call, logging_module_names)
                 and isinstance(prior_call.func, ast.Attribute)
-                and prior_call.func.attr in LOG_METHODS_WITH_TRACEBACK
-                and call_uses_sanitizer(prior_call, handler=handler)
-                and _logs_sanitized_traceback(prior_call, exception_name)
+                and _LOG_METHOD_LEVELS.get(prior_call.func.attr, 0) >= call_level
+                and not call_logs_raw_exception(prior_call, handler)
+                and _logs_sanitized_traceback(prior_call, exception_name, trace_locals)
             ):
                 return True
 
         if _statement_rebinds_name(statement, exception_name):
-            exception_rebound = True
+            # Later logs may no longer refer to the caught exception.
+            return False
+
+        trace_name = _sanitized_trace_assignment(
+            statement, exception_name, trace_locals
+        )
+        if trace_name is not None:
+            trace_locals.add(trace_name)
+            continue
+        if isinstance(
+            statement,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.Try,
+                ast.With,
+                ast.AsyncWith,
+                ast.Match,
+            ),
+        ):
+            # Conditional rebinding cannot be ruled out; drop tracked traces.
+            trace_locals.clear()
+            continue
+        trace_locals.difference_update(
+            node.id
+            for node in _walk_no_scope(statement)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
+        )
+        trace_locals.difference_update(_walrus_targets(statement))
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            trace_locals.discard(statement.name)
+        if isinstance(statement, (ast.Import, ast.ImportFrom)):
+            trace_locals.difference_update(
+                alias.asname or alias.name.split(".")[0] for alias in statement.names
+            )
     return False
 
 
