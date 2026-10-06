@@ -739,4 +739,80 @@ RULES: tuple[RuleDefinition, ...] = (
             target="migrate-asset-modeling",
         ),
     ),
+    RuleDefinition(
+        id="P055",
+        canonical_reference=(
+            "atlan-openapi-app app/contracts.py — payloads that could be large travel as "
+            "`FileReference` fields, never inline. A task that produces a batch of "
+            "records writes them to a local file and returns "
+            "`FileReference.from_local(path, tier=StorageTier.TRANSIENT)` plus counts."
+        ),
+        rule_interactions=(
+            "Fires on the same contract fields P001 fires on when the class opts out "
+            "with allow_unbounded_fields, and is the reason an inline P001 "
+            "suppression on a record batch is not a fix: P055 has its own id and "
+            "ignores suppression directives. P014 checks that a @task is "
+            "typed with Input/Output; P055 checks what those types carry, and also "
+            "covers raw @activity.defn functions that P001 and P014 never inspect."
+        ),
+        terminal_state=(
+            "No exception path: the finding clears only when the records cross the "
+            "boundary as a FileReference (or are re-read by the consumer from their "
+            "source) and the contract or activity signature carries the ref and counts."
+        ),
+        scope=RuleScope.APP,
+        name="InlineRecordBatchAcrossBoundary",
+        tier=EnforcementTier.BLOCK,
+        mechanism=RuleMechanism.STATIC,
+        category="contract-payload-safety",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.43.0",
+        rationale=(
+            "A batch of records passed between tasks rides the Temporal payload, which "
+            "is capped (2 MiB by the SDK's payload limit, 4 MiB by gRPC). MaxItems bounds "
+            "the count but not each record's size, so the cap is crossed by data volume, "
+            "not by code: the app passes every test and fails the first time a tenant's "
+            "backlog is large. Customer impact: the run dies on its first task on every "
+            "attempt, so nothing it fetched is ever processed or acknowledged and the "
+            "backlog that caused the failure only grows. Two apps shipped this shape "
+            "past P001 — one by suppressing it with a size budget that was already over "
+            "the cap, one through raw @activity.defn functions P001 never inspects."
+        ),
+        short_description=(
+            "Batch of records (list[dict]/list[Any]/Sequence[Mapping]) crosses a task "
+            "or activity boundary inline instead of as a FileReference"
+        ),
+        full_description=(
+            "A collection whose elements are records — ``list[dict[...]]``,\n"
+            "``list[Any]``, ``Sequence[Mapping[...]]``, ``tuple[dict, ...]`` and the\n"
+            "``typing`` spellings, also inside ``Annotated[...]`` / ``Optional`` /\n"
+            "``X | None`` — is declared:\n"
+            "\n"
+            "* as a field of an ``Input``/``Output`` contract subclass, or\n"
+            "* as a parameter or return annotation of a raw ``@activity.defn``\n"
+            "  function (``@activity.defn``, ``@activity.defn(...)`` or a bare\n"
+            "  imported ``@defn``).\n"
+            "\n"
+            "Either way the whole batch is serialised into the Temporal payload.\n"
+            "Lists of scalars (``list[str]``), of ``FileReference`` and of named\n"
+            "models are not flagged.\n"
+            "\n"
+            "Fix: write the records to a local file (JSONL) and hand on\n"
+            "``FileReference.from_local(path, tier=StorageTier.TRANSIENT)``.  The\n"
+            "activity interceptor uploads it when the producing task returns,\n"
+            "materialises it before the consumer runs, and ``cleanup_storage`` /\n"
+            "``cleanup_files`` remove both copies at run end.  Carry only the ref and\n"
+            "counts on the contract.\n"
+            "\n"
+            "``BLOCK`` and **not suppressible**: inline ``# conformance: ignore``\n"
+            "directives are ignored for this rule, because no batch size makes an\n"
+            "inline record list safe and the ``FileReference`` fix is always available.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
 )

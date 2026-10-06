@@ -382,6 +382,30 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   ever feeding it to the consumer.  If a shape crashes the legacy path, that is
   a finding to report in the proposal, not a mismatch to reconcile.
 
+- **P055 InlineRecordBatchAcrossBoundary** — a batch of records
+  (`list[dict]`, `list[Any]`, `Sequence[Mapping]`…) crosses a task or activity
+  boundary inline: a contract field, or a raw `@activity.defn` parameter or
+  return.  There is no suppression to draft — the rule ignores directives — and
+  no batch size to tune: lowering a fetch limit or adding `MaxItems` moves the
+  cliff, it does not remove it.
+
+  Draft the handoff.  The producer writes the records as JSONL to a run-scoped
+  local path and returns `FileReference.from_local(path,
+  tier=StorageTier.TRANSIENT)` plus a count; the consumer reads the file at
+  `ref.local_path` (the interceptor has materialised it).  Leave
+  `storage_path` unset (P010).  Return `None` for an empty batch so the
+  consumer needs no storage round-trip to learn there is nothing to do, and
+  move any summary the workflow computed from the inline list (success /
+  failure counts) into the producing task's output.  For raw
+  `@activity.defn` code the same change applies, but the interceptor does not
+  run there: the app owns the upload and download, so route it through the
+  SDK storage ops rather than a hand-built client (P009).
+
+  Cite as evidence the record-shaped annotation at `finding.line`, the
+  producer and every consumer of that value, and
+  `application_sdk/storage/file_ref_sync.py` (the persist / materialise
+  contract the fix relies on).
+
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
   any of its categorical leaves) redeclares the `category` ClassVar in its
   own body.  Read the class definition around `finding.line`, then:

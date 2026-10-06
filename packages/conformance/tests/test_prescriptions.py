@@ -3350,3 +3350,152 @@ def test_p001_fires_on_none_optout_with_any_field(tmp_path: Path) -> None:
     findings = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P001"]
     assert len(findings) == 1
     assert "does NOT set" in findings[0].message
+
+
+# ── P055 InlineRecordBatchAcrossBoundary ────────────────────────────────────────
+
+
+def _p055(src: str) -> list:
+    return [f for f in scan_text(src, "x.py") if f.rule_id == "P055"]
+
+
+_ACTIVITY_PRELUDE = (
+    "from typing import Any\n" "from temporalio import activity\n" "class Acts:\n"
+)
+
+
+def test_p055_fires_on_record_list_contract_field() -> None:
+    src = (
+        "class FetchOutput(Output, allow_unbounded_fields=True):\n"
+        "    events: list[dict[str, Any]] = []\n"
+    )
+    findings = _p055(src)
+    assert [(f.line, f.suppressed) for f in findings] == [(2, False)]
+    assert "events" in findings[0].message
+    assert "FileReference" in findings[0].message
+
+
+def test_p055_fires_through_annotated_maxitems() -> None:
+    """MaxItems bounds the count, not the size of each record."""
+    src = (
+        "class SyncInput(Input, allow_unbounded_fields=True):\n"
+        "    events: Annotated[list[dict[str, Any]], MaxItems(500)] = []\n"
+    )
+    assert len(_p055(src)) == 1
+
+
+def test_p055_is_not_silenced_by_a_p001_suppression() -> None:
+    """The shape that shipped: P001 suppressed with a size 'budget' that was wrong."""
+    src = (
+        "class FetchOutput(Output, allow_unbounded_fields=True):  "
+        "# conformance: ignore[P001] count bounded by MaxItems, size budgeted\n"
+        "    events: Annotated[list[dict[str, Any]], MaxItems(500)] = []\n"
+    )
+    by_rule = {
+        f.rule_id: f.suppressed
+        for f in scan_text(src, "x.py")
+        if f.rule_id in {"P001", "P055"}
+    }
+    assert by_rule == {"P001": True, "P055": False}
+
+
+def test_p055_cannot_be_suppressed() -> None:
+    for directive in ("# conformance: ignore[P055] reason", "# conformance: ignore"):
+        src = (
+            "class FetchOutput(Output, allow_unbounded_fields=True):\n"
+            f"    {directive}\n"
+            f"    events: list[dict[str, Any]] = []  {directive}\n"
+        )
+        findings = _p055(src)
+        assert findings and not any(f.suppressed for f in findings), directive
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "List[Dict[str, Any]]",
+        "Sequence[Mapping[str, Any]]",
+        "tuple[dict[str, str], ...]",
+        "list[Any]",
+        "list[dict] | None",
+        "Optional[list[dict[str, Any]]]",
+    ],
+)
+def test_p055_fires_on_record_collection_shapes(annotation: str) -> None:
+    src = (
+        f"class O(Output, allow_unbounded_fields=True):\n    rows: {annotation} = []\n"
+    )
+    assert len(_p055(src)) == 1, annotation
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "list[str]",
+        "Annotated[list[str], MaxItems(100)]",
+        "dict[str, str]",
+        "FileReference | None",
+        "list[FileReference]",
+        "int",
+    ],
+)
+def test_p055_silent_on_non_record_fields(annotation: str) -> None:
+    src = f"class O(Output):\n    value: {annotation} = None\n"
+    assert _p055(src) == [], annotation
+
+
+def test_p055_silent_on_non_contract_class() -> None:
+    src = "class Row(BaseModel):\n    cells: list[dict[str, Any]] = []\n"
+    assert _p055(src) == []
+
+
+def test_p055_fires_on_raw_activity_return_and_params() -> None:
+    """The raw-activity shape: no SDK contract, so P001 never looks at it."""
+    src = _ACTIVITY_PRELUDE + (
+        "    @activity.defn\n"
+        "    async def fetch_pending_events(self, table: str) -> list[dict[str, Any]]:\n"
+        "        return []\n"
+        "    @activity.defn(name='sync')\n"
+        "    async def sync(self, raw_events: list[dict[str, Any]]) -> str:\n"
+        "        return ''\n"
+    )
+    findings = _p055(src)
+    assert sorted(f.line for f in findings) == [5, 8]
+    assert all(not f.suppressed for f in findings)
+
+
+def test_p055_fires_on_bare_imported_defn() -> None:
+    src = (
+        "from temporalio.activity import defn\n"
+        "@defn\n"
+        "async def fetch() -> list[dict]:\n"
+        "    return []\n"
+    )
+    assert len(_p055(src)) == 1
+
+
+def test_p055_silent_on_activity_with_scalar_io() -> None:
+    src = _ACTIVITY_PRELUDE + (
+        "    @activity.defn\n"
+        "    async def write_ack(self, path: str, rows: list[str]) -> dict[str, Any]:\n"
+        "        return {}\n"
+    )
+    assert _p055(src) == []
+
+
+def test_p055_silent_on_plain_function() -> None:
+    src = "def helper(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:\n    return rows\n"
+    assert _p055(src) == []
+
+
+def test_p055_emitted_by_cross_file_scan(tmp_path: Path) -> None:
+    findings = _scan_one(
+        tmp_path,
+        "class O(Output, allow_unbounded_fields=True):\n"
+        "    events: list[dict[str, Any]] = []\n",
+    )
+    assert [f.rule_id for f in findings if f.rule_id == "P055"] == ["P055"]
+
+
+def test_p055_is_block_tier() -> None:
+    assert get_rule("P055").tier is EnforcementTier.BLOCK
