@@ -29,6 +29,22 @@ def check(
     return [f.rule_id for f in scan(build_registry([path], tmp_path))]
 
 
+def f007_messages(tmp_path: Path, body: str, extra: str = "") -> list[str]:
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check("
+        + "self, input: PreflightInput) -> PreflightOutput"
+        + ":\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + "\n"
+    )
+    return [
+        f.message for f in scan(build_registry([path], tmp_path)) if f.rule_id == "F007"
+    ]
+
+
 @pytest.mark.parametrize("signature", ["self, input)", "self, input: dict) -> dict"])
 def test_handler_contract_rejects_untyped(tmp_path: Path, signature: str) -> None:
     assert "F006" in check(tmp_path, "return None", signature=signature)
@@ -419,3 +435,79 @@ def test_rebound_row_is_unresolved(tmp_path: Path) -> None:
         "row = reconcile(row)\n"
         "return PreflightOutput(checks=[row])",
     ) == ["F019"]
+
+
+def test_f007_message_names_the_sdk_error_and_its_audience(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "RateLimitedError" in message
+    assert "audience USER" in message
+    assert "customer-facing" in message
+    assert "Unresolved factory values" not in message
+
+
+def test_f007_message_resolves_an_app_subclass_audience(tmp_path):
+    extra = (
+        "from application_sdk.errors import InternalError\n"
+        'class ProbeError(InternalError):\n    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "ProbeError" in message
+    assert "audience APP_OWNER" in message
+    assert "engineer-facing" in message
+
+
+def test_f007_message_honours_an_audience_override(tmp_path):
+    extra = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors import Audience, InternalError\n"
+        "class ProbeError(InternalError):\n"
+        "    audience: ClassVar[Audience] = Audience.PLATFORM\n"
+        '    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_message_keeps_internals_out(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "exception text" in message
+
+
+def test_sdk_error_audience_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_audience
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert (
+            sdk_error_audience(f"application_sdk.errors.{name}") == cls.audience.value
+        ), name
+
+
+def test_f007_full_description_names_each_audience_voice():
+    from conformance.suite.rules.preflight import RULES
+
+    (f007,) = [r for r in RULES if r.id == "F007"]
+    for audience in ("USER", "APP_OWNER", "PLATFORM"):
+        assert audience in f007.full_description
+    assert "exception text" in f007.full_description
