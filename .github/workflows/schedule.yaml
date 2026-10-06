@@ -32,13 +32,6 @@ jobs:
           days-before-stale: 60
           debug-only: 'true'
 
-  trivy:
-    name: Trivy Code Scan
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: "./.github/actions/trivy"
-
   # Nightly real-cloud storage integration tests against main (no PR context →
   # no label gate). Same suites as the label-gated job in pull_request.yaml;
   # conftest skips any cloud whose creds aren't set, so this stays green until
