@@ -341,7 +341,21 @@ _CONTRACT_RULES = (
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
-        full_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
+        full_description=(
+            "Every error that reaches a failed preflight check carries a nonblank "
+            "``message`` and ``suggested_action``.  The SDK's generic leaves (for "
+            "example ``RateLimitedError``, ``SourceUnavailableError``, "
+            "``DependencyUnavailableError``, ``InternalError``) ship no default "
+            "action, so the app supplies it — as a class default on its own "
+            "subclass or at the construction site.\n"
+            "\n"
+            "Write the action for the error's ``audience`` (ADR 0013): customer-facing "
+            "text the customer can act on for ``USER``; an engineer-facing remediation "
+            "for the connector owners for ``APP_OWNER``; an operator hint for platform "
+            "on-call for ``PLATFORM``.  The finding message names the resolved class "
+            "and its audience.  Some surfaces forward the action without filtering by "
+            "audience, so keep internal file paths and exception text out of it."
+        ),
         rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
         help_uri=f"{_HELP_BASE}#f007",
         remediation_reference=RemediationReference(
