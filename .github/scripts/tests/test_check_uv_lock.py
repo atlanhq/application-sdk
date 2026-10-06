@@ -1,4 +1,8 @@
-"""The Pre-commit lock check rejects a refused Renovate lock (FND-3328).
+"""The lock check rejects a refused Renovate lock (FND-3328, FND-3404).
+
+It runs in two required jobs: checks-reusable.yaml's Pre-commit and
+conformance-reusable.yaml's Conformance Gate, the one context every repo
+requires.
 
 Red-green against the real `uv` and the real refusal writer
 (`renovate_uv_lock_bounded.withhold`), so a change to either the tripwire's
@@ -117,3 +121,42 @@ def test_pre_commit_job_runs_the_lock_check_on_every_pr() -> None:
     assert step["env"]["BASE_SHA"] == (
         "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
     )
+
+
+def test_conformance_gate_runs_the_lock_check_on_every_pr() -> None:
+    """`suite / Conformance Gate` is required in every repo; `pre-commit /
+    Pre-commit` is not (FND-3404). Same script, same base-diff env, no
+    condition, and the fetched copy is gone before any series walks the tree."""
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/conformance-reusable.yaml").read_text()
+    )
+    job = workflow["jobs"]["suite"]
+    assert job["name"] == "Conformance Gate"
+    steps = job["steps"]
+    names = [s.get("name") for s in steps]
+
+    fetch = steps[names.index("Fetch check_uv_lock.py from SDK")]
+    assert fetch["with"]["sparse-checkout"] == ".github/scripts/check_uv_lock.py"
+    assert fetch["with"]["ref"] == "${{ job.workflow_sha }}"
+    assert fetch["with"]["path"] == ".sdk-lock-check"
+
+    (check_at,) = [
+        i for i, s in enumerate(steps) if "check_uv_lock.py" in str(s.get("run", ""))
+    ]
+    check = steps[check_at]
+    assert "if" not in check
+    assert check["run"] == "python3 .sdk-lock-check/.github/scripts/check_uv_lock.py"
+    assert check["env"]["BASE_SHA"] == (
+        "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+    )
+
+    remove_at = names.index("Remove the fetched SDK script")
+    assert steps[remove_at]["run"] == "rm -rf .sdk-lock-check"
+    assert steps[remove_at]["if"] == "!cancelled()"
+    first_series = min(
+        i
+        for i, s in enumerate(steps)
+        if s.get("uses") == "./.github/actions/run-conformance-detect"
+    )
+    assert names.index("Authenticate private atlanhq git dependencies") < check_at
+    assert check_at < remove_at < first_series

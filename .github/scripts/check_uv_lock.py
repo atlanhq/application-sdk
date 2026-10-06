@@ -12,10 +12,16 @@ caught it was the image build's ``uv sync --locked`` behind the required
 PR, and a skipped required check passes, so the refused lock PR would
 auto-merge.
 
-This check takes over. It runs ``uv lock --check`` in the Pre-commit job of
-``checks-reusable.yaml``: a shared workflow every caller pins at ``@main``, so
-it went live fleet-wide in the same merge as the scan skip, and its
-``pre-commit / Pre-commit`` context is required on every PR. Verified on uv
+This check takes over. It runs ``uv lock --check`` in two shared workflows
+every caller pins at ``@main``, so it goes live fleet-wide in the same merge as
+the scan skip:
+
+* the Pre-commit job of ``checks-reusable.yaml`` (``pre-commit / Pre-commit``,
+  FND-3328), which some repos do not require or never call; and
+* the Conformance Gate job of ``conformance-reusable.yaml``
+  (``suite / Conformance Gate``, FND-3404), which every repo requires.
+
+Verified on uv
 0.12.23: ``uv lock --check`` exits 1 on a lock carrying the refusal's
 ``[options]`` table and 0 on the valid lock (red-green in
 tests/test_check_uv_lock.py, which runs the real ``uv``).

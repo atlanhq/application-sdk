@@ -299,10 +299,14 @@ Mechanics: `.github/scripts/release_candidate.py`; release-side detail in
 a lock carrying an undeclared `[options]` table (`renovate_uv_lock_bounded.py`,
 `withhold`). The image build's `uv sync --locked` behind the required
 `scan / Build Image` used to reject it. That job now skips on ordinary PRs, so
-the Pre-commit job of the shared `checks-reusable.yaml` runs `uv lock --check`
-(`.github/scripts/check_uv_lock.py`) whenever `uv.lock` differs from the base.
-It sits in the shared workflow, not a bootstrap template, so it went live in
-the same merge as the skip.
+two shared workflows run `uv lock --check` (`.github/scripts/check_uv_lock.py`)
+whenever `uv.lock` differs from the base: the Pre-commit job of
+`checks-reusable.yaml`, and the Conformance Gate job of
+`conformance-reusable.yaml`. The second is the one that holds fleet-wide:
+`suite / Conformance Gate` is required in every repo, while some repos require
+no `pre-commit / Pre-commit` context or never call `checks-reusable.yaml`.
+Both sit in shared workflows, not bootstrap templates, so they go live in the
+same merge as the skip.
 
 ## Runner sizing
 
