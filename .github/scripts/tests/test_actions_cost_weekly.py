@@ -72,15 +72,16 @@ def _usage(spec: dict) -> tuple:
     return runs, jobs
 
 
-def _write_report(report_dir: Path, runs: list, jobs: list, fleet_size=None) -> None:
+def _write_report(
+    report_dir: Path, runs: list, jobs: list, fleet_size=None, repos=None
+) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
     amr.write_csv(report_dir / "runs.csv", runs, amr.RunRecord)
     amr.write_csv(report_dir / "jobs.csv", jobs, amr.JobRecord)
-    (report_dir / "meta.json").write_text(
-        json.dumps(
-            {"since": "2026-09-28", "until": "2026-10-11", "fleet_size": fleet_size}
-        )
-    )
+    meta = {"since": "2026-09-28", "until": "2026-10-11", "fleet_size": fleet_size}
+    if repos is not None:
+        meta["repos"] = repos
+    (report_dir / "meta.json").write_text(json.dumps(meta))
 
 
 class FakeSlack:
@@ -416,3 +417,36 @@ def test_scan_requests_the_fourteen_day_window(tmp_path, monkeypatch):
     assert argv[argv.index("--until") + 1] == "2026-10-11"
     assert argv[argv.index("--sample") + 1] == "12"
     assert argv[argv.index("--seed") + 1] == "3312"
+
+
+@pytest.mark.parametrize("threshold", ["nan", "inf", "-inf"])
+def test_main_rejects_non_finite_threshold(tmp_path, threshold):
+    # NaN makes every `change > threshold` false: 100% growth would exit 0.
+    with pytest.raises(SystemExit) as exc:
+        acw.main(
+            ["--threshold", threshold, "--out-dir", str(tmp_path)],
+            post=FakeSlack(),
+            scan=_scan_writing(
+                {(PREV_DAY, "Tests", REPO): 1000, (CUR_DAY, "Tests", REPO): 2000}, []
+            ),
+        )
+    assert exc.value.code == 2
+
+
+def test_main_counts_sampled_repos_with_no_runs(tmp_path):
+    idle = "atlanhq/atlan-idle-app"
+    runs, jobs = _usage({(PREV_DAY, "Tests", REPO): 10, (CUR_DAY, "Tests", REPO): 10})
+    _write_report(tmp_path / "report", runs, jobs, fleet_size=4, repos=[REPO, idle])
+
+    code = acw.main(
+        ["--report-dir", str(tmp_path / "report"), "--out-dir", str(tmp_path / "o")],
+        post=FakeSlack(),
+    )
+
+    assert code == 0
+    fleet = json.loads((tmp_path / "o" / "fleet.json").read_text())
+    assert fleet["reposScanned"] == 2
+    idle_doc = json.loads(
+        (tmp_path / "o" / "repos" / "atlanhq_atlan-idle-app.json").read_text()
+    )
+    assert idle_doc["total"]["current"] == 0

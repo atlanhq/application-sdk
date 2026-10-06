@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import urllib.request
@@ -69,7 +70,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Optional, Sequence
 from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -252,7 +253,11 @@ def compare(
     fleet_size: Optional[int],
     threshold: float,
     min_minutes: int,
+    selected: Sequence[str] = (),
 ) -> Comparison:
+    """``selected`` is the scanner's repo list (``meta.json``): a sampled repo
+    with no runs in either week still counts towards the sample size and the
+    fleet estimate, and gets a zero-activity entry."""
     previous, current = split_weeks(runs, jobs, weeks)
     workflows = deltas(
         billed_by(previous, lambda j: j.workflow),
@@ -267,7 +272,7 @@ def compare(
         sum(j.billed_minutes for j in previous),
         sum(j.billed_minutes for j in current),
     )
-    repos = sorted({r.repo for r in runs})
+    repos = sorted({*selected, *(r.repo for r in runs)})
     prev_repo = billed_by(previous, lambda j: j.repo)
     cur_repo = billed_by(current, lambda j: j.repo)
     per_repo = {
@@ -542,6 +547,10 @@ def main(
         help="name of the env var holding the Slack incoming-webhook URL",
     )
     args = parser.parse_args(argv)
+    # NaN makes every `change > threshold` false, which would silently turn
+    # the regression alert off.
+    if not math.isfinite(args.threshold):
+        parser.error("--threshold must be a finite number")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     report_dir = args.report_dir
@@ -557,7 +566,13 @@ def main(
     runs = amr.read_csv(report_dir / "runs.csv", amr.RunRecord)
     jobs = amr.read_csv(report_dir / "jobs.csv", amr.JobRecord)
     comparison = compare(
-        runs, jobs, weeks, meta.get("fleet_size"), args.threshold, args.min_minutes
+        runs,
+        jobs,
+        weeks,
+        meta.get("fleet_size"),
+        args.threshold,
+        args.min_minutes,
+        selected=meta.get("repos") or [],
     )
 
     summary = render_summary(comparison, args.top)

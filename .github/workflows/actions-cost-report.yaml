@@ -78,7 +78,12 @@ jobs:
             --sample 12 \
             --seed 3312 \
             --out-dir actions-cost-out
-          cat actions-cost-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # A separate step so the report still reaches the run page when the
+      # step above exits 1 on a failed Slack alert; the job stays red.
+      - name: Publish step summary
+        if: ${{ !cancelled() && hashFiles('actions-cost-out/summary.md') != '' }}
+        run: cat actions-cost-out/summary.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload report
         if: ${{ !cancelled() && hashFiles('actions-cost-out/summary.md') != '' }}
