@@ -32,7 +32,7 @@ description: >
   defect unless the developer explicitly accepts it. Run this BEFORE any
   skill that bumps the SDK (adopt-preflight-gate, upgrade-v3) when the app
   is below 3.20.0.
-runs_before: [adopt-preflight-gate, upgrade-v3]
+runs_before: [adopt-preflight-gate, migrate-asset-modeling, migrate-storage, migrate-orchestration, migrate-deprecated-symbols, upgrade-v3]
 mandatory_triggers:
   - "/migrate-off-daft"
   - "migrate off daft"

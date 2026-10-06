@@ -157,8 +157,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/optimizations.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
         ),
     ),
     RuleDefinition(
@@ -206,8 +206,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/optimizations.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
         ),
     ),
     RuleDefinition(
@@ -265,8 +265,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/optimizations.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
         ),
     ),
     RuleDefinition(

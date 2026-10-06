@@ -114,7 +114,8 @@ populating writer) describes a structural fix — route the data through the typ
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
 constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
-gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
+performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
+the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
@@ -434,11 +435,11 @@ is always `"judgment"`:
   - `temporalio.converter` data-converter use →
     `from application_sdk.execution import create_data_converter`.
 
-  **Annotation hole — route to residue, do not fabricate a fix:** if the only
-  use of a `temporalio` symbol is to *annotate* a value the public seam returns
-  (e.g. `Client` for the result of `create_temporal_client`), there is no public
-  opaque type to swap to yet — this is the P007 leak the SDK must close first.
-  Note the P007 dependency in residue rather than inventing an import.
+  **Annotation:** if the only use of a `temporalio` symbol is to *annotate* a
+  value the public seam returns (e.g. `Client` for the result of
+  `create_temporal_client`), use `from application_sdk.execution import TemporalClient`
+  (SDK 3.20.0). It is an alias of the temporalio type, not an opaque one, so
+  the P007 leak stays open SDK-side; the app import is clean.
 
 - **P005 PrivateOrchestrationInternalImport** (app) — the app reaches into an
   SDK-private module. Draft a rewrite to the public re-export when one exists:
@@ -449,10 +450,13 @@ is always `"judgment"`:
   - `application_sdk.execution._temporal.converter.create_data_converter` →
     `application_sdk.execution.create_data_converter`.
 
+  `create_data_converter_for_app` and `TemporalExecutorBackend` are public in
+  `application_sdk.execution` since SDK 3.20.0.
+
   **No public twin — route to residue:** some internals have no public
-  equivalent today (e.g. `create_data_converter_for_app`,
-  `TemporalExecutorBackend`). Do **not** invent a public import; note that the
-  SDK must expose a public equivalent (or the app must drop the dependency).
+  equivalent today (e.g. `PreflightGateInput`, `_resolve_gate_enforcement`).
+  Do **not** invent a public import; note that the SDK must expose a public
+  equivalent (or the app must drop the dependency).
 
 - **P006 TemporalImportOutsideAdapter** (sdk) — `temporalio` is imported outside
   the `execution/_temporal/` adapter. The fix is a structural relocation of the
@@ -489,7 +493,7 @@ around `finding.line` before drafting any proposal.
   object store directly: `boto3.client(...)`, `S3Store(...)`, `GCSStore(...)`,
   `AzureStore(...)`, or any `create_store_from_binding*(...)` call.  The SDK
   provides a correctly routed store (including SDR mode) via
-  `get_infrastructure().storage` (import from `application_sdk.framework`).
+  `get_infrastructure().storage` (import from `application_sdk.infrastructure.context`).
   Draft a replacement that obtains the store through the SDK seam.  If the
   original construction passes configuration parameters (region, endpoint,
   credentials) that may not be available through the SDK, note those in residue

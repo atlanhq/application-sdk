@@ -333,11 +333,7 @@ def test_skill_order_honours_each_skills_runs_before() -> None:
     order = _skill_order()
     broken = []
     for skill in _packaged_skills():
-        match = re.search(
-            r"^runs_before:\s*\[(.*)\]\s*$", (skill / "SKILL.md").read_text(), re.M
-        )
-        for later in match.group(1).split(",") if match else []:
-            later = later.strip()
+        for later in _frontmatter_list(skill, "runs_before"):
             if later in order and order.index(later) < order.index(skill.name):
                 broken.append(f"{skill.name} must run before {later}")
     assert not broken, broken
@@ -379,3 +375,92 @@ def test_malformed_sarif_reference_is_rejected(malformed: dict[str, str]) -> Non
     props["atlan/remediationReference"] = malformed
     with pytest.raises(ValidationError):
         AtlanRuleProperties.from_properties(props)
+
+
+def _frontmatter_list(skill: Path, key: str) -> list[str]:
+    """A list-valued frontmatter key, in flow (``[a, b]``) or block (``- a``) style."""
+    lines = (skill / "SKILL.md").read_text().split("---", 2)[1].splitlines()
+    for i, line in enumerate(lines):
+        match = re.match(rf"^{key}:\s*(.*)$", line)
+        if not match:
+            continue
+        value = match.group(1).strip()
+        if value:
+            return [v.strip() for v in value.strip("[]").split(",") if v.strip()]
+        items = []
+        for nxt in lines[i + 1 :]:
+            item = re.match(r"^\s+-\s+(.+)$", nxt)
+            if not item:
+                break
+            items.append(item.group(1).strip().strip("\"'"))
+        return items
+    return []
+
+
+def test_frontmatter_lists_parse_in_both_styles(tmp_path: Path) -> None:
+    (tmp_path / "SKILL.md").write_text(
+        "---\nname: x\nruns_before: [a, b]\nalso_clears:\n  - c\n  - d\n---\nbody\n"
+    )
+    assert _frontmatter_list(tmp_path, "runs_before") == ["a", "b"]
+    assert _frontmatter_list(tmp_path, "also_clears") == ["c", "d"]
+
+
+def test_every_route_reaches_a_skill_that_will_run_it() -> None:
+    """/remediate starts a skill only for its own rules or for a symbol in its
+    ``also_clears`` list. A routed site can produce no finding of the
+    receiver's own (a ``tests/`` site P005 reports but B008 does not scan), so
+    every receiver declares the symbols it clears for others."""
+    broken = []
+    for skill in _packaged_skills():
+        for target in _frontmatter_list(skill, "routes_to"):
+            target_dir = PACKAGE_ROOT / "skills" / target
+            if not target_dir.is_dir():
+                broken.append(f"{skill.name} routes to unpackaged {target}")
+            elif not _frontmatter_list(target_dir, "also_clears"):
+                broken.append(
+                    f"{skill.name} routes to {target}, which declares no also_clears"
+                )
+    assert not broken, broken
+
+
+def test_also_clears_symbols_are_named_in_the_routing_skill() -> None:
+    """Every symbol a skill clears for others is one a routing skill sends it."""
+    missing = []
+    for skill in _packaged_skills():
+        symbols = _frontmatter_list(skill, "also_clears")
+        if not symbols:
+            continue
+        senders = [
+            s
+            for s in _packaged_skills()
+            if skill.name in _frontmatter_list(s, "routes_to")
+        ]
+        text = "".join((s / "SKILL.md").read_text() for s in senders)
+        missing += [f"{skill.name}:{sym}" for sym in symbols if sym not in text]
+    assert not missing, missing
+
+
+def test_each_route_matches_the_symbols_its_sender_names() -> None:
+    """Checked per route, not over all senders' prose at once: a sender that
+    names a receiver's symbol declares the route, and a declared route names at
+    least one of the receiver's symbols. Otherwise a sender could drop a route
+    while another sender's prose still covers the symbol."""
+    skills = _packaged_skills()
+    clears = {s.name: _frontmatter_list(s, "also_clears") for s in skills}
+    broken = []
+    for sender in skills:
+        text = (sender / "SKILL.md").read_text()
+        routes = _frontmatter_list(sender, "routes_to")
+        for receiver, symbols in clears.items():
+            if receiver == sender.name or not symbols:
+                continue
+            named = [sym for sym in symbols if sym in text]
+            if named and receiver not in routes:
+                broken.append(
+                    f"{sender.name} names {named} but does not route to {receiver}"
+                )
+            if receiver in routes and not named:
+                broken.append(
+                    f"{sender.name} routes to {receiver} but names none of its symbols"
+                )
+    assert not broken, broken

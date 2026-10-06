@@ -106,8 +106,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#b001",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/deprecation.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-deprecated-symbols",
         ),
     ),
     RuleDefinition(
@@ -622,8 +622,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#b008",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/deprecation.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-deprecated-symbols",
         ),
     ),
 )

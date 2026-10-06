@@ -114,7 +114,7 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 - **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
   `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than through `.dict()`, then
   decodes that output to merge in the custom attributes pyatlan_v9 does not model.
-- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
 asset-mapper pattern writes assets through
@@ -154,7 +154,7 @@ WARN/recommendation because adding the annotation is a safe, mechanical nudge.
   MetabaseCollection`, the pyatlan_v9 type it constructs and returns (`map_dashboard`
   and `map_bi_process` likewise), so a wrong asset type is a type error rather than a
   runtime surprise in the payload.
-- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
@@ -189,7 +189,7 @@ needs human judgement — never a blind name swap.
 - **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
   Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears nowhere
   under the three reference apps' app/ directories.
-- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
