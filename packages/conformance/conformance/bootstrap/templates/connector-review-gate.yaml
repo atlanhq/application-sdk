@@ -77,7 +77,7 @@ jobs:
     # entry at a time, so a group is always exactly one PR and there is nothing
     # extra to re-check.
     if: github.event_name != 'merge_group'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Checkout

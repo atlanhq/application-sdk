@@ -193,6 +193,95 @@ is an expression that renders differently on the skipping event. When a
 downstream gate reads the skipped job's `needs.<job>.result`, make it accept
 `skipped` explicitly.
 
+## Runner sizing
+
+**Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a
+comment or uploads a file) runs on `ubuntu-slim`. Everything else stays on
+`ubuntu-latest` until it has a measured reason to move.
+
+**Why:** every job is billed in whole minutes, so a 9-second job costs the same
+60 seconds as a 59-second one. `ubuntu-slim` (1 vCPU) is billed at $0.002/min
+against `ubuntu-latest`'s $0.006/min, so a sub-minute job costs a third as much
+there. This only matters for jobs that run in private repos: standard runners
+are free on public ones. application-sdk is public, so its own workflows save
+nothing by moving. The saving comes from the reusables and bootstrap templates
+that private connector repos run (FND-3335).
+
+### What `ubuntu-slim` provides
+
+Checked on 2026-10-06 against GitHub's hosted-runner reference and the
+runner-images `ubuntu-slim` README and Dockerfile (image `20260925`). Check
+them again before relying on anything not listed here.
+
+* 1 vCPU, 5 GB RAM, 14 GB disk, x64, Ubuntu 24.04.
+* **A hard 15-minute job timeout.** A longer `timeout-minutes` is ignored. The
+  job is killed and fails.
+* An unprivileged container, not a VM: no Docker daemon. That rules out
+  `services:`, `container:`, Docker actions, and `docker build/run/pull`. The
+  Docker CLI is installed but has nothing to talk to.
+* Installed: `gh`, `git`, `jq`, `yq`, `curl`, `aws`, Node 24, Python 3.12 with
+  `pip` and `venv`, `sudo`. **Not installed:** `uv` (use `astral-sh/setup-uv`),
+  `pkl`, `trivy`, and the apt Python modules the full image's system
+  interpreter has (PyYAML, `packaging`). A script run with the system `python3`
+  must import the stdlib only.
+* `sudo` is present, but nothing here has verified it inside the unprivileged
+  container. Jobs that `sudo`/`apt-get` stay on `ubuntu-latest` until a canary
+  confirms it, and that includes `install-pkl`, which does `sudo mv`.
+
+`.github/scripts/tests/test_runner_sizing.py` enforces all of this for every
+`runs-on: ubuntu-slim` job: a declared timeout of 15 or less, no Docker, no
+root, only allowlisted actions (each checked to be `node24` at its pinned
+SHA), and stdlib-only system Python. To move a job, add it and let that test
+tell you what it needs.
+
+### Which jobs moved, and which stayed
+
+Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
+
+* `tests-reusable.yaml`: Detect merge queue, Detect integration suite, Discover
+  e2e suites, Recheck the dispatched SDK ref, Release tenant lease, Report to
+  application-sdk, Test-readiness scorecard, Renovate artifacts, Tests Gate.
+* `build-and-publish-app.yaml`: Validate Channel + Branch, Dispatch App
+  Deployment, Publish.
+* `build-and-scan.yaml`: Security Gate.
+* `update-dashboard.yaml`: all three jobs.
+* `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
+  `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
+* Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
+
+Short fleet jobs that stay on `ubuntu-latest`:
+
+| Job | Why it stays |
+| --- | --- |
+| `renovate-auto-approve` | A conformance-resync PR is verified by rendering in a Docker container, and the job only finds out which kind of PR it has after it starts. Its 25-minute ceiling (fan-in wait) is also over the slim cap. Moving it needs the resync render split into its own job. |
+| build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
+| build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
+| tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
+| tests-reusable `wake-` / `pause-dataforge-source` | GlobalProtect VPN needs a tun device, which an unprivileged container cannot create. |
+| `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
+| Image build, merge, scan and e2e jobs | Docker. |
+
+Jobs that only run in application-sdk itself stay put because moving them saves
+nothing.
+
+### arm64 for Python jobs: not now
+
+`ubuntu-24.04-arm` is $0.005/min, about 17% under `ubuntu-latest`. The
+SDK, conformance, mysql and metabase locks all resolve to wheels with an
+aarch64 build. openapi's does not: `scalene` (a dev dependency) ships x86_64
+wheels only, so its `uv sync` would compile it from source, which costs more
+than the 17% saves. The other cost is a second architecture to debug in every
+connector's test tier.
+
+The measured upside is small. The billed-minutes report for 12 private fleet
+repos over 2026-09-28..10-04 (`--sample 12 --seed 3312`) counts 69,376 billed
+minutes. Unit and Integration are 5,015 of them (7.2%), with medians of 55s
+and 145s. A 17% cut on 7.2% is 1.2% of the bill, and that assumes arm64 runs
+no slower. The glue jobs moved to `ubuntu-slim` above billed 15,000 minutes
+(21.6%) of the same week. At a third of the price, moving them saves about 14%
+of the fleet's cost, roughly $60 a week on that sample alone. Revisit arm64
+with a measured pilot of the `unit` job on mysql or metabase.
+
 ## Mask secrets before writing them to `$GITHUB_ENV`
 
 **Rule:** if a step derives secret values from something else — unpacking a

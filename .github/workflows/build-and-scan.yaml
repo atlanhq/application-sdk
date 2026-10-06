@@ -522,7 +522,7 @@ jobs:
     # check, naming that job as the cause rather than leaving the gate skipped.
     needs: [build]
     if: always() && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Mint fleet App token

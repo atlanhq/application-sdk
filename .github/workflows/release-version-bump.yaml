@@ -69,7 +69,8 @@ permissions:
 jobs:
   bump-version:
     name: Update version and changelog
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
 
     env:
       # Referenced from step-level `if:` guards below, which cannot read
