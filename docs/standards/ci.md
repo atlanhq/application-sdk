@@ -193,6 +193,75 @@ is an expression that renders differently on the skipping event. When a
 downstream gate reads the skipped job's `needs.<job>.result`, make it accept
 `skipped` explicitly.
 
+## What a merge-queue entry re-runs
+
+**Rule:** on `merge_group`, a check runs only if its result can change when the
+PR is combined with the latest base. Every other check skips at job level, as
+above, and its skipped check run passes the required context.
+
+**Why:** the queue exists to catch what the combination changes. A PR cannot
+enter the queue until its required checks are green on its head, so a check
+whose inputs are identical on the queue commit can only repeat that verdict,
+and every repeat bills a runner across the fleet (FND-3321).
+
+Seven bootstrap callers declare `merge_group:`. Each check is either
+base-sensitive or not:
+
+| Caller → job | Base-sensitive? | On a queue entry | Why |
+| --- | --- | --- | --- |
+| `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels. A release PR without `e2e` fails on the PR and never enters the queue. |
+| `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
+| `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
+| `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree | The suite reads only the tree. |
+| `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
+| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | Skipped unless an image input differs from the PR head | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
+
+The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+head SHA from the queue branch name
+(`gh-readonly-queue/<base>/pr-<N>-<head sha>`), fetches that one commit, and
+compares it with the queue commit. It writes two outputs: `identical` (the
+whole tree matches) and `image_changed` (a path in the script's image-input
+list differs). The skipping job's gate is
+`!cancelled() && needs.queue-diff.outputs.<x> != '<skip value>'`, so an empty
+output still runs the check. That covers a skipped `queue-diff` on every
+non-queue event and a failed one. `test_queue_entry_rechecks.py` evaluates
+each gate in both directions.
+
+**Comparing with the PR head is the conservative choice.** The PR's run built
+`refs/pull/N/merge`: the head merged with the base as it was then. The diff
+against the head can only include more than the diff against that merge ref,
+never less. When a group batches several PRs, the queue branch names the last
+one. The PRs ahead of it then show up as a difference, and the checks run.
+
+**No separate `queue-gate` reporter.** A job-level skip with a static `name:`
+already files the check run the required context waits for. A reporter job
+that posts the contexts itself would need `checks: write` in every caller,
+and it would have to keep its context strings in sync with the job names by
+hand.
+
+**Newest suite wins, and that is safe here.** A queue commit belongs to one
+entry. Nothing else runs on its SHA, so no later `skipped` run can override a
+real failure. That differs from the same-commit `labeled` trap below. A
+requeue after an ejection builds a new queue commit. The skip adds no
+`concurrency:` group either, so it adds nothing to the FND-218 eviction
+surface.
+
+**What it does not cover:**
+
+* A floating base-image tag (`FROM …:latest`) can move without any file
+  changing, and so can the vulnerability DB. Both drift the same way between
+  any two scans, queue or no queue. `build-and-publish-app.yaml` scans the
+  published image again after merge, report-only (`fail_on_findings: false`).
+* A Dockerfile under a name the image-input list does not match (the list is
+  by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
+  which names the Dockerfile, is on the list. A bespoke name still needs adding
+  there.
+* Unit tests. They are base-sensitive and could skip on an identical tree too,
+  but they feed `Tests Gate` with the integration tier, so they were left
+  alone.
+
 ## Runner sizing
 
 **Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a

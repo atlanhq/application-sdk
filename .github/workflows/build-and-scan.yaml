@@ -86,6 +86,54 @@ permissions:
   pull-requests: write
 
 jobs:
+  # ── Merge-queue entry: did combining with the base change the image? ───────
+  # The scan's verdict depends on the image's packages, which come from the
+  # base image, the Dockerfile and the dependency locks, plus the caller's
+  # `.security/` allowlist. Python source never adds a finding. So on a queue
+  # entry where none of those differ from the PR head, the build and both
+  # scanners would only repeat the PR's green result for the same inputs
+  # (FND-3321). This job answers that; `build` and `security-gate` skip on it.
+  # The full list of paths, and why, is IMAGE_INPUT_BASENAMES in the script.
+  #
+  # Only on a queue entry building the caller's own tree: the prebuilt-image
+  # path (`inputs.image`) and an explicit `inputs.ref` are never skipped.
+  # Skipped (not billed) on every other event; an empty output — skipped or
+  # failed — is not `'false'`, so the scan then runs as before.
+  queue-diff:
+    name: Queue tree diff
+    if: github.event_name == 'merge_group' && inputs.image == '' && inputs.ref == ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      image_changed: ${{ steps.diff.outputs.image_changed }}
+    steps:
+      # Credentials stay persisted: the script fetches the PR head from this
+      # same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Fetch queue_tree_diff.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
   # ── Build Docker image and scan it (single-arch, no push) ──────────────────
   #
   # One job builds the image and runs both scanners on it, on this runner's
@@ -104,8 +152,15 @@ jobs:
   # Runs on the prebuilt-image path too (`inputs.image` set, the merge path in
   # build-and-publish-app.yaml): the build steps skip, and both scanners pull
   # the published image instead.
+  #
+  # Skipped only on a queue entry whose image inputs match the PR head's. The
+  # skipped job still files `Build Image`, as `skipped`, which the required
+  # context counts as a pass; keep `name:` static so it carries the same
+  # string. `!cancelled()` keeps it running when `queue-diff` is skipped.
   build:
     name: Build Image
+    needs: [queue-diff]
+    if: ${{ !cancelled() && needs.queue-diff.outputs.image_changed != 'false' }}
     runs-on: ubuntu-latest
     # The job cap is a hard limit from job start, and continue-on-error does
     # not survive it: a job that times out during the Endor scan fails the
@@ -530,8 +585,11 @@ jobs:
     name: Security Gate
     # `always()` so a failed `build` still produces a verdict here, the required
     # check, naming that job as the cause rather than leaving the gate skipped.
-    needs: [build]
-    if: always() && !cancelled()
+    # The one deliberate skip is the same as `build`'s: a queue entry whose
+    # image inputs match the PR head's, where there are no results to check
+    # and the skipped `Security Gate` counts as the PR's pass.
+    needs: [queue-diff, build]
+    if: always() && !cancelled() && needs.queue-diff.outputs.image_changed != 'false'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
