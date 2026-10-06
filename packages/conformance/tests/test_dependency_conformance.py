@@ -2361,6 +2361,34 @@ def test_d010_suppression_is_read_from_the_pyproject_anchor_line(
     assert not on_import.suppressed
 
 
+def test_d010_suppression_falls_back_to_line_1_without_an_sdk_dependency(
+    tmp_path: Path,
+) -> None:
+    pyproject = (
+        "[project]\n"
+        'name = "my-connector"\n'
+        'version = "0.1.0"\n'
+        'dependencies = ["httpx>=0.27"]\n'
+    )
+    directive = "  # conformance: ignore[D010] only frozen reference code imports it"
+    (tmp_path / "bare").mkdir()
+    (tmp_path / "suppressed").mkdir()
+    (bare,) = _d010_scan(
+        tmp_path / "bare", pyproject=pyproject, source=_D010_TRANSFORMER_IMPORT
+    )
+    first, rest = pyproject.split("\n", 1)
+    (on_line_1,) = _d010_scan(
+        tmp_path / "suppressed",
+        pyproject=first + directive + "\n" + rest,
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert bare.line == 1
+    assert "pyproject.toml:1" in bare.message
+    assert "else line 1" in bare.message
+    assert not bare.suppressed
+    assert on_line_1.suppressed
+
+
 def test_d010_full_description_says_to_check_the_import_site_is_live_first() -> None:
     from conformance.suite.rules.dependency import RULES
 

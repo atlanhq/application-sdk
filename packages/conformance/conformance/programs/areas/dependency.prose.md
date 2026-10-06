@@ -423,9 +423,11 @@ for human confirmation):
   reads), with no dependency change — adding `[sql]` would ship an unused
   `duckdb` to production.  If the repo keeps that code on purpose (frozen
   reference code for an in-progress port), the brief is a trailing
-  `# conformance: ignore[D010] <reason>` on the SDK dependency line in
-  `pyproject.toml`, naming the dead import path and the owner.  The
-  finding is anchored there and only that file's suppressions are read, so
+  `# conformance: ignore[D010] <reason>` on the finding's anchor line in
+  `pyproject.toml` (the SDK dependency line in `[project] dependencies`, or
+  line 1 when no SDK dependency is declared there), naming the dead import
+  path and the owner — even on a `[daft]` pin, where the SDK bump below
+  would ship an unused `duckdb`.  Only that file's suppressions are read, so
   a directive on the Python import line has no effect.  Only for a live
   import, continue below.
 

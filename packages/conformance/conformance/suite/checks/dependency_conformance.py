@@ -1421,7 +1421,7 @@ def _scan_query_transformer_duckdb(
     rel_import, import_line = import_site
     suppressions = parse_toml_suppressions(pyproject_text)
     # Anchor at the SDK dependency line (where the extra belongs) so the
-    # finding lands where the fix goes; fall back to the [project] header.
+    # finding lands where the fix goes; fall back to line 1 of pyproject.toml.
     sdk_norm = _normalise_name(SDK_PACKAGE)
     anchor_line = 1
     for entry in _iter_dep_entries(pyproject_text):
@@ -1447,10 +1447,12 @@ def _scan_query_transformer_duckdb(
                 f"imports the module at {rel_import}: if it is dead code "
                 f"(nothing imports it), delete it instead of adding a "
                 f"dependency; if the repo keeps it "
-                f"on purpose (e.g. frozen reference code), suppress D010 on the "
-                f"SDK dependency line in pyproject.toml, where this finding is "
-                f"anchored. Otherwise reference the SDK as "
-                f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock. If the app "
+                f"on purpose (e.g. frozen reference code), suppress D010 on "
+                f"this finding's pyproject.toml anchor line (pyproject.toml:"
+                f"{anchor_line} — the SDK dependency line when [project] "
+                f"dependencies declares one, else line 1). For a live import, "
+                f"reference the SDK as "
+                f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock; if the app "
                 f"is pinned to the deprecated '{SDK_PACKAGE}[daft]' extra, upgrade "
                 f"to SDK >= 3.28.0 instead — that extra resolved empty over "
                 f"3.22–3.27 and aliases [sql] again from 3.28.0, so the bump is "

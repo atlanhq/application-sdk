@@ -365,8 +365,9 @@ unit tests that mock the transformer pass.
 `[daft]` extra resolved to nothing, so apps that were following the SDK's own
 deprecation note were broken by an automated upgrade crossing the 3.22 line.  That is
 fixed at the root: from 3.28.0 `[daft]` aliases `[sql]` again, and a version bump alone
-resolves `duckdb` for every such app with no repo-side change.  If this rule fires on an
-app pinned to `[daft]`, upgrade the SDK rather than editing the app's extras.
+resolves `duckdb` for every such app with no repo-side change.  If this rule fires on a
+live import in an app pinned to `[daft]`, upgrade the SDK rather than editing the app's
+extras.
 
 Resolution order of the check:
 
@@ -392,10 +393,13 @@ benefit.
 cause is gone, with no dependency change.
 
 *Code the repo keeps on purpose* (e.g. reference code for an in-progress port): suppress
-D010 with a trailing `# conformance: ignore[D010] <reason>` on the SDK dependency line
-in `pyproject.toml`.  The finding is anchored there and only that file's suppressions
-are read, so a directive on the Python import line has no effect.  Name the dead import
-path in the reason, and remove the suppression when that code is deleted.
+D010 with a trailing `# conformance: ignore[D010] <reason>` on the finding's anchor line
+in `pyproject.toml`: the SDK dependency line in `[project] dependencies`, or line 1 of
+the file when no SDK dependency is declared there (the finding names the line).  Only
+that file's suppressions are read, so a directive on the Python import line has no
+effect.  Name the dead import path in the reason, and remove the suppression when that
+code is deleted.  This applies on a `[daft]` pin too: the SDK bump below is for live
+imports only, and would ship an unused `duckdb` here.
 
 *A live import*: change the SDK reference to `atlan-application-sdk[sql]` (or
 `[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
@@ -413,7 +417,9 @@ It landed as `WARN` under the new-rule tier policy with the note "treat it as an
 Note for the `[daft]`-pinned population above: with a parseable `uv.lock` the check
 walks what the app's own extras actually resolve, so once the SDK bump to >= 3.28.0 is
 locked (where `[daft]` aliases `[sql]`) `duckdb` is reachable and the finding clears
-with no app-side edit.  Bump the SDK; do not reach for a suppression.
+with no app-side edit.  For a live import, bump the SDK; do not reach for a suppression.
+Retained code that nothing imports is the exception: suppress it as above, since the
+bump would activate `[sql]` and ship an unused `duckdb`.
 
 ---
 
