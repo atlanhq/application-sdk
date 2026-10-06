@@ -2,7 +2,7 @@
 lane (FND-2848/FND-2868).
 
 Focuses on the pure decision logic: eligibility, the auto-merge gate, one-PR-
-per-repo bookkeeping, PR text, and the new approval-dispatch rule. The
+per-repo bookkeeping and PR text. The
 byte-identical re-render is the approval gate's job
 (test_resync_approval_conditions.py), not the lane's — this lane only needs to
 stage/commit the way that gate expects, which is why it imports
@@ -233,55 +233,6 @@ def test_pr_title_names_the_pinned_version():
     assert "0.39.0" in lane.pr_title("0.39.0")
 
 
-# ── approval dispatch (FND-2868) ─────────────────────────────────────────
-
-
-def _approved_review(head_sha: str, *, signature: bool = True) -> dict:
-    return {
-        "user": {"login": gate.APPROVER_LOGIN},
-        "state": "APPROVED",
-        "commit_id": head_sha,
-        "body": gate.RESYNC_SIGNATURE + " ..." if signature else "looks fine",
-    }
-
-
-def test_dispatch_when_checks_green_and_unapproved():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40)
-    assert lane.should_dispatch_approval(pr, True, []) is True
-
-
-def test_no_dispatch_when_checks_not_green():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40)
-    assert lane.should_dispatch_approval(pr, False, []) is False
-
-
-def test_no_dispatch_when_already_approved_with_signature_on_this_head():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40)
-    assert (
-        lane.should_dispatch_approval(pr, True, [_approved_review("a" * 40)]) is False
-    )
-
-
-def test_dispatch_when_approval_is_on_a_stale_head():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40)
-    assert lane.should_dispatch_approval(pr, True, [_approved_review("b" * 40)]) is True
-
-
-def test_dispatch_ignores_approvals_without_the_signature():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40)
-    stray = _approved_review("a" * 40, signature=False)
-    assert lane.should_dispatch_approval(pr, True, [stray]) is True
-
-
-def test_no_dispatch_when_pr_closed():
-    pr = _pr(7, gate.RESYNC_BRANCH, sha="a" * 40, state="closed")
-    assert lane.should_dispatch_approval(pr, True, []) is False
-
-
-def test_no_dispatch_when_no_pr():
-    assert lane.should_dispatch_approval(None, True, []) is False
-
-
 def test_checks_all_green_reads_required_checks_exit_code():
     runner = FakeRunner(
         {
@@ -299,21 +250,6 @@ def test_checks_all_green_reads_required_checks_exit_code():
     assert gate.required_checks_green(REPO, "7", runner, echo=False) is True
     runner2 = FakeRunner(default_rc=1)
     assert gate.required_checks_green(REPO, "7", runner2, echo=False) is False
-
-
-def test_dispatch_approval_invokes_the_repos_own_approver():
-    runner = FakeRunner()
-    lane.dispatch_approval(REPO, 7, runner)
-    assert runner.calls[-1] == [
-        "gh",
-        "workflow",
-        "run",
-        lane.APPROVE_WORKFLOW,
-        "-R",
-        REPO,
-        "-f",
-        "pr_number=7",
-    ]
 
 
 # ── shared contract with the approval gate ───────────────────────────────
@@ -371,7 +307,7 @@ def test_pr_matches_render_detects_changed_content_or_paths():
     assert lane.pr_matches_render(REPO, 7, ["renovate.json"], "/w", runner) is False
 
 
-def test_withdraw_closes_the_lane_pr_and_never_dispatches():
+def test_withdraw_closes_the_lane_pr():
     runner = FakeRunner()
     result: dict = {"trace": []}
     lane.withdraw_lane_pr(
@@ -379,11 +315,6 @@ def test_withdraw_closes_the_lane_pr_and_never_dispatches():
     )
     assert result["closed"] == 7
     assert not any("workflow" in c for c in runner.calls)
-
-
-def test_dispatch_failure_is_reported_not_raised():
-    assert lane.dispatch_approval(REPO, 7, FakeRunner(default_rc=1)) == "gh exited 1"
-    assert lane.dispatch_approval(REPO, 7, FakeRunner()) == ""
 
 
 def test_pr_matches_render_when_both_sides_delete_the_path():
@@ -396,25 +327,7 @@ def test_pr_matches_render_detects_a_delete_on_one_side_only():
     assert lane.pr_matches_render(REPO, 7, ["retired.sh"], "/w", runner) is False
 
 
-def test_no_dispatch_when_the_repo_does_not_auto_merge():
-    runner = FakeRunner()
-    result: dict = {"trace": []}
-    lane._maybe_dispatch(
-        REPO,
-        _pr(7, gate.RESYNC_BRANCH),
-        False,
-        runner,
-        result,
-        repo_automerge=(False, "renovate.json is in soft mode (auto-merge disabled)"),
-    )
-    assert not any("workflow" in c for c in runner.calls)
-    assert (
-        result["approvalSkipped"]
-        == "renovate.json is in soft mode (auto-merge disabled)"
-    )
-
-
-# ── an unchanged PR must still be approvable to be left alone ────────────
+# ── an unchanged PR must still sit on the current pin to be left alone ────────────
 
 PARENT = "p" * 40
 AUTO_JSON = '{"extends": ["github>atlanhq/application-sdk//renovate/fleet"]}'
@@ -455,31 +368,18 @@ def _parent_runner(pin: str | None, renovate_json: str | None) -> FakeRunner:
 def test_unchanged_pr_on_a_bumped_suite_is_re_pushed():
     # Renovate bumped 0.39.0 -> 0.40.0 on main; the templates did not change,
     # so the PR content still matches but its parent pins the old suite.
-    ok, why = lane.unchanged_pr_approvable(
-        REPO, PARENT, "0.40.0", True, _parent_runner("0.39.0", AUTO_JSON)
+    ok, why = lane.unchanged_pr_current(
+        REPO, PARENT, "0.40.0", _parent_runner("0.39.0", AUTO_JSON)
     )
     assert not ok and "0.39.0" in why
 
 
-def test_unchanged_pr_whose_parent_is_soft_is_re_pushed_when_main_auto_merges():
-    ok, why = lane.unchanged_pr_approvable(
-        REPO, PARENT, "0.39.0", True, _parent_runner("0.39.0", SOFT_JSON)
-    )
-    assert not ok and "soft" in why
-
-
-def test_unchanged_pr_left_alone_when_the_parent_still_passes_the_gate():
-    assert lane.unchanged_pr_approvable(
-        REPO, PARENT, "0.39.0", True, _parent_runner("0.39.0", AUTO_JSON)
-    ) == (True, "")
-
-
-def test_soft_repo_does_not_require_an_auto_parent():
-    # No approval is dispatched in a soft repo, so the mode must not force a
-    # re-push on every run.
-    assert lane.unchanged_pr_approvable(
-        REPO, PARENT, "0.39.0", False, _parent_runner("0.39.0", SOFT_JSON)
-    ) == (True, "")
+def test_unchanged_pr_left_alone_when_the_parent_pins_the_current_suite():
+    # The parent's renovate.json mode no longer matters: no approval is asked for.
+    for renovate_json in (AUTO_JSON, SOFT_JSON):
+        assert lane.unchanged_pr_current(
+            REPO, PARENT, "0.39.0", _parent_runner("0.39.0", renovate_json)
+        ) == (True, "")
 
 
 def test_read_clone_file_reads_the_checkout_and_refuses_symlinks(tmp_path):

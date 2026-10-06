@@ -46,7 +46,6 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "connector-review-gate.yaml",
     "release.yaml",
     "tag-and-publish.yaml",
-    "renovate-auto-approve.yml",
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
@@ -94,12 +93,21 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # now pulled for the whole fleet by application-sdk's scheduled
 # ``update-fleet-dashboards.yaml``, so the per-repo push has nothing left to do.
 # Its reusable stays in application-sdk until resync has removed every copy.
+#
+# ``renovate-auto-approve.yml``: a ``workflow_run`` shim that posted an
+# atlan-ci approval on green Renovate and resync PRs, to satisfy a
+# code-owner review rule. No app repo's ruleset requires an approval, so it
+# unblocked nothing, and every Renovate push fired it once per required-check
+# workflow, each run spending the ``ORG_PAT_GITHUB`` rate limit. Only
+# application-sdk requires the approval; it keeps its own caller and the
+# reusable, which are not bootstrap-managed.
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, not only a workflow.
 RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/docstring-coverage.yaml",
     ".github/workflows/auto-fix.yml",
     ".github/workflows/update-dashboard.yml",
+    ".github/workflows/renovate-auto-approve.yml",
 )
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")

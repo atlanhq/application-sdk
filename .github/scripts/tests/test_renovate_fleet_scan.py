@@ -339,14 +339,28 @@ def test_normalize_merged_pr_maps_reviews():
     }
     out = rfs.normalize_merged_pr(pr)
     assert out == {
+        "mergedBy": {"login": None, "is_bot": False},
         "reviews": [
             {
                 "state": "APPROVED",
                 "body": "**Renovate auto-approval:** ...",
                 "author": {"login": "atlan-ci"},
             },
-        ]
+        ],
     }
+
+
+def test_normalize_merged_pr_marks_a_bot_merger():
+    pr = {
+        "mergedBy": {"__typename": "Bot", "login": "atlan-app-fleet"},
+        "reviews": {"nodes": []},
+    }
+    assert rfs.normalize_merged_pr(pr)["mergedBy"] == {
+        "login": "atlan-app-fleet",
+        "is_bot": True,
+    }
+    person = {"mergedBy": {"__typename": "User", "login": "someone"}}
+    assert rfs.normalize_merged_pr(person)["mergedBy"]["is_bot"] is False
 
 
 def test_normalize_merged_pr_handles_missing_author():
@@ -524,7 +538,9 @@ def test_run_writes_open_and_merged_files(tmp_path):
 
     assert json.loads((open_dir / "atlanhq_a.json").read_text())[0]["number"] == 1
     assert json.loads((open_dir / "atlanhq_b.json").read_text()) == []
-    assert json.loads((merged_dir / "atlanhq_a.json").read_text()) == [{"reviews": []}]
+    assert json.loads((merged_dir / "atlanhq_a.json").read_text()) == [
+        {"mergedBy": {"login": None, "is_bot": False}, "reviews": []}
+    ]
     assert json.loads((merged_dir / "atlanhq_b.json").read_text()) == []
 
 
