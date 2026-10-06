@@ -168,11 +168,20 @@ def _nodes(node: ast.AST):
             yield from _nodes(child)
 
 
+def _audience_value(node: ast.AST | None) -> str | None:
+    """An ``Audience`` member or its string value, as the enum coerces both."""
+    if isinstance(node, ast.Attribute) and node.attr in _VOICE:
+        return node.attr
+    if isinstance(node, ast.Constant) and node.value in _VOICE:
+        return node.value
+    return None
+
+
 class _Checker:
     def __init__(self, reg: Registry):
         self.reg = reg
         self.findings: list[Finding] = []
-        self.seen: set[tuple[str, int, str]] = set()
+        self.seen: set[tuple[str, int, int, str]] = set()
 
     def emit(
         self,
@@ -182,7 +191,7 @@ class _Checker:
         message: str,
         cleared_by: frozenset[str] = frozenset(),
     ) -> None:
-        key = (src.rel, node.lineno, rule)
+        key = (src.rel, node.lineno, node.col_offset, rule)
         if key not in self.seen:
             self.seen.add(key)
             self.findings.append(
@@ -257,13 +266,10 @@ class _Checker:
                 target, value = stmt.target, stmt.value
             elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
                 target, value = stmt.targets[0], stmt.value
-            if (
-                isinstance(target, ast.Name)
-                and target.id == "audience"
-                and isinstance(value, ast.Attribute)
-                and value.attr in _VOICE
-            ):
-                return value.attr
+            if isinstance(target, ast.Name) and target.id == "audience":
+                found = _audience_value(value)
+                if found is not None:
+                    return found
         for base in cls.bases:
             found = self.audience(owner, base, visited | {id(cls)})
             if found is not None:
@@ -345,12 +351,7 @@ class _Checker:
         values.update(_kwargs(error))
         audience = self.audience(src, error.func)
         if details:
-            override = values.get("audience")
-            audience = (
-                override.attr
-                if isinstance(override, ast.Attribute) and override.attr in _VOICE
-                else "APP_OWNER"
-            )
+            audience = _audience_value(values.get("audience")) or "APP_OWNER"
         subject = _qualified(src, error.func).rsplit(".", 1)[-1]
         if audience is not None:
             subject = f"{subject}, audience {audience}"

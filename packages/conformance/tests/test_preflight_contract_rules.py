@@ -521,3 +521,35 @@ def test_f007_message_lists_every_missing_field(tmp_path):
     assert "message and suggested_action" in message
     assert "explanation" in message
     assert "engineer-facing" in message
+
+
+@pytest.mark.parametrize(
+    "audience",
+    [
+        pytest.param("audience=Audience.PLATFORM", id="enum-member"),
+        pytest.param('audience="PLATFORM"', id="string-value"),
+    ],
+)
+def test_f007_message_honours_a_failure_details_audience(tmp_path, audience):
+    """FailureDetails coerces the enum's string value, so both spellings route alike."""
+    (message,) = f007_messages(
+        tmp_path,
+        f"return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails({audience}))])",
+        "from application_sdk.errors import Audience\n",
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_reports_each_failed_error_on_one_line(tmp_path):
+    """Dedup keys on the error occurrence, so a single-line checks list loses no F007."""
+    messages = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=["
+        "PreflightCheck(passed=False, error=RateLimitedError().to_failure_details()), "
+        "PreflightCheck(passed=False, error=InternalError().to_failure_details())])",
+        "from application_sdk.errors import InternalError, RateLimitedError\n",
+    )
+    assert len(messages) == 2
+    assert any("RateLimitedError" in m for m in messages)
+    assert any("InternalError" in m for m in messages)
