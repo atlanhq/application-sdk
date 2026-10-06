@@ -145,7 +145,9 @@ parameter instead.
 2. Read the SDK version from `uv.lock`; raise it to the latest release only
    if an API this skill needs is above it (see the floors).
 3. Record the baseline outside the repo:
-   `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021,B008 --output "$TMPDIR/before.sarif"`;
+   `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021,B008 --exit-zero --output "$TMPDIR/before.sarif"`
+   (`detect` prints SARIF and exits non-zero on findings; list each result's
+   rule id and location from the file);
    `UV_FROZEN=1 uv sync --all-groups --all-extras` once (frozen, so the lock
    file is not rewritten), then `uv run --no-sync pytest tests/unit tests/integration`.
    Tests that already fail do not block this skill and must not get worse.
@@ -158,7 +160,10 @@ parameter instead.
      preflight gate activity `<App name>:preflight` and any string activity
      name the app calls;
    - the **effective** retry and timeout values per task (decorator defaults
-     included), and every task queue;
+     included), and every task queue — the **production** queue, from the
+     deployment's environment (for example `atlan-<app>-<deployment>`); the
+     queue `run_dev_combined` uses locally differs and is for information
+     only;
    - every HTTP route the app itself builds (routes the SDK serves do not
      count);
    - the run paths the app derives from its ids, with a sample id, and every
@@ -185,8 +190,11 @@ One row per **use**, not per finding, `tests/` included: one import of
   `maximum_attempts=0` means unlimited) and fields are renamed
   (`non_retryable_error_types` → `non_retryable_errors`). Copy **every**
   value explicitly; never rely on a default.
-- **context** — a helper outside `run()` that reads `workflow.info()`, or a
-  unit test that patches it. Pass the id in as a parameter; off Temporal,
+- **context** — a helper outside `run()` that reads `workflow.info()`, a
+  derivation inline in `run()`, or a unit test that patches it. Pass the id in
+  as a parameter; when the derivation is inline, extract a module-level
+  helper that takes the ids, so a unit test can call it without a context
+  (the call from `run()` is then covered by the integration kit only). Off Temporal,
   `self.context.workflow_id` is a local placeholder, not the app's own
   fallback, so compare the derived paths. A unit test that calls `run()`
   directly needs a context: the SDK's `app_context` test fixture builds one,
@@ -200,8 +208,10 @@ One row per **use**, not per finding, `tests/` included: one import of
   its decision; transfers (`self.upload`, `self.download`, `upload_refs`) stay
   in `run()` (P008 forbids them in a task).
 - **v2 residue** — a test or module written for the v2 harness (`Worker`,
-  `Client`, `WorkflowEnvironment`, activity stubs). Rewrite on the fixture
-  kit, or remove it after the developer confirms it is dead.
+  `Client`, `WorkflowEnvironment`, activity stubs). If the app's fixture-kit
+  suite already runs the workflow end to end, or the test only exercises its
+  own mocks, recommend removal at Stop 1; otherwise rewrite it on the kit.
+  Remove a file only after the developer confirms.
 - **no public equivalent** — see the list above.
 - **routed** — a private SDK name that is not orchestration (see Routing).
 
@@ -243,15 +253,23 @@ import to module scope.
 
 ## Step 3 — Prove it
 
-1. `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021`
-   and `--rule B008` — nothing left from this skill's inventory except the
-   agreed ignores and the owner-decision sites.
-2. The tests pass (`uv run --no-sync pytest ...`), with no failure that was
-   not in the baseline.
+1. `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021 --exit-zero --output <file>`
+   and the same with `--rule B008` — nothing left from this skill's inventory
+   except the agreed ignores, the owner-decision sites, the routed sites (name
+   the skill each goes to) and the residue the developer chose to keep.
+2. The tests pass, with the Step 0.3 command, and no failure that was not in
+   the baseline. Report skipped tests separately: a skipped kit test hides a
+   coverage gap.
 3. Runtime parity: compare against the Step 0.4 record — the workflow type,
-   activity names, retry and timeout values, task queues, routes and derived
-   run paths are the same, or the difference was accepted at Stop 1. Boot the
-   app once with `run_dev_combined` and confirm the worker registers.
+   activity names, retry and timeout values, the production task queue,
+   routes and derived run paths are the same, or the difference was accepted
+   at Stop 1. To derive run paths for a sample id off Temporal, call the
+   extracted helper; if only `run()` can produce them, setting the private
+   `app._context` in a script outside the repo is acceptable.
+4. Boot check: start `run_dev_combined` (no Temporal or Dapr needed for this
+   check), wait for the log lines `Registered app <name>` and the
+   combined-mode start with its queue, confirm the health endpoint returns
+   200, then stop the process.
 
 **Stop 2** (see Agent protocol).
 

@@ -153,9 +153,10 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
    the transformed entity files, one JSONL line per entity, outside the repo.
    If the app has no such test, stop and ask the developer how to produce the
    output. Check coverage: the capture must contain every asset type and
-   process kind in the Step 1 inventory. For a type it does not contain, add a
-   unit-level test that pins the qualifiedName for a sample input before any
-   edit.
+   process kind (each distinct process qualifiedName grammar, for example
+   `{conn}/{model}@allmodule`) in the Step 1 inventory. For a type it does not
+   contain, first check whether an existing unit test already pins its
+   qualifiedName; if none does, add one for a sample input before any edit.
 
 ## Step 1 — Inventory and classify every site
 
@@ -166,13 +167,19 @@ helper and lists their lines.
 
 - **creator** — a `pyatlan_v9.model.assets` class with a `creator()` produces
   the **same** string. Check it: build one value both ways and compare, with
-  a realistic input **and** with the edge inputs the app can receive (an id
-  that is `None` or empty, the real connection qualifiedName format).
-  Creators enforce segment counts (`Database` needs a 3-segment connection
-  qualifiedName, `Schema` 4, `Table`/`View`/`Procedure` 5) and raise
-  `ValueError` where an f-string would produce `…/None`. If a caller catches
-  that error and drops the entity, the site is an **identity change**, not a
-  creator rewrite. When the app keys a name on an id, pass the id as `name`
+  a realistic input **and** with every edge input the app can receive: an id
+  that is `None` or empty, an empty connection qualifiedName, and the real
+  connection qualifiedName format. An input is reachable unless a guard or a
+  required non-empty type stops it before the site; `.get(k, "")`,
+  `.get(k)` and a field declared `str = ""` all make the empty value
+  reachable. When the qualifiedName is built through a chain of creators,
+  check every id in the chain, not only the last one: each goes in as a
+  `name`. Creators enforce segment counts (`Database` needs a 3-segment
+  connection qualifiedName, `Schema` 4, `Table`/`View`/`Procedure` 5) and
+  raise `ValueError` where an f-string would produce `…/None` or `//`. If a
+  creator can raise on any input the app accepts, the site is an **identity
+  change**, whether the error drops the entity, fails the task or fails the
+  run. When the app keys a name on an id, pass the id as `name`
   to get the **string** only; never emit that creator-built asset, because
   its `name` is then the id. Some families have no creators at all; check per
   asset type.
@@ -214,7 +221,10 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    sites, and the f-string helpers with their ignores for the **centralise**
    sites. Call sites use the helpers. In a dict-mapper app the helpers return
    strings only, and the emitted dicts keep their shape. Leave **identity
-   change** and **decode** sites untouched.
+   change** and **decode** sites untouched and **unsuppressed**: they stay
+   P028 findings, listed in the PR description, until the owner decides (for
+   example to reject blank ids in `run()`, which makes the creator rewrite
+   safe).
 4. **P052 / O002** — serialize every entity with
    `entity_bytes(asset, envelope=ENTITY_ENVELOPE, entity_type=...)`, one module-level
    policy. Pass `connection_name=` and `last_sync=resolve_last_sync_details()`
@@ -225,17 +235,25 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 
 ## Step 3 — Prove it
 
-1. `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004`
-   — no finding left except the agreed ignores and the owner-decision sites.
-2. The test suite passes.
-3. Parity: regenerate the output from Step 0.3 and compare the
-   `(typeName, qualifiedName)` pairs as a multiset (counts, not a set: an
-   anonymised fixture can repeat a qualifiedName). Every pair must be present
-   before and after, with the same count. Expected differences: `connectionName` added,
-   placeholder guids removed. Anything else is a defect unless the
-   developer accepts it.
-4. Add a test that pins the qualifiedNames of a recorded fixture, so a later
-   change to a creator or helper cannot change identity silently.
+1. `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004 --exit-zero --output <file>`
+   — no finding left except the agreed ignores and the owner-decision sites
+   (expected, unsuppressed). The checker does not see the hand-built helpers
+   from Step 1 (for example a `_qn(*parts)` join): grep their call sites and
+   confirm each is migrated or listed as an owner decision.
+2. The test suite passes, with no failure that was not in the baseline.
+3. Parity: regenerate the output from Step 0.3 and compare, as multisets
+   (counts, not sets: an anonymised fixture can repeat a qualifiedName), both
+   the `(typeName, qualifiedName)` pairs **and** every
+   `uniqueAttributes.qualifiedName` in relationship references — a mapper
+   that builds a reference changes identity as surely as one that builds an
+   entity. Every value must be present before and after, with the same count.
+   Ignore volatile fields such as `lastSyncRunAt`. On the `entity_bytes`
+   path, `connectionName` added and placeholder guids removed are expected;
+   anything else is a defect unless the developer accepts it.
+4. Pin the parity in the repo: commit the before-snapshot as JSON next to the
+   recorded fixture, assert `Counter` equality against it in the offline
+   test, and change one grammar on purpose to confirm the test fails, then
+   revert.
 
 **Stop 2** (see Agent protocol).
 

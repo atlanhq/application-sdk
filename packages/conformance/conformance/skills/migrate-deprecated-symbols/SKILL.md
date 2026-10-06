@@ -65,8 +65,11 @@ on names that exist in the repo, or on dunders.
 
 `detect` does not scan `tests/`, but test code breaks on the same SDK
 changes. Find those sites yourself and add them to the inventory:
-`rg -n 'application_sdk\S*\._|PreflightStatus\.PARTIAL' tests/` plus every
-deprecated symbol the app-code findings named.
+`grep -rnE 'application_sdk[^ ]*\._|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`
+plus every deprecated symbol the app-code findings named. Iterating the enum
+(`for status in PreflightStatus`) still yields PARTIAL. List string patch
+targets too (`patch("app.app.download_files")`): they move with the symbol
+they name.
 
 Suppression form, on the line or on a comment-only line directly above:
 `# conformance: ignore[<ID>] <reason>`.
@@ -85,7 +88,9 @@ so read it on GitHub; and a notice that points at a private module
 
 1. Run the skills listed before this one in
    `$(atlan-application-sdk-conformance skills-dir)/order.txt` first, so the
-   manifest matches the SDK the app will ship with.
+   manifest matches the SDK the app will ship with. If you run this skill
+   alone, record that the earlier migrations can still change what is
+   deprecated.
 2. Record the baseline outside the repo:
    `atlan-application-sdk-conformance detect --rule B001,B008 --output "$TMPDIR/before.sarif"`.
    Run the tests with every group and extra installed
@@ -125,15 +130,21 @@ use), because each use changes with the migration.
     already treats PARTIAL as READY); `NOT_READY` blocks the run. Either way
     the status label in the UI, Pulse and the Automation Engine event changes.
     Change the tests that assert PARTIAL and any message map keyed on it in
-    the same step.
+    the same step. Keep the "readiness is undetermined" message: choose it
+    from the checks (READY with a failed advisory check), not from the status
+    alone, or an undetermined run shows "all checks passed".
   - `upload_to_atlan(...)` → `App.upload(UploadInput(local_path=..., tier=StorageTier.RETAINED))`:
     different arguments and return value.
   - `get_workflow_id()` → `input.workflow_id` (needs the typed Input in
     scope); `get_workflow_run_id()` → `App.run_id`.
-  - `build_output_path()` → compose the run path from `input.workflow_id`.
-    The public `application_sdk.execution.build_output_path` exists, but its
-    docstring forbids app code from calling it: it reads the current
-    activity, so it is wrong in `run()`.
+  - `build_output_path()`: moving the **import** to the public
+    `application_sdk.execution.build_output_path` (the same object) is a
+    **swap**. Replacing the **call** is a separate decision: its docstring
+    forbids app code from calling it, and it reads the current activity, so
+    it is wrong in `run()`; but the path can feed published object-store keys,
+    so composing it differently (for example from `input.workflow_id` alone,
+    which drops the run id) changes those keys. Route that change to
+    `migrate-storage`.
   - A deprecated error class → the typed `application_sdk.errors` subclass
     the notice names; update every `except` and `isinstance` that used it.
 - **route** — a structural migration another skill owns. Record it, do not
@@ -169,7 +180,8 @@ class does not change: a **behaviour** site still waits for the developer.
 
 1. Apply the **swap** sites. Change the import or call only, and keep the
    surrounding logic — except where the old call was wrapped for an
-   exception, as with `_resolve_store`; replace that wrapper too.
+   exception, as with `_resolve_store`; replace that wrapper too, and remove
+   imports only the old wrapper used.
 2. Apply the **behaviour** sites the developer decided, one at a time, with
    the test that covers the changed path.
 3. Add the agreed ignores for **no public equivalent** and **false
@@ -180,9 +192,12 @@ class does not change: a **behaviour** site still waits for the developer.
 
 1. `atlan-application-sdk-conformance detect --rule B001,B008` — no finding
    left except the routed sites and the agreed ignores.
-2. The test suite passes, with no failure that was not in the baseline.
+2. The test suite passes (the Step 0.2 command), with no failure that was not
+   in the baseline.
 3. A test collects for every changed test module (`pytest --collect-only`):
    B008 changes in `tests/` break collection first.
+4. `detect` does not check `tests/`: re-run the Step 1 search and confirm each
+   test site is fixed or carries its agreed ignore.
 
 **Stop 2** (see Agent protocol).
 

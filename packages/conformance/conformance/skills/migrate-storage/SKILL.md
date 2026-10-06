@@ -164,8 +164,9 @@ for a customer bucket.
    SDK to the latest release only if the lock is below it and the app will
    use `upload_refs`.
 3. Record the baseline outside the repo:
-   `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044,B001,B008 --output "$TMPDIR/before.sarif"`,
-   and the tests: `uv sync --all-groups --all-extras` once, then
+   `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044,B001,B008 --exit-zero --output "$TMPDIR/before.sarif"`,
+   and the tests: `UV_FROZEN=1 uv sync --all-groups --all-extras` once (frozen,
+   so the lock file is not rewritten), then
    `uv run --no-sync pytest tests/unit tests/integration` (a plain `uv run`
    re-syncs the environment and can replace the installed conformance build).
    Tests that already fail do not block this skill and must not get worse.
@@ -175,7 +176,11 @@ for a customer bucket.
      clients, recorded or cassette data). Give the test infrastructure a
      **separate** `upstream_storage` from `storage`, so a file that never
      reaches the upstream store shows as a missing key; with one shared store
-     the silent failure cannot show. If the app has no such test for an
+     the silent failure cannot show. The integration kit has no option for
+     this: override its infrastructure fixture in a `conftest.py` outside the
+     repo that you point pytest at (a `-p` plugin cannot override a conftest
+     fixture), and set `ATLAN_APPLICATION_NAME` before any `application_sdk`
+     import so the run paths match production. If the app has no such test for an
      entrypoint, write a scratch test outside the repo, or stop and ask the
      developer.
    - **Published keys.** From a fixture or plugin outside the repo
@@ -187,6 +192,10 @@ for a customer bucket.
      developer whether they count.
    - **Entities.** Collect the transformed entity files (one JSONL line per
      entity).
+   - **An empty upstream baseline is a finding, not a pass.** If an
+     entrypoint hands a prefix to other apps but nothing reaches the upstream
+     store today, the silent failure already exists: report it at Stop 1.
+     "Same key set" after the change proves nothing for that prefix.
 
 ## Step 1 — Inventory and classify every site
 
@@ -216,7 +225,10 @@ One row per site (B001 flags an import: list every use of a routed class).
 - **move** — a transfer call inside a `@task`: `self.upload` /
   `self.download` / `self.upload_refs` (P008) and the `application_sdk.storage`
   helpers `upload_file` / `upload_file_from_bytes`, which P008 does not see.
-  The task returns a FileReference; the transfer moves to `run()`.
+  The task returns a FileReference; the transfer moves to `run()`. A
+  helper write that lands in the **deployment** store today lands in the
+  **upstream** store once it goes through `App.upload` / `upload_refs`: that
+  adds keys downstream apps can see, so it is an owner decision.
 - **store** — a hand-built store (P009). Inside the app:
   `self.context.storage` / `upstream_storage` or `App.download`. An external
   customer bucket: `CloudStore.from_credentials`. A `boto3` import used only
@@ -232,9 +244,11 @@ Private storage helpers routed here by `migrate-deprecated-symbols` (B008):
 `_download_files` (a **hand-off** or **inbound** site),
 `storage.ops._resolve_store` (a **store** site), and the private
 `execution._temporal.activity_utils.get_object_store_prefix` /
-`build_output_path` (a **hand-off** site once the shared path goes; until
-then, the public `get_object_store_prefix` import, and a run path composed
-from `input.workflow_id` in place of `build_output_path`). Private
+`build_output_path` (a **hand-off** site once the shared path goes). Until
+then, import `get_object_store_prefix` from the public
+`application_sdk.execution`. Do not replace `build_output_path` with a path
+composed from `input.workflow_id` alone when the path feeds a published key:
+that drops the run id from the key; keep it and record the call. Private
 non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 
 **Owner decisions** — record each; do not apply without an answer:
@@ -258,10 +272,13 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    publish a prefix naming an empty tree today. An empty or missing prefix
    can be read as "the source has no assets" downstream, which can delete
    published assets. Confirm with each downstream consumer, per entrypoint.
-4. **Bytes and format.** `JsonFileWriter` wrote through pandas `to_json`;
-   `orjson` output differs in escaping. Parquet to JSONL changes nullable
-   integer typing. Chunk names change. Any change beyond the same entity
-   multiset needs the developer's yes.
+4. **Bytes and format.** The legacy `JsonFileWriter` writes orjson over
+   `DataFrame.to_dict` records, names chunks `chunk-<n>-part<m>.json`, splits
+   a chunk into more parts near the message-size limit, and adds a
+   `statistics/` sidecar. A `RollingFileWriter` replacement changes the chunk
+   names and drops the sidecar unless the flush function reproduces them;
+   write the same bytes and names, or get the developer's yes. Parquet to
+   JSONL changes nullable integer typing.
 5. **Entrypoint contract.** Retiring or retyping a field the app declares on
    an `@entrypoint` Input / Output: mark it `sunset` in
    `contract_schema.lock.json`; a FileReference on an entrypoint contract needs
@@ -285,7 +302,11 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
    `_download_files` and the legacy readers.
 4. `run()` / `@entrypoint`: deliver outbound files with `App.upload` /
    `upload_refs` at the agreed keys; remove hand-rolled store copies and
-   `upload_to_atlan`.
+   `upload_to_atlan`. If `upload_refs` verification counts more objects than
+   were declared for a **directory** ref (the interceptor adds `.sha256`
+   sidecars to it), declare a copy of the ref with `local_path=None` and
+   `auto_materialize=False`, and record it: this is an SDK defect, not an app
+   one.
 5. Stores and fields: `self.context.*`, `CloudStore`,
    `FileReference.from_local`; the agreed ignores and renames.
 
