@@ -55,7 +55,7 @@ a blind swap.
   (application_sdk.app, application_sdk.contracts, application_sdk.errors). What counts
   as deprecated is not a judgement call: it is the manifest this rule reads, regenerated
   from SDK source by `gen-deprecations`.
-- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
+- **Migrate with:** the `migrate-deprecated-symbols` skill (`skills-dir`)
 
 Flags app consumption of any symbol recorded in the deprecated-symbol manifest the SDK
 ships with this conformance package (BLDX-1418).  Four surfaces are matched,
@@ -425,7 +425,7 @@ prevent; revisit once the count nears zero.
   application_sdk.app, .contracts, .credentials, .errors, .observability and .outputs,
   plus msgspec and orjson. No module under the three reference apps' app/ directories
   imports an underscore-prefixed module or name it does not own.
-- **Migrate with:** [`programs/areas/deprecation.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/deprecation.prose.md)
+- **Migrate with:** the `migrate-deprecated-symbols` skill (`skills-dir`)
 
 Flags any import or attribute use that reaches a private module or name the app does not
 own.  Six shapes are matched:

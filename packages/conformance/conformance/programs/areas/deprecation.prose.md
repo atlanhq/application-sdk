@@ -26,7 +26,7 @@ includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 

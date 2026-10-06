@@ -286,7 +286,7 @@ and bypasses that seam (BLDX-1417).
   application_sdk.app import App, entrypoint, task`, and the string temporalio appears
   nowhere under that repo's app/ or tests/. Everything a workflow needs, including
   `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -321,7 +321,7 @@ longer evolve the seam safely (BLDX-1417).
   `application_sdk.observability.logger_adaptor`. None reaches an underscore-prefixed
   path such as application_sdk.execution._temporal, which the SDK may move without a
   deprecation cycle.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
 under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
@@ -406,7 +406,7 @@ let the activity interceptor move the bytes (BLDX-1398).
   return, to deliver the FileReferences they declared. A @task hands its output back as
   a FileReference and lets the framework move it; the transfer is the App's business,
   not the task's.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 - **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
   of these transfers, P021 says move the block into a @task and this rule says the
   transfer must stay in run() — so relocating the block wholesale trades one finding for
@@ -459,7 +459,7 @@ extract→publish hand-off. The SDK's infrastructure context (get_infrastructure
 - **Compliant example:** atlan-openapi-app app/connector.py — object-store access goes through the SDK's
   `CloudStore` over `self.context.storage`. No reference app constructs a boto3/gcs/adls
   client of its own.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A consumer app builds its own storage backend directly: importing `boto3` (`import
 boto3` / `from boto3 ...`), constructing an obstore store (`S3Store`, `GCSStore`,
@@ -495,7 +495,7 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
   `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
   `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
 explicitly: `storage_path=`, `is_durable=`, or `file_count=`.  The SDK owns these fields
@@ -529,7 +529,7 @@ pass a FileReference, which crosses the task boundary as a small durable handle
 - **Compliant example:** atlan-openapi-app app/contracts.py — payloads that could be large travel as
   `FileReference` fields, never as bytes. A bytes field puts the whole artefact inside
   Temporal's 2MB envelope.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
 `memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
@@ -566,7 +566,7 @@ underlying file (BLDX-1398).
   remaining `str` fields are URLs, object-store keys and prefixes, identifiers (a legacy
   credential GUID, the workflow id and type) and qualified names; none is a path on a
   worker's disk.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -854,7 +854,7 @@ consistent, SDK-controlled way (BLDX-1411).
   temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
   is constructed anywhere under app/. The launcher is what wires interceptors, the
   activity registry and the task queue together.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -897,7 +897,7 @@ safely (BLDX-1411).
 - **Compliant example:** atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same
   `run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none of the
   SDK's platform endpoints (/workflows/v1/auth, /check, /metadata).
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
 `uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
@@ -1025,7 +1025,7 @@ whose result is durably recorded in workflow history.
   the object-store download live inside those tasks. The comment above the download call
   states the rule in the app's own words: cloud I/O must run in an activity, not
   workflow code.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 - **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
   self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
   this finding for P008 findings: those helpers are framework tasks and must be called
@@ -1385,7 +1385,7 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
   string and not the asset, atlan-metabase-app app/qualified_names.py carries a
   per-function ignore[P028] naming the creator whose grammar it mirrors.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
   end state in two cases, and the reason must say which. Either the caller needs the
   qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
@@ -2193,7 +2193,7 @@ customer who finds the gap, if anyone does.
   source_prefix=..., prefix=...))` over the transformed FileReferences the tasks
   declared, not a directory scan. storage.upload_prefix / download_prefix move bytes
   without producing a FileReference the next task can resolve.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 App source calls `upload_prefix` / `download_prefix` (or imports them from
 `application_sdk.storage`) to move artifacts itself, rather than declaring the data on
@@ -2627,7 +2627,7 @@ copied, the bypass spreads.
 - **Compliant example:** atlan-openapi-app app/connector.py — `_transform_blocking` writes every connection,
   APISpec and APIPath line as `entity_bytes(asset, entity_type=...,
   envelope=ENTITY_ENVELOPE)`; no mapper result is serialized any other way.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
   where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
   from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.

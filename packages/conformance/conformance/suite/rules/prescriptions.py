@@ -654,8 +654,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
         ),
     ),
     RuleDefinition(
@@ -735,8 +735,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
         ),
     ),
 )
