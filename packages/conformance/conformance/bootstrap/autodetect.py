@@ -20,6 +20,7 @@ from conformance.bootstrap.extract import (
     extract_conformance_private_git_deps,
     extract_field,
     extract_release_private_git_auth,
+    extract_sarif_upload,
     extract_use_ghcr_base,
     extract_vulnerability_scan_lfs,
     resolve_renovate_fallback_exit_zero,
@@ -87,6 +88,21 @@ def _read_use_ghcr_base(path: pathlib.Path) -> str:
         return ""
     try:
         return extract_use_ghcr_base(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError):
+        return ""
+
+
+def _read_sarif_upload(path: pathlib.Path) -> str:
+    """Return ``"true"`` if *path* (a ``conformance-upload-sarif.yaml``) is an
+    opted-in copy, else ``""``.
+
+    Delegates to ``extract_sarif_upload`` — the same extractor the C002 drift
+    checker uses — so the copy bootstrap keeps is exactly the copy C002 accepts.
+    """
+    if not path.exists():
+        return ""
+    try:
+        return extract_sarif_upload(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError):
         return ""
 
@@ -300,6 +316,14 @@ def apply_bootstrap_autodetection(kwargs: dict[str, str], root: pathlib.Path) ->
     if not kwargs["use_ghcr_base"]:
         kwargs["use_ghcr_base"] = _read_use_ghcr_base(
             root / ".github" / "workflows" / "build-and-publish.yaml"
+        )
+    # sarif-upload: an existing conformance-upload-sarif.yaml's opt-in marker,
+    # else unset (FND-3336). Keyed on the marker rather than the file existing:
+    # every repo bootstrapped before the opt-in holds an unmarked copy, and on
+    # the private repos that is exactly the copy this run must remove.
+    if not kwargs["sarif_upload"]:
+        kwargs["sarif_upload"] = _read_sarif_upload(
+            root / ".github" / "workflows" / "conformance-upload-sarif.yaml"
         )
     # vuln-scan lfs: an existing vulnerability-scan.yml's opt-in, else unset.
     # Exactly the use-ghcr-base case above -- an always-overwrite shim carrying

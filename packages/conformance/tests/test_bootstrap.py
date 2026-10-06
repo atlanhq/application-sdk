@@ -22,12 +22,17 @@ from conformance.bootstrap.command import (
     _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK,
     _bootstrap_file,
 )
+from conformance.bootstrap.extract import (
+    SARIF_UPLOAD_OPT_IN_MARKER,
+    extract_sarif_upload,
+)
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_WORKFLOWS,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 from conformance.cli import _cmd_bootstrap
@@ -132,6 +137,9 @@ def test_parse_bootstrap_args_defaults() -> None:
         # canonical and C002 stays silent.
         "unit_coverage_fail_under": "",
         "use_ghcr_base": "",
+        # "" = defer to an opt-in already on disk; with none, the SARIF upload
+        # workflow is not installed (public repos only, FND-3336).
+        "sarif_upload": "",
         # No flag of its own: autodetected from an existing
         # vulnerability-scan.yml so an app that vendors LFS-tracked assets into
         # its Docker build context keeps `lfs: true` across a bootstrap run.
@@ -2384,6 +2392,104 @@ def test_cmd_bootstrap_json_reports_a_removal_as_touched(
     payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
     for name in RETIRED_WORKFLOWS:
         assert f".github/workflows/{name}" in payload["touched"]
+
+
+# ---------------------------------------------------------------------------
+# Opt-in SARIF upload (FND-3336): public repos only
+# ---------------------------------------------------------------------------
+
+_SARIF_REL = f".github/workflows/{SARIF_UPLOAD_WORKFLOW}"
+
+# What every repo bootstrapped before FND-3336 holds: the canonical as it was,
+# without the opt-in marker.
+_UNMARKED_SARIF_COPY = "\n".join(
+    line
+    for line in render(SARIF_UPLOAD_WORKFLOW).splitlines()
+    if line != SARIF_UPLOAD_OPT_IN_MARKER
+)
+
+
+def test_sarif_upload_is_not_an_always_managed_shim() -> None:
+    """Listed in MANAGED_WORKFLOWS it would be written into every private repo."""
+    assert SARIF_UPLOAD_WORKFLOW not in MANAGED_WORKFLOWS
+    assert SARIF_UPLOAD_WORKFLOW not in RETIRED_WORKFLOWS
+
+
+def test_sarif_upload_canonical_carries_the_opt_in_marker() -> None:
+    """Autodetection keys on the marker, so a copy bootstrap writes must keep it
+    or the next bare run would remove the public repo's own opt-in."""
+    assert extract_sarif_upload(render(SARIF_UPLOAD_WORKFLOW)) == "true"
+    assert extract_sarif_upload(_UNMARKED_SARIF_COPY) == ""
+
+
+def test_cmd_bootstrap_does_not_install_sarif_upload_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert not (tmp_path / _SARIF_REL).exists()
+
+
+def test_cmd_bootstrap_installs_sarif_upload_when_opted_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    assert (tmp_path / _SARIF_REL).read_text() == render(SARIF_UPLOAD_WORKFLOW)
+
+
+@pytest.mark.parametrize("argv", [[], ["--resync"]])
+def test_cmd_bootstrap_removes_an_unmarked_sarif_upload(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys, argv: list[str]
+) -> None:
+    """The private-repo case: the pre-opt-in copy goes, and the deletion is in
+    `touched` so the resync lane stages it."""
+    dest = tmp_path / _SARIF_REL
+    dest.parent.mkdir(parents=True)
+    dest.write_text(_UNMARKED_SARIF_COPY)
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([*argv, "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert not dest.exists()
+    assert _SARIF_REL in payload["touched"]
+
+
+def test_cmd_bootstrap_keeps_an_opted_in_sarif_upload(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The public-repo case: a bare re-run (and so the fleet resync) keeps it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (tmp_path / _SARIF_REL).read_text() == render(SARIF_UPLOAD_WORKFLOW)
+    assert _SARIF_REL in payload["unchanged"]
+
+
+def test_cmd_bootstrap_sarif_upload_false_removes_an_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    _cmd_bootstrap(["--sarif-upload", "false"])
+    assert not (tmp_path / _SARIF_REL).exists()
+
+
+def test_cmd_bootstrap_sarif_upload_absent_is_not_reported(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert _SARIF_REL not in payload["touched"]
+    assert _SARIF_REL not in payload["unchanged"]
+
+
+def test_parse_bootstrap_args_rejects_a_non_boolean_sarif_upload() -> None:
+    with pytest.raises(SystemExit) as exc:
+        parse_bootstrap_args(["--sarif-upload", "yes"])
+    assert exc.value.code == 2
 
 
 # ---------------------------------------------------------------------------
