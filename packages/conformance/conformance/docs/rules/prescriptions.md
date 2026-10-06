@@ -1576,6 +1576,29 @@ mis-rooting class). * **Inline writers that target the deployment store only** �
 is   written, but never to the tenant bucket (observed for a key-value   store connector
 in fleet testing).
 
+**Working transfers that still fire P030.**  Two shapes move bytes but are not
+`self.upload` / `self.upload_refs` and are not the named `upload_to_atlan` bridge P042
+reports: an app task that calls `storage.transfer.upload` (against
+`create_store_from_binding` or `upstream_storage`), and a call to the inherited
+`BaseMetadataExtractor.upload_to_atlan` shim, which is a pure redirect to
+`self.upload(local_path=output_path, tier=RETAINED)`.  Convert them anyway — the private
+path skips the SDK's upstream checks, dual-write and cross-pod fallback — but treat the
+change as a refactor that must not move a key.
+
+*Conversion recipe.*  `App.upload` and `upload_refs` are tasks, so call them from the
+entrypoint, never from inside another task.  Either keep the activity and have it stage
+a local tree that mirrors the key layout, returned as a directory `FileReference`, then
+upload it once with `storage_path` pinned to the prefix the app returns (no replay risk
+for runs in flight at deploy); or declare the task outputs to `upload_refs` with a
+`DeclaredFile.label` per key.  Skip empty entities (`upload_refs` raises on an empty
+declared file), keep side outputs such as `resolvable/` or miner files in a delivery,
+and upload the whole tree when downstream nodes read more than `transformed/`.  For the
+shim, the swap is its own body.
+
+*Verification.*  Run the full-DAG e2e on main first as a baseline, then on the change,
+and compare the Atlas inventory per type.  The inventory need not list every type a
+connector writes; a type absent from both runs is not proven either way.
+
 **Never mark a P030 finding a false positive without a green full-DAG e2e** (extract →
 publish) proving assets actually land in Atlas.  The workflow status is not evidence —
 every failure mode above reports 'success'.  The live e2e's asset-count floor is the
