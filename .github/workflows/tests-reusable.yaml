@@ -690,7 +690,7 @@ jobs:
   detect-merge-queue:
     name: Detect merge queue
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -764,7 +764,7 @@ jobs:
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
           (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
       count: ${{ steps.detect.outputs.count }}
@@ -1080,7 +1080,7 @@ jobs:
   # resolution — is exercised before release rather than after.
   discover-e2e:
     name: Discover e2e suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
     # hold the required check pending for GitHub's 6-hour default.
     timeout-minutes: 10
@@ -1685,7 +1685,7 @@ jobs:
     name: Recheck the dispatched SDK ref
     needs: [merge-e2e-image]
     if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       # Nothing beyond the default. Every read is of public data in
@@ -2551,7 +2551,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: write
@@ -2687,7 +2687,10 @@ jobs:
       always() &&
       github.event_name == 'workflow_dispatch' &&
       inputs.application-sdk-ref != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    # Explicit, not the platform's: ubuntu-slim kills a job at 15 minutes
+    # whatever it declares (docs/standards/ci.md, "Runner sizing").
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -2892,8 +2895,8 @@ jobs:
   # ways out were considered and this is the one that survives contact with how
   # the artifact is consumed:
   #
-  #   * Also run on the e2e-labelled PR path — DEAD. update-dashboard.yaml picks
-  #     the newest DEFAULT-BRANCH Tests run carrying a live scorecard artifact,
+  #   * Also run on the e2e-labelled PR path — DEAD. update-fleet-dashboards.yaml
+  #     picks the newest live scorecard artifact from a DEFAULT-BRANCH run,
   #     so a PR-run scorecard is never ingested. Worse, on a PR the integration
   #     job is skipped, so such a scorecard would publish a zeroed integration
   #     tier: a fabricated regression, which is exactly what this job's `if:`
@@ -2924,7 +2927,7 @@ jobs:
     # need does not satisfy.
     needs: [unit, detect-integration, integration, discover-e2e, e2e]
     if: always() && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
@@ -3084,9 +3087,9 @@ jobs:
           # and --cross-cloud-configured / a repeatable --e2e-junit only exist
           # from 0.21.0; until that publishes, argparse rejects them, this step
           # warns, and no scorecard artifact is produced for that run. The
-          # dashboard already tolerates that — update-dashboard.yaml walks back
-          # through the last 20 completed runs for one that still carries a live
-          # scorecard — and the same gap was accepted when the per-tier flags
+          # dashboard already tolerates that — update-fleet-dashboards.yaml reads
+          # the newest default-branch run that still carries a live scorecard —
+          # and the same gap was accepted when the per-tier flags
           # landed ahead of 0.17.0. It closes on the next conformance release.
           uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
@@ -3136,9 +3139,19 @@ jobs:
           overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
+  #
+  # Job-level `if`, not an early exit in the script: a job that starts and then
+  # passes at once is still billed a full runner minute, and before FND-3320
+  # this one started on every PR, push and merge-group run in every app repo
+  # just to see a non-Renovate head ref. `github.head_ref` is empty off the
+  # pull_request event, so the filter is exactly the script's own pass-at-once
+  # rule. The skip is not a gap: the `Enforce Renovate artifacts` step in
+  # tests-passed accepts `skipped`, and this job is not itself a required
+  # context — Tests Gate is.
   renovate-artifacts:
     name: Renovate artifacts
-    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'renovate/')
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -3182,7 +3195,7 @@ jobs:
         renovate-artifacts,
       ]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Comment + gate-eval only; cap so a wedged runner can't hold the required
     # check pending for GitHub's 6-hour default.
     timeout-minutes: 10
@@ -3322,8 +3335,12 @@ jobs:
 
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".
+      # `skipped` is the non-Renovate path (the job's own `if`), so only a
+      # failed or cancelled check holds the gate.
       - name: Enforce Renovate artifacts
-        if: always() && needs.renovate-artifacts.result != 'success'
+        if: >-
+          always() && needs.renovate-artifacts.result != 'success' &&
+          needs.renovate-artifacts.result != 'skipped'
         shell: bash
         run: exit 1
 

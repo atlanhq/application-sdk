@@ -130,7 +130,7 @@ jobs:
   validate-channel:
     name: Validate Channel + Branch
     if: inputs.publish
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Enforce main-branch invariant for channel='all'
@@ -1519,7 +1519,8 @@ jobs:
     # exactly when this job can fire, so 'success' is always reachable and
     # 'skipped' no longer means "never checked".
     if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && github.ref == 'refs/heads/main' && needs.prepare.outputs.enable_sdr == 'true' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
     strategy:
       matrix:
         repo: ['atlanhq/atlan-apps-deployment']
@@ -1551,7 +1552,7 @@ jobs:
     name: Publish to Marketplace
     needs: [prepare, merge, security-scan, certify]
     if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.merge.result == 'success' && needs.security-scan.result == 'success' && needs.certify.result == 'success' && inputs.publish }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 15
 
     steps:

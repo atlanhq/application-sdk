@@ -1,6 +1,7 @@
 # Build & Scan — reusable security scanning template.
 #
-# Builds a Docker image and runs Trivy.
+# Builds a Docker image and runs Trivy (and, report-only, Endor) on it in one
+# job, on the runner's own docker daemon -- the image never leaves the runner.
 # Checks results against .security/allowlist.json in the caller repo.
 # Fails if any CRITICAL/HIGH CVE is not in the allowlist.
 #
@@ -85,12 +86,35 @@ permissions:
   pull-requests: write
 
 jobs:
-  # ── Build Docker image (single-arch, no push) ──────────────────────────────
+  # ── Build Docker image and scan it (single-arch, no push) ──────────────────
+  #
+  # One job builds the image and runs both scanners on it, on this runner's
+  # own docker daemon. The image used to travel from a separate `build` job to
+  # `trivy-scan` and `endor-scan` as a multi-GB `docker-image` artifact (plus a
+  # `docker-image-retry` copy when the first upload failed): an upload and two
+  # downloads on every PR push and every merge-queue entry, artifact storage
+  # on top, and four billed jobs a run. Nothing here needs to leave the runner,
+  # so nothing is uploaded except the Trivy JSON (FND-3319).
+  #
+  # Still named `Build Image`: fleet rulesets require `scan / Build Image`
+  # (the lock-lane refusal in renovate_uv_lock_bounded.py relies on it), as
+  # well as `scan / Security Gate` from the job below. A single job can carry
+  # only one name, which is why the gate stays a job of its own.
+  #
+  # Runs on the prebuilt-image path too (`inputs.image` set, the merge path in
+  # build-and-publish-app.yaml): the build steps skip, and both scanners pull
+  # the published image instead.
   build:
     name: Build Image
-    if: inputs.image == ''
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The job cap is a hard limit from job start, and continue-on-error does
+    # not survive it: a job that times out during the Endor scan fails the
+    # required `Build Image` context. So every long step carries its own
+    # budget (build 15, build retry 15, Trivy 15, Endor 20) and the job cap is
+    # their sum plus 10 minutes for the short steps between them. Endor then
+    # always gets its full 20 minutes, whatever the steps before it used.
+    # test_endor_scan_prep.py pins the arithmetic.
+    timeout-minutes: 75
     outputs:
       scan_image: ${{ steps.meta.outputs.scan_image }}
     steps:
@@ -104,6 +128,7 @@ jobs:
       # moves constantly. So: absorb one recompute.
       - name: Checkout
         id: checkout
+        if: inputs.image == ''
         continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -123,6 +148,7 @@ jobs:
 
       - name: Read Dockerfile path
         id: meta
+        if: inputs.image == ''
         run: |
           if [ -f atlan.yaml ]; then
             DOCKERFILE=$(python3 -c "import yaml; d=yaml.safe_load(open('atlan.yaml')); print(d.get('dockerfile', './Dockerfile'))")
@@ -134,8 +160,11 @@ jobs:
           echo "scan_image=scan-target:${SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
+        if: inputs.image == ''
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
 
+      # Both paths need it: the build pulls GHCR base images, and on the
+      # prebuilt path Trivy and Endor pull the published image.
       - name: Log in to GHCR
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
         with:
@@ -158,9 +187,16 @@ jobs:
       # `cache-from: type=gha` means the second attempt replays every layer
       # before the failing one. The cost of a wasted retry is the sleep, not a
       # second build.
+      #
+      # The image is written to /tmp/image.tar and then `docker load`ed, rather
+      # than built with `load: true`, because Endor's container scan reads a
+      # tarball: this way both scanners see byte-identical image content, and a
+      # disagreement between them is always the scanner, never the input.
       - name: Build image
         id: build-image
+        if: inputs.image == ''
         continue-on-error: true
+        timeout-minutes: 15
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
@@ -193,8 +229,7 @@ jobs:
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
       # Long enough for a registry or index having a moment to have passed, short
-      # enough that a genuinely broken build still reports inside the job's
-      # 15-minute budget.
+      # enough that a genuinely broken build still leaves the scans their budget.
       - name: Wait before the build retry
         if: steps.build-image.outcome == 'failure'
         run: sleep 30
@@ -207,7 +242,9 @@ jobs:
       # NOT continue-on-error: if the image cannot be built twice there is nothing
       # to scan, and the security gate reads a failed `build` as exactly that.
       - name: Build image (retry)
+        id: build-image-retry
         if: steps.build-image.outcome == 'failure'
+        timeout-minutes: 15
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: .
@@ -221,114 +258,14 @@ jobs:
           secrets: |
             git_token=${{ secrets.ORG_PAT_GITHUB }}
 
-      # `upload-artifact` classifies the artifact service's finalize 403 as
-      # non-retryable and fails on the first occurrence, even though the bytes
-      # already landed and the next attempt normally succeeds. That failed the
-      # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and keep it fatal if both attempts fail —
-      # the trivy-scan job downloads this with no continue-on-error, so
-      # losing it fails that job anyway; failing here says why.
-      - name: Upload image artifact
-        id: upload-image
-        continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: docker-image
-          path: /tmp/image.tar
-          # One day, not seven. This ~0.5 GB tarball was ~97% of every connector
-          # repo's live artifact storage (FND-3313), and its only readers —
-          # trivy-scan and endor-scan — run in this same run minutes later.
-          # The cost: "re-run failed jobs" on a scan job more than a day later
-          # finds no tarball; "re-run all jobs" rebuilds it.
-          retention-days: 1
-          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
-          # a run, so re-running a failed job would otherwise 409 here and burn the
-          # retry on a conflict that has nothing to do with a finalize failure. It is
-          # also what holds the invariant every consumer of this upload globs on:
-          # at most ONE live artifact ever matches `<name>*`.
-          overwrite: true
-
-      # A finalize 403 comes from an intermediary having a moment, and the
-      # retry runs about a second later — well inside the same window. Wait
-      # it out, so the two attempts fail independently or not at all.
-      - name: Wait before the upload retry
-        if: steps.upload-image.outcome == 'failure'
-        run: sleep 20
-
-      - name: Upload image artifact (retry)
-        if: steps.upload-image.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
-          # failure leaves an unfinalized record holding that name for the whole
-          # run. The list API cannot see it, so `overwrite` cannot clear it and
-          # CreateArtifact 409s — a same-named retry could never have worked.
-          # Consumers resolve this artifact by `<name>*` glob, not exact name.
-          name: docker-image-retry
-          path: /tmp/image.tar
-          retention-days: 1
-          overwrite: true
-
-  # ── Trivy scan ──────────────────────────────────────────────────────────────
-  trivy-scan:
-    name: Trivy Scan
-    needs: build
-    if: always() && (needs.build.result == 'success' || inputs.image != '')
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      # Retried for the same reason the uploads are, one layer down: the
-      # artifact service answers `ListArtifacts` with a 403 from an intermediary
-      # often enough to matter, `download-artifact` classifies that as
-      # non-retryable and gives up on the first occurrence, and the bytes are
-      # sitting there intact the whole time. Unlike an upload retry this one can
-      # reuse the first attempt's pattern — a failed download burns no name.
-      - name: Download image artifact
-        id: download-image
-        continue-on-error: true
-        if: inputs.image == ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          # `pattern` + merge-multiple, not the bare name: the upload's retry
-          # attempt lands under `docker-image-retry` (it has to — see that
-          # step), so the glob is what finds a retried upload at all.
-          #
-          # It resolves to ONE artifact because both upload attempts set
-          # `overwrite: true`. Without that on the first attempt, re-running a
-          # failed job in a run that already carried `docker-image` would 409
-          # there, publish `docker-image-retry`, and leave two live image.tars
-          # for merge-multiple to flatten in undefined order — Trivy could then
-          # scan the previous attempt's image.
-          pattern: docker-image*
-          merge-multiple: true
-          path: /tmp
-
-      - name: Wait before the download retry
-        if: steps.download-image.outcome == 'failure'
-        run: sleep 20
-
-      # No continue-on-error: if the image cannot be fetched twice there is
-      # nothing to scan, and failing here says exactly that.
-      - name: Download image artifact (retry)
-        if: steps.download-image.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: docker-image*
-          merge-multiple: true
-          path: /tmp
-
+      # Trivy reads `scan-target:<sha>` from this daemon, exactly as it did when
+      # it ran in its own job after downloading the tarball — only the transit
+      # through the artifact service is gone.
       - name: Load local image
         if: inputs.image == ''
         run: docker load -i /tmp/image.tar
 
-      - name: Log in to GHCR
-        if: inputs.image != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB }}
-
+      # ── Trivy scan ────────────────────────────────────────────────────────────
       - name: Install Trivy
         # Install via the official setup-trivy action with a PINNED version —
         # the same recipe already used by the sdk-trivy-scan composite (same
@@ -384,12 +321,17 @@ jobs:
       # the next one when a pull fails with a temporary error, which includes
       # a 429. The first two are Trivy's own defaults; ECR, which used to be
       # the only source, stays as the last resort.
+      #
+      # The image travels through `env:` rather than `${{ }}` in the body:
+      # `inputs.image` is caller-supplied.
       - name: Run Trivy scan
+        id: trivy-scan
+        timeout-minutes: 15
         env:
+          IMAGE: ${{ inputs.image || steps.meta.outputs.scan_image }}
           TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
           TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
         run: |
-          IMAGE="${{ inputs.image || needs.build.outputs.scan_image }}"
           trivy image \
             --scanners vuln \
             --severity CRITICAL,HIGH \
@@ -404,14 +346,14 @@ jobs:
       # job, which failed the aggregate gate, which ejected the merge-queue
       # entry. So: retry once.
       #
-      # The retry is NOT continue-on-error, matching the build job above. It was,
-      # on the reasoning that the gate downloads with continue-on-error so
-      # nothing needed to fail here. But the gate fails anyway when the results
-      # are absent, and a green `trivy-scan` then told it the artifact HAD been
-      # published — so it blamed the download and advised re-running itself,
-      # which could never find an artifact this run never created. This job's
-      # result has to be a truthful proxy for "the results exist", because
-      # `check_allowlist.py` reads it as exactly that.
+      # The retry is NOT continue-on-error. It was, on the reasoning that the
+      # gate downloads with continue-on-error so nothing needed to fail here.
+      # But the gate fails anyway when the results are absent, and a green job
+      # here then told it the artifact HAD been published — so it blamed the
+      # download and advised re-running itself, which could never find an
+      # artifact this run never created. This job's result has to be a truthful
+      # proxy for "the results exist", because `check_allowlist.py` reads it as
+      # exactly that.
       - name: Upload Trivy results
         id: upload-trivy
         continue-on-error: true
@@ -448,30 +390,25 @@ jobs:
           retention-days: 7
           overwrite: true
 
-  # ── Endor Labs container scan (report-only) ─────────────────────────────────
-  #
-  # Runs ALONGSIDE Trivy, not instead of it. The two enumerate packages
-  # differently -- Endor reads package-manager manifests per layer, Trivy/Syft
-  # fingerprint the filesystem -- so each sees things the other misses,
-  # measurably so on our images. What Endor adds is OVAL-based distro severity
-  # (fewer false highs on Wolfi), base-image attribution, and OS reachability.
-  # So: collect both, compare, and decide later what gates.
-  #
-  # Deliberately NOT in security-gate's `needs`, and `continue-on-error: true`:
-  # during the rollout an Endor outage, licence issue, or false positive must not
-  # be able to wedge the merge queue for the whole fleet. Promoting this to a gate
-  # is a separate, conscious PR — flip continue-on-error off and add `endor-scan`
-  # to security-gate.needs.
-  endor-scan:
-    name: Endor Container Scan
-    needs: build
-    if: always() && (needs.build.result == 'success' || inputs.image != '')
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    continue-on-error: true
-    steps:
-      # The two decisions this job makes -- "are Endor credentials present?" and
-      # "pull a published image, or use the tarball the build job uploaded?" --
+      # ── Endor Labs container scan (report-only) ──────────────────────────────
+      #
+      # Runs ALONGSIDE Trivy, not instead of it. The two enumerate packages
+      # differently -- Endor reads package-manager manifests per layer, Trivy/Syft
+      # fingerprint the filesystem -- so each sees things the other misses,
+      # measurably so on our images. What Endor adds is OVAL-based distro severity
+      # (fewer false highs on Wolfi), base-image attribution, and OS reachability.
+      # So: collect both, compare, and decide later what gates.
+      #
+      # It needs the image itself, not just source, so it lives in this job
+      # rather than downloading an image artifact in a parallel one. It runs
+      # after the Trivy results are uploaded, and every Endor step is
+      # `continue-on-error: true`: during the rollout an Endor outage, licence
+      # issue, or false positive must not be able to fail `Build Image` or wedge
+      # the merge queue for the whole fleet. Promoting this to a gate is a
+      # separate, conscious PR.
+      #
+      # The two decisions this block makes -- "are Endor credentials present?"
+      # and "pull a published image, or use the tarball the build wrote?" --
       # live in a tested script, not in inlined if/else (docs/standards/ci.md).
       # This reusable runs in the CALLER's repo, whose checkout has no such
       # script, so fetch it from the SDK at `job.workflow_sha`: the commit of
@@ -480,8 +417,10 @@ jobs:
       # checkout whose payload is then executed (same pinning as
       # tests-reusable.yaml; actionlint <=1.7.12 flags the property as unknown,
       # see .github/actionlint.yaml). Own `path:` so it can never leave the
-      # workspace sparse for a later full checkout.
-      - name: Fetch Endor scan prep script from SDK
+      # workspace sparse for a later full checkout -- and it is fetched only
+      # after the image is built, so it never lands in the Docker build context.
+      - name: "Endor: fetch scan prep script from SDK"
+        continue-on-error: true
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -492,54 +431,18 @@ jobs:
           persist-credentials: false
 
       # Endor is opt-in per org secret. Without this guard every fork PR and
-      # every repo not yet licensed would show a red (if ignored) job. The
+      # every repo not yet licensed would show a red (if ignored) step. The
       # script tests presence only; the value is never printed.
-      - name: Check Endor credentials
+      - name: "Endor: check credentials"
         id: creds
+        continue-on-error: true
         env:
           ENDOR_KEY: ${{ secrets.ENDOR_API_CREDENTIALS_KEY }}
         run: python3 _sdk/.github/scripts/endor_scan_prep.py credentials
 
-      # Same artifact the Trivy job consumes, so both scanners see byte-identical
-      # image content and a disagreement is always the scanner, never the input.
-      # Glob + merge, not the bare name, for the reason the Trivy download above
-      # spells out: the build job's first upload is continue-on-error and its
-      # retry lands under `docker-image-retry`. With the bare name a successful
-      # retry left this job with no tarball -- and, being continue-on-error
-      # itself, it failed silently: Trivy still gated, Endor just never reported.
-      - name: Download image artifact
-        id: download-image
-        continue-on-error: true
-        if: steps.creds.outputs.configured == 'true' && inputs.image == ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: docker-image*
-          merge-multiple: true
-          path: /tmp
-
-      - name: Wait before the download retry
-        if: steps.download-image.outcome == 'failure'
-        run: sleep 20
-
-      - name: Download image artifact (retry)
-        if: steps.download-image.outcome == 'failure'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
-        with:
-          pattern: docker-image*
-          merge-multiple: true
-          path: /tmp
-
-      - name: Log in to GHCR
-        if: steps.creds.outputs.configured == 'true' && inputs.image != ''
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.ORG_PAT_GITHUB }}
-
       # Normalise both paths onto /tmp/image.tar. The tarball is the primary
       # interface because on the PR path the image is built locally and never
-      # pushed -- there is nothing for endorctl to pull -- and the build job's
+      # pushed -- there is nothing for endorctl to pull -- and the build step's
       # buildx `outputs: type=docker,dest=/tmp/image.tar` hands us one for free.
       #
       # It is also the more durable choice: endorctl shells out to `docker save`,
@@ -547,7 +450,7 @@ jobs:
       # platform ("both OS and Architecture must be provided"). Runners are on
       # ubuntu-24.04 / Docker API 1.48 today and unaffected, but they will move.
       #
-      # On the PR path the build job tagged the local image `scan-target:<sha>`,
+      # On the PR path the build tagged the local image `scan-target:<sha>`,
       # which is meaningless in the Endor UI, so the script reports it under the
       # name it will be published as (ghcr.io/atlanhq/<repo>:<sha7>) and PR
       # scans line up with published images on one container.
@@ -557,22 +460,21 @@ jobs:
       # the previous inline form interpolated `${{ inputs.ref || github.sha }}`
       # into the `run:` body, where a value carrying `$(...)` or a backtick
       # executes as shell before bash ever sees the surrounding quotes.
-      - name: Materialise image tarball
+      #
+      # Reachability (`endor_os_reachability`) has to RUN the image, so the
+      # daemon must hold it. It already does on both paths -- loaded for Trivy
+      # above on the PR path, pulled by this step on the prebuilt one -- so the
+      # separate `docker load` this used to need is gone.
+      - name: "Endor: materialise image tarball"
         id: image
         if: steps.creds.outputs.configured == 'true'
+        continue-on-error: true
         env:
           PREBUILT: ${{ inputs.image }}
           REPO: ${{ github.event.repository.name }}
           REF: ${{ inputs.ref || github.sha }}
           TARBALL: /tmp/image.tar
         run: python3 _sdk/.github/scripts/endor_scan_prep.py materialise
-
-      # Reachability has to RUN the image, so the daemon must hold it -- a
-      # tarball alone is not enough. Gated on the input because `docker load` of
-      # a 0.5-2.5 GB image is dead weight for a metadata-only scan.
-      - name: Load image into the daemon (reachability only)
-        if: steps.creds.outputs.configured == 'true' && inputs.endor_os_reachability
-        run: docker load -i /tmp/image.tar
 
       # `pr: true` keeps PR scans out of the monitored-version history; the merge
       # path (build-and-publish-app.yaml, fail_on_findings=false) records a
@@ -588,8 +490,14 @@ jobs:
       # ENDOR_* variable, and the action does not strip those, so this is the
       # reliable channel. Re-verify by grepping a run log for the printed
       # `endorctl container scan ...` line, not by trusting the `with:` block.
-      - name: Endor Labs container scan
-        if: steps.creds.outputs.configured == 'true'
+      #
+      # `timeout-minutes` is the old endor-scan job's budget, now bounding only
+      # this step: a hung scan is cut off and, being continue-on-error, leaves
+      # the job's result to the build and Trivy.
+      - name: "Endor: container scan"
+        if: steps.image.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
         env:
           ENDOR_CONTAINER_SCAN_IMAGE_TYPE: app
           ENDOR_CONTAINER_SCAN_FINDING_TAGS: ${{ steps.image.outputs.ref }}
@@ -620,12 +528,11 @@ jobs:
   # ── Security Gate — check Trivy results against allowlist ───────────────────
   security-gate:
     name: Security Gate
-    # `build` is in `needs` only so the gate can name which upstream job failed
-    # when there are no results to gate on. It is skipped when `image` is
-    # supplied, which the `always()` below tolerates.
-    needs: [build, trivy-scan]
+    # `always()` so a failed `build` still produces a verdict here, the required
+    # check, naming that job as the cause rather than leaving the gate skipped.
+    needs: [build]
     if: always() && !cancelled()
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Mint fleet App token
@@ -659,8 +566,10 @@ jobs:
         continue-on-error: true
         with:
           # Glob, not the bare name: the upload's retry attempt lands under
-          # `trivy-results-retry`. One live match only, for the reason the
-          # image download above spells out — both attempts overwrite.
+          # `trivy-results-retry`. It resolves to ONE artifact because both
+          # upload attempts set `overwrite: true`: without that, re-running a
+          # failed job could leave both names live, and merge-multiple would
+          # flatten two trivy_results.json files in undefined order.
           pattern: trivy-results*
           merge-multiple: true
           path: /tmp
@@ -670,11 +579,11 @@ jobs:
       # the truth — retrying would only add 20s of sleep to every genuinely
       # broken run before the gate gets to say what broke.
       - name: Wait before the download retry
-        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        if: steps.download-trivy.outcome == 'failure' && needs.build.result == 'success'
         run: sleep 20
 
       - name: Download Trivy results (retry)
-        if: steps.download-trivy.outcome == 'failure' && needs['trivy-scan'].result == 'success'
+        if: steps.download-trivy.outcome == 'failure' && needs.build.result == 'success'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         continue-on-error: true
         with:
@@ -686,9 +595,9 @@ jobs:
         env:
           FAIL_ON_FINDINGS: ${{ inputs.fail_on_findings }}
           # So a missing results file can name the job that caused it instead of
-          # sending every reader to the scanner.
+          # sending every reader to the scanner. Build and scan are one job now,
+          # so there is one upstream result to pass.
           BUILD_RESULT: ${{ needs.build.result }}
-          SCAN_RESULT: ${{ needs['trivy-scan'].result }}
         run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
 
       - name: Comment on PR

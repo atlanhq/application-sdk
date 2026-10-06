@@ -27,6 +27,7 @@ FLAGS = {
     "--system-deps": "system_deps",
     "--unit-coverage-fail-under": "unit_coverage_fail_under",
     "--use-ghcr-base": "use_ghcr_base",
+    "--sarif-upload": "sarif_upload",
     "--enforce": "enforce",
     "--conformance-blocking": "conformance_blocking",
     "--renovate-automerge": "renovate_automerge",
@@ -49,11 +50,16 @@ FLAGS = {
 # (build-and-publish.yaml) is always-overwrite and a bare re-run must re-render
 # an existing opt-in rather than drop it. Explicit ``false`` therefore means
 # "remove the opt-in", not "leave whatever is there".
+#
+# ``--sarif-upload`` is the same shape again (FND-3336): it decides whether
+# bootstrap installs ``conformance-upload-sarif.yaml`` at all, "" defers to an
+# opt-in already on disk, and explicit ``false`` removes the workflow.
 TRISTATE_FLAGS = (
     "enforce",
     "conformance_blocking",
     "renovate_automerge",
     "use_ghcr_base",
+    "sarif_upload",
 )
 
 # Presence flags: no value, "true" when present and "false" otherwise. Declared
@@ -121,6 +127,7 @@ def parse_bootstrap_args(argv: list[str]) -> dict[str, str]:
         "unit_coverage_fail_under": "",
         # "" = not explicitly set; "true"/"false" = explicit. See TRISTATE_FLAGS.
         "use_ghcr_base": "",
+        "sarif_upload": "",
         # No flag: autodetected from an existing vulnerability-scan.yml. Seeded
         # here so apply_bootstrap_autodetection can test it like any other
         # render param and render() receives it as a known keyword.
@@ -328,6 +335,15 @@ options:
                               flag are both slated for removal now that the default has
                               flipped. C002 does not read either state as drift. Omit to
                               auto-detect from an existing build-and-publish.yaml.
+  --sarif-upload true|false   install conformance-upload-sarif.yaml, which uploads the
+                              Conformance SARIF to the repo's Security tab. Pass true
+                              on PUBLIC repos only: on a private repo the upload needs
+                              GitHub Advanced Security, which the org does not have, so
+                              the workflow can only probe, skip and bill a job per rule
+                              series on every merge to main. Off by default; false (and
+                              a bare run on a repo that never opted in) REMOVES an
+                              existing copy. Omit to keep an opt-in already on disk —
+                              the installed file carries a marker line for it.
   --enforce true|false        0-touch shorthand: sets BOTH granular levers below at
                               once. Omit to auto-detect from an existing
                               conformance.yaml (else hard-gate). Pass explicitly (either

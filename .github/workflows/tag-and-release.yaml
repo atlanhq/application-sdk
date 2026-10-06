@@ -47,7 +47,8 @@ permissions:
 jobs:
   create-release:
     name: Create release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
 
     steps:
       - name: Mint fleet App token

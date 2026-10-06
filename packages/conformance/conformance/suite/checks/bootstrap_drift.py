@@ -35,6 +35,11 @@ the better thing, which is what flagging them amounted to.
    overwrite). A ``RETIRED_WORKFLOWS`` name still present is the same track in
    reverse: WARN, and the same bare re-run deletes it.
 
+   ``conformance-upload-sarif.yaml`` (``SARIF_UPLOAD_WORKFLOW``) is opt-in, for
+   public repos only (FND-3336): absent is clean, a copy carrying the opt-in
+   marker is compared like any managed shim, and an unmarked copy — what every
+   repo held before the opt-in existed — is reported for removal.
+
 2. **tests.yaml / renovate.json**: write-if-absent scaffolds.  Bootstrap
    creates each once and never clobbers customisations.  Drift is also tracked
    at WARN, never BLOCK.  Remediation: re-run bootstrap with ``--resync``,
@@ -77,6 +82,7 @@ from conformance.bootstrap.extract import (
     extract_field,
     extract_release_private_git_auth,
     extract_renovate_automerge,
+    extract_sarif_upload,
     extract_tests_yaml_params,
     extract_use_ghcr_base,
     extract_vulnerability_scan_lfs,
@@ -89,6 +95,7 @@ from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_WORKFLOWS,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 from conformance.suite.checks._ast_common import safe_read_text
@@ -165,6 +172,8 @@ def discover(root: Path) -> list[Path]:
     # copy still on disk is drift in the other direction — the file is reported
     # until the repo re-runs bootstrap (which removes it).
     paths.extend(wf_dir / name for name in RETIRED_WORKFLOWS)
+    # Opt-in shim: reported only if present (see _scan_sarif_upload).
+    paths.append(wf_dir / SARIF_UPLOAD_WORKFLOW)
     # Non-workflow vendored files (composite action + arg-building script).
     paths.extend(root / dest_rel for dest_rel in _MANAGED_ACTION_FILES_BY_DEST)
     # Write-if-absent scaffolds (WARN-only drift tracking).
@@ -177,6 +186,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     """Return C002 findings for *path* (may or may not exist on disk)."""
     if path.name in RETIRED_WORKFLOWS:
         return _scan_retired_shim(path, root)
+    if path.name == SARIF_UPLOAD_WORKFLOW:
+        return _scan_sarif_upload(path, root)
     if path.name == _TESTS_WORKFLOW:
         return _scan_tests_yaml(path, root)
     if path.name == _RENOVATE_JSON:
@@ -218,6 +229,45 @@ def _scan_retired_shim(path: Path, root: Path) -> list[Finding]:
             ),
         )
     ]
+
+
+def _scan_sarif_upload(path: Path, root: Path) -> list[Finding]:
+    """Scan the opt-in SARIF upload shim (FND-3336).
+
+    Absent is the default and is clean: a private repo cannot accept the upload
+    without GitHub Advanced Security, so it should not carry the workflow. A
+    copy without the opt-in marker is the one bootstrap gave every repo before
+    the opt-in existed; bootstrap now removes it, so it is reported the way a
+    retired shim is. A marked copy is a public repo's opt-in and is drift-checked
+    like any other managed shim.
+    """
+    try:
+        rel = path.relative_to(root).as_posix()
+    except ValueError:
+        rel = str(path)
+
+    if not path.exists():
+        return []
+    on_disk = safe_read_text(path)
+    if on_disk is None:
+        return []
+
+    if not extract_sarif_upload(on_disk):
+        message = (
+            f"CI workflow '{path.name}' is installed only on public repos that opt "
+            "in: on a private repo the upload needs GitHub Advanced Security, so the "
+            f"workflow only probes, skips and bills a job per series. Run `{_CLI_CMD}` "
+            f"to remove it, or `{_CLI_CMD} --sarif-upload true` on a public repo to "
+            "keep it."
+        )
+    elif strip_action_pins(on_disk) != strip_action_pins(render(path.name)):
+        message = (
+            f"CI workflow '{path.name}' has drifted from the bootstrap canonical. "
+            f"Run `{_CLI_CMD}` to re-sync."
+        )
+    else:
+        return []
+    return [Finding(rule_id=RULE_ID, file=rel, line=1, column=1, message=message)]
 
 
 def _scan_managed_action_file(

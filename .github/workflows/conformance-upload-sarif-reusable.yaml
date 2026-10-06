@@ -63,7 +63,8 @@ on:
 jobs:
   upload:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -93,7 +94,7 @@ jobs:
       # newly-licensed repo, so the check would lock itself off permanently.
       #
       # Nothing downstream depends on this upload: connector-pulse ingests the
-      # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
+      # k.atlan.dev mirror published by `update-fleet-dashboards.yaml`, not the Security
       # tab, so a skipped leg costs no fleet visibility.
       #
       # The decision itself is a tested Python script, not inlined shell:
@@ -126,7 +127,7 @@ jobs:
         id: probe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .github/scripts/probe_code_scanning.py
+        run: python3 .github/scripts/probe_code_scanning.py
 
       - name: "Download SARIF artifact"
         id: download
