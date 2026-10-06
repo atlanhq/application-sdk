@@ -73,12 +73,14 @@ deselects (e.g. `integration`, `s3_integration`, `storage_emulator`) so the unit
 skips it and a dedicated integration job runs it.  A test is considered marked when the
 module declares `pytestmark` containing such a marker (bare or in a list/tuple), when an
 enclosing `Test*` class is decorated with one, or when the test function itself carries
-one.  The accepted set is derived per-repo from the `-m 'not …'` expression in
-`[tool.pytest.ini_options].addopts` (falling back to `{"integration"}`).  Unmarked tests
-leak into the unit matrix — where the embedded Temporal/Dapr/emulator boot can exceed
-the unit job timeout — and are skipped by the dedicated integration job.  Tracked in
-BLDX-1455; chosen over an auto-marking `conftest.py` hook precisely to avoid non-obvious
-hidden behaviour.
+one.  The accepted set is the `-m 'not …'` expression in
+`[tool.pytest.ini_options].addopts` plus `integration`, which is always accepted.
+Prefer `integration`: the shared integration job runs `pytest tests/integration/` with
+the same `addopts`, so marking with a marker `addopts` deselects (such as `e2e`) hides
+the test from that job too, and it collects nothing.  Unmarked tests leak into the unit
+matrix — where the embedded Temporal/Dapr/emulator boot can exceed the unit job timeout
+— and are skipped by the dedicated integration job.  Tracked in BLDX-1455; chosen over
+an auto-marking `conftest.py` hook precisely to avoid non-obvious hidden behaviour.
 
 ---
 
