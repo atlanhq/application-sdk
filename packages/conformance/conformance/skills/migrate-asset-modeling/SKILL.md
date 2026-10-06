@@ -145,7 +145,7 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
      strings from creators does not need the raise.
    - Below 3.20.0: stop, and run `migrate-off-daft` first.
 2. Record the baseline: run
-   `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004 --output before.sarif`
+   `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004 --exit-zero --output "$TMPDIR/before.sarif"`
    and the test suite. Record the tests that already fail; they do not block
    this skill, and they must not get worse.
 3. Capture the app's current output for parity. Run the offline (recorded

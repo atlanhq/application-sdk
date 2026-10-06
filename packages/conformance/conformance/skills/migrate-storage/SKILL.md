@@ -312,10 +312,10 @@ non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 
 ## Step 3 — Prove it
 
-1. `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044`
+1. `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044 --exit-zero --output <file>`
    and `--rule B001,B008` — nothing left from this skill's inventory except
    the agreed ignores and the owner-decision sites.
-2. The tests pass (`uv run --no-sync pytest ...`), with no failure that was
+2. The tests pass, with the Step 0.3 command, and no failure that was
    not in the baseline.
 3. Delivery parity: re-run the Step 0.4 capture with the same two stores. The published keys relative
    to each prefix are the same set (missing keys are the silent-failure

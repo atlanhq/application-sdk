@@ -92,9 +92,11 @@ so read it on GitHub; and a notice that points at a private module
    alone, record that the earlier migrations can still change what is
    deprecated.
 2. Record the baseline outside the repo:
-   `atlan-application-sdk-conformance detect --rule B001,B008 --output "$TMPDIR/before.sarif"`.
+   `atlan-application-sdk-conformance detect --rule B001,B008 --exit-zero --output "$TMPDIR/before.sarif"`.
    Run the tests with every group and extra installed
-   (`uv sync --all-groups --all-extras && uv run pytest tests/unit tests/integration`).
+   (`UV_FROZEN=1 uv sync --all-groups --all-extras` once, so the lock file is not
+   rewritten, then `uv run --no-sync pytest tests/unit tests/integration`; a plain
+   `uv run` re-syncs and can replace the installed conformance build).
    Record the tests that already fail; they do not block this skill, and they
    must not get worse.
 
@@ -190,7 +192,7 @@ class does not change: a **behaviour** site still waits for the developer.
 
 ## Step 3 — Prove it
 
-1. `atlan-application-sdk-conformance detect --rule B001,B008` — no finding
+1. `atlan-application-sdk-conformance detect --rule B001,B008 --exit-zero --output <file>` — no finding
    left except the routed sites and the agreed ignores.
 2. The test suite passes (the Step 0.2 command), with no failure that was not
    in the baseline.
