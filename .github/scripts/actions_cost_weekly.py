@@ -512,6 +512,15 @@ def _scan(args: argparse.Namespace, weeks: Weeks, report_dir: Path) -> int:
     return amr.main(argv)
 
 
+def _finite_float(text: str) -> float:
+    # NaN makes every `change > threshold` false, which would silently turn
+    # the regression alert off.
+    value = float(text)
+    if not math.isfinite(value):
+        raise argparse.ArgumentTypeError(f"must be a finite number, got {text!r}")
+    return value
+
+
 def main(
     argv: Optional[list] = None,
     post: PostFn = _post_json,
@@ -532,7 +541,7 @@ def main(
     parser.add_argument("--sample", type=int, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--top", type=int, default=15)
-    parser.add_argument("--threshold", type=float, default=DEFAULT_THRESHOLD)
+    parser.add_argument("--threshold", type=_finite_float, default=DEFAULT_THRESHOLD)
     parser.add_argument("--min-minutes", type=int, default=DEFAULT_MIN_MINUTES)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument(
@@ -547,10 +556,6 @@ def main(
         help="name of the env var holding the Slack incoming-webhook URL",
     )
     args = parser.parse_args(argv)
-    # NaN makes every `change > threshold` false, which would silently turn
-    # the regression alert off.
-    if not math.isfinite(args.threshold):
-        parser.error("--threshold must be a finite number")
     args.out_dir.mkdir(parents=True, exist_ok=True)
 
     report_dir = args.report_dir
