@@ -227,6 +227,21 @@ repos. One extra billed minute per PR there is ~140 minutes per fleet-wide PR
 cycle, and a cron that fires hourly is ~3,360 jobs a day. Judge a template or
 reusable change by its fleet total, not by the single run you watched.
 
+### Weekly cost report
+
+`actions-cost-report.yaml` runs every Monday. It scans a seeded sample of 12
+fleet repos with `actions_minutes_report.py` over the last two complete weeks
+and compares them in `actions_cost_weekly.py`. It publishes the top workflows
+and jobs with week-over-week deltas to the run summary and to Kryptonite
+(`actions-cost-dashboard/`, history keyed by week). It posts to Slack
+(`SLACK_ACTIONS_COST_WEBHOOK`) when the sample's total billed minutes, or any
+one workflow with at least 300 billed minutes this week, grew more than 25%.
+A workflow that is new this week counts as growth. If there is a regression
+and the alert cannot be delivered, the run fails.
+
+A cost change you expect, such as a new required job, will still alert once.
+Say so in the PR so whoever reads the alert can match it to the change.
+
 ### Review checklist
 
 For any change under `.github/workflows/`, a reusable, or a bootstrap template:
