@@ -84,6 +84,12 @@ jobs:
 
       # A failed lookup leaves the file empty, which the gate reads as "no e2e
       # verdict" and fails on - see release_gate.py.
+      #
+      # The endpoint pages its `statuses` list, so on a commit with many
+      # contexts `e2e` can sit past the first page; `--paginate` walks them
+      # all. `--jq` runs once per page, and the script takes the last
+      # non-blank line. Not `--slurp`: gh rejects it alongside `--jq`, and
+      # that error would leave the file empty on every run.
       - name: Fetch the head commit's e2e status
         continue-on-error: true
         env:
@@ -92,7 +98,8 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          gh api "repos/${REPO}/commits/${HEAD_SHA}/status" \
+          gh api "repos/${REPO}/commits/${HEAD_SHA}/status?per_page=100" \
+            --paginate \
             --jq '.statuses[] | select(.context == "e2e") | .state' > e2e-state.txt
 
       - name: Verify release readiness

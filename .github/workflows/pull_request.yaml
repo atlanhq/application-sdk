@@ -710,10 +710,16 @@ jobs:
     # which made the event arm redundant: `contains(...)` alone was already true
     # for the label-just-added case, so every unrelated label add on a PR carrying
     # the label re-ran the real-cloud suite. AND-ing it is the fix.
+    #
+    # Dependabot is excluded like every other label-gated job here. Its runs get
+    # a read-only GITHUB_TOKEN, so consume-e2e-label skips them (it could not
+    # remove the label) — and a consumer that still fired would re-run on every
+    # push to a Dependabot PR carrying `e2e`.
     if: |
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
       (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
-      github.event.pull_request.head.repo.fork != true
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).

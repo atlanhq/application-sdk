@@ -44,13 +44,18 @@ def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
     return next(s for s in job["steps"] if s.get("name") == name)
 
 
-def _pr_event(labels: list[str], action: str = "synchronize", **extra: Any) -> dict:
+def _pr_event(
+    labels: list[str],
+    action: str = "synchronize",
+    author: str = "someone",
+    **extra: Any,
+) -> dict:
     event: dict[str, Any] = {
         "action": action,
         "pull_request": {
             "labels": [{"name": n} for n in labels],
             "head": {"repo": {"fork": False}},
-            "user": {"login": "someone"},
+            "user": {"login": author},
         },
     }
     event.update(extra)
@@ -206,3 +211,47 @@ def test_sdk_job_uses_github_token_and_fails_open(
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     assert step["continue-on-error"] is True
     assert consume_job["permissions"] == {"pull-requests": "write"}
+
+
+def _all_green_needs(workflow: dict[str, Any]) -> dict[str, Any]:
+    """Every upstream succeeded and every path filter matched.
+
+    The most permissive `needs`, so a consumer's gate reduces to its event
+    terms — the part the consume job has to mirror.
+    """
+    outputs = {"sdk": "true", "container": "true", "ci": "true"}
+    return {
+        job_id: {"result": "success", "outputs": outputs} for job_id in workflow["jobs"]
+    }
+
+
+@pytest.mark.parametrize(
+    "github",
+    [
+        _pr_event(["e2e"], "synchronize"),
+        _pr_event(["e2e"], "labeled", label={"name": "e2e"}),
+        _pr_event(["e2e", "size/S"], "labeled", label={"name": "size/S"}),
+        _pr_event(["e2e"], "synchronize", author="dependabot[bot]"),
+        _pr_event([], "synchronize"),
+    ],
+    ids=["push", "label-added", "unrelated-label", "dependabot", "no-label"],
+)
+def test_every_label_consumer_is_covered_by_the_consume_job(
+    consume_job: dict[str, Any], github: dict[str, Any]
+) -> None:
+    """Whenever any job consumes the label, the consume job must remove it.
+
+    Otherwise the label survives that run and the consumer re-fires on the
+    next push — the exact behaviour FND-3411 removes. A Dependabot PR is the
+    case this caught: storage-integration had no Dependabot exclusion, while
+    the consume job skips Dependabot.
+    """
+    workflow = _load("pull_request.yaml")
+    contexts = {"github": github, "needs": _all_green_needs(workflow)}
+    consumes = evaluate(consume_job["if"], {"github": github})
+    for job_id, job in workflow["jobs"].items():
+        gate = str(job.get("if", ""))
+        if job_id == "consume-e2e-label" or "labels.*.name, 'e2e'" not in gate:
+            continue
+        if evaluate(gate, contexts):
+            assert consumes, f"{job_id} consumes the label but it is never removed"

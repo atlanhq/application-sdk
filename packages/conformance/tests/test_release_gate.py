@@ -164,6 +164,21 @@ def test_status_lookup_reads_the_head_commit_and_fails_soft() -> None:
     assert 'select(.context == "e2e")' in fetch["run"]
 
 
+def test_status_lookup_walks_every_page() -> None:
+    """`e2e` can sit past the first page on a commit with many contexts.
+
+    And `--slurp` must never join `--jq`: gh rejects the pair outright, which
+    would leave the state file empty - a release PR blocked on every run.
+    """
+    steps = yaml.safe_load(render("release-gate.yaml"))["jobs"]["release-gate"]["steps"]
+    fetch = next(
+        s for s in steps if s.get("name") == "Fetch the head commit's e2e status"
+    )
+    assert "--paginate" in fetch["run"]
+    assert "per_page=100" in fetch["run"]
+    assert "--slurp" not in fetch["run"]
+
+
 def test_gate_reruns_on_unlabeled() -> None:
     """A human removing `e2e` must re-evaluate, not leave a stale green."""
     triggers = yaml.safe_load(render("release-gate.yaml"))[True]
