@@ -1602,3 +1602,58 @@ def test_passing_the_notice_as_a_variable_still_trips_b002() -> None:
     tree, directives = _tree_and_directives(src)
     findings = scan_authoring(tree, "application_sdk/x.py", "3.36.0", directives)
     assert [f.rule_id for f in findings] == ["B002"]
+
+
+# ── B007: pyarrow receivers traced through rebinding and method chains ──────────
+
+
+def test_b007_exempts_pyarrow_table_rebound_by_a_method() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "table = pq.read_table(path)\n"
+        + "table = table.rename_columns([c.lower() for c in table.column_names])\n"
+        + "for row in table.to_pylist():\n"
+        + "    pass\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_exempts_to_pylist_on_a_pyarrow_column() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "for batch in pq.ParquetFile(path).iter_batches():\n"
+        + "    names = batch.column('type_name').to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_exempts_a_parameter_annotated_as_pyarrow() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "def rows(table: pa.Table) -> list:\n"
+        + "    return table.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_still_fires_after_leaving_pyarrow_for_pandas() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "frame = pq.read_table(path).to_pandas()\n"
+        + "rows = frame.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_still_fires_on_an_unresolved_helper_result() -> None:
+    src = _SDK_IMPORT + "rows = load_arrow_batch(path).to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_still_fires_on_a_subscript_of_an_unresolved_frame() -> None:
+    src = _SDK_IMPORT + "values = frame['col'].to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
