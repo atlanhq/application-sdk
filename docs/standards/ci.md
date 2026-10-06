@@ -333,7 +333,7 @@ base-sensitive or not:
 | Caller → job | Base-sensitive? | On a queue entry | Why |
 | --- | --- | --- | --- |
 | `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
-| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels. A release PR without `e2e` fails on the PR and never enters the queue. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels and the head commit's `e2e` status. A release PR with neither fails on the PR and never enters the queue. |
 | `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |

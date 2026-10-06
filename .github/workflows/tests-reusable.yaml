@@ -3202,6 +3202,10 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
+      # The `e2e` commit status the consumer's Release Gate reads once the
+      # label is consumed (below). Every scaffolded caller already grants it —
+      # the e2e job declares it too — so asking here clamps nothing.
+      statuses: write
     steps:
       # Single source of truth: the tested driver computes both the pass/fail
       # decision and the human-readable status strings the summary table below
@@ -3332,6 +3336,62 @@ jobs:
             --repo "$REPO" \
             --head-sha "$HEAD_SHA" \
             --self-run-id "$SELF_RUN_ID"
+
+      # ── Consume the `e2e` label (FND-3411) ───────────────────────────────
+      #
+      # The label is a one-shot request, not a standing setting. Left on a PR,
+      # every later push re-runs the live-tenant suite — usually days after
+      # anyone wanted it. So the run that acted on the label removes it, and
+      # the next e2e run takes a fresh add.
+      #
+      # First the verdict goes onto the head commit as an `e2e` status, because
+      # the label was the only thing the consumer's Release Gate could see.
+      # With the label gone, the gate reads this status instead, and the
+      # status is bound to the SHA: a push lands on a commit that has none, so
+      # it re-blocks exactly as a missing label did. Only a real verdict is
+      # recorded — a skipped or cancelled matrix proves nothing either way.
+      #
+      # Both steps use `github.token`, never the PAT, and that is load-bearing:
+      # GitHub starts no workflow run for an event the run's own GITHUB_TOKEN
+      # caused. So the `unlabeled` event below re-fires neither this workflow
+      # nor a Release Gate that predates the status check — an un-resynced
+      # gate keeps its green verdict from the `labeled` run. Both are
+      # fail-open for the same reason as the repair step above: this job IS
+      # the required check, and housekeeping must not redden it.
+      - name: Record the e2e verdict on the head commit
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: ${{ needs.e2e.result }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state="$STATE" \
+            -f context=e2e \
+            -f description="End-to-end suite ${STATE} on this commit" \
+            -f target_url="$RUN_URL"
+
+      # Whenever this run acted on the label — `discover-e2e` ran rather than
+      # skipped — whatever the verdict: a failed run is retried by adding the
+      # label again, same as a passed one. A 404 means a sibling run already
+      # removed it, which is the outcome wanted.
+      - name: Remove the e2e label
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.discover-e2e.result != 'skipped'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/e2e"
 
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".

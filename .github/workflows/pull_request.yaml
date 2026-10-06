@@ -710,10 +710,16 @@ jobs:
     # which made the event arm redundant: `contains(...)` alone was already true
     # for the label-just-added case, so every unrelated label add on a PR carrying
     # the label re-ran the real-cloud suite. AND-ing it is the fix.
+    #
+    # Dependabot is excluded like every other label-gated job here. Its runs get
+    # a read-only GITHUB_TOKEN, so consume-e2e-label skips them (it could not
+    # remove the label) — and a consumer that still fired would re-run on every
+    # push to a Dependabot PR carrying `e2e`.
     if: |
       contains(github.event.pull_request.labels.*.name, 'e2e') &&
       (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
-      github.event.pull_request.head.repo.fork != true
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
@@ -776,3 +782,50 @@ jobs:
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
+
+  # Consumes the 'e2e' label once every job it requested has finished
+  # (FND-3411). The label is a one-shot request: left on a PR, every later
+  # push re-runs the whole release tier — connector fan-out, SDR on a live
+  # cluster, real-cloud storage — usually days after anyone wanted it. So the
+  # run that acted on it removes it, and the next run takes a fresh add.
+  #
+  # Same gate as the label-consuming jobs above, so it fires exactly when they
+  # could have. `always()` because a failed or cancelled leg still consumed the
+  # request; retrying is re-adding the label. `needs` covers every
+  # label-consuming job plus connector-gate, which is where the connector legs'
+  # verdicts actually land — removing before that would be removing mid-run.
+  #
+  # `github.token` is load-bearing, not a default: GitHub starts no workflow
+  # run for an event the run's own GITHUB_TOKEN caused, so this `unlabeled`
+  # triggers nothing. Fail-open: a 404 means the label is already gone, and a
+  # housekeeping failure must never read as a test failure.
+  consume-e2e-label:
+    name: Consume e2e label
+    needs:
+      [
+        build-sdk-base-image,
+        merge-sdk-base-image,
+        connector-tests,
+        connector-gate,
+        sdr-k8s-e2e,
+        storage-integration,
+      ]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove the e2e label
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/e2e"
