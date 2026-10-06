@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.42.0 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.41.0...v3.42.0
+
+### Features
+
+- add a preflight gate warmup tier with a stateless warmup probe, PENDING verdicts and category-gated hard mode, plus driver-level read cancellation and a worker-free handler (FND-3237) (#4130) (by @cmgrote in [f6a0eaa](https://github.com/atlanhq/application-sdk/commit/f6a0eaa))
+
+### Bug Fixes
+
+- write local sidecars when persisting a directory FileReference (#4127) (by @cmgrote in [907728a](https://github.com/atlanhq/application-sdk/commit/907728a))
+- FND-3272 classify a full volume during download as DiskFullError (#4145) (by @SwarnadeepChatterjee in [e0764aa](https://github.com/atlanhq/application-sdk/commit/e0764aa))
+- keep run_query connect and close off the event loop, add conformance rule P054 (#4167) (by @fyzanshaik-atlan in [28e24be](https://github.com/atlanhq/application-sdk/commit/28e24be))
+- raise FastAPI to 0.142.2 with native telemetry off and OTel 1.45 (#4131) (by @cmgrote in [46e1633](https://github.com/atlanhq/application-sdk/commit/46e1633))
+
+
 ## v3.41.0 (October 02, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.40.0...v3.41.0
