@@ -90,6 +90,13 @@ jobs:
           PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: python .github/scripts/conformance_release.py
 
+      # The root uv.lock records this workspace member's version, so the bump
+      # above leaves it stale and the gate's `uv lock --check` fails the
+      # release PR. Relock so the bump and the lock land in one commit.
+      - name: Relock workspace
+        if: steps.versions.outputs.skip != 'true'
+        run: uv lock
+
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
         run: cd packages/conformance && uv build
@@ -108,7 +115,8 @@ jobs:
           git checkout -b "${BUMP_BRANCH}"
           git add packages/conformance/pyproject.toml \
                   packages/conformance/conformance/__init__.py \
-                  packages/conformance/CHANGELOG.md
+                  packages/conformance/CHANGELOG.md \
+                  uv.lock
           git commit -m "chore(conformance): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
