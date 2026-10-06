@@ -405,7 +405,7 @@ let the activity interceptor move the bytes (BLDX-1398).
   return, to deliver the FileReferences they declared. A @task hands its output back as
   a FileReference and lets the framework move it; the transfer is the App's business,
   not the task's.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 - **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
   of these transfers, P021 says move the block into a @task and this rule says the
   transfer must stay in run() — so relocating the block wholesale trades one finding for
@@ -458,7 +458,7 @@ extract→publish hand-off. The SDK's infrastructure context (get_infrastructure
 - **Compliant example:** atlan-openapi-app app/connector.py — object-store access goes through the SDK's
   `CloudStore` over `self.context.storage`. No reference app constructs a boto3/gcs/adls
   client of its own.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A consumer app builds its own storage backend directly: importing `boto3` (`import
 boto3` / `from boto3 ...`), constructing an obstore store (`S3Store`, `GCSStore`,
@@ -494,7 +494,7 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
   `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
   `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
 explicitly: `storage_path=`, `is_durable=`, or `file_count=`.  The SDK owns these fields
@@ -528,7 +528,7 @@ pass a FileReference, which crosses the task boundary as a small durable handle
 - **Compliant example:** atlan-openapi-app app/contracts.py — payloads that could be large travel as
   `FileReference` fields, never as bytes. A bytes field puts the whole artefact inside
   Temporal's 2MB envelope.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
 `memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
@@ -565,7 +565,7 @@ underlying file (BLDX-1398).
   remaining `str` fields are URLs, object-store keys and prefixes, identifiers (a legacy
   credential GUID, the workflow id and type) and qualified names; none is a path on a
   worker's disk.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -2165,7 +2165,7 @@ customer who finds the gap, if anyone does.
   source_prefix=..., prefix=...))` over the transformed FileReferences the tasks
   declared, not a directory scan. storage.upload_prefix / download_prefix move bytes
   without producing a FileReference the next task can resolve.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 App source calls `upload_prefix` / `download_prefix` (or imports them from
 `application_sdk.storage`) to move artifacts itself, rather than declaring the data on

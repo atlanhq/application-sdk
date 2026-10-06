@@ -122,8 +122,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p008",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
     RuleDefinition(
@@ -169,8 +169,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p009",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
     RuleDefinition(
@@ -218,8 +218,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p010",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
     RuleDefinition(
@@ -262,8 +262,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p011",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
     RuleDefinition(
@@ -313,8 +313,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p012",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
     RuleDefinition(
@@ -411,8 +411,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p044",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-storage",
         ),
     ),
 )
