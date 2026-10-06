@@ -55,9 +55,9 @@ jobs:
     #
     # Fan-in to one billed run per SHA (FND-3317), on event-payload fields only
     # so a skipped trigger never gets a runner: SDK Gate is the anchor (it
-    # composes the SDK tests, so it is the one that usually finishes last) and
-    # the reusable waits out any required check still pending when it fires
-    # (checks_wait_minutes). A check that finishes after that wait (CodeQL
+    # composes the SDK tests; measured for FND-3343, it finished last on 23 of
+    # 28 Renovate SHAs, the rest within 1.4 min of it) and the reusable waits
+    # out any required check still pending when it fires (checks_wait_minutes). A check that finishes after that wait (CodeQL
     # Advanced) is skipped here as a non-anchor first attempt, so
     # follow_up_when_pending makes the reusable dispatch this workflow once with
     # pr_number to re-evaluate the PR. Any re-run (run_attempt > 1) also passes, so
@@ -72,7 +72,9 @@ jobs:
       event_name: ${{ github.event_name }}
       head_sha: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
-      checks_wait_minutes: 15
+      # Same value as the bootstrap template: 28 SHAs are too few to set a
+      # lower one on, and 8 is still well past the 1.4-minute tail measured.
+      checks_wait_minutes: 8
       # A late first-attempt finish (e.g. CodeQL Advanced after the SDK Gate
       # anchor's wait ran out) is re-evaluated by one dispatched follow-up.
       follow_up_when_pending: true

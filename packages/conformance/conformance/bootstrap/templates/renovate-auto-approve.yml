@@ -39,8 +39,12 @@ jobs:
     # One billed run per Renovate SHA, not one per workflow above (FND-3317).
     # Only event-payload fields are used, so a skipped trigger never gets a
     # runner. A successful run passes when it is:
-    #   - Tests, the anchor: usually the last to finish. If another required
-    #     check is still running, the reusable waits for it (checks_wait_minutes).
+    #   - Tests, the anchor: the measured last to finish (FND-3343). Over 676
+    #     Renovate SHAs in 12 connector repos, with Vulnerability Scan as the
+    #     scope-only run it is on ordinary PRs since FND-3328, Tests finished
+    #     last on 82%; the others finished after it by p99 4.1, max 14.4 min.
+    #     If another required check is still running, the reusable waits for
+    #     it (checks_wait_minutes).
     #     A check that finishes AFTER that wait is skipped here (not the anchor,
     #     first attempt), so follow_up_when_pending makes the reusable dispatch
     #     this workflow once with pr_number to re-evaluate the PR.
@@ -57,7 +61,9 @@ jobs:
       event_name: ${{ github.event_name }}
       head_sha: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
-      checks_wait_minutes: 15
+      # Covers the measured p99 (4.1 min) with room. The anchor run plus its
+      # one follow-up span 16 minutes, past the slowest finish measured (14.4).
+      checks_wait_minutes: 8
       # A late first-attempt finish (e.g. Conformance after the Tests anchor's
       # wait ran out) is re-evaluated by one dispatched follow-up, not lost.
       follow_up_when_pending: true
