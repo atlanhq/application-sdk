@@ -187,6 +187,145 @@ def _call_uses_sanitized_local(call: ast.Call, names: set[str]) -> bool:
     )
 
 
+def _call_target_leaf(call: ast.Call) -> str | None:
+    """Return a simple call target's name or attribute leaf."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _call_reads_name_without_branch(call: ast.Call, name: str) -> bool:
+    """Whether *call* consumes *name* without a conditional or rebinding."""
+    args = [*call.args, *[kw.value for kw in call.keywords]]
+    if any(
+        isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+        for arg in args
+        for node in ast.walk(arg)
+    ):
+        return False
+    return any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == name
+        for arg in args
+        for node in ast.walk(arg)
+    )
+
+
+def _logs_sanitized_traceback(call: ast.Call, exception_name: str) -> bool:
+    """True if a log argument carries this exception's redacted stack trace."""
+    args = [*call.args, *[kw.value for kw in call.keywords]]
+    for arg in args:
+        for helper_call in ast.walk(arg):
+            if not isinstance(helper_call, ast.Call):
+                continue
+            target = _call_target_leaf(helper_call)
+            if target is not None and "safe_traceback" in target.lower():
+                if _call_reads_name_without_branch(helper_call, exception_name):
+                    return True
+                continue
+            if not is_sanitizer_call(helper_call):
+                continue
+            helper_args = [
+                *helper_call.args,
+                *[kw.value for kw in helper_call.keywords],
+            ]
+            if any(
+                isinstance(node, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+                for helper_arg in helper_args
+                for node in ast.walk(helper_arg)
+            ):
+                continue
+            if any(
+                isinstance(formatted, ast.Call)
+                and _call_target_leaf(formatted) == "format_exception"
+                and _call_reads_name_without_branch(formatted, exception_name)
+                for formatted in ast.walk(helper_call)
+            ):
+                return True
+    return False
+
+
+def _statement_rebinds_name(statement: ast.stmt, name: str) -> bool:
+    """Whether *statement* may replace a handler's caught-exception local."""
+    for node in _walk_no_scope(statement):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return True
+        if isinstance(node, ast.Import) and any(
+            (alias.asname or alias.name.split(".")[0]) == name for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and any(
+            (alias.asname or alias.name) == name for alias in node.names
+        ):
+            return True
+    return False
+
+
+def _source_position(node: ast.AST) -> tuple[int, int] | None:
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    if isinstance(line, int) and isinstance(column, int):
+        return line, column
+    return None
+
+
+def _handler_logged_sanitized_traceback_before(
+    handler: ast.ExceptHandler,
+    call: ast.Call,
+    logging_module_names: set[str],
+) -> bool:
+    """Whether an earlier top-level warning/error logged this handler's trace.
+
+    Only a straight-line log of the same caught exception's sanitized traceback
+    establishes the fact.  A cause-only sanitizer, another exception, a branch,
+    or a nested handler cannot prove that this traceback was recorded first.
+    """
+    exception_name = handler.name
+    call_position = _source_position(call)
+    if exception_name is None or call_position is None:
+        return False
+
+    exception_rebound = False
+    for statement in handler.body:
+        statement_position = _source_position(statement)
+        if statement_position is None:
+            continue
+        if statement_position >= call_position:
+            break
+
+        if (
+            not exception_rebound
+            and isinstance(statement, ast.Expr)
+            and isinstance(statement.value, ast.Call)
+        ):
+            prior_call = statement.value
+            if (
+                is_logger_call(prior_call, logging_module_names)
+                and isinstance(prior_call.func, ast.Attribute)
+                and prior_call.func.attr in LOG_METHODS_WITH_TRACEBACK
+                and call_uses_sanitizer(prior_call, handler=handler)
+                and _logs_sanitized_traceback(prior_call, exception_name)
+            ):
+                return True
+
+        if _statement_rebinds_name(statement, exception_name):
+            exception_rebound = True
+    return False
+
+
 class TracebackMixin(_MixinBase):
     """Rule method for L004 (missing-traceback category)."""
 
@@ -203,7 +342,9 @@ class TracebackMixin(_MixinBase):
         ``safe_traceback``/…), including a local value assigned from such a
         helper earlier in the handler.  Those mark a deliberate no-traceback
         boundary where ``exc_info`` would bypass the redaction and can leak
-        credentials (see _ast_common/_sanitizers.py).
+        credentials (see _ast_common/_sanitizers.py).  Once a warning/error call
+        has logged this same handler's sanitized traceback, later calls that do
+        not expose the raw exception do not need to repeat the trace.
         """
         for node in _walk_no_scope(handler):
             if not isinstance(node, ast.Call):
@@ -228,6 +369,14 @@ class TracebackMixin(_MixinBase):
             ):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
+                continue
+            if not call_logs_raw_exception(
+                node, handler
+            ) and _handler_logged_sanitized_traceback_before(
+                handler, node, self._logging_module_names
+            ):
+                # The same redacted traceback is already in the stream; don't
+                # repeat it on a later status log in this handler.
                 continue
             self._add(
                 "L004",

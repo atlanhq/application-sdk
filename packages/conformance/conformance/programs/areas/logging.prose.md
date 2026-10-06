@@ -131,7 +131,11 @@ report that site the same way.
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
 - **L004 ExceptBlockMissingExcInfoLog** — add `exc_info=True` as a keyword
-  argument to the log call inside the except block.
+  argument to the log call inside the except block unless an earlier
+  warning/error in that same handler has already logged a sanitized traceback
+  of the same caught exception. Later status-only calls that do not expose the
+  raw exception need no duplicate trace; a sanitized cause alone, a trace for a
+  different exception, or a trace from a nested handler does not count.
   `logger.warning("msg")` → `logger.warning("msg", exc_info=True)`.
   If the call already has keyword arguments, append after them.
 
