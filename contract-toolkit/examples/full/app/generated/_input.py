@@ -51,6 +51,7 @@ class AppInputContract(ExtractionInput):
     )
     """Sunset: no longer consumed by the extractor."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
+    preflight_check: str = ""
 
     @field_validator("schemas", mode="before")
     @classmethod

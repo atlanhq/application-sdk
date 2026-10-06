@@ -24,6 +24,11 @@ level::
 
     from application_sdk.testing import capture_preflight_outcomes
 
+To test an app's warmup without a real warehouse, script the source's answers
+with :class:`WarmingSource` (and, for gate tests, :class:`WarmingSourceHandler`)::
+
+    from application_sdk.testing import WarmingSource
+
 Fixtures (import into conftest.py or test files)::
 
     from application_sdk.testing import (
@@ -104,6 +109,11 @@ from application_sdk.testing.volatile_fields import (
     ENVIRONMENT_SCOPED_NESTED_FIELDS,
     RUN_VOLATILE_FIELDS,
 )
+from application_sdk.testing.warming import (
+    WarmingSource,
+    WarmingSourceHandler,
+    WarmingStep,
+)
 
 _GOLDEN_EXPORTS = frozenset(
     {
@@ -117,6 +127,9 @@ _GOLDEN_EXPORTS = frozenset(
         "GoldenRuleError",
         "TypenameDiff",
         "TypenameRule",
+        "WarmingSource",
+        "WarmingSourceHandler",
+        "WarmingStep",
         "assert_matches_golden",
         "diff_golden",
     }
@@ -168,6 +181,9 @@ __all__ = [
     "PreflightOutcomeCapture",
     "TypenameDiff",
     "TypenameRule",
+    "WarmingSource",
+    "WarmingSourceHandler",
+    "WarmingStep",
     "app_context",
     "assert_matches_golden",
     "capture_preflight_outcomes",

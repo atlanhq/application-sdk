@@ -429,6 +429,105 @@ def _reexported_names(
     return names
 
 
+def _module_scope(body: Sequence[ast.stmt]) -> Iterator[ast.stmt]:
+    """The statements of *body* that bind names at module scope.
+
+    A ``with`` block opens no scope: a name bound inside a top-level
+    ``with workflow.unsafe.imports_passed_through():`` is as importable as one
+    bound beside it, and modules imported into the Temporal sandbox re-export
+    through exactly that block. ``if`` and ``try`` are not unwrapped: an
+    ``if TYPE_CHECKING:`` binding does not exist at runtime, and a ``try``
+    branch may not run.
+    """
+    for node in body:
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            yield from _module_scope(node.body)
+        else:
+            yield node
+
+
+def _is_type_checking_guard(node: ast.stmt) -> bool:
+    return isinstance(node, ast.If) and (
+        (isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING")
+        or (isinstance(node.test, ast.Attribute) and node.test.attr == "TYPE_CHECKING")
+    )
+
+
+def _getattr_served(tree: ast.Module) -> frozenset[str] | None:
+    """Names in the allowlists a module ``__getattr__`` reads, or ``None`` without one.
+
+    Only a module-level collection the getter reads counts, such as the
+    ``_SERVICE_NAMES = frozenset({...})`` allowlist ``handler/__init__``
+    keeps. String literals in the getter's own body do not: there they are as
+    likely to reject a name (``raise AttributeError("x was removed")``) as to
+    serve it, and telling the two apart means modelling the getter. A declared
+    allowlist is checkable; a static scan cannot run the getter. The runtime
+    backstop is a test that every ``__all__`` name of such a module resolves.
+    """
+    getter = next(
+        (
+            n
+            for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == "__getattr__"
+        ),
+        None,
+    )
+    if getter is None:
+        return None
+    read = {n.id for n in ast.walk(getter) if isinstance(n, ast.Name)}
+    served: set[str] = set()
+    for node in tree.body:
+        targets: Sequence[ast.expr]
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+        else:
+            continue
+        if node.value is None or not any(
+            isinstance(t, ast.Name) and t.id in read for t in targets
+        ):
+            continue
+        served.update(
+            n.value
+            for n in ast.walk(node.value)
+            if isinstance(n, ast.Constant) and isinstance(n.value, str)
+        )
+    return frozenset(served)
+
+
+def _lazy_reexports(
+    tree: ast.Module, declared_all: frozenset[str] | None, package: str
+) -> list[str]:
+    """Names a package serves lazily through PEP 562 ``__getattr__``.
+
+    The shape is ``if TYPE_CHECKING: from .impl import name`` for type
+    checkers, the name in an allowlist the module ``__getattr__`` reads (see
+    :func:`_getattr_served`), and the name listed in ``__all__``. All three
+    must hold: the ``TYPE_CHECKING`` import alone binds nothing at runtime, and
+    a getter's allowlist is the only static evidence that it serves a name. A name
+    that passes all three was declared as surface, so removing it is a removal
+    like any other.
+    """
+    served = _getattr_served(tree)
+    if declared_all is None or served is None:
+        return []
+    names: list[str] = []
+    for guard in tree.body:
+        if not _is_type_checking_guard(guard):
+            continue
+        for node in guard.body:
+            if not isinstance(node, (ast.Import, ast.ImportFrom)):
+                continue
+            names.extend(
+                name
+                for name in _reexported_names(node, None, package)
+                if name in declared_all and name in served
+            )
+    return names
+
+
 def extract_module(
     tree: ast.Module, module: str, package: str = DEFAULT_PACKAGE
 ) -> list[Symbol]:
@@ -454,7 +553,7 @@ def extract_module(
             )
         )
 
-    for node in tree.body:
+    for node in _module_scope(tree.body):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             add(
                 node.name,
@@ -503,9 +602,14 @@ def extract_module(
             for bound in _reexported_names(node, declared_all, package):
                 add(bound, "reexport")
 
+    bound = {s.qualname for s in symbols}
+    for name in _lazy_reexports(tree, declared_all, package):
+        if name not in bound:
+            add(name, "reexport")
+            bound.add(name)
+
     # A name served by the shim need not exist as a real binding; record the
     # remainder so the alias keeps the old name present in the snapshot.
-    bound = {s.qualname for s in symbols}
     for name in sorted(aliases - bound):
         symbols.append(
             Symbol(module=module, qualname=name, kind="alias", deprecated=True)

@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from application_sdk._runtime.offload import (
+    CancelHandle,
     run_best_effort,
     run_fault_isolated,
     run_in_thread,
@@ -66,6 +67,7 @@ logger = get_logger(__name__)
 __all__ = [
     "AtlanLoggerAdapter",
     "BrokenProcessPool",
+    "CancelHandle",
     "HeartbeatController",
     "NoopHeartbeatController",
     "ProgressTracker",

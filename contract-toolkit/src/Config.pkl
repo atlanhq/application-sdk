@@ -641,6 +641,10 @@ class Widget {
   /// preflight checks to the selected connection's credential.
   selectedConnectionCredentialGuidProperty: String?
 
+  /// For sageV2 — the app declares a warmup, so the setup UI runs the warmup
+  /// flow before the warmup-tier checks. Set from `SageV2.warmup`.
+  warmup: Boolean?
+
   /// For connectionSelector — when true, the frontend stores selected full
   /// connection object(s) instead of only qualified-name string(s).
   shouldIncludeConnectionInfo: Boolean?
@@ -1811,6 +1815,7 @@ class Sage extends UIElement {
 /// |---|---|---|---|
 /// | **`title`** | | name to show in the UI for the widget | |
 /// | `checks` | | list of preflight check configurations | |
+/// | `warmup` | | whether the setup UI runs the warmup flow (handler overrides `Handler.warmup`) | `false` |
 /// | `required` | | whether the check must pass to proceed | `false` |
 /// | `hide` | | whether the widget will be shown in the UI (false) or not (true) | `false` |
 /// | `helpText` | | informational text to place in a hover-over to describe the use of the input | `""` |
@@ -1829,12 +1834,19 @@ class SageV2 extends UIElement {
   /// Path to the form field holding the credential GUID to use for the check.
   hidden selectedCredentialGuid: String?
 
+  /// Declares that the app's handler overrides `Handler.warmup`, so the setup
+  /// UI runs the warmup flow before the warmup-tier checks. Default `false`
+  /// renders nothing; `true` adds `"warmup": true` to the `ui` block. Same
+  /// semantics as `Widgets.SageV2.warmup`, which documents the drift cases.
+  hidden warmup: Boolean = false
+
   /// (Generated) Internal configuration for the UI's rendering.
   fixed ui {
     widget = "sageV2"
     config = checks
     connectorConfigName = connectorConfig
     selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+    warmup = if (outer.warmup) true else null
   }
 }
 

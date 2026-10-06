@@ -11,6 +11,12 @@ from application_sdk.errors.leaves import (
     UnimplementedError,
 )
 
+# Defined beside the secret store since FND-3280, so the handler can raise it
+# without importing the ``app`` package; re-exported here, the same class.
+from application_sdk.infrastructure.secrets import (  # noqa: F401
+    SecretStoreNotConfiguredError,
+)
+
 
 @dataclass(kw_only=True)
 class ObjectStoreNotConfiguredError(PreconditionError):
@@ -74,16 +80,6 @@ class StateStoreNotConfiguredError(PreconditionError):
     code: ClassVar[str] = "PRECONDITION_STATE_STORE_NOT_CONFIGURED"
     message: str = "No state store configured"
     resource: str | None = "state_store"
-    expected_state: str | None = "configured"
-
-
-@dataclass(kw_only=True)
-class SecretStoreNotConfiguredError(PreconditionError):
-    """Secret store required by get_secret / resolve_credential but not configured."""
-
-    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
-    message: str = "No secret store configured"
-    resource: str | None = "secret_store"
     expected_state: str | None = "configured"
 
 

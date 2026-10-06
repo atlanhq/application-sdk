@@ -2092,13 +2092,50 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
-| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
+| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. `SageV2` only: `warmup` (default `false`), see [SageV2 warmup](#sagev2-warmup). |
 | `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
 | `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
+
+##### SageV2 warmup
+
+`warmup: Boolean = false` on `SageV2` (both `Widgets.SageV2` and the legacy
+`Config.SageV2`) tells the setup UI, before it calls anything, that the app
+has a warmup:
+
+- `warmup = true`: the UI runs the warmup flow. It polls
+  `POST /workflows/v1/warmup` until it answers `ready`, then calls `/check`
+  with `tiers=["warmup"]`.
+- `warmup = false` (default): the UI calls `/check` as before.
+
+```pkl
+["preflight-check"] = new SageV2 {
+  title = ""
+  warmup = true
+}
+```
+
+Generated output: `true` adds `"warmup": true` to the widget's `ui` block in
+the workflow config (`app/generated/{name}.json`). The default renders
+nothing, so contracts that do not set it generate byte-identical output. The
+generated `_input.py`, `manifest.json` and credential config do not change.
+
+Set it if and only if the app's handler overrides `Handler.warmup`. The flag
+is a declaration for the UI; the preflight gate decides from the handler
+itself. When the two disagree:
+
+- Flag set, no override: `/warmup` always answers `ready`, so the UI makes one
+  wasted round trip.
+- Override, flag not set: setup never runs the warmup-tier checks, so missing
+  grants on those checks are not caught at setup. The gate still runs them on
+  a real run.
+
+The flag lives in the contract, not in the handler service, because the
+served form must match the committed contract. The v1 `Sage` widget does not
+take the flag: the warmup flow is built on the `sageV2` component only.
 
 #### Computed
 

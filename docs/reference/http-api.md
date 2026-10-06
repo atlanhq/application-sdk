@@ -60,6 +60,89 @@ Each check in `PreflightOutput.checks` is mapped to a key in `data` by lower-cas
 
 Delegates to `Handler.preflight_check(PreflightInput)`.
 
+**Check tiers (optional).** Add `"tiers"` to the body to run only some of the checks: `["preflight"]`, `["warmup"]`, or both. A `preflight` check runs with no preparation; a `warmup` check needs the source's compute and runs only once the app's `Handler.warmup` reports `ready`. A check with no tier is `preflight`, and a `preflight` check carries no `tier` key in the response. A body with no `tiers` runs every check and never calls `warmup`, so its response is exactly what it was before tiers existed. See [Check tiers and warmup](../concepts/handlers.md#check-tiers-and-warmup) for which checks belong in which tier.
+
+| `tiers` | Calls `warmup` | Runs | `preflight.status` |
+| --- | --- | --- | --- |
+| absent | no | every check | the handler's verdict |
+| `["preflight"]` | no | only `preflight` checks | `pending` when the app has a warmup and the handler's verdict is not `not_ready`; otherwise the handler's verdict |
+| includes `"warmup"` | once, before any check | every requested tier when the probe answers `ready`; otherwise every requested tier except `warmup` (nothing, for `["warmup"]`) | the handler's verdict on `ready`; `not_ready` on `unavailable`; otherwise `pending` unless the handler said `not_ready` |
+
+An app *has a warmup* when its handler overrides `Handler.warmup`, or when the entry point has a `warmup` module hook. `not_ready` always wins over `pending`. A `pending` verdict means the checks that ran passed, or failed only advisorily, but the `warmup` checks have not run. `preflight.warmup` explains it: the probe's `WarmupObservation` (`state` and `source_state`, plus `queued_queries` and `next_poll_seconds` when set), or `null` for a `["preflight"]` request, which never probes. `preflight.warmup` is present on every `pending` verdict and on a `not_ready` verdict from a request that probed; otherwise it is absent. The envelope `success` is `true` on a `pending` verdict even when no check ran.
+
+The probe is bounded by the app's `preflight_warmup_probe_timeout_seconds` (default 10s). A probe still running at that point reads as `warming`. An `unavailable` probe turns the verdict into `not_ready` with the message "The source reported its compute as unavailable (…)".
+
+`tiers: ["preflight", "warmup"]` against a source that is still resuming:
+
+```json
+{
+  "success": true,
+  "data": {
+    "reachable": { "success": true, "message": "", "successMessage": "", "failureMessage": "" }
+  },
+  "message": "Preflight check pending",
+  "preflight": {
+    "status": "pending",
+    "message": "",
+    "total_duration_ms": 0.0,
+    "checks": [{ "name": "reachable", "passed": true, "message": "" }],
+    "warmup": { "state": "queued", "source_state": "RESUMING", "queued_queries": 3 }
+  }
+}
+```
+
+`tiers: ["warmup"]` once `/warmup` reports `ready`. A `warmup` check carries its `tier`:
+
+```json
+{
+  "success": true,
+  "data": {
+    "catalogScan": { "success": true, "message": "", "successMessage": "", "failureMessage": "" }
+  },
+  "message": "Preflight check ready",
+  "preflight": {
+    "status": "ready",
+    "message": "",
+    "total_duration_ms": 0.0,
+    "checks": [{ "name": "catalogScan", "passed": true, "tier": "warmup", "message": "" }]
+  }
+}
+```
+
+**Post-call tier check.** The SDK checks every returned check's tier against the tiers the handler was asked to run. A check outside them means the handler ran something it was told not to, such as a `warmup` probe against compute that is not ready, so its verdict is not one about the requested tiers. The answer is **HTTP 500** with the unverified verdict every handler failure uses: `not_ready` and one failed `preflightVerdict` row carrying a typed `INTERNAL` error whose message names the checks ("Preflight handler returned checks outside the requested tiers: catalogScan"). Rows are never silently dropped.
+
+An unknown tier, or an empty `tiers` list, is a 422.
+
+---
+
+### `POST /workflows/v1/warmup`
+
+Probe the source's compute once, the probe that `warmup`-tier checks wait on. Stateless and idempotent: each call both pushes the warmup forward (for example, a probe query that resumes a suspended warehouse) and reports where it is, and the SDK keeps no warmup state between calls. Optional: an app that does not override `Handler.warmup` answers `ready`.
+
+**Request body:** Same as `/check`, so the UI sends one payload to both routes. The route does not act on `tiers`.
+
+**Response:** the handler's `WarmupObservation` under `data`, plus `ceiling_seconds`, the app's `preflight_warmup_ceiling_seconds` (default 600), so the UI has a stop condition of its own. The envelope message is `Warmup <state>`:
+
+```json
+{
+  "success": true,
+  "data": { "state": "queued", "source_state": "RESUMING", "queued_queries": 3, "ceiling_seconds": 600 },
+  "message": "Warmup queued"
+}
+```
+
+| `data.state` | `success` | Meaning |
+| --- | --- | --- |
+| `cold` / `warming` / `queued` | `true` | not ready yet; call again |
+| `ready` | `true` | `warmup`-tier checks can run |
+| `unavailable` | `false` | the source will not get ready on its own |
+
+Every observation answers HTTP 200. `source_state` is the source's own label for display (`""` when the handler gave none), `queued_queries` the number of statements waiting for a slot, and `next_poll_seconds` the source's suggestion for when to call again; the last two are omitted when the handler did not set them. The probe is bounded by the app's `preflight_warmup_probe_timeout_seconds`, and a probe still running at that point answers `warming`, so no request is held longer than one probe timeout. A typed `AppError` raised by the handler maps to its HTTP status (an `AuthError` is 401) with the leaf's message as `detail`. Any other raise is a 500 with `"detail": "Internal server error"`.
+
+Delegates to `Handler.warmup(WarmupInput)`, or to an entry point's `warmup` module hook when one exists.
+
+**The UI sequence.** `POST /check` with `"tiers": ["preflight"]` answers the cheap checks without starting compute. `POST /warmup` starts the warmup and reports it; call it again until `data.state` is `ready`, waiting `next_poll_seconds` when it is set, and stop at `ceiling_seconds`. When it reports `ready`, `POST /check` with `"tiers": ["warmup"]`. On `unavailable`, show that the source's compute is unavailable instead.
+
 ---
 
 ### `POST /workflows/v1/metadata`

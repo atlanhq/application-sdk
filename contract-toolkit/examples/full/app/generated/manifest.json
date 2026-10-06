@@ -30,7 +30,8 @@
           "custom_attributes": "{{custom_attributes}}",
           "legacy_timeout": "{{legacy_timeout}}",
           "old_batch_mode": "{{old_batch_mode}}",
-          "schemas": "{{schemas}}"
+          "schemas": "{{schemas}}",
+          "preflight_check": "{{preflight-check}}"
         }
       },
       "error_handling": {
