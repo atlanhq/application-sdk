@@ -900,9 +900,12 @@ jobs:
         continue-on-error: true
         env:
           LEDGER_PATH: ${{ inputs.ledger-path }}
+          # Through env, never interpolated into the script: the ref is a
+          # caller-supplied string and `${{ }}` would splice it into shell source.
+          CONFORMANCE_REF: ${{ inputs.conformance-ref }}
         run: >-
           uvx
-          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance"
+          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance"
           atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
       - name: "Report a contract ledger violation"

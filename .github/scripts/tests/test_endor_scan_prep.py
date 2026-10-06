@@ -298,10 +298,13 @@ def test_endor_scans_the_tarball_its_own_job_built():
     build = _step(_job(BUILD_AND_SCAN, "build"), "build-image")
     assert build["with"]["outputs"] == "type=docker,dest=/tmp/image.tar"
     scan = next(s for s in steps if "endorlabs/github-action" in str(s.get("uses")))
+    image = _step(_job(BUILD_AND_SCAN, "build"), "image")
     assert scan["with"]["image_tar"] == "/tmp/image.tar"
-    assert steps.index(build) < steps.index(
-        _step(_job(BUILD_AND_SCAN, "build"), "image")
-    )
+    # The scan is gated on `steps.image.outcome == 'success'`. Reordered ahead
+    # of `image`, that condition is false (the step has not run) and Endor is
+    # silently skipped, so the order is part of the contract.
+    assert scan["if"] == "steps.image.outcome == 'success'"
+    assert steps.index(build) < steps.index(image) < steps.index(scan)
 
 
 def test_endor_cannot_fail_the_required_build_check():
@@ -318,7 +321,41 @@ def test_endor_cannot_fail_the_required_build_check():
     assert all(steps.index(s) > steps.index(endor[0]) for s in endor[1:])
     scan = next(s for s in endor if "endorlabs/github-action" in str(s.get("uses")))
     assert isinstance(scan.get("timeout-minutes"), int)
-    assert scan["timeout-minutes"] < job["timeout-minutes"]
+
+
+# Minutes the job cap reserves for the short, unbudgeted steps (checkout,
+# buildx, login, docker load, Trivy install and cache, uploads, Endor prep).
+SHORT_STEP_HEADROOM_MINUTES = 10
+
+# The steps that can run long before the Endor scan. Each must carry its own
+# budget, or the job cap cannot be shown to leave Endor its full one.
+LONG_STEPS_BEFORE_ENDOR = ("build-image", "build-image-retry", "trivy-scan")
+
+
+def test_job_cap_reserves_endors_full_budget():
+    """The job timeout is a hard cap from job start, and continue-on-error does
+    not protect a step from it: a job that times out during Endor fails the
+    required `Build Image` context. So the cap must cover the worst case of
+    every budgeted step before the scan, run back to back, plus the scan's
+    own budget and headroom for the short steps. A tighter cap would let a
+    slow but successful build and Trivy run turn report-only Endor into a
+    gate."""
+    job = _job(BUILD_AND_SCAN, "build")
+    steps = _steps(job)
+    scan = next(s for s in steps if "endorlabs/github-action" in str(s.get("uses")))
+    for step_id in LONG_STEPS_BEFORE_ENDOR:
+        step = _step(job, step_id)
+        assert isinstance(step.get("timeout-minutes"), int), step_id
+        assert steps.index(step) < steps.index(scan), step_id
+    before = sum(
+        s["timeout-minutes"]
+        for s in steps[: steps.index(scan)]
+        if isinstance(s.get("timeout-minutes"), int)
+    )
+    assert (
+        before + scan["timeout-minutes"] + SHORT_STEP_HEADROOM_MINUTES
+        <= job["timeout-minutes"]
+    )
 
 
 def test_at_most_two_jobs_and_both_required_contexts_survive():

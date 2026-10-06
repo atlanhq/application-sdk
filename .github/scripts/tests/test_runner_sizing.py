@@ -79,9 +79,10 @@ SLIM_LOCAL_ACTION_DIRS = tuple(
 )
 
 _PRIVILEGED = re.compile(r"(^|[\s;&|(])(sudo|apt-get|docker)\s", re.M)
-# The SYSTEM python3, not a venv's (`/tmp/venv/bin/python x.py` is excluded by
-# the lookbehind): that is the interpreter whose site-packages differs.
-_SYSTEM_PY_SCRIPT = re.compile(r"(?<![/\w])python3\s+(?:-\S+\s+)*([\w./${}-]+\.py)")
+# The SYSTEM python, not a venv's (`/tmp/venv/bin/python x.py` is excluded by
+# the lookbehind): that is the interpreter whose site-packages differs. Bare
+# `python` counts too: on a runner that has it, it is the same system Python.
+_SYSTEM_PY_SCRIPT = re.compile(r"(?<![/\w])python3?\s+(?:-\S+\s+)*([\w./${}-]+\.py)")
 _INLINE_IMPORT = re.compile(r"^\s*(?:import|from)\s+([A-Za-z_]\w*)", re.M)
 
 

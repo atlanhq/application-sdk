@@ -60,6 +60,7 @@ import argparse
 import glob
 import json
 import os
+import subprocess
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -74,6 +75,40 @@ from scorecard_history_entry import history_entry as scorecard_history  # noqa: 
 # (args) -> (returncode, stdout). Same seam as fetch_conformance_sarif.run_gh,
 # so one fake drives both in the tests.
 GhFn = Callable[[list], tuple]
+
+# One gh call's ceiling. The fleet is collected sequentially, so a stalled
+# request with no bound would hold every later repo until the workflow's own
+# timeout. Five minutes clears the largest artifact download with room.
+GH_CALL_TIMEOUT_SECONDS = 300
+# The exit code `timeout(1)` uses; any non-zero rc makes the caller raise.
+GH_TIMEOUT_RC = 124
+
+ARTIFACT_PAGE_SIZE = 100
+
+
+def run_gh_bounded(args: list[str]) -> tuple[int, str]:
+    """``fetch_conformance_sarif.run_gh`` with a per-call timeout.
+
+    A stalled call returns a failure, so that repo's dashboard is marked
+    ``error`` and the fleet scan moves on.
+    """
+    try:
+        proc = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            timeout=GH_CALL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        print(
+            f"::warning::gh {args[0]} timed out after {GH_CALL_TIMEOUT_SECONDS}s",
+            file=sys.stderr,
+        )
+        return GH_TIMEOUT_RC, ""
+    if proc.stderr:
+        sys.stderr.write(proc.stderr)
+    return proc.returncode, proc.stdout
+
 
 SECURITY_PREFIX = "security-dashboard"
 CONFORMANCE_PREFIX = "conformance-dashboard"
@@ -133,27 +168,44 @@ def latest_artifact(
 ) -> Optional[dict[str, Any]]:
     """Newest non-expired artifact named one of ``names`` from a ``branch`` run.
 
-    Queried by name, one call per name, rather than by listing the run history.
-    A busy repo's PR runs would otherwise push the default branch's last scan
-    out of any page we could afford to read. Returns ``None`` when no live
-    artifact exists, which is the routine case for a quiet repo.
+    Queried by name rather than by listing the run history: a busy repo's PR
+    runs would otherwise push the default branch's last scan out of any page
+    we could afford to read. Even by name, PR-branch artifacts can fill the
+    first page, so each name is paged until a page holds a match (the listing
+    is newest first, so later pages are only older) or the listing runs out.
+    Returns ``None`` when no live artifact exists, which is the routine case
+    for a quiet repo.
     """
     found: list[dict[str, Any]] = []
     for name in names:
-        rc, out = gh(["api", f"repos/{repo}/actions/artifacts?name={name}&per_page=30"])
-        if rc != 0:
-            raise CollectError(f"could not list {name} artifacts for {repo}")
-        try:
-            payload = json.loads(out or "{}")
-        except json.JSONDecodeError as exc:
-            raise CollectError(f"unparseable {name} listing for {repo}") from exc
-        for artifact in payload.get("artifacts", []) or []:
-            run = artifact.get("workflow_run") or {}
-            if artifact.get("expired") or run.get("head_branch") != branch:
-                continue
-            if not run.get("id") or not artifact.get("created_at"):
-                continue
-            found.append(artifact)
+        page = 1
+        while True:
+            rc, out = gh(
+                [
+                    "api",
+                    f"repos/{repo}/actions/artifacts?name={name}"
+                    f"&per_page={ARTIFACT_PAGE_SIZE}&page={page}",
+                ]
+            )
+            if rc != 0:
+                raise CollectError(f"could not list {name} artifacts for {repo}")
+            try:
+                payload = json.loads(out or "{}")
+            except json.JSONDecodeError as exc:
+                raise CollectError(f"unparseable {name} listing for {repo}") from exc
+            listed = payload.get("artifacts", []) or []
+            matched = False
+            for artifact in listed:
+                run = artifact.get("workflow_run") or {}
+                if artifact.get("expired") or run.get("head_branch") != branch:
+                    continue
+                if not run.get("id") or not artifact.get("created_at"):
+                    continue
+                found.append(artifact)
+                matched = True
+            if matched or len(listed) < ARTIFACT_PAGE_SIZE:
+                break
+            page += 1
     if not found:
         return None
     return max(found, key=lambda a: a["created_at"])
@@ -180,11 +232,27 @@ def download_artifact(repo: str, artifact: dict[str, Any], dest: Path, gh: GhFn)
         )
 
 
-def read_repo_file(repo: str, path: str, ref: str, gh: GhFn) -> Optional[str]:
-    """Raw contents of ``path`` at ``ref``, or ``None`` if it cannot be read.
+def _is_not_found(out: str) -> bool:
+    """True when a failed ``gh api`` call's body is GitHub's 404.
 
-    Best effort, the same as the shim's checkout read: a missing repo
-    allowlist or Dockerfile is normal and only narrows what the doc reports.
+    ``gh api`` prints the error response body to stdout, so the status is
+    readable without changing the ``(rc, stdout)`` seam.
+    """
+    try:
+        body = json.loads(out or "")
+    except json.JSONDecodeError:
+        return False
+    return isinstance(body, dict) and str(body.get("status")) == "404"
+
+
+def read_repo_file(repo: str, path: str, ref: str, gh: GhFn) -> Optional[str]:
+    """Raw contents of ``path`` at ``ref``, or ``None`` if it does not exist.
+
+    A missing repo allowlist or Dockerfile is normal and only narrows what the
+    doc reports. Any other failure (a rate-limit or permission 403, a 5xx, a
+    timeout) raises: treating it as absent would publish allowlisted CVEs as
+    new and the SDK version as unknown, so that dashboard is skipped instead
+    and keeps its stored row.
     """
     rc, out = gh(
         [
@@ -194,7 +262,11 @@ def read_repo_file(repo: str, path: str, ref: str, gh: GhFn) -> Optional[str]:
             f"repos/{repo}/contents/{path}?ref={ref}",
         ]
     )
-    return out if rc == 0 else None
+    if rc == 0:
+        return out
+    if _is_not_found(out):
+        return None
+    raise CollectError(f"could not read {path} at {ref} of {repo}")
 
 
 def run_created_at(repo: str, run_id: int, gh: GhFn) -> tuple[str, str, str]:
@@ -543,6 +615,10 @@ def collect_conformance(
             sarif_docs.append(json.loads(Path(path).read_text()))
         except json.JSONDecodeError as exc:
             print(f"::warning::{repo}: skipping unparseable {path}: {exc}")
+    # A corrupt artifact is not evidence of zero findings: publishing the
+    # zero-count doc would overwrite the stored row with a false "clean".
+    if not sarif_docs:
+        raise CollectError(f"no parseable SARIF in run {run_id} of {repo}")
 
     doc, history = conformance_doc(repo, sarif_docs, sha, head_branch, created)
     _write(out_dir, CONFORMANCE_PREFIX, repo, doc, history)
@@ -612,7 +688,7 @@ def collect_fleet(
     base_allowlist: dict[str, Any],
     today: str,
     out_dir: Path,
-    gh: GhFn = fcs.run_gh,
+    gh: GhFn = run_gh_bounded,
 ) -> dict[str, dict[str, str]]:
     results: dict[str, dict[str, str]] = {}
     for repo in repos:
@@ -631,7 +707,7 @@ def all_failed(results: dict[str, dict[str, str]]) -> bool:
     )
 
 
-def main(argv: Optional[list] = None, gh: GhFn = fcs.run_gh) -> int:
+def main(argv: Optional[list] = None, gh: GhFn = run_gh_bounded) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )

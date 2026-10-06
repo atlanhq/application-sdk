@@ -127,7 +127,7 @@ jobs:
         id: probe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .github/scripts/probe_code_scanning.py
+        run: python3 .github/scripts/probe_code_scanning.py
 
       - name: "Download SARIF artifact"
         id: download
