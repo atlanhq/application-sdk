@@ -40,7 +40,6 @@ _ENV = jinja2.Environment(
 # ``.github/workflows/``).  The C002 drift check iterates this registry.
 MANAGED_WORKFLOWS: tuple[str, ...] = (
     "conformance.yaml",
-    "conformance-upload-sarif.yaml",
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
@@ -54,6 +53,19 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "stale.yml",
     "generated-freshness.yaml",
 )
+
+# Opt-in managed shim (FND-3336): installed only under ``bootstrap
+# --sarif-upload true``, and removed on any other run. Uploading SARIF to a
+# private repo's Security tab needs GitHub Advanced Security, which the org
+# does not buy, so on the private fleet this workflow's five-leg matrix only
+# ever probed, skipped the upload and billed five jobs per merge to main. The
+# public repos keep it: their runners are free and their Security tab is the
+# one place the upload shows anything. Nothing else reads its output — the
+# conformance dashboard downloads the SARIF artifacts from the Conformance run
+# itself. Not a RETIRED_FILES entry because it is not retired everywhere; the
+# reusable and ``probe_code_scanning.py`` stay, the probe still guarding a
+# private repo that keeps an old copy.
+SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 
 # Workflow shims bootstrap once managed and now actively removes (relative to
 # ``.github/workflows/``).  A retired name must be deleted rather than merely
