@@ -755,10 +755,11 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**Execution-seam rules (P031, P036)** — suggest-only, WARN-tier;
-`classification` is always `"judgment"`.  Both replace a hand-rolled
-concurrency primitive with the SDK seam that owns its lifecycle, and both need
-`result.evidence` citing the seam's own path plus the reference-app call site —
+**Execution-seam rules (P031, P036, P054)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Each replaces a hand-rolled
+concurrency primitive with a shape whose lifecycle is safe on the event loop,
+and each needs `result.evidence` citing that shape's own path plus the
+reference call site —
 the blind gate cannot tell a correct hop from a plausible one.
 
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
@@ -772,8 +773,9 @@ the blind gate cannot tell a correct hop from a plausible one.
   callable **passed, not called** (`run_in_thread(fn, arg)`, never
   `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
   thread, exactly as P023 prescribes.  A `run_in_executor` whose first
-  argument is a *real* executor the app owns is a deliberate choice, not this
-  defect — say so and route to residue rather than rewriting it.  On a
+  argument is an executor other than `None` is not this rule; a `with`-scoped
+  executor is P054, and any other executor the app owns is a deliberate choice —
+  say so and route to residue rather than rewriting it.  On a
   preflight path, F011 sees the swapped call too: use the module-level
   `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
   `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
@@ -798,6 +800,19 @@ the blind gate cannot tell a correct hop from a plausible one.
   functions' own contracts as evidence.  This is a restructure (the child's
   entry function and its arguments must be picklable): route to residue with
   the proposed shape, never a mechanical constructor swap.
+
+- **P054 ScopedExecutorJoinedOnCancel** — inside an `async def`, a `with`
+  statement builds a `ThreadPoolExecutor` and the body offloads to it with
+  `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
+  `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
+  blocking driver call freezes the whole worker, not just the cancelled task
+  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
+  seam, and it does not join on cancel); or, when the calls must stay on one
+  thread (some DB-API cursors break when `execute` and `fetchmany` run on
+  different threads), a dedicated executor created **without** `with` and
+  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
+  goes through `run_in_thread` — and the offending call site.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
@@ -872,6 +887,40 @@ say so.
   already calls `upload_refs`, there is no P030 finding to remedy: do not
   propose a second upload.
 
+  **Working transfers that still fire P030.**  Before drafting, check whether
+  bytes already move through a path this check does not recognise: an app
+  task that calls `storage.transfer.upload` (against
+  `create_store_from_binding` or `upstream_storage`), or a call to the
+  inherited `BaseMetadataExtractor.upload_to_atlan` shim.  The shim forwards to
+  `self.upload(local_path=output_path, tier=RETAINED)`, which writes under
+  `App.upload`'s own run prefix: it delivers only when the app hands that same
+  prefix downstream, and is the re-rooting trap above when it does not —
+  compare the two before calling it working.  Neither shape is the named
+  bridge P042 reports, so both land here.  The proposal is the conversion,
+  framed as a refactor that must not move a key:
+
+  - `App.upload` / `upload_refs` are tasks: call them from the entrypoint,
+    never inside another task;
+  - either keep the activity and have it stage a local tree mirroring the key
+    layout, returned as a directory `FileReference`, then upload it once with
+    `storage_path` pinned to the prefix the app returns (replay-safe only for
+    runs pinned to this build; an unversioned or `AUTO_UPGRADE` worker
+    replays in-flight runs against the new entrypoint, so guard the new
+    `App.upload` call with `workflow.patched(...)`); or declare the task
+    outputs to `upload_refs` with a
+    `DeclaredFile.label` per key;
+  - skip empty entities (`upload_refs` raises on an empty declared file);
+  - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
+    files) — a second private write left behind is the same bridge again;
+  - upload the whole tree when downstream nodes read more than `transformed/`
+    (for example `parsed/`); for the shim, swap in its own body and pin
+    `storage_path` if the published prefix differs from the run prefix.
+
+  Evidence: run the full-DAG e2e on main first as a baseline, then on the
+  change, and compare the Atlas inventory per type; a type the inventory does
+  not list in either run is not proven by it.  Cite both runs in
+  `result.evidence`.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
   **does** perform a real storage transfer, with neither `self.upload(` nor
   `self.upload_refs(` anywhere in
@@ -900,6 +949,11 @@ say so.
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.
+
+  Detection is name-based: only an app method named `upload_to_atlan` is
+  graded here.  The same working shape under another name, and calls to the
+  inherited SDK shim, are reported as P030 — use the P030 conversion recipe
+  for them.
 
 - **P051 SdrPreflightUnavailable** (WARN) — an SDR app (`self_deployed_runtime:
   true` in `atlan.yaml`) locks `atlan-application-sdk` below `3.30.0` in

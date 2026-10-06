@@ -429,9 +429,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "``App.run_in_thread()`` or ``self.task_context.run_in_thread()`` — which\n"
             "dispatches onto the SDK's own dedicated ``sdk-blocking-*`` thread pool.\n"
             "\n"
-            "``run_in_executor(<some-executor>, ...)`` with any executor other than\n"
-            "``None`` is not flagged — a call-site-owned ``ThreadPoolExecutor`` is\n"
-            "not the shared-pool contention this rule targets.\n"
+            "``run_in_executor`` on an executor other than ``None`` is not this rule; a\n"
+            "``with``-scoped executor is P054.\n"
             "``application_sdk/_runtime/offload.py`` is exempt: that is where\n"
             "``run_in_thread()``'s own dedicated-executor dispatch lives.\n"
             "\n"
@@ -518,6 +517,66 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P036] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p036",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P054",
+        canonical_reference=(
+            "application_sdk/clients/sql.py — `BaseSQLClient.run_query` and "
+            "`_execute_async_read_operation` offload every driver call with "
+            "`run_in_thread` instead of a `with`-scoped executor, so cancelling the "
+            "awaiting task never joins a blocked driver call on the event loop."
+        ),
+        scope=RuleScope.BOTH,
+        name="ScopedExecutorJoinedOnCancel",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="async-correctness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.43.0",
+        rationale=(
+            "`with ThreadPoolExecutor() as pool:` exits by calling "
+            "`pool.shutdown(wait=True)` on the event loop thread. When the awaiting "
+            "task is cancelled while the executor runs a blocking driver call, that "
+            "`wait=True` blocks the loop until the call returns and freezes the whole "
+            "worker — every other task on the loop stops with it (FND-2873). The fix "
+            "is a dedicated executor created without `with` and shut down with "
+            "`shutdown(wait=False)` in `finally`, or `run_in_thread(fn, ...)` when the "
+            "call has no thread affinity."
+        ),
+        short_description=(
+            "A `with`-scoped ThreadPoolExecutor joined on cancel blocks the event loop"
+        ),
+        full_description=(
+            "Inside an ``async def``, a ``with`` statement constructs a\n"
+            "``ThreadPoolExecutor`` bound to a name and the body offloads work to it\n"
+            "with ``.run_in_executor(<that name>, ...)``, e.g.\n"
+            "``with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)``.\n"
+            "\n"
+            "A task cancelled inside that ``with`` block leaves through\n"
+            "``pool.shutdown(wait=True)``, which runs on the event loop thread and\n"
+            "blocks until the driver call returns — freezing the whole worker, not just\n"
+            "the cancelled task.\n"
+            "\n"
+            "Fix (a): use ``run_in_thread(fn, ...)``, which dispatches onto the SDK's\n"
+            "dedicated pool and does not join on cancel — the shape\n"
+            "``application_sdk/clients/sql.py`` ``BaseSQLClient.run_query`` uses.\n"
+            "Fix (b): when the calls must stay on one thread (some DB-API cursors break\n"
+            "when ``execute`` and ``fetchmany`` run on different threads), keep a\n"
+            "dedicated executor created **without** ``with`` and call\n"
+            "``executor.shutdown(wait=False)`` in ``finally``.\n"
+            "\n"
+            "``run_in_executor(None, ...)`` is P031, not this rule; a ``with``-scoped\n"
+            "executor that only calls ``pool.submit(...)`` is out of scope.  Land as\n"
+            "``WARN``; suppress a reviewed exception on the ``with`` line (the finding\n"
+            "anchors there, not on the ``run_in_executor`` call) with\n"
+            "``# conformance: ignore[P054] <reason>``.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#p054",
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",

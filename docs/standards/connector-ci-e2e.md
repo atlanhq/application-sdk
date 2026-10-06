@@ -577,7 +577,7 @@ Actions log, and nothing fails either way — so at any point of *central*
 visibility a repo running degraded looks identical to a fully covered one. The
 `scorecard` job closes that (FND-33, FND-34): it feeds the e2e tier's evidence
 and records cross-CSP coverage into `results/test-readiness.json`, which
-`update-dashboard.yaml` publishes and connector-pulse ingests as the
+`update-fleet-dashboards.yaml` publishes and connector-pulse ingests as the
 `test_readiness` metric.
 
 **Two facts, kept apart.** `raw.crossCloud.configured` is what this repo is
@@ -611,7 +611,7 @@ regression. Record first; score once a low value is actionable.
 push/merge_group; e2e runs on `workflow_dispatch + run_e2e=true` or an
 `e2e`-labelled PR. Only a dispatched run on the default branch carries both, so
 `observed` appears on those runs and not the rest. It cannot be fixed by also
-running the scorecard on the PR path: `update-dashboard.yaml` only ingests
+running the scorecard on the PR path: `update-fleet-dashboards.yaml` only ingests
 default-branch runs, and on a PR the integration job is skipped, so such a
 scorecard would publish a zeroed integration tier — a fabricated regression.
 This is precisely why `configured`, which needs no e2e run, is the field that

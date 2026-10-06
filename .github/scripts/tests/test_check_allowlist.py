@@ -313,13 +313,14 @@ class TestUpstreamResultsAreTruthful:
     created. A fourth transient failure, wearing a confidently wrong name, in
     the function written to stop exactly that.
 
-    `trivy-scan` shipped that way, on the reasoning that the gate downloads with
-    `continue-on-error` so nothing needed to fail at the upload. The gate fails
-    regardless when the results are absent; all the tolerance bought was the
-    wrong diagnosis.
+    The Trivy upload shipped that way, on the reasoning that the gate downloads
+    with `continue-on-error` so nothing needed to fail at the upload. The gate
+    fails regardless when the results are absent; all the tolerance bought was
+    the wrong diagnosis. Build and scan are one job since FND-3319, so that
+    job's upload is the one this pins.
     """
 
-    GATING_JOBS = ("build", "trivy-scan")
+    GATING_JOBS = ("build",)
 
     def _upload_retries(self, job_id: str) -> list[dict[str, Any]]:
         workflow = (

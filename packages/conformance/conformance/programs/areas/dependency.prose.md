@@ -414,6 +414,23 @@ for human confirmation):
   never exercise (fleet SDR sweep).  The finding is anchored at the SDK
   dependency line in `pyproject.toml`.
 
+  **First check that the import site is live.**  The check matches the
+  import anywhere in the source and does not test reachability.  Search for
+  importers of the module the finding message names, outside that module;
+  read its docstring and the repo's `CLAUDE.md`/`AGENTS.md`, which often mark
+  superseded code as unused.  If nothing imports it, it is dead code: the
+  `migration_brief` is to delete that module (and the templates only it
+  reads), with no dependency change — adding `[sql]` would ship an unused
+  `duckdb` to production.  If the repo keeps that code on purpose (frozen
+  reference code for an in-progress port), the brief is a trailing
+  `# conformance: ignore[D010] <reason>` on the finding's anchor line in
+  `pyproject.toml` (the SDK dependency line in `[project] dependencies`, or
+  line 1 when no SDK dependency is declared there), naming the dead import
+  path and the owner — even on a `[daft]` pin, where the SDK bump below
+  would ship an unused `duckdb`.  Only that file's suppressions are read, so
+  a directive on the Python import line has no effect.  Only for a live
+  import, continue below.
+
   **Check the extra on that line before proposing anything.**  If the app pins
   `atlan-application-sdk[daft]`, the defect is the SDK's, not the app's: that
   extra resolved to nothing over SDK 3.22–3.27 and aliases `[sql]` again from

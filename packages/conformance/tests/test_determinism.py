@@ -1481,11 +1481,111 @@ def test_p036_suppression() -> None:
     assert len(findings) == 1 and findings[0].suppressed
 
 
+# ── P054 ScopedExecutorJoinedOnCancel ────────────────────────────────────────
+
+
+def test_p054_flags_with_scoped_executor_used_by_run_in_executor() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        await loop.run_in_executor(pool, g)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_flags_dotted_construction_with_executor_keyword() -> None:
+    body = (
+        "import concurrent.futures\n"
+        "async def f(loop):\n"
+        "    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:\n"
+        "        await loop.run_in_executor(executor=ex, func=g)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_one_finding_per_with_node() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        await loop.run_in_executor(pool, g)\n"
+        "        await loop.run_in_executor(pool, h)\n"
+    )
+    assert len(_rule(body, "P054", header="")) == 1
+
+
+def test_p054_silent_in_sync_def() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        return loop.run_in_executor(pool, g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_on_unjoined_dedicated_executor() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        '    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="x-")\n'
+        "    try:\n"
+        "        return await loop.run_in_executor(executor, g)\n"
+        "    finally:\n"
+        "        executor.shutdown(wait=False)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_when_with_body_only_submits() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f():\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        pool.submit(g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_on_default_executor_arg() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        return await loop.run_in_executor(None, g)\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_silent_when_offload_is_in_nested_def() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:\n"
+        "        def inner():\n"
+        "            return loop.run_in_executor(pool, g)\n"
+        "        inner()\n"
+    )
+    assert _rule(body, "P054", header="") == []
+
+
+def test_p054_suppression() -> None:
+    body = (
+        "from concurrent.futures import ThreadPoolExecutor\n"
+        "async def f(loop):\n"
+        "    with ThreadPoolExecutor() as pool:  # conformance: ignore[P054] reviewed\n"
+        "        await loop.run_in_executor(pool, g)\n"
+    )
+    findings = _rule(body, "P054", header="")
+    assert len(findings) == 1 and findings[0].suppressed
+
+
 # ── catalog meta-tests ───────────────────────────────────────────────────────
 
 
 def test_new_rules_present_and_scoped_both() -> None:
-    for rid in ("P020", "P021", "P022", "P023", "P024", "P031", "P036"):
+    for rid in ("P020", "P021", "P022", "P023", "P024", "P031", "P036", "P054"):
         assert rid in CATALOG, f"{rid} missing from catalog"
         assert CATALOG[rid].scope is RuleScope.BOTH
         assert CATALOG[rid].rationale.strip(), f"{rid} needs a non-empty rationale"

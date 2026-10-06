@@ -55,17 +55,20 @@ concurrency:
 jobs:
   release-gate:
     name: Release Gate
-    runs-on: ubuntu-latest
+    # `github.event.pull_request` does not exist on `merge_group`, so the label
+    # lookup can only run on the pull_request event. The skip is at JOB level:
+    # a job that starts only to skip its one step is billed a runner minute on
+    # every queue entry (FND-3320), while a skipped job bills nothing and still
+    # files its `Release Gate` check run with conclusion `skipped` — which a
+    # required check counts as a pass, so the queue still drains. Keep the
+    # `name:` static: the skipped run must carry the same context string.
+    # Nothing is lost by passing here: a release PR missing `e2e` fails this
+    # gate on the PR itself and so never becomes eligible to enter the queue.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Verify release readiness
-        # `github.event.pull_request` does not exist on `merge_group`, so the
-        # label lookup can only run on the pull_request event. A skipped step
-        # still leaves the job successful, and that success is what reports
-        # the green context to the queue. Nothing is lost by passing here: a
-        # release PR missing `e2e` fails this gate on the PR itself and so
-        # never becomes eligible to enter the queue.
-        if: github.event_name == 'pull_request'
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
