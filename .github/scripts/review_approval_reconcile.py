@@ -1,104 +1,51 @@
 #!/usr/bin/env python3
-"""Re-drive review approvals that were computed but never posted.
+"""Re-drive lens approvals that were computed but never posted.
 
-Two review sources post a code-owner approval as `atlan-ci`: sdk-review
-(`sdk_review_approve.py`) and lens (`lens/approve.py`). Both lose it the same
-way, to one failed POST, and both are recovered here by one sweep. One sweep,
-not one per source, because they spend the same two quotas: the fleet App's
-reads and `atlan-ci`'s hourly REST quota, whose exhaustion is what loses the
-approvals in the first place. A second cron would compete for both.
+lens (`lens/approve.py`) posts a code-owner approval as `atlan-ci` — the
+CODEOWNER whose approval satisfies branch protection on `main`. Its last step
+posts that APPROVE and, when the one POST fails, only warns: the run stays green
+and the summary says ready to merge while the PR is blocked. The trigger has
+been `atlan-ci` exhausting its 5,000 req/hr primary REST quota, and the only
+recovery was `/lens force`.
 
-Each source is an adapter (`sdk_review_verdict`, `LensSource`) that answers,
-for one PR: is there a verdict on the live head that should carry an approval,
-and is that approval missing? Everything after that is shared: the dry-run
-stop, the quota pre-flight, the staleness rule, and reporting.
+This reconciler is the durable answer because it does not care *why* the
+approval was lost. It sweeps open PRs on a cron, and as soon as a lens run
+finishes (`workflow_run`), and replays the approval for any PR whose lens
+verdict still stands but whose approval is missing.
 
-When both sources are owed an approval on one PR, each posts its own. One
-approval would satisfy branch protection, but each source's invalidators only
-ever dismiss that source's signed approval (`dismiss-on-human` dismisses
-sdk-review's, lens's withdraw dismisses lens's). A shared approval would outlive
-the verdict of whichever source withdrew. The cost is one extra `atlan-ci`
-request in the rare case both approvals were lost together.
+The review source is an adapter (`LensSource`) that answers, for one PR: is
+there a verdict on the live head that should carry an approval, and is that
+approval missing? Everything after that is shared: the dry-run stop, the quota
+pre-flight, the staleness rule, and reporting.
 
-sdk-review
-==========
+sdk-review used to be a second adapter here. Its verdict path is retired
+(#4138), and the workflows that cleared its `sdk-review-approved` label when an
+approval stopped counting are gone, so a reconciler still acting on that label
+would have no invalidators behind it. It was removed rather than kept as a
+legacy drain.
 
-Why this exists
----------------
-`sdk-review-approve-on-verdict.yml` computes the verdict and then posts the
-formal approval as `atlan-ci` — the CODEOWNER whose approval satisfies branch
-protection on `main`. When that one POST fails, the run dies and nothing retries
-it: the PR sits with a posted review summary, the `sdk-review-approved` label,
-and no approving review. Recovery was entirely manual (`gh run rerun --failed`).
-
-The trigger has been `atlan-ci` exhausting its 5,000 req/hr primary REST quota.
-The token split in #3162 cut that path's `atlan-ci` spend to exactly one request
-and added rate-limit-aware retry, which shrinks the window but cannot close it:
-primary quota can reset up to an hour out, and the stamper deliberately fails
-fast rather than hold a runner that long. `issue_comment` workflows also always
-execute from the default branch, so that hardening can only protect PRs opened
-after it lands — it could not protect its own approval.
-
-This reconciler is the durable answer because it does not care *why* the stamp
-was lost. It sweeps open PRs on a cron and re-invokes the existing stamper for
-any PR whose verdict still stands but whose approval is missing. It also
-runs as soon as a review workflow finishes (`workflow_run`), so a lost approval
-is recovered in about a minute rather than at the next cron tick.
-
-Guards (all three must hold before a PR is touched)
----------------------------------------------------
-1. `sdk-review-approved` is still on the PR. This is the solo-approval safety
-   property: it is the one signal every invalidator clears — `dismiss-on-human`
-   strips it (and notably does NOT touch the commit status, so the status cannot
-   substitute), `downgrade-on-ci-failure` strips it, `reset-on-push` strips it.
-   Reconciling without it would re-approve PRs a human has already engaged with.
-2. No `atlan-ci` APPROVED review already carries the bot signature — so a
-   healthy PR is a no-op and never collects a duplicate approval.
-3. The newest `mothership-ai[bot]` verdict comment says READY_TO_MERGE and its
-   REVIEWED_HEAD equals the PR's live head. Reconciling a verdict whose head has
-   moved would bless unreviewed code.
+lens has no label for a prefilter, so `lens_ready_heads` asks one GraphQL query
+for every open PR's head and the newest `lens` status on it; only a PR whose
+head is green there is read further. The guards, and why a dismissed lens
+approval on the head is the solo-approval guard, are on `LensSource`.
 
 There is deliberately no minimum age. An earlier version waited 12 minutes
-after a verdict before treating its approval as lost, so it could never race a
-fast-path run still retrying the same approval. That turned every lost approval
-into a 20-30 minute stall (the grace, plus up to a cron interval, plus GitHub's
-own cron drift), which cost far more than it saved. Racing the fast path is not
-unsafe: every approval path re-reads the verdict, head and label or status just
-before posting, and refuses when a signed approval is already there. The worst
-case is two approvals from `atlan-ci` on one PR, which is harmless.
-
-The stamper re-checks 1, 2 and 3 itself against fresh reads, so a dismissal
-landing between this sweep and the stamp is still caught. The checks here are a
-prefilter — they keep the sweep cheap and tell us when a reconcile actually
-happened, which is the signal worth alerting on.
-
-What it deliberately does not do
---------------------------------
-It does not write the `sdk-review` commit status (WRITE_STATUS=false). A green
-status with no approving review is exactly the misleading state that made this
-failure mode look like success in the first place. The approval is the thing
-that was lost and the thing worth restoring; the status is left to whichever
-path owns it.
-
-lens
-====
-
-lens's last step posts its APPROVE and, when that fails, only warns: the run
-stays green and the summary says ready to merge while the PR is blocked. lens
-has no label for a prefilter, so `lens_ready_heads` asks one GraphQL query for
-every open PR's head and the newest `lens` status on it; only a PR whose head is
-green there is read further. The guards, and why a dismissed lens approval on
-the head is the solo-approval guard, are on `LensSource`.
+after a verdict before treating its approval as lost, so it could never race the
+source's own approval step. That turned every lost approval into a 20-30 minute
+stall (the grace, plus up to a cron interval, plus GitHub's own cron drift),
+which cost far more than it saved. Racing is not unsafe: the approve step
+re-reads the verdict, head and reviews just before posting, and refuses when a
+signed approval is already there. The worst case is two approvals from
+`atlan-ci` on one PR, which is harmless.
 
 Request budget
 --------------
 Everything runs on the fleet App token, which carries its own quota — a
 reconciler that polled every PR on the `atlan-ci` PAT would become a new source
 of the exhaustion it exists to recover from. Per tick that is one paginated PR
-listing and one paginated GraphQL query, plus two reads per labelled PR
-(comments, then reviews) and about three per PR with a green `lens` status
-(statuses, more than one page only on a busy head; comments; reviews), plus a
-status re-read before each lens approval. Every `gh` call the script makes
+listing and one paginated GraphQL query, plus about three reads per PR with a
+green `lens` status (statuses, more than one page only on a busy head; comments;
+reviews), plus a status re-read before each lens approval. Every `gh` call the script makes
 itself is bounded by GH_TIMEOUT_SECONDS. The `atlan-ci` PAT is spent on one
 request per approval posted.
 
@@ -146,8 +93,7 @@ import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -155,7 +101,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 # All of these need the sys.path bootstrap above.
-import sdk_review_approve as approve  # noqa: E402
 from lens import approve as lens_approve  # noqa: E402
 from lens.findings import PRState  # noqa: E402
 from lens.github import GitHub as LensGitHub  # noqa: E402
@@ -188,16 +133,14 @@ FAILED = "failed"
 DEFERRED = "deferred"
 SKIPPED = "skipped"
 
-# The review sources whose `atlan-ci` approvals this sweep restores.
-SDK_REVIEW = "sdk-review"
+# The review source whose `atlan-ci` approvals this sweep restores.
 LENS = "lens"
 
 # A dry run's reason for a PR it would have approved. The job summary lists these.
 DRY_RUN_REASON = "would reconcile (dry run)"
 
-# How each source's standing verdict is named in annotations.
+# How the source's standing verdict is named in annotations.
 VERDICT_NAMES = {
-    SDK_REVIEW: "a READY_TO_MERGE verdict",
     LENS: "a lens ready-to-merge verdict",
 }
 
@@ -209,7 +152,7 @@ class Outcome:
     number: int
     action: str
     reason: str
-    source: str = SDK_REVIEW
+    source: str = LENS
 
 
 @dataclass(frozen=True)
@@ -232,7 +175,7 @@ def run_gh(runner: Runner, argv: list[str], **kwargs) -> subprocess.CompletedPro
     failed result (exit 124, like coreutils `timeout`), so each caller's own
     failure handling covers a stalled CLI too."""
     try:
-        # setdefault, so a runner bounded twice passes one timeout, not two.
+        # setdefault, so a caller's own timeout is kept rather than passed twice.
         kwargs.setdefault("timeout", GH_TIMEOUT_SECONDS)
         return runner(argv, **kwargs)
     except subprocess.TimeoutExpired:
@@ -244,24 +187,9 @@ def run_gh(runner: Runner, argv: list[str], **kwargs) -> subprocess.CompletedPro
         )
 
 
-def bounded(runner: Runner) -> Runner:
-    """`runner` with every call under GH_TIMEOUT_SECONDS, for code that calls
-    `gh` itself: the sdk-review stamper, including its APPROVE. A POST that
-    times out may still have landed; the stamper's own "already approved"
-    check makes the next tick a no-op in that case."""
-
-    def call(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
-        return run_gh(runner, argv, **kwargs)
-
-    return call
-
-
 def list_open_prs(repo: str, runner: Runner) -> list[dict]:
-    """Every open PR, with `head` and `labels` already populated.
-
-    Those two fields are why this lists PRs rather than searching: the label
-    prefilter and the head comparison both come free with the listing, so an
-    unlabelled PR costs zero further requests.
+    """Every open PR, with `head` already populated, so the head comparison
+    against the lens prefilter comes free with the listing.
 
     `--paginate` follows Link: rel="next", so a repo with more than 100 open
     PRs does not silently lose coverage of the rest.
@@ -322,10 +250,6 @@ def approver_quota(runner: Runner, token: str) -> Quota | None:
         return None
 
 
-def label_names(pr: dict) -> set[str]:
-    return {label.get("name", "") for label in pr.get("labels") or []}
-
-
 def comment_age(comment: dict, now: datetime) -> timedelta | None:
     """How long ago `comment` was created, or None if that cannot be read.
 
@@ -342,85 +266,12 @@ def comment_age(comment: dict, now: datetime) -> timedelta | None:
     return now - created_dt
 
 
-@contextmanager
-def stamper_env(values: dict[str, str]) -> Iterator[None]:
-    """Set `values` in os.environ for the block, then restore what was there.
-
-    The stamper reads its inputs from the environment (it is normally a workflow
-    step). Driving it per PR means rewriting those keys in a loop, so they are
-    restored afterwards rather than left to leak into the next iteration.
-    """
-    previous = {key: os.environ.get(key) for key in values}
-    os.environ.update(values)
-    try:
-        yield
-    finally:
-        for key, value in previous.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-
-
-def stamp(
-    repo: str,
-    pr_number: int,
-    head_sha: str,
-    runner: Runner,
-    *,
-    sleeper: Callable[[float], None] = time.sleep,
-    clock: Callable[[], float] = time.time,
-) -> approve.StampOutcome:
-    """Invoke the stamper for one PR and return what it actually did.
-
-    `stamp_verdict` reports its own action rather than the caller inferring one
-    from the exit code, which cannot separate "approved" from "a guard
-    declined". Inferring it from a follow-up read of the reviews listing does
-    not work either — that listing is read-after-write eventually consistent,
-    and the first live run of this cron approved PR #3232, re-read, saw nothing,
-    and reported a decline.
-
-
-    The environment matches the slow path (`sdk-review.yml`) — no event payload,
-    no commit-status write, label guard on — with only a short retry budget,
-    because this cron is itself the retry loop for anything longer.
-    """
-    env = {
-        "REPO": repo,
-        "PR_NUMBER": str(pr_number),
-        # Empty: re-read the newest summary comment off the PR rather than an
-        # event payload. There is no event here.
-        "COMMENT_BODY": "",
-        "TRIGGERING_COMMENT_ID": "",
-        # Staleness guard, re-evaluated against a fresh read inside the stamper.
-        "EXPECTED_HEAD": head_sha,
-        # A green `sdk-review` status with no approving review is the state this
-        # whole mechanism exists to avoid creating.
-        "WRITE_STATUS": "false",
-        # Solo-approval guard: refuse if `sdk-review-approved` has gone in the
-        # gap between this sweep's listing and the stamp.
-        "REQUIRE_APPROVED_LABEL": "true",
-        # One `atlan-ci` request on the success path. The second attempt exists
-        # only for a SECONDARY throttle, which clears in seconds and is worth
-        # waiting out inline; the quota pre-flight above already catches primary
-        # exhaustion, and the stamper bails immediately on a reset it cannot
-        # reach inside this budget. Anything longer than 45s is the next tick's
-        # job, not this runner's.
-        "APPROVE_MAX_ATTEMPTS": "2",
-        "APPROVE_MAX_WAIT_SECONDS": "45",
-    }
-    with stamper_env(env):
-        # Bounded here, where the stamper gets it, whatever the caller passed:
-        # it calls `gh` itself, the APPROVE included.
-        return approve.stamp_verdict(runner=bounded(runner), sleeper=sleeper, now=clock)
-
-
 def _blocked_outcome(
     number: int,
     blocker: str,
     age: timedelta,
     stale_after: timedelta,
-    source: str = SDK_REVIEW,
+    source: str = LENS,
 ) -> Outcome:
     """Classify a PR that is owed an approval we cannot currently post.
 
@@ -464,90 +315,9 @@ class Owed:
 Verdict = Outcome | Owed | None
 
 
-def sdk_review_verdict(
-    repo: str,
-    pr: dict,
-    *,
-    runner: Runner,
-    stale_after: timedelta,
-    now: datetime,
-    sleeper: Callable[[float], None],
-) -> Verdict:
-    """sdk-review's guards 1-3 for one PR (see the module docstring).
-
-    None when the PR is not sdk-review's (no `sdk-review-approved` label): that
-    is almost every PR, and it costs nothing because the listing carries labels.
-
-    The comment listing is read before the review listing, deliberately, even
-    though reviews would short-circuit more PRs. The review check needs the
-    verdict's age to decide whether an unreadable listing is a blip to defer or
-    an outage to escalate, and the age comes from the comment. One extra
-    App-token read per labelled PR buys an escalation path that would otherwise
-    not exist.
-    """
-    number = pr["number"]
-    if approve.APPROVED_LABEL not in label_names(pr):
-        return None
-
-    client = approve.Client(repo, str(number), bounded(runner))
-
-    comment = client.latest_summary_comment()
-    if comment is None:
-        return Outcome(number, SKIPPED, "no verdict comment")
-
-    body = comment.get("body") or ""
-    verdict = approve.extract_verdict(body)
-    if verdict != approve.READY:
-        return Outcome(number, SKIPPED, f"verdict is {verdict}")
-
-    reviewed_head = approve.extract_reviewed_head(body)
-    head_sha = ((pr.get("head") or {}).get("sha") or "").strip()
-    if not reviewed_head or not head_sha or reviewed_head != head_sha:
-        return Outcome(
-            number,
-            SKIPPED,
-            f"head moved past the verdict ({reviewed_head} -> {head_sha})",
-        )
-
-    age = comment_age(comment, now)
-    if age is None:
-        return Outcome(number, SKIPPED, "verdict comment has no readable timestamp")
-
-    # None is not []: an unreadable listing cannot prove there is no approval,
-    # and treating it as proof is what turned a GitHub degradation into
-    # duplicate approvals on every tick. Checked after `age` so a listing that
-    # stays broken can escalate rather than skip forever.
-    approvals = client.bot_approval_ids()
-    if approvals is None:
-        return _blocked_outcome(
-            number,
-            "the review listing is unreadable, so it is unknowable "
-            "whether an approval already exists",
-            age,
-            stale_after,
-        )
-    if approvals:
-        return Outcome(number, SKIPPED, "already approved")
-
-    def post() -> tuple[str, str]:
-        stamped = stamp(
-            repo, number, head_sha, runner, sleeper=sleeper, clock=now.timestamp
-        )
-        if stamped.action == approve.APPROVED:
-            return RECONCILED, stamped.detail
-        if stamped.action == approve.SKIPPED:
-            # The stamper re-reads the label, head and comments, so a dismissal
-            # landing between this sweep's listing and the stamp is caught
-            # there. It says so itself rather than us inferring it.
-            return SKIPPED, f"the stamper declined — {stamped.detail}"
-        return FAILED, stamped.detail
-
-    return Owed(number, SDK_REVIEW, age, post)
-
-
 # One GraphQL query for every open PR's head and the newest `lens` status on it.
-# This is lens's free prefilter, the counterpart of sdk-review's label: lens
-# adds no label, so without it every open PR would cost a comment read per tick.
+# This is lens's free prefilter: lens adds no label, so without it every open
+# PR would cost a comment read per tick.
 LENS_READY_QUERY = """
 query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
@@ -649,9 +419,9 @@ class LensSource:
     2. lens's sticky summary decodes, its `reviewed_head` is the live head, and
        the state says ready (`lens_not_ready`).
     3. No lens-signed `atlan-ci` review on this head is APPROVED (a healthy PR
-       is a no-op) or DISMISSED. This is the solo-approval guard. sdk-review
-       has a label every invalidator clears; lens has none, so this keys on
-       what an invalidation leaves on lens's own approval. A dismissed lens
+       is a no-op) or DISMISSED. This is the solo-approval guard. lens has no
+       label an invalidator could clear, so this keys on what an invalidation
+       leaves on lens's own approval. A dismissed lens
        approval on the head means lens withdrew it (a later round on that head
        was not ready) or a person dismissed it, and only a new lens verdict may
        approve that head again. A push moves the head, which guards 1 and 2
@@ -671,9 +441,8 @@ class LensSource:
     quota window. It is never a quiet skip.
 
     Human activity on its own does not stop a lens approval, here or in lens:
-    a posted lens approval survives a human comment, because `dismiss-on-human`
-    only dismisses sdk-review's signature. The reconciler restores what lens's
-    last step would have left, no more.
+    a posted lens approval survives a human comment. The reconciler restores
+    what lens's last step would have left, no more.
     """
 
     def __init__(
@@ -845,14 +614,13 @@ def sweep(
     stale_after: timedelta = timedelta(minutes=DEFAULT_STALE_AFTER_MINUTES),
     now: datetime | None = None,
     dry_run: bool = False,
-    sleeper: Callable[[float], None] = time.sleep,
     lens: LensSource | None = None,
     only_pr: int | None = None,
 ) -> list[Outcome]:
     """Reconcile every open PR whose standing verdict lost its approval.
 
-    One PR listing, then each source is asked about each PR. Whatever a source
-    says is owed goes through one shared settle step: the dry-run stop, the
+    One PR listing, then the source is asked about each PR. Whatever it says
+    is owed goes through one settle step: the dry-run stop, the
     approver quota (read at most once per run, and only once a PR has actually
     earned an attempt), the one `atlan-ci` request, and the classification of
     anything that did not land.
@@ -873,14 +641,6 @@ def sweep(
             continue
 
         verdicts: list[Verdict] = [
-            sdk_review_verdict(
-                repo,
-                pr,
-                runner=runner,
-                stale_after=stale_after,
-                now=now,
-                sleeper=sleeper,
-            ),
             lens_source.verdict(pr, lens_ready, stale_after=stale_after, now=now),
         ]
         for verdict in verdicts:
@@ -897,8 +657,7 @@ def sweep(
 
             # Read the meter once per run, and only now — a sweep that finds
             # nothing to approve should not spend a request establishing that
-            # it could have. One reading covers every source: they all spend
-            # the same `atlan-ci` quota.
+            # it could have.
             if not quota_checked:
                 quota, quota_checked = approver_quota(runner, approver_token), True
             if quota is not None and quota.exhausted:
