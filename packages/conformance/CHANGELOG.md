@@ -2,6 +2,38 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.43.0] - 2026-10-06
+
+### Features
+
+- four migration skills and a B007 false-positive fix (FND-3097, FND-3098, FND-3099, FND-3100) (#4180) ([891ee76](https://github.com/atlanhq/application-sdk/commit/891ee76))
+- add a preflight gate warmup tier with a stateless warmup probe, PENDING verdicts and category-gated hard mode, plus driver-level read cancellation and a worker-free handler (FND-3237) (#4130) ([f6a0eaa](https://github.com/atlanhq/application-sdk/commit/f6a0eaa))
+- remediation references and skill hand-off for every rule (FND-3088) (#4076) ([ea29dcd](https://github.com/atlanhq/application-sdk/commit/ea29dcd))
+- FND-3140 unique entrypoint contract class names and conformance K027 (#4102) ([1eb754a](https://github.com/atlanhq/application-sdk/commit/1eb754a))
+
+### Bug fixes
+
+- consume the e2e label after each run and let Release Gate read the e2e commit status (FND-3411) (#4195) ([1b78117](https://github.com/atlanhq/application-sdk/commit/1b78117))
+- stop re-running PR-verified CI on merge queue and release, and reject refused Renovate locks in the gate (#4184) ([3230926](https://github.com/atlanhq/application-sdk/commit/3230926))
+- FND-3384 P030 guidance covers working bridges and the conversion recipe (#4182) ([9e6726a](https://github.com/atlanhq/application-sdk/commit/9e6726a))
+- FND-3292 D010 guidance checks the import site is live before adding [sql] (#4151) ([5d4e34d](https://github.com/atlanhq/application-sdk/commit/5d4e34d))
+- FND-3367 F007 guidance names the error audience and voice (#4176) ([323f036](https://github.com/atlanhq/application-sdk/commit/323f036))
+- cut fleet CI billed jobs by collapsing job fan-out, right-sizing runners and retiring per-repo SARIF and dashboard workflows (#4170) ([ba684e4](https://github.com/atlanhq/application-sdk/commit/ba684e4))
+- keep run_query connect and close off the event loop, add conformance rule P054 (#4167) ([28e24be](https://github.com/atlanhq/application-sdk/commit/28e24be))
+- L004 false positive on compliant code (1 repos) (#4179) ([1434113](https://github.com/atlanhq/application-sdk/commit/1434113))
+- T001 always accepts the integration marker (#4178) ([2fcc900](https://github.com/atlanhq/application-sdk/commit/2fcc900))
+- L017 and L004 guidance agrees with ruff (G201, BLE001) (#4165) ([8e244aa](https://github.com/atlanhq/application-sdk/commit/8e244aa))
+- E018 false positive on compliant code (1 repos) (#4149) ([071055b](https://github.com/atlanhq/application-sdk/commit/071055b))
+- cut redundant fleet CI runs from superseded pushes, scheduled sweeps, Renovate rebases and auto-approve fan-out (#4159) ([c5006a0](https://github.com/atlanhq/application-sdk/commit/c5006a0))
+- E005 false positive on compliant code (1 repos) (#4148) ([7a92c4d](https://github.com/atlanhq/application-sdk/commit/7a92c4d))
+- retire the auto-fix.yml bootstrap shim (#4157) ([5800da9](https://github.com/atlanhq/application-sdk/commit/5800da9))
+- FND-3299 score a crashed integration job as failing, not absent (#4153) ([45f1c04](https://github.com/atlanhq/application-sdk/commit/45f1c04))
+- FND-3094 recognise run() on SDK template bases as the entrypoint (#4078) ([2cab46f](https://github.com/atlanhq/application-sdk/commit/2cab46f))
+
+### Other changes
+
+- chore(deps): update non-critical python dependencies (#4121) ([48eb23f](https://github.com/atlanhq/application-sdk/commit/48eb23f))
+
 ## [0.42.1] - 2026-10-05
 
 ### Bug fixes
