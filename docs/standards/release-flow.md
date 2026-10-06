@@ -34,6 +34,24 @@ touched the branch, never from the run that happened to open it.
 Note the tag itself is read from `pyproject.toml` in Stage 2 and never from the PR title, so
 a stale title misleads reviewers rather than mis-tagging a release.
 
+**The branch is only re-pushed when the release would change** (FND-3322,
+`.github/scripts/release_bump_debounce.py`). Each force-push is a `synchronize` that re-runs
+all PR CI on the bump PR, and most merges change nothing it would ship: Renovate commits are
+forced to `chore`, which neither moves the version past the first patch bump nor appears in
+the rendered notes (only Features and Bug Fixes do). The push is skipped when the open branch
+already carries the computed version (in every version file) and the same CHANGELOG section,
+date aside, **and** still merges cleanly onto the new tip. Anything the script cannot establish
+resolves to a push. A skipped branch stays on an older base; that is safe because it only edits
+version lines, the lock's own-package version and the top of the CHANGELOG, and the merge — and
+the `e2e`-label test run, which tests the PR's merge ref — combine it with the current target.
+The PR upsert still runs on a skipped push. Bump runs are also serialised per repo and target
+(`concurrency`, queued not cancelled), so a burst of merges coalesces into the newest run.
+
+Release Gate deliberately still runs on every `labeled`/`unlabeled` event. It cannot be skipped
+for unrelated labels: a skipped job files a `skipped` check, a required check reads that as a
+pass, and the newest run wins — so an unrelated label would clear a real "missing `e2e`" failure.
+The job is a two-minute `ubuntu-slim` label lookup.
+
 **Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
 from `release.py` before any file is touched; each sets `skip=true`, which every mutating
 step is gated on). Both read the target branch fresh from the remote rather than trusting
