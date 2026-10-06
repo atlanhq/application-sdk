@@ -5,12 +5,29 @@
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
-# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
+# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest build on branch)
+#
+# Main push:  builds ONLY for SDR deploy-on-merge apps (self_deployed_runtime:
+#             true) or when the caller sets publish. Any other main push skips
+#             everything after the `build-decision` job (FND-3327), so for those
+#             apps `:main` / `main-{sha7}` move only when a release is built.
 #
 # Release:    when release_tag is provided (set to github.event.release.tag_name by caller),
 #             additionally pushes a version-tag ladder to GHCR:
 #             - Stable (no '-' in version): :latest, :VERSION, :MAJOR.MINOR, :MAJOR, :sha-{SHA7}
 #             - Pre-release (rc/alpha/beta): :VERSION, :sha-{SHA7} only (no :latest or aliases)
+#
+# Release candidate (FND-3328): the bump-version PR's vulnerability-scan.yml
+#             calls this with `candidate: true`. It runs the same prepare →
+#             build → merge, pushes `:candidate-<tree>` (tree = git tree SHA of
+#             the commit built), and stops: no Docker Hub, no scan, no deploy, no
+#             publish. The caller scans that digest and, on a pass, tags it
+#             `:scanned-<tree>`.
+#             A release whose commit has a `:scanned-<tree>` image PROMOTES it:
+#             the build is skipped and merge copies that manifest to every tag
+#             above, so the shipped digest is the scanned digest. With no
+#             scanned candidate the release rebuilds, and its scan blocks the
+#             publish. See .github/scripts/release_candidate.py.
 #
 # Build: parallel matrix (amd64 + arm64), merged into a multi-arch manifest.
 # Publish: after build succeeds, registers the version in the Global Marketplace via API.
@@ -37,6 +54,9 @@ on:
       dockerhub_image:
         description: "Docker Hub image ref (set when published)."
         value: ${{ jobs.prepare.outputs.dockerhub_image }}
+      candidate_image:
+        description: "Candidate mode only: the pushed release candidate pinned to its digest (ghcr.io/atlanhq/<repo>:candidate-<tree>@sha256:...). Pass it to build-and-scan.yaml as `image` with `mark_scanned: true`."
+        value: ${{ jobs.merge.outputs.candidate_image }}
     inputs:
       ref:
         description: "Branch or SHA to checkout and build (default: caller's ref)"
@@ -72,6 +92,11 @@ on:
         required: false
         type: string
         default: ""
+      candidate:
+        description: "Build the release candidate for a bump-version PR (FND-3328): prepare → build → merge only, pushed as :candidate-<tree> with the release's baked identity (app_version v<pyproject version>). No Docker Hub copy, scan, deploy or publish. Pass `ref: github.sha` so every job builds the same commit. Set by the vulnerability-scan.yml template; nothing else should."
+        required: false
+        type: boolean
+        default: false
       lfs:
         description: "Check out git-LFS objects before building the image (default false). Set true for apps that vendor LFS-tracked assets (e.g. large parser jars) into the Docker build context — without it the build copies the LFS pointer, not the real file. Only applied to the image-build checkout; other jobs do not need LFS content."
         required: false
@@ -120,6 +145,51 @@ permissions:
   checks: read
 
 jobs:
+  # ── Build decision: does this main push need an image at all? (FND-3327) ────
+  # A push to main that will not publish builds an image nobody consumes —
+  # the marketplace publish comes from the release event, which rebuilds. The
+  # one exception is an SDR deploy-on-merge app (`self_deployed_runtime: true`):
+  # app-deployment-dispatcher ships the main-push image, so it must still build.
+  #
+  # This job runs ONLY on that one case (push to main, publish off) and reads
+  # `enable_sdr` from atlan.yaml with the same parser `prepare` uses. The
+  # expensive jobs (certify, leak-scan, prepare → build → merge → scan) skip on
+  # exactly `enable_sdr == 'false'`. Every other event skips this job, which
+  # leaves the output empty, so they build as before. A caller that sets
+  # `publish: true` on push (the legacy `github.event.inputs.publish != 'false'`
+  # pattern) also never reaches here and keeps building and publishing.
+  build-decision:
+    name: Build decision
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      enable_sdr: ${{ steps.manifest.outputs.enable_sdr }}
+    steps:
+      - name: Checkout atlan.yaml
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          sparse-checkout: |
+            atlan.yaml
+            uv.lock
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Read atlan.yaml
+        id: manifest
+        run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
+
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
@@ -402,9 +472,13 @@ jobs:
   # image still went to GHCR, and for SDR apps still shipped to Docker Hub via
   # app-deployment-dispatcher below, uncertified. Main pushes ran this job under
   # the legacy model (publish was true there); this keeps that property.
+  # A main push that builds no image (non-SDR, publish off — see
+  # build-decision) has nothing to certify, so it skips here too; the release
+  # that ships the image certifies it.
   certify:
     name: Certify app
-    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -670,11 +744,13 @@ jobs:
   # Runs on publish OR any main push — same reasoning as `certify` above. Its
   # gitleaks (hardcoded-secret) layer is a real blocker that gates `prepare`,
   # so leaving it publish-only let a semver merge build and SDR-ship an image
-  # with no hardcoded-secret scan at all.
+  # with no hardcoded-secret scan at all. Skips with certify on a main push
+  # that builds no image (see build-decision).
   # See docs/standards/credential-leak-gate.md.
   leak-scan:
     name: Credential leak gate
-    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -933,7 +1009,7 @@ jobs:
     # gates prepare/build, it gates the terminal side-effecting jobs instead:
     # publish AND app-deployment-dispatcher (see their needs/if). leak-scan +
     # validate-channel stay as pre-build gates.
-    needs: [validate-channel, unit-tests-gate, leak-scan]
+    needs: [build-decision, validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false off main, all of them are skipped via their `if:`
     # (`leak-scan` still runs on main pushes; `unit-tests-gate` is permanently
@@ -949,7 +1025,9 @@ jobs:
     # publish. Its creds-into-logs layer is warn-only (annotates + pings Slack,
     # never fails the job), so warnings do not block. `unit-tests-gate` is
     # currently warn-only; its enforcement-flip is tracked separately.
-    if: ${{ !failure() && !cancelled() }}
+    # `build-decision` answers 'false' only on a non-SDR main push that will not
+    # publish: skipping prepare there skips the whole build chain behind it.
+    if: ${{ !failure() && !cancelled() && needs.build-decision.outputs.enable_sdr != 'false' }}
     name: Prepare
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -957,21 +1035,27 @@ jobs:
       app_name:         ${{ steps.manifest.outputs.app_name }}
       app_id:           ${{ steps.manifest.outputs.app_id }}
       dockerfile:       ${{ steps.manifest.outputs.dockerfile }}
-      enable_sdr:       ${{ steps.manifest.outputs.enable_sdr }}
+      # A candidate is never copied to Docker Hub or deployed.
+      enable_sdr:       ${{ !inputs.candidate && steps.manifest.outputs.enable_sdr || 'false' }}
       release_model:    ${{ steps.manifest.outputs.release_model }}
       deploy_config:    ${{ steps.manifest.outputs.deploy_config }}
       sdk_version:      ${{ steps.manifest.outputs.sdk_version }}
       entrypoints: ${{ steps.manifest.outputs.entrypoints }}
       app_configs:      ${{ steps.app_configs.outputs.app_configs }}
-      branch:           ${{ steps.tags.outputs.branch }}
-      image_tag:        ${{ steps.tags.outputs.image_tag }}
+      # `steps.candidate` runs only in candidate mode and renames the build to
+      # `candidate-<tree>`; otherwise these are the tag step's values.
+      branch:           ${{ steps.candidate.outputs.branch || steps.tags.outputs.branch }}
+      image_tag:        ${{ steps.candidate.outputs.image_tag || steps.tags.outputs.image_tag }}
       ghcr_base:        ${{ steps.tags.outputs.ghcr_base }}
-      ghcr_image:       ${{ steps.tags.outputs.ghcr_image }}
-      ghcr_branch_tag:  ${{ steps.tags.outputs.ghcr_branch_tag }}
+      ghcr_image:       ${{ steps.candidate.outputs.ghcr_image || steps.tags.outputs.ghcr_image }}
+      ghcr_branch_tag:  ${{ steps.candidate.outputs.ghcr_branch_tag || steps.tags.outputs.ghcr_branch_tag }}
       dockerhub_image:  ${{ steps.tags.outputs.dockerhub_image }}
       release_tags:     ${{ steps.tags.outputs.release_tags }}
-      gm_version:       ${{ steps.tags.outputs.gm_version }}
+      gm_version:       ${{ steps.candidate.outputs.gm_version || steps.tags.outputs.gm_version }}
       commit_sha:       ${{ steps.tags.outputs.commit_sha }}
+      # Release only: the scanned bump-PR candidate to promote instead of
+      # building (ghcr.io/atlanhq/<repo>@sha256:...). Empty means rebuild.
+      promote_source:   ${{ steps.candidate_lookup.outputs.promote_source }}
       # Empty unless use_ghcr_base is set AND the preflight below matched the
       # Dockerfile's base and resolved its GHCR digest.
       base_build_contexts: ${{ steps.base_redirect.outputs.build_contexts }}
@@ -1193,6 +1277,29 @@ jobs:
           echo "DockerHub image: ${DOCKERHUB_IMAGE}"
           if [ -n "${RELEASE_TAGS}" ]; then printf 'Release tags:\n%s\n' "${RELEASE_TAGS}"; fi
 
+      # Candidate mode (bump-version PR, FND-3328): every tag this run pushes
+      # becomes `candidate-<tree>[-<arch>]`, and the identity baked into the
+      # image carries the version the release will be tagged with, so the
+      # promoted image reports the same app_version the publish sends to GM.
+      - name: Name the release candidate
+        id: candidate
+        if: inputs.candidate
+        env:
+          REPO: ${{ github.event.repository.name }}
+        run: python3 .sdk-entrypoint/.github/scripts/release_candidate.py name
+
+      # Release: is there a bump-PR candidate that passed its blocking scan, for
+      # exactly this commit's tree? Fails open to a rebuild.
+      - name: Look up a scanned release candidate
+        id: candidate_lookup
+        if: inputs.release_tag != '' && !inputs.candidate
+        env:
+          REPO: ${{ github.event.repository.name }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: python3 .sdk-entrypoint/.github/scripts/release_candidate.py lookup
+
   # ── Job 2: Build — parallel per architecture ──────────────────────────────────
   build:
     name: Build (${{ matrix.arch }})
@@ -1201,7 +1308,9 @@ jobs:
     # via its `if:`. The default `success()` propagates that skip through the
     # needs chain, so without this override `build` skips even though `prepare`
     # successfully ran with its own override.
-    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' }}
+    # Skipped when the release promotes a scanned candidate (FND-3328): the
+    # image already exists, and rebuilding it is what this change removes.
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && needs.prepare.outputs.promote_source == '' }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
@@ -1339,7 +1448,9 @@ jobs:
   merge:
     name: Merge & Push Manifest
     needs: [prepare, build]
-    if: ${{ !failure() && !cancelled() && needs.build.result == 'success' }}
+    # Runs after a build, or with no build when the release promotes a scanned
+    # candidate (build skipped on purpose).
+    if: ${{ !failure() && !cancelled() && needs.prepare.result == 'success' && (needs.build.result == 'success' || needs.prepare.outputs.promote_source != '') }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # A job-level `permissions` block REPLACES the workflow-level default, so we
@@ -1349,6 +1460,8 @@ jobs:
       contents: read
       packages: write
       id-token: write
+    outputs:
+      candidate_image: ${{ steps.pin.outputs.image_ref }}
 
     steps:
       - name: Set up Docker Buildx
@@ -1374,6 +1487,7 @@ jobs:
           password: ${{ secrets.DOCKER_HUB_PAT_RW }}
 
       - name: Create and push multi-arch manifest
+        if: needs.prepare.outputs.promote_source == ''
         env:
           GHCR_BASE:       ${{ needs.prepare.outputs.ghcr_base }}
           GHCR_IMAGE:      ${{ needs.prepare.outputs.ghcr_image }}
@@ -1405,10 +1519,11 @@ jobs:
           fi
 
       - name: Checkout SDK helper scripts
-        # mirror_tags_dockerhub.py lives in the SDK repo, not the caller repo —
-        # this job has no checkout of its own (unlike prepare/certify/leak-scan),
-        # so the script must be pulled in explicitly before it's invoked below.
-        if: needs.prepare.outputs.enable_sdr == 'true'
+        # mirror_tags_dockerhub.py and release_candidate.py live in the SDK
+        # repo, not the caller repo — this job has no checkout of its own
+        # (unlike prepare/certify/leak-scan), so the scripts must be pulled in
+        # explicitly before they're invoked below.
+        if: needs.prepare.outputs.enable_sdr == 'true' || needs.prepare.outputs.promote_source != '' || inputs.candidate
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -1416,6 +1531,35 @@ jobs:
           path: .sdk-entrypoint
           sparse-checkout: .github/scripts
           sparse-checkout-cone-mode: false
+
+      # Release with a scanned candidate (FND-3328): instead of a manifest
+      # assembled from fresh per-arch builds, copy the scanned candidate's
+      # manifest, byte for byte, to the immutable, branch and release tags. The
+      # script reads every tag back and fails unless it carries the scanned
+      # digest. Runs before the Docker Hub copy below, which reads GHCR_IMAGE.
+      - name: Promote the scanned release candidate
+        if: needs.prepare.outputs.promote_source != ''
+        env:
+          SOURCE: ${{ needs.prepare.outputs.promote_source }}
+          TAGS: |
+            ${{ needs.prepare.outputs.ghcr_image }}
+            ${{ needs.prepare.outputs.ghcr_branch_tag }}
+            ${{ needs.prepare.outputs.release_tags }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: python3 .sdk-entrypoint/.github/scripts/release_candidate.py promote
+
+      # Candidate mode: hand the caller the digest just pushed, so the scan and
+      # the `scanned-<tree>` mark both act on this exact image even if the tag
+      # is pushed again by a later run.
+      - name: Pin the release candidate by digest
+        id: pin
+        if: inputs.candidate
+        env:
+          IMAGE: ${{ needs.prepare.outputs.ghcr_image }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: python3 .sdk-entrypoint/.github/scripts/release_candidate.py pin
 
       - name: Install crane
         if: needs.prepare.outputs.enable_sdr == 'true'
@@ -1492,15 +1636,27 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + allowlist gate ─────────────────────────────
+  # Scans the image this run pushed (no rebuild). Blocking on:
+  #   * a non-publishing main run (FND-3327): after build-decision, a main push
+  #     that still builds without publishing is an SDR deploy-on-merge push,
+  #     and app-deployment-dispatcher ships that image to tenants only on this
+  #     job's success. A scan that cannot fail there gates nothing.
+  #   * a release that REBUILT (FND-3328): no scanned bump-PR candidate matched
+  #     its tree, so this is the only scan the shipped image gets, and publish
+  #     waits on it.
+  # Report-only on a release that promoted the scanned candidate (its blocking
+  # scan was the bump PR's; this run records the monitored version in Endor),
+  # and on branch builds, which deploy nothing. Not run in candidate mode: the
+  # caller scans the candidate itself, blocking, and marks it on a pass.
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
-    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' }}
+    if: ${{ !failure() && !cancelled() && needs.merge.result == 'success' && !inputs.candidate }}
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      fail_on_findings: false
+      fail_on_findings: ${{ (github.ref == 'refs/heads/main' && !inputs.publish) || (inputs.release_tag != '' && needs.prepare.outputs.promote_source == '') }}
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────

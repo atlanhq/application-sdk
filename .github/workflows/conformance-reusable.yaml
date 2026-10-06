@@ -17,6 +17,10 @@
 # context in the fleet rulesets, and this job carries that name, so the gate
 # a merge waits on is unchanged; the per-series check runs are gone.
 #
+# The one other job, `queue-diff`, runs only on a merge-queue entry: a slim
+# job that lets the suite skip when the queue commit's tree is the PR head's
+# (FND-3321).  On every other event it is skipped and bills nothing.
+#
 # Per-series visibility without per-series jobs:
 #   - every series is its own `<letter> · <name>` step, so a red series is red
 #     in the job's step list;
@@ -285,6 +289,55 @@ permissions:
   pull-requests: read
 
 jobs:
+  # ── Merge-queue entry: did combining with the base change the tree? ─────────
+  # Conformance reads the tree and nothing else, so on a queue commit whose
+  # tree is exactly the PR head's it can only repeat the verdict the PR already
+  # earned — a PR cannot enter the queue until this gate is green on its head
+  # (FND-3321).  This job answers that one question; `suite` skips on it.
+  #
+  # Runs only on a real queue entry and never when forcing: on every other
+  # event it is skipped (not billed) and its outputs are empty, which `suite`
+  # reads as "run".  Fails safe the same way — an error here leaves the outputs
+  # empty and the suite runs.  docs/standards/ci.md ("What a merge-queue entry
+  # re-runs") has the classification this is one row of.
+  queue-diff:
+    name: "Queue tree diff"
+    if: github.event_name == 'merge_group' && inputs.event_name == 'merge_group' && !inputs.force-all
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identical: ${{ steps.diff.outputs.identical }}
+    steps:
+      # The queue commit, depth 1. Credentials stay persisted: the script
+      # fetches the PR head from this same remote, and the repo may be private.
+      - name: "Checkout queue commit"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      # Pinned to `job.workflow_sha` so the script always matches the workflow
+      # running it (same as tests-reusable.yaml's Detect merge queue).
+      - name: "Fetch queue_tree_diff.py from SDK"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: "Compare the queue commit with the PR head"
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
   # ── The suite, the ledger guard and the gate, in one job ────────────────────
   # `series`, `slug` and the filter globs are workflow-controlled constants;
   # the exclude-paths inputs are the only caller-controlled values, and they
@@ -292,11 +345,20 @@ jobs:
   # — never interpolated into a `run:` script — so an exclude-path string can
   # never inject shell.
   #
-  # No job-level `if:`: the job must always run so the required context can
-  # never be "skipped".  A job of only skipped series steps passes, exactly as
-  # the old gate passed a suite whose legs had all self-skipped.
+  # The job-level `if:` skips it in exactly one case: a merge-queue entry whose
+  # tree is identical to the PR head's.  A skipped job still files its
+  # `Conformance Gate` check run, as `skipped`, which the required context
+  # counts as a pass, so the queue drains on the PR's own verdict.  The queue
+  # commit is unique to its entry, so no other run on that SHA can be the
+  # "newest suite" that this skip would override.  Everywhere else the job
+  # always runs: `!cancelled()` keeps it running when `queue-diff` is skipped
+  # (every non-queue event) or fails, and an empty output is not `'true'`.  A
+  # job of only skipped series steps passes, exactly as the old gate passed a
+  # suite whose legs had all self-skipped.
   suite:
     name: "Conformance Gate"
+    needs: [queue-diff]
+    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
     runs-on: ubuntu-latest
     env:
       # Surfaced as env because a step-level `if:` cannot read the secrets
@@ -418,6 +480,37 @@ jobs:
         run: |
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # ── Refused Renovate lock ───────────────────────────────────────────────
+      # A refused Renovate lock bump is withheld by writing a lock no
+      # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
+      # `withhold`).  The required `scan / Build Image` used to reject it; since
+      # FND-3328 that job skips on every PR but the bump-version PR.  The same
+      # check also runs in checks-reusable.yaml's Pre-commit job, but not every
+      # repo requires that context; every repo requires this one (FND-3404).
+      # Same script, same base-diff rule: runs only when uv.lock differs from
+      # the base.  Not subject to `exit-zero`, which softens conformance
+      # findings, not this.  After the private-deps rewrite, since resolving
+      # can reach a private git dependency.  Fetched at this workflow's own
+      # SHA into its own path, and removed before any series walks the tree.
+      - name: "Fetch check_uv_lock.py from SDK"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-lock-check
+          persist-credentials: false
+
+      - name: "uv.lock matches pyproject.toml"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+
+      - name: "Remove the fetched SDK script"
+        if: "!cancelled()"
+        run: rm -rf .sdk-lock-check
 
       # ── Series ──────────────────────────────────────────────────────────────
       # Each series is a detect step and a SARIF upload.  The upload is

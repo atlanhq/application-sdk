@@ -361,15 +361,26 @@ def test_job_cap_reserves_endors_full_budget():
 def test_at_most_two_jobs_and_both_required_contexts_survive():
     """FND-3319 budget: at most two billed jobs per run. The two names are the
     required contexts fleet rulesets carry (`scan / Build Image`,
-    `scan / Security Gate`), so neither may be renamed or folded away."""
+    `scan / Security Gate`), so neither may be renamed or folded away.
+
+    The third job, `queue-diff` (FND-3321), is billed only on a merge-queue
+    entry, where it exists to let the other two skip; on every other event it
+    is skipped. When the two skip, and so may never skip, is pinned in
+    test_queue_entry_rechecks.py.
+
+    The fourth, `scope` (FND-3328), is a two-step ubuntu-slim decision that
+    runs only on a PR or queue entry and lets the other two skip everywhere
+    but the bump-version PR; pinned in test_release_candidate_gates.py."""
     jobs = yaml.safe_load(BUILD_AND_SCAN.read_text())["jobs"]
-    assert len(jobs) <= 2
     assert {job_id: job["name"] for job_id, job in jobs.items()} == {
+        "scope": "Scan scope",
+        "queue-diff": "Queue tree diff",
         "build": "Build Image",
         "security-gate": "Security Gate",
     }
-    assert "if" not in jobs["build"], "the build job must never skip"
-    assert jobs["security-gate"]["needs"] == ["build"]
+    assert "github.event_name == 'merge_group'" in jobs["queue-diff"]["if"]
+    assert jobs["build"]["needs"] == ["scope", "queue-diff"]
+    assert jobs["security-gate"]["needs"] == ["scope", "queue-diff", "build"]
 
 
 def test_endor_scan_script_checkout_is_provenance_pinned():

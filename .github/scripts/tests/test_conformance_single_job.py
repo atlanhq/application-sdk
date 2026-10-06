@@ -13,8 +13,9 @@ reproduces, per series, what each leg did:
   `<slug>.sarif`, the names the upload-sarif reusable and
   fetch_conformance_sarif.py resolve;
 * the same required context — this job is named `Conformance Gate`, the name
-  every fleet ruleset requires (`suite / Conformance Gate`), and nothing can
-  make it skip;
+  every fleet ruleset requires (`suite / Conformance Gate`), and the only
+  thing that can make it skip is a merge-queue entry whose tree is the PR
+  head's (FND-3321), where the skipped check counts as the PR's pass;
 * the same verdict for the ledger guard — it was never part of the gate.
 """
 
@@ -78,19 +79,65 @@ def _contexts(*, event: str, force_all: bool, outputs: dict[str, str]) -> dict: 
 
 
 def test_one_job_carries_the_required_context(workflow: dict) -> None:  # type: ignore[type-arg]
-    """One job, named as the rulesets require, that can never be skipped."""
-    assert list(workflow["jobs"]) == ["suite"], (
-        "the suite is one job; a second job is a second billed runner, and a "
-        "job the required context waits on must not be able to skip"
-    )
+    """One suite job, named as the rulesets require, plus only the queue-entry
+    decision job that it waits on (FND-3321)."""
+    assert list(workflow["jobs"]) == [
+        "queue-diff",
+        "suite",
+    ], "the suite is one job; a further job is a further billed runner"
     job = workflow["jobs"]["suite"]
     assert job["name"] == "Conformance Gate", (
         "fleet rulesets require `suite / Conformance Gate`; renaming this job "
         "leaves that context unreported and blocks every merge"
     )
-    assert "if" not in job, "a job-level `if:` can skip the required context"
     assert "strategy" not in job, "the per-series matrix is what FND-3318 removed"
-    assert "needs" not in job
+    assert job["needs"] == ["queue-diff"]
+
+
+def _queue_diff_contexts(*, event: str, event_input: str, force_all: bool) -> dict:  # type: ignore[type-arg]
+    return {
+        "github": {"event_name": event},
+        "inputs": {"event_name": event_input, "force-all": force_all},
+    }
+
+
+@pytest.mark.parametrize("event", ("pull_request", "merge_group", "push", "schedule"))
+@pytest.mark.parametrize("event_input", ("pull_request", "merge_group", "push", ""))
+@pytest.mark.parametrize("force_all", (False, True))
+def test_queue_diff_runs_only_on_an_unforced_queue_entry(
+    workflow: dict,  # type: ignore[type-arg]
+    event: str,
+    event_input: str,
+    force_all: bool,
+) -> None:
+    """A caller declaring push semantics (sdk-gate.yaml can) or forcing every
+    series must never be able to skip the suite."""
+    gate = workflow["jobs"]["queue-diff"]["if"]
+    expected = event == "merge_group" and event_input == "merge_group" and not force_all
+    got = evaluate(
+        gate,
+        _queue_diff_contexts(event=event, event_input=event_input, force_all=force_all),
+    )
+    assert got == expected
+
+
+@pytest.mark.parametrize(
+    ("identical", "runs"),
+    [
+        # queue-diff skipped (every non-queue event) or failed: outputs empty.
+        ("", True),
+        ("false", True),
+        # The one skip: the queue commit's tree is the PR head's tree.
+        ("true", False),
+    ],
+)
+def test_suite_skips_only_on_an_identical_queue_tree(
+    job: dict,  # type: ignore[type-arg]
+    identical: str,
+    runs: bool,
+) -> None:
+    contexts = {"needs": {"queue-diff": {"outputs": {"identical": identical}}}}
+    assert evaluate(job["if"], contexts) is runs
 
 
 def test_every_series_is_present_once(job: dict) -> None:  # type: ignore[type-arg]

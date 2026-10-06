@@ -15,6 +15,11 @@ jobs:
     if: github.event.pull_request.merged == true && !startsWith(github.event.pull_request.head.ref, 'bump-version')
     name: Update version and changelog
     runs-on: ubuntu-latest
+    # Serialise bumps; a burst of merges coalesces into the newest pending run.
+    # See release-version-bump.yaml for why this queues instead of cancelling.
+    concurrency:
+      group: release-version-bump-${{ github.event.pull_request.base.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -109,10 +114,26 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: python .github/scripts/update_changelog.py "${{ env.CURRENT_VERSION }}" "${{ env.NEW_VERSION }}"
 
-      - name: Commit version bump and changelog
+      # Same debounce as release-version-bump.yaml (FND-3322): a force-push is a
+      # `synchronize` that re-runs all PR CI on the bump PR, so skip it when the
+      # open branch already carries this version and these notes and still
+      # merges cleanly. Fails open to push=true.
+      - name: Decide whether the bump branch needs a push
+        id: debounce
         if: steps.version_update.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          python .github/scripts/release_bump_debounce.py \
+            --branch "bump-version-${TARGET_BRANCH}" \
+            --version-file pyproject.toml \
+            --version-file application_sdk/version.py \
+            --changelog CHANGELOG.md \
+            --new-version "${NEW_VERSION}"
+
+      - name: Commit and push bump branch
+        if: steps.version_update.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
+        env:
           TARGET_BRANCH: ${{ github.ref_name }}
         run: |
           set -euo pipefail
@@ -125,6 +146,15 @@ jobs:
           git add pyproject.toml uv.lock CHANGELOG.md application_sdk/version.py
           git commit -m "chore: bump version to ${NEW_VERSION}"
           git push origin "$branch_name" --force
+
+      - name: Open or sync bump PR
+        if: steps.version_update.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          TARGET_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          branch_name="bump-version-${TARGET_BRANCH}"
 
           cat > "${RUNNER_TEMP}/bump-pr-body.md" <<EOF
           Automated version bump after merge to ${TARGET_BRANCH}.
