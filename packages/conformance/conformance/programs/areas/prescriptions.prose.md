@@ -884,8 +884,11 @@ say so.
     never inside another task;
   - either keep the activity and have it stage a local tree mirroring the key
     layout, returned as a directory `FileReference`, then upload it once with
-    `storage_path` pinned to the prefix the app returns (runs in flight at
-    deploy are unaffected); or declare the task outputs to `upload_refs` with a
+    `storage_path` pinned to the prefix the app returns (replay-safe only for
+    runs pinned to this build; an unversioned or `AUTO_UPGRADE` worker
+    replays in-flight runs against the new entrypoint, so guard the new
+    `App.upload` call with `workflow.patched(...)`); or declare the task
+    outputs to `upload_refs` with a
     `DeclaredFile.label` per key;
   - skip empty entities (`upload_refs` raises on an empty declared file);
   - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
