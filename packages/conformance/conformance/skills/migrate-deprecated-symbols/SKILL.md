@@ -104,9 +104,9 @@ use), because each use changes with the migration.
   - `DataframeType.daft` → `DataframeType.pandas`.
   - `SqlApp._resolve_credential_ref` → `SqlApp.resolve_credential_ref`.
   - `application_sdk.execution._temporal.activity_utils.get_object_store_prefix`
-    and `build_output_path` → `from application_sdk.execution import ...`
-    (the same functions, exported publicly). Replacing them with
-    FileReference outputs is a storage migration, not part of this swap.
+    → `from application_sdk.execution import get_object_store_prefix` (the
+    same function, exported publicly). Replacing it with FileReference outputs
+    is a storage migration, not part of this swap.
   - Third-party privates with a public home, for example
     `confluent_kafka.admin._metadata` → `confluent_kafka.admin`, or
     `ipaddress._BaseAddress` in an annotation →
@@ -130,6 +130,10 @@ use), because each use changes with the migration.
     different arguments and return value.
   - `get_workflow_id()` → `input.workflow_id` (needs the typed Input in
     scope); `get_workflow_run_id()` → `App.run_id`.
+  - `build_output_path()` → compose the run path from `input.workflow_id`.
+    The public `application_sdk.execution.build_output_path` exists, but its
+    docstring forbids app code from calling it: it reads the current
+    activity, so it is wrong in `run()`.
   - A deprecated error class → the typed `application_sdk.errors` subclass
     the notice names; update every `except` and `isinstance` that used it.
 - **route** — a structural migration another skill owns. Record it, do not

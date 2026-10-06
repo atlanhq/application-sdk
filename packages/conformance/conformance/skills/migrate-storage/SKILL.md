@@ -233,7 +233,8 @@ Private storage helpers routed here by `migrate-deprecated-symbols` (B008):
 `storage.ops._resolve_store` (a **store** site), and the private
 `execution._temporal.activity_utils.get_object_store_prefix` /
 `build_output_path` (a **hand-off** site once the shared path goes; until
-then the public `application_sdk.execution` import is enough). Private
+then, the public `get_object_store_prefix` import, and a run path composed
+from `input.workflow_id` in place of `build_output_path`). Private
 non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 
 **Owner decisions** — record each; do not apply without an answer:
