@@ -480,6 +480,37 @@ jobs:
           git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
+      # ── Refused Renovate lock ───────────────────────────────────────────────
+      # A refused Renovate lock bump is withheld by writing a lock no
+      # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
+      # `withhold`).  The required `scan / Build Image` used to reject it; since
+      # FND-3328 that job skips on every PR but the bump-version PR.  The same
+      # check also runs in checks-reusable.yaml's Pre-commit job, but not every
+      # repo requires that context; every repo requires this one (FND-3404).
+      # Same script, same base-diff rule: runs only when uv.lock differs from
+      # the base.  Not subject to `exit-zero`, which softens conformance
+      # findings, not this.  After the private-deps rewrite, since resolving
+      # can reach a private git dependency.  Fetched at this workflow's own
+      # SHA into its own path, and removed before any series walks the tree.
+      - name: "Fetch check_uv_lock.py from SDK"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-lock-check
+          persist-credentials: false
+
+      - name: "uv.lock matches pyproject.toml"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+
+      - name: "Remove the fetched SDK script"
+        if: "!cancelled()"
+        run: rm -rf .sdk-lock-check
+
       # ── Series ──────────────────────────────────────────────────────────────
       # Each series is a detect step and a SARIF upload.  The upload is
       # `continue-on-error`: `upload-artifact` classifies the artifact

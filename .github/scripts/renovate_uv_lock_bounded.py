@@ -291,9 +291,11 @@ def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> boo
     validity. So a refusal writes the baseline's versions — never the rejected
     resolve, never an unbounded one — and adds an ``[options]`` table the repo's
     ``pyproject.toml`` does not declare. That is exactly what ``uv lock --check``
-    rejects in ``check_uv_lock.py``, run by the Pre-commit job of
-    ``checks-reusable.yaml``, and ``pre-commit / Pre-commit`` is required on every
-    PR, so the branch cannot merge until a human looks at it. (Until FND-3328 the
+    rejects in ``check_uv_lock.py``, run by the Conformance Gate job of
+    ``conformance-reusable.yaml``, and ``suite / Conformance Gate`` is required
+    in every repo, so the branch cannot merge until a human looks at it. (The
+    Pre-commit job of ``checks-reusable.yaml`` runs it too, but not every repo
+    requires ``pre-commit / Pre-commit``. Until FND-3328 the
     image build's ``uv sync --locked`` behind ``scan / Build Image`` caught it;
     that job now skips on every PR but the bump-version PR.)
 
