@@ -1050,8 +1050,25 @@ def test_l021_silent_exact_rule_ids(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["E", "F", "G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_fires_when_g201_is_off_today_but_not_ignored(tmp_path: Path) -> None:
+    """An explicit select that leaves G201 out still needs the ignore.
+
+    G201 is off only until someone adds ``G`` to ``select`` or the config moves
+    to ``extend-select`` (ruff's defaults include G201 from 0.16); the ignore
+    is what keeps ruff and L017 from asking for opposite code for good.
+    """
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings and 'ignore = ["G201"]' in findings[0].message
 
 
 def test_l021_fires_when_rule_explicitly_ignored(tmp_path: Path) -> None:
@@ -1074,6 +1091,7 @@ def test_l021_silent_extend_select(tmp_path: Path) -> None:
         "[tool.ruff.lint]\n"
         'select = ["E", "F"]\n'
         'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
 

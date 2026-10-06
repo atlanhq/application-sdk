@@ -26,8 +26,11 @@ _REQUIRED_RULES: dict[str, str] = {
 }
 
 # G201 rewrites ``logger.error(..., exc_info=True)`` to ``logger.exception(...)``,
-# the call L017 forbids, so the two cannot both pass.  The ruff config must
-# switch it off: L017 is policy (ADR-0011), G201 is a style preference.
+# the call L017 forbids, so the two cannot both pass.  Every app's ruff config
+# ignores it explicitly, whether or not its select reaches G201 today: ruff's
+# default rule set gained G201 in 0.16, and a later ``G`` in select or a move to
+# extend-select would switch it on silently.  L017 is policy (ADR-0011), G201 is
+# a style preference.
 _CONFLICTING_RULE = "G201"
 
 # Packages exempt from this check (they publish the ruff config, not consume it).
@@ -68,21 +71,9 @@ def _is_ignored(rule_id: str, ignored: frozenset[str]) -> bool:
     return any(rule_id[:end] in ignored for end in range(len(rule_id), 0, -1))
 
 
-def _conflicting_rule_enabled(
-    lint_cfg: dict, selected: frozenset[str], ignored: frozenset[str]
-) -> bool:
-    """Return True unless the ruff config provably leaves G201 off.
-
-    With no ``select`` key ruff starts from its default rule set, which
-    includes G201 (ruff 0.16 and later), so only an ignore turns it off.
-    An explicit ``select`` replaces the defaults, so G201 is on only when
-    ``select``/``extend-select`` reaches it by ID, prefix or ``ALL``.
-    """
-    if _is_ignored(_CONFLICTING_RULE, ignored):
-        return False
-    if "select" not in lint_cfg:
-        return True
-    return _is_covered(_CONFLICTING_RULE, selected, ignored)
+def _conflicting_rule_not_ignored(ignored: frozenset[str]) -> bool:
+    """Return True unless the ruff config ignores G201 (by ID or a prefix of it)."""
+    return not _is_ignored(_CONFLICTING_RULE, ignored)
 
 
 def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
@@ -124,7 +115,7 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
         if not _is_covered(rid, selected, ignored)
     ]
 
-    g201_on = _conflicting_rule_enabled(lint_cfg, selected, ignored)
+    g201_on = _conflicting_rule_not_ignored(ignored)
 
     if not missing and not g201_on:
         return []
@@ -148,11 +139,11 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
         )
     if g201_on:
         parts.append(
-            "pyproject.toml ruff config leaves G201 enabled. G201 demands "
+            "pyproject.toml ruff config does not ignore G201. G201 demands "
             ".exception(...) over .error(..., exc_info=True), the exact "
-            "inverse of conformance L017, and ruff's default rule set "
-            "includes it. Add to [tool.ruff.lint]: "
-            'extend-ignore = ["G201"].'
+            "inverse of conformance L017; ruff's default rule set includes it "
+            "from 0.16, and a later G in select turns it on. Add to "
+            '[tool.ruff.lint]: extend-ignore = ["G201"] (or "G201" in ignore).'
         )
 
     return [

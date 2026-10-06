@@ -688,8 +688,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         rule_interactions=(
             "ruff G201 is this rule's inverse: it rewrites logger.error(..., "
-            "exc_info=True) to logger.exception(...). L021 requires G201 off in the "
-            "app's ruff config, so the replacement this rule prescribes lints clean. "
+            "exc_info=True) to logger.exception(...). L021 requires every app's ruff "
+            "config to ignore G201, so the replacement this rule prescribes lints clean. "
             "logger.warning(..., exc_info=True) satisfies G201 and this rule either way."
         ),
         short_description="logger.exception() used — use logger.error(..., exc_info=True) instead",
@@ -820,13 +820,13 @@ RULES: tuple[RuleDefinition, ...] = (
         id="L021",
         canonical_reference=(
             "atlan-metabase-app pyproject.toml — `select` lists G001, G003, G004, T201 "
-            "and LOG009 one per line, with a comment on why G002 is deliberately absent. "
-            "An explicit `select` replaces ruff's default rule set, so G201 is never on. "
-            'A config that keeps the defaults and only adds `extend-select = ["G001", '
-            '"G003", "G004", "T201", "LOG009"]` also needs `extend-ignore = ["G201"]`.'
+            "and LOG009 one per line, with a comment on why G002 is deliberately absent; "
+            'with `extend-ignore = ["G201"]` added, as every app needs, it is the shape '
+            "this rule asks for. A config that keeps the defaults and only adds "
+            '`extend-select = ["G001", "G003", "G004", "T201", "LOG009"]` needs the same ignore.'
         ),
         rule_interactions=(
-            "L017 is why G201 must be off: G201 demands logger.exception(...) over "
+            "L017 is why G201 must be ignored: G201 demands logger.exception(...) over "
             "logger.error(..., exc_info=True), the exact inverse of L017. "
             "L001 and L011 box in the order of this fix. G004 and G003 are the "
             "ruff twins of those rules, so enabling them while L001/L011 findings "
@@ -858,7 +858,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description=(
             "pyproject.toml ruff config is missing logging lint rules (G001, G003, "
-            "G004, T201, LOG009) or leaves G201 on"
+            "G004, T201, LOG009) or does not ignore G201"
         ),
         full_description=(
             "The project's ``[tool.ruff.lint]`` ``select`` / ``extend-select`` must\n"
@@ -874,15 +874,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "``G``-prefixed rules), or ``ALL`` appears in ``select`` or\n"
             "``extend-select`` and is not in ``ignore`` / ``extend-ignore``.\n"
             "\n"
-            "``G201`` must be off.  It demands ``.exception(...)`` over\n"
+            "``G201`` must be ignored.  It demands ``.exception(...)`` over\n"
             "``.error(..., exc_info=True)`` — the exact inverse of conformance L017\n"
             "(LoggerExceptionUsage) — so with it on, ruff and the conformance suite\n"
             "contradict each other on every except-block log call.  ruff's default\n"
-            "rule set includes ``G201``, so a config with no ``select`` key has it\n"
-            "on, as does any ``select`` reaching it through ``G``, ``G2`` or ``ALL``.\n"
-            'Add ``extend-ignore = ["G201"]`` (an ignore of ``G201`` or a prefix\n'
-            "of it in ``ignore`` / ``extend-ignore`` counts).  An explicit ``select``\n"
-            "that does not reach ``G201`` needs no ignore.\n"
+            "rule set includes ``G201`` from 0.16, so a config with no ``select``\n"
+            "key has it on, as does any ``select`` reaching it through ``G``, ``G2``\n"
+            "or ``ALL``; a ``select`` that leaves it out today turns it on the day\n"
+            "someone adds ``G``.  So every app ignores it explicitly: add\n"
+            '``extend-ignore = ["G201"]`` (an ignore of ``G201`` or a prefix of it\n'
+            "in ``ignore`` / ``extend-ignore`` counts).\n"
             "\n"
             "Self-check exemption: ``pyproject.toml`` files whose\n"
             "``[project].name`` starts with ``atlan-application-sdk`` are skipped\n"
