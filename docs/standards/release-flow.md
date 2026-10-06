@@ -113,11 +113,35 @@ jobs:
     secrets: inherit
 ```
 
+## Bump PR — release candidate and vulnerability scan (FND-3328)
+
+The bump PR is the one PR the vulnerability scan gates in a release-flow repo
+(ordinary PRs and queue entries skip it; see `ci.md`). Its
+`vulnerability-scan.yml` runs two jobs:
+
+1. `candidate` — `build-and-publish-app.yaml` with `candidate: true` on the
+   PR's merge commit (`ref: github.sha`). Same prepare → build → merge as a
+   release, pushed as `:candidate-<tree>` (`<tree>` = git tree SHA of that
+   commit, per-arch `:candidate-<tree>-amd64|arm64`). It bakes the release's
+   identity: `app_version` is `v<pyproject version>`, the tag Stage 2 cuts. No
+   Docker Hub copy, scan, deploy or publish.
+2. `scan` — `build-and-scan.yaml` on `candidate-<tree>@<digest>`, blocking. On
+   a pass the Security Gate copies that digest to `:scanned-<tree>`.
+
+If the candidate build fails, `scan` falls back to the scan's own single-arch
+build, so the required checks still mean something; the release then rebuilds.
+
 ## Stage 3 — Versioned GHCR image (`build-and-publish-app.yaml`)
 
 **Trigger:** `release: published` event in the app repo.
 
 **What it does:**
+- Looks up `:scanned-<tree>` for the tree of the tagged commit (and only when
+  the release tag is `v<pyproject version>`). **Found:** skips the build and
+  promotes that manifest, byte for byte, to every tag below; the shipped digest
+  is the scanned digest. The release's scan is then report-only. **Not found**
+  (base moved before the merge, scan failed, lookup error): falls through to
+  the build below, and that release's scan **blocks** the publish.
 - Builds the multi-arch (`linux/amd64` + `linux/arm64`) Docker image.
 - Pushes to GHCR with the full version-tag ladder:
   - **Stable** (e.g. `1.2.3`): `:latest`, `:1.2.3`, `:1.2`, `:1`, `:sha-{SHA7}`
@@ -166,6 +190,7 @@ jobs:
 | Push to `main` (every other app) | none — no image is built |
 | Release (stable) | `:main-{sha7}`, `:main` + `:latest`, `:VERSION`, `:MAJOR.MINOR`, `:MAJOR`, `:sha-{SHA7}` |
 | Release (pre-release, e.g. rc) | `:main-{sha7}`, `:main` + `:VERSION`, `:sha-{SHA7}` |
+| Bump PR (release candidate) | `:candidate-{tree}` (+ `-amd64` / `-arm64`); `:scanned-{tree}` once its scan passes |
 
 A release build still pushes `:main-{sha7}` and `:main` (the branch slug is forced to `main` for a release tag). So for a non-SDR app the mutable `:main` tag now tracks the **latest release**, not the latest merge, and a `main-{sha7}` tag exists only for commits a release was cut from. Pin a version tag (`:VERSION`, `:sha-{SHA7}`) rather than `:main` where the exact build matters.
 
@@ -187,6 +212,11 @@ Dockerfile change per app:
   "built_at": "2026-09-10T12:00:00+00:00"
 }
 ```
+
+A promoted release image (FND-3328) was built on the bump PR, so its
+`commit_sha`, `build_id` and `image` name the PR's merge commit and
+`candidate-<tree>`: a commit whose tree equals the released commit's, not the
+released commit itself. `app_version` still matches the release exactly.
 
 `app_version` is the exact string the publish job sends to Global Marketplace as
 `version` (the release tag for semver apps, the 7-char SHA for CD apps), so a

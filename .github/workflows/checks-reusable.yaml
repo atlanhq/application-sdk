@@ -159,4 +159,30 @@ jobs:
           git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
 
       - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+
+      # A refused Renovate lock bump is withheld by writing a lock no
+      # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
+      # `withhold`). The required `scan / Build Image` used to be what rejected
+      # it; since FND-3328 that job skips on every PR but the bump-version PR,
+      # so this required job does it instead. Runs only when uv.lock differs
+      # from the base (see check_uv_lock.py). Script fetched at this workflow's
+      # own SHA, into its own path, and removed before pre-commit sees the tree.
+      - name: Fetch check_uv_lock.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-lock-check
+          persist-credentials: false
+
+      - name: uv.lock matches pyproject.toml
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+
+      - name: Remove the fetched SDK script
+        run: rm -rf .sdk-lock-check
+
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
