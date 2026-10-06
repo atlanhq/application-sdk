@@ -1702,3 +1702,62 @@ def test_b007_exempts_an_optional_pyarrow_annotation() -> None:
         + "    return t.to_pylist()\n"
     )
     assert _b007(src) == []
+
+
+def test_b007_pyarrow_import_in_a_helper_does_not_exempt_a_module_name() -> None:
+    # The import binds `frame` only inside `helper`; the module-level `frame`
+    # is still the fixture's reader frame.
+    src = (
+        _SDK_IMPORT
+        + "from fixtures import frame\n"
+        + "def helper():\n"
+        + "    import pyarrow as frame\n"
+        + "    return frame\n"
+        + "rows = frame.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_pyarrow_import_in_an_enclosing_scope_still_exempts() -> None:
+    src = (
+        _SDK_IMPORT
+        + "def rows(path):\n"
+        + "    import pyarrow.parquet as pq\n"
+        + "    def inner():\n"
+        + "        return pq.ParquetFile(path).read().to_pylist()\n"
+        + "    return inner()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_local_import_shadows_a_module_pyarrow_import() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "def rows():\n"
+        + "    from fixtures import pa\n"
+        + "    return pa.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_comprehension_of_pyarrow_method_chains_is_exempt() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "table = pa.table({'x': [1]})\n"
+        + "columns = [table.column('x') for _ in range(1)]\n"
+        + "pairs = (table.column('x'), table.column('x'))\n"
+        + "rows = [col.to_pylist() for col in columns]\n"
+        + "more = [col.to_pylist() for col in pairs]\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_comprehension_of_reader_method_chains_still_fires() -> None:
+    src = (
+        _SDK_IMPORT
+        + "columns = [reader.column('x') for _ in range(1)]\n"
+        + "rows = [col.to_pylist() for col in columns]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]

@@ -231,9 +231,12 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    safe).
 4. **P052 / O002** — serialize every entity with
    `entity_bytes(asset, envelope=ENTITY_ENVELOPE, entity_type=...)`, one module-level
-   policy. Pass `connection_name=` and `last_sync=resolve_last_sync_details()`
-   (`application_sdk.common.last_sync`) unless the mapper already stamps
-   them. `entity_bytes` returns bytes: the sink must accept bytes (JSONL).
+   policy. Pass `connection_name=` and `last_sync=` unless the mapper already
+   stamps them. Call `resolve_last_sync_details()`
+   (`application_sdk.common.last_sync`) once per transform activity, outside
+   the per-record loop, and pass that same value for every entity: each call
+   reads the current time, so a per-record call gives one run's entities
+   different `lastSyncRunAt` values. `entity_bytes` returns bytes: the sink must accept bytes (JSONL).
    A `.dict()` on a model that is not an asset is a false positive: ignore it
    with that reason.
 

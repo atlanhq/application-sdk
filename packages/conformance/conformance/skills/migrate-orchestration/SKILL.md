@@ -92,7 +92,7 @@ imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
 | workflow id in a `@task` | `input.workflow_id` | typed Input | 3.0.0 |
 | start time, current time | `self.context.started_at`, `now()` | App / `application_sdk.app` | 3.0.0 / 3.13.0 |
 | workflow primitives | `now`, `sleep`, `uuid4`, `wait_condition`, `signal`, `query`, `update` | `application_sdk.app` | 3.13.0 |
-| decorators | `task(name=, timeout_seconds=, heartbeat_timeout_seconds=, retry_policy=, retry_max_attempts=, pool=)`, `entrypoint(name=, default=)` | `application_sdk.app` | 3.0.0; `pool` 3.21.0 |
+| decorators | `task(name=, timeout_seconds=, heartbeat_timeout_seconds=, retry_policy=, retry_max_attempts=, pool=)` on a method taking exactly one `Input` subclass and returning an `Output` subclass (anything else raises `TaskContractError` when the class is defined), `entrypoint(name=, default=)` | `application_sdk.app` | 3.0.0; `pool` 3.21.0 |
 | retry policy | `RetryPolicy(max_attempts=3, initial_interval=1s, max_interval=5m, backoff_coefficient=2.0, non_retryable_errors=())`; the `@task` keyword defaults differ: `retry_max_attempts=3`, `retry_initial_interval_seconds=1`, `retry_max_interval_seconds=30` | `application_sdk.app` | 3.0.0 |
 | sandbox passthrough | `passthrough_modules: ClassVar[set[str]]` on the App class | App | — |
 | workflow-type rename alias | `legacy_workflow_types` on the App class | App | 3.29.0 |
@@ -214,8 +214,10 @@ One row per **use**, not per finding, `tests/` included: one import of
   → the integration fixture kit; a fake third-party API server in a test →
   the SDK's fake-source helpers or a justified ignore.
 - **io** — workflow-context I/O (P021). Move it into a `@task` that returns
-  its decision; transfers (`self.upload`, `self.download`, `upload_refs`) stay
-  in `run()` (P008 forbids them in a task).
+  its decision, wrapped in a typed `Output` (a bare `bool` or `str` return
+  fails the `@task` contract); transfers (`self.upload`, `self.download`,
+  `upload_refs`) stay in `run()` (P008 forbids them in a task). A P021 hit in
+  a `@query` is not a move: see owner decision 7.
 - **v2 residue** — a test or module written for the v2 harness (`Worker`,
   `Client`, `WorkflowEnvironment`, activity stubs). If the app's fixture-kit
   suite already runs the workflow end to end, or the test only exercises its
@@ -243,6 +245,10 @@ One row per **use**, not per finding, `tests/` included: one import of
    Options: set the private `app._context` from the `app_context` fixture,
    with a justified ignore; test the helper with the id passed explicitly; or
    remove a test that only covers its own mock.
+7. **I/O in a `@query`.** A query is read-only and cannot schedule or await a
+   task, so its I/O cannot move into one. The usual shape has `run()` or a
+   task compute the value into workflow state and the query return that
+   state, which changes when the value is read; agree it per query.
 
 **Stop 1** (see Agent protocol).
 

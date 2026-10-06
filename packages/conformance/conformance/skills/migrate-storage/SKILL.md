@@ -16,6 +16,7 @@ description: >
   are the same multiset. Key layout, tiers, empty-output semantics, file
   formats and entrypoint-contract changes stop for an owner decision.
 runs_before: [migrate-orchestration, migrate-deprecated-symbols]
+routes_to: [migrate-deprecated-symbols]
 also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store]
 mandatory_triggers:
   - "/migrate-storage"

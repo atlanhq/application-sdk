@@ -438,3 +438,29 @@ def test_also_clears_symbols_are_named_in_the_routing_skill() -> None:
         text = "".join((s / "SKILL.md").read_text() for s in senders)
         missing += [f"{skill.name}:{sym}" for sym in symbols if sym not in text]
     assert not missing, missing
+
+
+def test_each_route_matches_the_symbols_its_sender_names() -> None:
+    """Checked per route, not over all senders' prose at once: a sender that
+    names a receiver's symbol declares the route, and a declared route names at
+    least one of the receiver's symbols. Otherwise a sender could drop a route
+    while another sender's prose still covers the symbol."""
+    skills = _packaged_skills()
+    clears = {s.name: _frontmatter_list(s, "also_clears") for s in skills}
+    broken = []
+    for sender in skills:
+        text = (sender / "SKILL.md").read_text()
+        routes = _frontmatter_list(sender, "routes_to")
+        for receiver, symbols in clears.items():
+            if receiver == sender.name or not symbols:
+                continue
+            named = [sym for sym in symbols if sym in text]
+            if named and receiver not in routes:
+                broken.append(
+                    f"{sender.name} names {named} but does not route to {receiver}"
+                )
+            if receiver in routes and not named:
+                broken.append(
+                    f"{sender.name} routes to {receiver} but names none of its symbols"
+                )
+    assert not broken, broken
