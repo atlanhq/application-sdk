@@ -584,7 +584,7 @@ class BaseSQLClient(ClientInterface):
             # that call; hand the close to the pool to run once the call ends.
             submit_in_thread(_holding_connection(_close))
             raise
-        _close()
+        await run_in_thread(_holding_connection(_close))
 
         logger.info("Query execution completed")
 

@@ -222,6 +222,7 @@ async def test_run_query(
         mock_cursor,  # Simulate connection.execute
         [row1, row2],  # First batch from `fetchmany`
         [],  # End of data from `fetchmany`
+        None,  # Simulate the close
     ]
 
     # Run run_query and collect all results
@@ -1082,8 +1083,9 @@ async def test_run_query_escapes_colons(
     cursor.cursor.description = [col]
 
     # run_in_thread is called once for connect, once for execute (returns the
-    # cursor), then once per fetchmany batch — an empty batch ends the loop.
-    mock_run_in_thread.side_effect = [connection, cursor, [("v",)], []]
+    # cursor), once per fetchmany batch — an empty batch ends the loop — and
+    # once for the close.
+    mock_run_in_thread.side_effect = [connection, cursor, [("v",)], [], None]
 
     async for _ in sql_client.run_query("RLIKE '^(?:cdl)'"):
         pass

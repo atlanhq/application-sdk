@@ -193,6 +193,37 @@ async def test_cancelling_run_query_during_connect_returns_promptly_and_closes(
     connection.close.assert_called_once()
 
 
+async def test_run_query_closes_off_the_loop_after_a_full_read(
+    sql_client: BaseSQLClient,
+):
+    """run_query(): the close after the last batch can stall on a slow source
+    (rollback, reset), so it must block its worker thread, not the loop."""
+    close = _BlockingQuery()
+    cursor = MagicMock()
+    cursor.cursor.description = []
+    cursor.fetchmany.return_value = []
+    connection = MagicMock()
+    connection.execute.return_value = cursor
+    connection.execution_options.return_value = connection
+    connection.close.side_effect = close
+    sql_client.engine.connect.return_value = connection
+
+    async def consume() -> None:
+        async for _ in sql_client.run_query("SELECT 1"):
+            pass
+
+    task = asyncio.ensure_future(consume())
+    try:
+        start = time.monotonic()
+        await _wait_for_thread(close.started, task)
+        reached = time.monotonic() - start
+        assert reached < _PROMPT, f"loop blocked {reached:.2f}s while closing"
+    finally:
+        close.release.set()
+    await task
+    connection.close.assert_called_once()
+
+
 # ---------------------------------------------------------------------------
 # Cancelling at the driver (FND-3269): a real engine, a real driver cancel.
 #
