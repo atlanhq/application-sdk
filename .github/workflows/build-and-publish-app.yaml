@@ -5,7 +5,12 @@
 #
 # Image tag:  {branch}-{sha7}  (e.g. main-abc1234) — immutable, used by deploy systems
 # Image URI:  ghcr.io/atlanhq/{repo}:{branch}-{sha7}
-# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest on branch)
+# Mutable:    ghcr.io/atlanhq/{repo}:{branch}         (always points to latest build on branch)
+#
+# Main push:  builds ONLY for SDR deploy-on-merge apps (self_deployed_runtime:
+#             true) or when the caller sets publish. Any other main push skips
+#             everything after the `build-decision` job (FND-3327), so for those
+#             apps `:main` / `main-{sha7}` move only when a release is built.
 #
 # Release:    when release_tag is provided (set to github.event.release.tag_name by caller),
 #             additionally pushes a version-tag ladder to GHCR:
@@ -120,6 +125,51 @@ permissions:
   checks: read
 
 jobs:
+  # ── Build decision: does this main push need an image at all? (FND-3327) ────
+  # A push to main that will not publish builds an image nobody consumes —
+  # the marketplace publish comes from the release event, which rebuilds. The
+  # one exception is an SDR deploy-on-merge app (`self_deployed_runtime: true`):
+  # app-deployment-dispatcher ships the main-push image, so it must still build.
+  #
+  # This job runs ONLY on that one case (push to main, publish off) and reads
+  # `enable_sdr` from atlan.yaml with the same parser `prepare` uses. The
+  # expensive jobs (certify, leak-scan, prepare → build → merge → scan) skip on
+  # exactly `enable_sdr == 'false'`. Every other event skips this job, which
+  # leaves the output empty, so they build as before. A caller that sets
+  # `publish: true` on push (the legacy `github.event.inputs.publish != 'false'`
+  # pattern) also never reaches here and keeps building and publishing.
+  build-decision:
+    name: Build decision
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.publish }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      enable_sdr: ${{ steps.manifest.outputs.enable_sdr }}
+    steps:
+      - name: Checkout atlan.yaml
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          sparse-checkout: |
+            atlan.yaml
+            uv.lock
+          sparse-checkout-cone-mode: false
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Read atlan.yaml
+        id: manifest
+        run: python3 .sdk-entrypoint/.github/scripts/parse_atlan_yaml.py
+
   # ── Job 0: Channel + branch gate ─────────────────────────────────────────────
   # 'all'-channel releases reach every production tenant, so they MUST come
   # from the protected `main` branch. Fail here (before the multi-arch build
@@ -402,9 +452,13 @@ jobs:
   # image still went to GHCR, and for SDR apps still shipped to Docker Hub via
   # app-deployment-dispatcher below, uncertified. Main pushes ran this job under
   # the legacy model (publish was true there); this keeps that property.
+  # A main push that builds no image (non-SDR, publish off — see
+  # build-decision) has nothing to certify, so it skips here too; the release
+  # that ships the image certifies it.
   certify:
     name: Certify app
-    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -670,11 +724,13 @@ jobs:
   # Runs on publish OR any main push — same reasoning as `certify` above. Its
   # gitleaks (hardcoded-secret) layer is a real blocker that gates `prepare`,
   # so leaving it publish-only let a semver merge build and SDR-ship an image
-  # with no hardcoded-secret scan at all.
+  # with no hardcoded-secret scan at all. Skips with certify on a main push
+  # that builds no image (see build-decision).
   # See docs/standards/credential-leak-gate.md.
   leak-scan:
     name: Credential leak gate
-    if: ${{ inputs.publish || github.ref == 'refs/heads/main' }}
+    needs: build-decision
+    if: ${{ !failure() && !cancelled() && (inputs.publish || github.ref == 'refs/heads/main') && needs.build-decision.outputs.enable_sdr != 'false' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -933,7 +989,7 @@ jobs:
     # gates prepare/build, it gates the terminal side-effecting jobs instead:
     # publish AND app-deployment-dispatcher (see their needs/if). leak-scan +
     # validate-channel stay as pre-build gates.
-    needs: [validate-channel, unit-tests-gate, leak-scan]
+    needs: [build-decision, validate-channel, unit-tests-gate, leak-scan]
     # `needs: [...]` only enforces ordering when those jobs run. When
     # publish=false off main, all of them are skipped via their `if:`
     # (`leak-scan` still runs on main pushes; `unit-tests-gate` is permanently
@@ -949,7 +1005,9 @@ jobs:
     # publish. Its creds-into-logs layer is warn-only (annotates + pings Slack,
     # never fails the job), so warnings do not block. `unit-tests-gate` is
     # currently warn-only; its enforcement-flip is tracked separately.
-    if: ${{ !failure() && !cancelled() }}
+    # `build-decision` answers 'false' only on a non-SDR main push that will not
+    # publish: skipping prepare there skips the whole build chain behind it.
+    if: ${{ !failure() && !cancelled() && needs.build-decision.outputs.enable_sdr != 'false' }}
     name: Prepare
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -1492,7 +1550,13 @@ jobs:
           echo "| Dockerfile | \`${{ needs.prepare.outputs.dockerfile }}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| SDR push | \`${{ needs.prepare.outputs.enable_sdr }}\` |" >> $GITHUB_STEP_SUMMARY
 
-  # ── Job 4: Security scan — Trivy + allowlist gate (non-blocking on merge path) ──
+  # ── Job 4: Security scan — Trivy + allowlist gate ─────────────────────────────
+  # Scans the image this run pushed (no rebuild). Blocking on a non-publishing
+  # main run (FND-3327): after build-decision, a main push that still builds
+  # without publishing is an SDR deploy-on-merge push, and app-deployment-
+  # dispatcher ships that image to tenants only on this job's success. A scan
+  # that cannot fail there gates nothing. Report-only elsewhere: branch builds
+  # deploy nothing, and the release scan/promote path is FND-3328.
   security-scan:
     name: Security Scan
     needs: [prepare, merge]
@@ -1500,7 +1564,7 @@ jobs:
     uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main
     with:
       image: ${{ needs.prepare.outputs.ghcr_image }}
-      fail_on_findings: false
+      fail_on_findings: ${{ github.ref == 'refs/heads/main' && !inputs.publish }}
     secrets: inherit
 
   # ── Job 5: Dispatch deployment to atlan-apps-deployment (main only) ───────────

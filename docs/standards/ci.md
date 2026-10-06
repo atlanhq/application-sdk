@@ -253,7 +253,8 @@ surface.
 * A floating base-image tag (`FROM …:latest`) can move without any file
   changing, and so can the vulnerability DB. Both drift the same way between
   any two scans, queue or no queue. `build-and-publish-app.yaml` scans the
-  published image again after merge, report-only (`fail_on_findings: false`).
+  image it pushes: blocking on an SDR deploy-on-merge push to `main`, report-only
+  on a publishing run. Non-SDR apps build no image on a merge (FND-3327).
 * A Dockerfile under a name the image-input list does not match (the list is
   by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
   which names the Dockerfile, is on the list. A bespoke name still needs adding

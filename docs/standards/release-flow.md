@@ -125,7 +125,12 @@ jobs:
 - Publishes to the Atlan Global Marketplace (`publish=true`).
 - Pushes to Docker Hub for SDR apps (`self_deployed_runtime: true` in `atlan.yaml`).
 
-On every push to `main` (non-release), the same workflow fires with `publish=false`, producing only `:{branch}-{sha7}` + `:{branch}` tags — no version ladder, no marketplace publish.
+On every push to `main` (non-release), the same workflow fires with `publish=false`. What it does depends on the app (FND-3327):
+
+- **SDR deploy-on-merge apps** (`self_deployed_runtime: true`): builds and pushes `:{branch}-{sha7}` + `:{branch}`, scans the image (blocking), copies it to Docker Hub, and dispatches the deploy. No version ladder, no marketplace publish.
+- **Every other app**: only the `Build decision` job runs (it reads `atlan.yaml`); certify, leak-scan, build and scan all skip. No image is built — the release builds the one that ships.
+
+A caller that passes `publish: true` on push (the legacy `github.event.inputs.publish != 'false'` wiring) is unaffected and builds on every push as before.
 
 **Caller wiring** (`.github/workflows/build-and-publish.yaml`):
 ```yaml
@@ -157,11 +162,12 @@ jobs:
 
 | Context | GHCR tags pushed |
 |---|---|
-| Push to `main` | `:{branch}-{sha7}` (immutable), `:{branch}` (mutable) |
-| Release (stable) | All of the above + `:latest`, `:VERSION`, `:MAJOR.MINOR`, `:MAJOR`, `:sha-{SHA7}` |
-| Release (pre-release, e.g. rc) | All push-to-main tags + `:VERSION`, `:sha-{SHA7}` |
+| Push to `main` (SDR deploy-on-merge apps only) | `:{branch}-{sha7}` (immutable), `:{branch}` (mutable) |
+| Push to `main` (every other app) | none — no image is built |
+| Release (stable) | `:main-{sha7}`, `:main` + `:latest`, `:VERSION`, `:MAJOR.MINOR`, `:MAJOR`, `:sha-{SHA7}` |
+| Release (pre-release, e.g. rc) | `:main-{sha7}`, `:main` + `:VERSION`, `:sha-{SHA7}` |
 
-Apps opting out of explicit versioning can pin the mutable `:{branch}` tag (e.g. `:main`) in deployment manifests — it always tracks the latest build on that branch without requiring manual SHA updates.
+A release build still pushes `:main-{sha7}` and `:main` (the branch slug is forced to `main` for a release tag). So for a non-SDR app the mutable `:main` tag now tracks the **latest release**, not the latest merge, and a `main-{sha7}` tag exists only for commits a release was cut from. Pin a version tag (`:VERSION`, `:sha-{SHA7}`) rather than `:main` where the exact build matters.
 
 ## Image identity
 
