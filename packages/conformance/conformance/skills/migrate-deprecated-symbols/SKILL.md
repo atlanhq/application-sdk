@@ -15,6 +15,7 @@ description: >
   sites, and proves the result with re-detection and the test suite. Run it
   after any skill that raises the SDK, because a newer SDK can deprecate more
   symbols.
+routes_to: [migrate-storage]
 mandatory_triggers:
   - "/migrate-deprecated-symbols"
   - "deprecated SDK symbol"
@@ -32,7 +33,7 @@ outputs:
   - app code and tests importing public SDK and third-party names only
   - app code using the replacement each deprecation notice names, for the straight swaps
   - justified ignores for private names with no public equivalent, each naming a tracking id
-  - a routing list of structural sites handed to migrate-storage, migrate-asset-modeling or upgrade-v3
+  - a routing list of structural sites handed to migrate-storage, or to the developer with upgrade-v3
 ---
 
 # Migrate deprecated and private symbols (B001, B008)
@@ -49,7 +50,7 @@ of these rule ids is still reported.
 A deprecated symbol is on a removal path: the next SDK major (or the version
 in its notice) removes it, and the app breaks on that bump. A private name
 (leading underscore) has no compatibility promise at all: SDK 3.36.0 reshaped
-one private preflight module and 15 repos stopped collecting tests.
+one private module, and every app that imported it stopped collecting tests.
 
 ## What each rule fires on
 
@@ -115,7 +116,7 @@ use), because each use changes with the migration.
     same function, exported publicly). Replacing it with FileReference outputs
     is a storage migration, not part of this swap.
   - Third-party privates with a public home, for example
-    `confluent_kafka.admin._metadata` → `confluent_kafka.admin`, or
+    a library's private submodule → the public package that re-exports the name, or
     `ipaddress._BaseAddress` in an annotation →
     `ipaddress.IPv4Address | ipaddress.IPv6Address`.
   - `storage.ops._resolve_store(None)` used only to ask "is an object store
@@ -151,18 +152,19 @@ use), because each use changes with the migration.
     the notice names; update every `except` and `isinstance` that used it.
 - **route** — a structural migration another skill owns. Record it, do not
   start it here:
-  - `ParquetFileReader`, `ParquetFileWriter`, `JsonFileWriter`, other
-    storage-format readers and writers, and private storage helpers such as
+  - `ParquetFileReader`, `ParquetFileWriter`, `JsonFileReader`,
+    `JsonFileWriter`, other storage-format readers and writers, and private storage helpers such as
     `_download_files` → `migrate-storage` (`RollingFileWriter`, or a
     FileReference field on the typed Input read with `pandas.read_parquet`).
-  - `QueryBasedTransformer`, `TransformerInterface` → the asset-mapper
-    pattern (`migrate-asset-modeling`).
-  - `BaseMetadataExtractor`, `SqlMetadataExtractor` → `templates.SqlApp`
-    ([`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md),
-    in the `atlanhq/application-sdk` repo, not shipped with this package).
+  - `QueryBasedTransformer`, `TransformerInterface` (→ the asset-mapper
+    pattern) and `BaseMetadataExtractor`, `SqlMetadataExtractor`
+    (→ `templates.SqlApp`) are structural v3 migrations no packaged skill
+    performs: hand them to the developer with
+    [`upgrade-v3`](https://github.com/atlanhq/application-sdk/blob/main/.claude/skills/upgrade-v3/SKILL.md)
+    (in the `atlanhq/application-sdk` repo, not shipped with this package).
 - **no public equivalent** — a private name the SDK or library does not
-  expose publicly (examples seen in the fleet: `_HTTP_POOL_LIMITS`,
-  `TaskContext`, `_CREDENTIAL_KEYS`, a thrift `_match_hostname` patch). Two
+  expose publicly (for example SDK constants such as `_HTTP_POOL_LIMITS`, or
+  a patched private method of a third-party library). Two
   options for the developer: for a plain value (a constant), copy it into
   the app under its own name; otherwise ignore it:
   `# conformance: ignore[B008] no public equivalent — tracked in <ticket id>`.

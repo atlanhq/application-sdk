@@ -158,10 +158,14 @@ Residue entries for migration rules carry `remediation_reference`
   Resolve the skills directory the same way as the programs directory:
   `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
   connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
-  anywhere else. Run the skills one at a time, in the order of
-  `$SKILLS/order.txt` and never another: an earlier skill can be a
-  precondition of a later one (`migrate-off-daft` must cross the daft cliff
-  before any skill that bumps the SDK). For each skill:
+  anywhere else. The skills to run are every skill named by a residue
+  entry, plus every skill whose `also_clears` frontmatter list names a symbol
+  that a B001, B008 or P005 finding reports: those findings point at another
+  skill, but this one performs their migration. Run them one at a time, in
+  the order of `$SKILLS/order.txt` and never another: an earlier skill can be
+  a precondition of a later one (`migrate-off-daft` must cross the daft
+  cliff before any skill that bumps the SDK), and a skill routes work only to
+  a skill that runs before it. For each skill:
   1. Tell the developer which rule ids and how many findings it covers, and
      ask before starting it.
   2. Read `$SKILLS/<target>/SKILL.md` and follow it, stop points included.

@@ -15,7 +15,8 @@ description: >
   downstream apps are the same before and after, and the transformed entities
   are the same multiset. Key layout, tiers, empty-output semantics, file
   formats and entrypoint-contract changes stop for an owner decision.
-runs_before: [migrate-deprecated-symbols]
+runs_before: [migrate-orchestration, migrate-deprecated-symbols]
+also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store, get_object_store_prefix, build_output_path]
 mandatory_triggers:
   - "/migrate-storage"
   - "migrate storage seam"
@@ -182,9 +183,12 @@ for a customer bucket.
    developer whether to finish that skill first, because it can change the
    entities this skill compares. An app below SDK 3.20.0 must cross the daft
    cliff first: the legacy readers and writers were daft-backed.
-2. Read the SDK version from `uv.lock`. `upload_refs` needs 3.33.2; raise the
-   SDK to the latest release only if the lock is below it and the app will
-   use `upload_refs`.
+2. Read the SDK version from `uv.lock`. `upload_refs` needs 3.33.2. Only if
+   the lock is below it and the app will use `upload_refs`, raise the SDK to
+   the newest release that is at least 7 days old and at or above that floor
+   (dependency cooldown; never a release younger than 7 days unless it fixes
+   a known vulnerability). List releases with dates:
+   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
 3. Record the baseline outside the repo:
    `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044,B001,B008 --exit-zero --output "$TMPDIR/before.sarif"`,
    and the tests: `UV_FROZEN=1 uv sync --all-groups --all-extras` once (frozen,
@@ -222,6 +226,11 @@ for a customer bucket.
 ## Step 1 — Inventory and classify every site
 
 One row per site (B001 flags an import: list every use of a routed class).
+The sites routed here are B001, B008 and P005 findings that name another
+skill; do not wait for them to be handed over. Search the app and `tests/`
+for every symbol in this skill's `also_clears` frontmatter list
+(`grep -rnwE 'ParquetFileReader|ParquetFileWriter|...' app tests`) and add
+each use to the inventory.
 
 - **hand-off** — a path string, `bytes` field, shared `output_path`, prefix
   read/write or `_download_files` that moves data from one task to another

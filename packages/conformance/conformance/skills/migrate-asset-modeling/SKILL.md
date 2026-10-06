@@ -19,6 +19,7 @@ description: >
   pyatlan import) gets P028 only: creators produce the strings, the dict shape
   stays. Run after migrate-off-daft when the app is below SDK 3.20.0;
   adopting creators needs SDK 3.39.0 or later.
+runs_before: [migrate-deprecated-symbols]
 mandatory_triggers:
   - "/migrate-asset-modeling"
   - "migrate asset modeling"
@@ -57,7 +58,7 @@ A qualifiedName is an asset's identity. When an app builds it by hand, the
 grammar lives in many places and drifts; pyatlan's `creator()` factories own
 it in one place. `entity_bytes` is the one seam where the SDK injects
 `connectionName`, applies the entity envelope and strips the placeholder guid
-that every creator sets (SDK 3.39.0, FND-2720). An entity serialized another
+that every creator sets (SDK 3.39.0). An entity serialized another
 way misses every central fix. Both changes can alter what the app publishes,
 so the skill proves parity before it finishes.
 
@@ -137,8 +138,10 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
 1. Read the resolved SDK version from `uv.lock`.
    - 3.39.0 or later: no change.
    - Below 3.39.0 and the app will emit creator-built **assets**: raise the
-     SDK to the latest release
-     (`curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r .info.version`).
+     SDK to the newest release that is at least 7 days old and at or above that floor
+     (dependency cooldown; never a release younger than 7 days unless it fixes
+     a known vulnerability). List releases with dates:
+     `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
      Creators set a random placeholder guid on every call, and only
      `entity_bytes` from 3.39.0 removes it; without it, publish sees every
      entity as changed on every run. An app that only reads `.qualified_name`

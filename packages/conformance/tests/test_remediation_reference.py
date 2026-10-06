@@ -379,3 +379,49 @@ def test_malformed_sarif_reference_is_rejected(malformed: dict[str, str]) -> Non
     props["atlan/remediationReference"] = malformed
     with pytest.raises(ValidationError):
         AtlanRuleProperties.from_properties(props)
+
+
+def _frontmatter_list(skill: Path, key: str) -> list[str]:
+    match = re.search(
+        rf"^{key}:\s*\[(.*)\]\s*$", (skill / "SKILL.md").read_text(), re.M
+    )
+    return [v.strip() for v in match.group(1).split(",") if v.strip()] if match else []
+
+
+def test_every_route_reaches_a_skill_that_will_run_it() -> None:
+    """/remediate runs each skill once, in order.txt order, and starts a skill
+    only for its own rules or for a symbol in its ``also_clears`` list. So a
+    route to an earlier skill only works when that skill declares the symbols
+    it clears for others; a route to a later skill works through its own
+    rules."""
+    order = _skill_order()
+    broken = []
+    for skill in _packaged_skills():
+        for target in _frontmatter_list(skill, "routes_to"):
+            target_dir = PACKAGE_ROOT / "skills" / target
+            if not target_dir.is_dir():
+                broken.append(f"{skill.name} routes to unpackaged {target}")
+            elif order.index(target) < order.index(
+                skill.name
+            ) and not _frontmatter_list(target_dir, "also_clears"):
+                broken.append(
+                    f"{skill.name} routes back to {target}, which declares no also_clears"
+                )
+    assert not broken, broken
+
+
+def test_also_clears_symbols_are_named_in_the_routing_skill() -> None:
+    """Every symbol a skill clears for others is one a routing skill sends it."""
+    missing = []
+    for skill in _packaged_skills():
+        symbols = _frontmatter_list(skill, "also_clears")
+        if not symbols:
+            continue
+        senders = [
+            s
+            for s in _packaged_skills()
+            if skill.name in _frontmatter_list(s, "routes_to")
+        ]
+        text = "".join((s / "SKILL.md").read_text() for s in senders)
+        missing += [f"{skill.name}:{sym}" for sym in symbols if sym not in text]
+    assert not missing, missing

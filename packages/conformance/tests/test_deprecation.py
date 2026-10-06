@@ -1657,3 +1657,48 @@ def test_b007_still_fires_on_an_unresolved_helper_result() -> None:
 def test_b007_still_fires_on_a_subscript_of_an_unresolved_frame() -> None:
     src = _SDK_IMPORT + "values = frame['col'].to_pylist()\n"
     assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_local_binding_shadows_a_pyarrow_import_of_the_same_name() -> None:
+    src = (
+        _SDK_IMPORT
+        + "from pyarrow import table\n"
+        + "def rows(r):\n"
+        + "    table = r.read()\n"
+        + "    return table.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_fires_on_column_of_an_unresolved_receiver() -> None:
+    src = _SDK_IMPORT + "values = reader.column('a').to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_fires_on_batches_of_an_sdk_reader() -> None:
+    src = (
+        _SDK_IMPORT
+        + "for batch in ParquetFileReader(path).iter_batches():\n"
+        + "    rows = batch.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_follows_a_long_rebinding_chain() -> None:
+    lines = ["import pyarrow.parquet as pq\n", "t0 = pq.read_table(path)\n"]
+    lines += [f't{i} = t{i - 1}.select(["a"])\n' for i in range(1, 12)]
+    src = _SDK_IMPORT + "".join(lines) + "rows = t11.to_pylist()\n"
+    assert _b007(src) == []
+
+
+def test_b007_exempts_an_optional_pyarrow_annotation() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "from typing import Optional\n"
+        + "def a(t: pa.Table | None) -> list:\n"
+        + "    return t.to_pylist()\n"
+        + "def b(t: Optional[pa.Table]) -> list:\n"
+        + "    return t.to_pylist()\n"
+    )
+    assert _b007(src) == []

@@ -15,6 +15,7 @@ description: >
   accepts the change. Anything that changes workflow history or routing stops
   for an owner decision.
 runs_before: [migrate-deprecated-symbols]
+routes_to: [migrate-storage, migrate-deprecated-symbols]
 mandatory_triggers:
   - "/migrate-orchestration"
   - "remove temporalio imports"
@@ -142,8 +143,12 @@ parameter instead.
    (`adopt-preflight-gate` creates the preflight test imports this skill
    meets). To check, run `detect --rule` with each earlier skill's rule ids;
    if findings remain, ask the developer whether to finish that skill first.
-2. Read the SDK version from `uv.lock`; raise it to the latest release only
-   if an API this skill needs is above it (see the floors).
+2. Read the SDK version from `uv.lock`. Only if an API this skill needs is
+   above it (see the floors), raise the SDK to
+   the newest release that is at least 7 days old and at or above that floor
+   (dependency cooldown; never a release younger than 7 days unless it fixes
+   a known vulnerability). List releases with dates:
+   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
 3. Record the baseline outside the repo:
    `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021,B008 --exit-zero --output "$TMPDIR/before.sarif"`
    (`detect` prints SARIF and exits non-zero on findings; list each result's
