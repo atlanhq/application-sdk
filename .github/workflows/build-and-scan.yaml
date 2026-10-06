@@ -7,7 +7,8 @@
 #
 # Used in two places:
 #   1. Directly by app repos on PR (blocks merge on new vulnerabilities)
-#   2. By build-and-publish-app.yaml on merge (reconfirms before publish)
+#   2. By build-and-publish-app.yaml on the image it pushes (blocking before an
+#      SDR deploy-on-merge, report-only on a publishing run)
 #
 # Usage (PR check):
 #   jobs:
@@ -532,7 +533,7 @@ jobs:
         run: python3 _sdk/.github/scripts/endor_scan_prep.py materialise
 
       # `pr: true` keeps PR scans out of the monitored-version history; the merge
-      # path (build-and-publish-app.yaml, fail_on_findings=false) records a
+      # path (build-and-publish-app.yaml, prebuilt `image`) records a
       # monitored version instead. Without this Endor fragments the project and
       # the dashboards stop meaning anything.
       # image-type / finding-tags travel as ENV, not as `additional_args`.
