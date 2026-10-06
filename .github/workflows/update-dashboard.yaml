@@ -1,22 +1,15 @@
-# Update Security Dashboard — reusable workflow.
+# Update Security Dashboard — reusable workflow. RETIRED, kept for transition.
 #
-# Triggered after a vulnerability scan completes. Downloads scan results,
-# generates per-repo dashboard data, and deploys to Kryptonite (k.atlan.dev).
+# Superseded by update-fleet-dashboards.yaml (FND-3337), which pulls all three
+# dashboards below for the whole fleet on a schedule. Bootstrap no longer
+# installs the per-repo `update-dashboard.yml` shim that calls this, and
+# `bootstrap --resync` deletes existing copies (RETIRED_FILES). This file stays
+# only so a repo that has not resynced yet keeps working rather than failing
+# at startup. Delete it once no fleet repo still carries the shim. Do not add
+# callers.
 #
-# Usage in each app repo:
-#   on:
-#     workflow_run:
-#       workflows: ["Vulnerability Scan"]
-#       types: [completed]
-#     workflow_dispatch:
-#   permissions:
-#     id-token: write
-#     actions: read
-#     contents: read
-#   jobs:
-#     dashboard:
-#       uses: atlanhq/application-sdk/.github/workflows/update-dashboard.yaml@main
-#       secrets: inherit
+# While both run, they write the same S3 keys. That is harmless: the docs have
+# the same shape, and both history paths keep one line per date.
 #
 name: Update Security Dashboard
 

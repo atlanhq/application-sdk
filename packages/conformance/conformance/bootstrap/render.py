@@ -44,7 +44,6 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
     "commits.yaml",
     "release-gate.yaml",
     "connector-review-gate.yaml",
-    "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",
     "renovate-auto-approve.yml",
@@ -87,11 +86,20 @@ SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 # comment. Every PR comment (mostly Renovate's) queued a run that the job-level
 # ``if`` then skipped — hundreds of skipped runs per repo, no real invocations.
 # Retired as noise; the reusable workflow it called is left in place here.
+#
+# ``update-dashboard.yml`` (FND-3337): a ``workflow_run`` shim on Vulnerability
+# Scan, Build & Publish and Conformance that pushed this repo's rows to the
+# security, conformance and test-readiness dashboards. Every merge to main
+# fired it up to three times with up to three jobs each. Those dashboards are
+# now pulled for the whole fleet by application-sdk's scheduled
+# ``update-fleet-dashboards.yaml``, so the per-repo push has nothing left to do.
+# Its reusable stays in application-sdk until resync has removed every copy.
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, not only a workflow.
 RETIRED_FILES: tuple[str, ...] = (
     ".github/workflows/docstring-coverage.yaml",
     ".github/workflows/auto-fix.yml",
+    ".github/workflows/update-dashboard.yml",
 )
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")

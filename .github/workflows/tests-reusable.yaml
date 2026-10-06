@@ -2895,8 +2895,8 @@ jobs:
   # ways out were considered and this is the one that survives contact with how
   # the artifact is consumed:
   #
-  #   * Also run on the e2e-labelled PR path — DEAD. update-dashboard.yaml picks
-  #     the newest DEFAULT-BRANCH Tests run carrying a live scorecard artifact,
+  #   * Also run on the e2e-labelled PR path — DEAD. update-fleet-dashboards.yaml
+  #     picks the newest live scorecard artifact from a DEFAULT-BRANCH run,
   #     so a PR-run scorecard is never ingested. Worse, on a PR the integration
   #     job is skipped, so such a scorecard would publish a zeroed integration
   #     tier: a fabricated regression, which is exactly what this job's `if:`
@@ -3087,9 +3087,9 @@ jobs:
           # and --cross-cloud-configured / a repeatable --e2e-junit only exist
           # from 0.21.0; until that publishes, argparse rejects them, this step
           # warns, and no scorecard artifact is produced for that run. The
-          # dashboard already tolerates that — update-dashboard.yaml walks back
-          # through the last 20 completed runs for one that still carries a live
-          # scorecard — and the same gap was accepted when the per-tier flags
+          # dashboard already tolerates that — update-fleet-dashboards.yaml reads
+          # the newest default-branch run that still carries a live scorecard —
+          # and the same gap was accepted when the per-tier flags
           # landed ahead of 0.17.0. It closes on the next conformance release.
           uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
