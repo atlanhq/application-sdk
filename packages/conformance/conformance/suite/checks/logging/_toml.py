@@ -25,6 +25,14 @@ _REQUIRED_RULES: dict[str, str] = {
     "LOG009": "undocumented logging.WARN constant",
 }
 
+# G201 rewrites ``logger.error(..., exc_info=True)`` to ``logger.exception(...)``,
+# the call L017 forbids, so the two cannot both pass.  Every app's ruff config
+# ignores it explicitly, whether or not its select reaches G201 today: ruff's
+# default rule set gained G201 in 0.16, and a later ``G`` in select or a move to
+# extend-select would switch it on silently.  L017 is policy (ADR-0011), G201 is
+# a style preference.
+_CONFLICTING_RULE = "G201"
+
 # Packages exempt from this check (they publish the ruff config, not consume it).
 _EXEMPT_NAME_PREFIX = "atlan-application-sdk"
 
@@ -58,8 +66,20 @@ def _is_covered(
     return False
 
 
+def _is_ignored(rule_id: str, ignored: frozenset[str]) -> bool:
+    """Return True if *rule_id* or any of its prefixes is in *ignored*."""
+    return any(rule_id[:end] in ignored for end in range(len(rule_id), 0, -1))
+
+
+def _conflicting_rule_not_ignored(ignored: frozenset[str]) -> bool:
+    """Return True unless the ruff config ignores G201 (by ID or a prefix of it)."""
+    return not _is_ignored(_CONFLICTING_RULE, ignored)
+
+
 def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
-    """Return L021 findings for a ``pyproject.toml`` missing required ruff rules.
+    """Return L021 findings for a ``pyproject.toml`` whose ruff config is off.
+
+    The config is off when it misses a required rule, or leaves G201 on.
 
     Returns an empty list when the file is unreadable, unparseable, is exempt
     (SDK packages), or all required rules are already covered.
@@ -95,7 +115,9 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
         if not _is_covered(rid, selected, ignored)
     ]
 
-    if not missing:
+    g201_on = _conflicting_rule_not_ignored(ignored)
+
+    if not missing and not g201_on:
         return []
 
     try:
@@ -106,22 +128,31 @@ def check_ruff_config(toml_path: Path, root: Path) -> list[Finding]:
     # Find the line of [tool.ruff.lint] or [tool.ruff] for a precise location.
     line = _find_ruff_section_line(text)
 
+    parts: list[str] = []
+    if missing:
+        parts.append(
+            "pyproject.toml ruff config is missing logging lint rules. "
+            "Add to [tool.ruff.lint] select / extend-select: "
+            + ", ".join(missing)
+            + ". These complement the L-series AST checks with editor-time "
+            "feedback."
+        )
+    if g201_on:
+        parts.append(
+            "pyproject.toml ruff config does not ignore G201. G201 demands "
+            ".exception(...) over .error(..., exc_info=True), the exact "
+            "inverse of conformance L017; ruff's default rule set includes it "
+            "from 0.16, and a later G in select turns it on. Add to "
+            '[tool.ruff.lint]: extend-ignore = ["G201"] (or "G201" in ignore).'
+        )
+
     return [
         Finding(
             rule_id="L021",
             file=str(rel),
             line=line,
             column=1,
-            message=(
-                "pyproject.toml ruff config is missing logging lint rules. "
-                "Add to [tool.ruff.lint] select / extend-select: "
-                + ", ".join(missing)
-                + ". These complement the L-series AST checks with editor-time "
-                "feedback. Pin the rules individually — do NOT select the bare "
-                "'G' category: it also enables G201, which demands "
-                ".exception(...) over .error(..., exc_info=True), the exact "
-                "inverse of conformance L017."
-            ),
+            message=" ".join(parts),
         )
     ]
 
