@@ -130,7 +130,7 @@ jobs:
     # still billed a runner minute. See the header for why the skip is safe
     # for a required check.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       # The `.sdk-scripts` side-path pattern from docs/standards/ci.md. There

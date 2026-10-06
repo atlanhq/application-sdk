@@ -65,7 +65,7 @@ jobs:
     # Nothing is lost by passing here: a release PR missing `e2e` fails this
     # gate on the PR itself and so never becomes eligible to enter the queue.
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
       - name: Verify release readiness
