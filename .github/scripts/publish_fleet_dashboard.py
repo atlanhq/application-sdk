@@ -297,6 +297,17 @@ def main(argv: Optional[list] = None) -> int:
         action="store_true",
         help="scan covered one repo: skip fleet.json and the fleet history",
     )
+    # Same behaviour, named for a fleet run whose output is not authoritative
+    # about membership. update-fleet-dashboards.yaml skips a repo with no live
+    # artifact, so a repo absent from its output has not left the fleet and
+    # must stay on the manifest. Those dashboards have no fleet aggregate.
+    parser.add_argument(
+        "--partial-scan",
+        dest="single_repo",
+        action="store_true",
+        help="scan may omit fleet repos: keep every stored repo on the manifest "
+        "and skip fleet.json and the fleet history",
+    )
     args = parser.parse_args(argv)
 
     with tempfile.TemporaryDirectory() as tmp:

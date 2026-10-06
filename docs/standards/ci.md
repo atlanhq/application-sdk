@@ -244,7 +244,8 @@ Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
 * `build-and-publish-app.yaml`: Validate Channel + Branch, Dispatch App
   Deployment, Publish.
 * `build-and-scan.yaml`: Security Gate.
-* `update-dashboard.yaml`: all three jobs.
+* `update-dashboard.yaml`: all three jobs (since retired for the central
+  `update-fleet-dashboards.yaml`, FND-3337).
 * `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
   `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
 * Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
