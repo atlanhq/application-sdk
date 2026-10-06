@@ -262,6 +262,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "rocksdict" },
     { name = "temporalio" },
     { name = "uvloop", marker = "sys_platform != 'win32'" },
 ]
@@ -293,7 +294,6 @@ incremental = [
     { name = "duckdb-engine" },
     { name = "pandas" },
     { name = "pyarrow" },
-    { name = "rocksdict" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
 mcp = [
@@ -372,7 +372,6 @@ test = [
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.10.0,<4.0.0" },
     { name = "atlan-application-sdk", extras = ["sql"], marker = "extra == 'daft'" },
-    { name = "atlan-application-sdk", extras = ["storage"], marker = "extra == 'incremental'" },
     { name = "azure-identity", specifier = ">=1.15.0" },
     { name = "azure-identity", marker = "extra == 'azure'", specifier = ">=1.15.0" },
     { name = "azure-storage-blob", marker = "extra == 'azure'", specifier = ">=12.19.0" },
@@ -413,7 +412,8 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.1.0,<2.0.0" },
     { name = "pyyaml", specifier = ">=6.0.2,<7.0.0" },
     { name = "redis", extras = ["hiredis"], marker = "extra == 'distributed-lock'", specifier = ">=5.2.0,<9.0.0" },
-    { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0" },
+    { name = "rocksdict", specifier = ">=0.3.0,<0.4.0" },
+    { name = "rocksdict", marker = "extra == 'storage'", specifier = ">=0.3.0,<0.4.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'incremental'", specifier = ">=2.0.36,<3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sqlalchemy'", specifier = ">=2.0.36,<3.0.0" },

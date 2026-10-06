@@ -222,6 +222,6 @@ The `[incremental]` extra brings in:
 - `pyarrow` — columnar data I/O
 - `pandas` — tabular helpers
 - `sqlalchemy[asyncio]` — async DB connectivity
-- `rocksdict` (via `[storage]`) — disk-backed state
 
-`rocksdict` is also available as a standalone `[storage]` extra for non-incremental connectors.
+`rocksdict` (disk-backed state) is a core SDK dependency, so no extra is
+needed for it. The `[storage]` extra remains only as a compatibility alias.

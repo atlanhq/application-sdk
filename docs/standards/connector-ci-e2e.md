@@ -1674,12 +1674,11 @@ run's own before the seeded ones) even when the seed half-fails — see
   config-pinnable must precompute them from its source fixture, never invent
   them. Segments that cannot compose cleanly (empty, padded, or carrying a `/`)
   are rejected at declaration.
-- **The pre-submit check needs the `[storage]` extra.** `seed_assets` runs
+- **The pre-submit check is always on.** `seed_assets` runs
   `validate_transformed_dir(..., check_referential_integrity=True)` offline
   before it uploads anything, which is what turns "every parent is present" from
-  hoped-for into asserted. The referential pass is backed by `rocksdict`; without
-  it the walk degrades to per-asset validation and logs a warning. A leg that
-  relies on this check should install the extra.
+  hoped-for into asserted. The referential pass is backed by `rocksdict`, a core
+  SDK dependency, so no extra is needed.
 - **Cross-batch parity is still on you.** The check validates integrity *within*
   the seed. It cannot tell you the seed covers every ref the connector will
   emit — the coalesce pilot published 82 ColumnProcesses against a golden of

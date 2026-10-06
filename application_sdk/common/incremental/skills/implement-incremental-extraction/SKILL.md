@@ -269,9 +269,9 @@ dependencies = [
 ]
 ```
 
-The `[incremental]` extra brings in DuckDB, pyarrow, pandas, sqlalchemy, and
-(via `[storage]`) `rocksdict` for disk-backed table state storage — no
-separate `rocksdict` pin is needed.
+The `[incremental]` extra brings in DuckDB, pyarrow, pandas, and sqlalchemy.
+`rocksdict`, used for disk-backed table state storage, is a core SDK
+dependency — no separate `rocksdict` pin is needed.
 
 ## Common Pitfalls
 

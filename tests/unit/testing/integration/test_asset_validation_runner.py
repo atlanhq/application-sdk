@@ -6,7 +6,6 @@ run directory, so no live server or Temporal runtime is needed.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,11 +16,6 @@ from application_sdk.testing.integration import BaseIntegrationTest, Scenario, e
 from application_sdk.testing.integration import runner as runner_module
 from application_sdk.testing.integration.models import APIType
 from application_sdk.testing.integration.runner import _needs_asset_validation
-
-_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
-requires_rocksdict = pytest.mark.skipif(
-    not _HAS_ROCKSDICT, reason="orphan pass needs rocksdict (the [storage] extra)"
-)
 
 CONN = "default/snow/123"
 SCHEMA_QN = f"{CONN}/DB/SCHEMA"
@@ -76,7 +70,6 @@ def _scenario(**overrides) -> Scenario:
 _RESPONSE = {"data": {"workflow_id": WORKFLOW_ID, "run_id": RUN_ID}}
 
 
-@requires_rocksdict
 class TestRunnerAssetValidation:
     def test_warn_first_does_not_raise(self, tmp_path: Path) -> None:
         _layout_with_orphan(tmp_path)

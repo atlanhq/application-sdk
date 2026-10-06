@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.41.0
-source-sha:    b004edfa8b58a2c4fdd49d2e46bd70a50dca484c
-source-date:   2026-10-06T00:35:45+01:00
+source-sha:    085ce7da75ace8ffa7ba6d51b6857b328a9e5bcb
+source-date:   2026-10-06T18:24:11+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -6273,7 +6273,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -6839,7 +6839,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 - **Import:** `from application_sdk.validation import iter_ndjson_lines`
 - **Also importable from:** `application_sdk.validation.ndjson`
-- **Signature:** `iter_ndjson_lines(path: str | Path)`
+- **Signature:** `iter_ndjson_lines(path: str | Path | Sequence[str | Path])`
 - **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 - **Defined in:** `application_sdk/validation/ndjson.py`
 
@@ -6899,14 +6899,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_assets_as_artifact`
 
 - **Import:** `from application_sdk.validation import validate_assets_as_artifact`
-- **Signature:** `validate_assets_as_artifact(path: str | Path, *, ...)`
+- **Signature:** `validate_assets_as_artifact(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.validation import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 

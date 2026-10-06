@@ -51,7 +51,7 @@ import functools
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Iterator
+from typing import Final, Iterator, Sequence
 
 import msgspec
 import orjson
@@ -357,7 +357,7 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
 
 
 def validate_transformed_dir(
-    path: str | Path,
+    path: str | Path | Sequence[str | Path],
     *,
     for_creation: bool = True,
     check_referential_integrity: bool = True,
@@ -375,7 +375,11 @@ def validate_transformed_dir(
     report reflects the full batch, not a sample.
 
     Args:
-        path: A transformed-output directory (e.g. ``.../transformed``) or file.
+        path: A transformed-output directory (e.g. ``.../transformed``) or file,
+            or a sequence of them read as one batch — the declared parts of a
+            fanned-in hand-off. The referential pass spans the whole batch, so
+            a parent emitted by one part satisfies a child in another
+            (FND-3414).
         for_creation: Passed through to each asset's ``.validate()``.
         check_referential_integrity: Run the referential second pass.
 
@@ -391,9 +395,9 @@ def validate_transformed_dir(
             present = SpillableDict()
             referenced = SpillableDict()
         except ImportError:
-            # rocksdict is an optional (``[storage]``) dependency and its absence
-            # is benign — no traceback needed. We fall back to per-asset
-            # validation only; the warning below (outside the except so the
+            # rocksdict is a core dependency (FND-3414), so this is reachable
+            # only in an environment that removed it by hand. Fall back to
+            # per-asset validation; the warning below (outside the except so the
             # ImportError stack isn't logged) tells the caller the orphan pass
             # was skipped.
             referential = False
@@ -624,7 +628,7 @@ def _as_reference_failure(orphan: ReferentialFailure) -> ArtifactValidationFailu
 
 
 def validate_assets_as_artifact(
-    path: str | Path,
+    path: str | Path | Sequence[str | Path],
     declaration: ModelDeclaration | None = None,
     *,
     for_creation: bool = True,
@@ -640,7 +644,9 @@ def validate_assets_as_artifact(
     without standing up the wrapper.
 
     Args:
-        path: A transformed-output directory (e.g. ``.../transformed``) or file.
+        path: A transformed-output directory (e.g. ``.../transformed``) or file,
+            or a sequence of them read as one batch (see
+            :func:`validate_transformed_dir`).
         declaration: The resolved model declaration. Accepted for the
             :class:`~application_sdk.validation.protocols.FormatValidator` shape and
             for the model check; ``None`` skips that check, for a direct caller with

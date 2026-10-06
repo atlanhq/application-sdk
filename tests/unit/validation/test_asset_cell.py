@@ -23,7 +23,6 @@ shape connectors actually write, so the decode path is the production one.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
 import pytest
@@ -46,12 +45,6 @@ from application_sdk.validation.artifacts import (
     OUTCOME_UNSUPPORTED,
     UNIT_RECORD,
     ModelDeclaration,
-)
-
-_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
-requires_rocksdict = pytest.mark.skipif(
-    not _HAS_ROCKSDICT,
-    reason="referential-integrity pass needs rocksdict (the [storage] extra)",
 )
 
 APP = "test-app"
@@ -159,7 +152,6 @@ def test_an_undeserializable_record_lands_as_undecodable(tmp_path: Path) -> None
     assert [f.kind for f in report.failures] == ["undecodable"]
 
 
-@requires_rocksdict
 def test_an_orphan_lands_as_a_missing_reference(tmp_path: Path) -> None:
     """An orphan is a ``missing`` failure naming the relationship it came through —
     and it does **not** move ``passed``. A record can be valid on its own terms and
