@@ -16,6 +16,8 @@ name: Tests
 #                 services-script below only if that pattern doesn't fit.
 #   e2e         — full-DAG tests against a real tenant via e2e-full-reusable.
 #                 Triggered by the 'e2e' PR label or workflow_dispatch.
+#                 The label is consumed: Tests Gate removes it after the
+#                 run, so re-add it to run e2e again (FND-3411).
 #   Tests Gate  — aggregator gate; the check INTENDED to be the required one
 #                 for branch protection.  tests must pass; e2e can be skipped.
 #

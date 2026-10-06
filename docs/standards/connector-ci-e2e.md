@@ -79,9 +79,27 @@ Neither leg is the place credential resolution is proven. That is `tests/unit/cr
 
 ### What the `e2e` label actually gates
 
-Adding the `e2e` label starts the suite; a subsequent push (`synchronize`) on a
-PR still carrying it re-runs the suite. What does **not** re-run it is an
-unrelated label add — `size/`, `area/`, dependency and review-state labels churn
+Adding the `e2e` label starts the suite. The label is a **one-shot request**:
+when the run finishes, the `Tests Gate` job removes it (FND-3411), whatever the
+verdict. To run e2e again — after a push, or to retry a failure — add the label
+again. Before this, a label left on a PR re-ran the live-tenant suite on every
+later push, usually days after anyone wanted it.
+
+Two details of the removal matter:
+
+- It uses the run's own `github.token`, so the `unlabeled` event starts no
+  workflow run — nothing re-fires on it.
+- Before removing the label, the gate records the verdict as an `e2e` commit
+  status on the PR head (`success` or `failure` only). The consumer's
+  [Release Gate](release-flow.md) reads that status once the label is gone. The
+  status is bound to the commit, so a push re-blocks a release PR until the
+  label is re-added.
+
+application-sdk's own `PR Checks` does the same in its `consume-e2e-label` job,
+after `Connector Tests Gate` and the other label-gated jobs finish.
+
+While the label is on the PR, a push (`synchronize`) re-runs the suite. What does
+**not** re-run it is an unrelated label add — `size/`, `area/`, dependency and review-state labels churn
 constantly on an open PR, and every one of those used to re-fire the whole
 matrix (FND-48).
 

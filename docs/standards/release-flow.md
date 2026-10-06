@@ -50,7 +50,17 @@ The PR upsert still runs on a skipped push. Bump runs are also serialised per re
 Release Gate deliberately still runs on every `labeled`/`unlabeled` event. It cannot be skipped
 for unrelated labels: a skipped job files a `skipped` check, a required check reads that as a
 pass, and the newest run wins — so an unrelated label would clear a real "missing `e2e`" failure.
-The job is a two-minute `ubuntu-slim` label lookup.
+The job is a two-minute `ubuntu-slim` check.
+
+Release Gate passes a release PR on the `e2e` label **or** on a successful `e2e` commit
+status on the PR head (`.github/scripts/release_gate.py`, vendored by bootstrap). The status
+is needed because the label is consumed: the Tests Gate removes it once the run finishes and
+records the verdict as that status first (FND-3411). The removal uses `github.token`, so it
+starts no new Release Gate run. A later run — an unrelated label, a human removing `e2e` —
+then reads the status and stays green. A push moves the head to a commit with no status, so
+the gate fails until the label is added again. A repo still on the pre-FND-3411 template keeps
+its green verdict from the `labeled` run, but any later label event turns it red; re-run
+`bootstrap --resync` to pick up the status check.
 
 **Two guards decide whether a run acts at all** (`.github/scripts/release_guard.py`, called
 from `release.py` before any file is touched; each sets `skip=true`, which every mutating

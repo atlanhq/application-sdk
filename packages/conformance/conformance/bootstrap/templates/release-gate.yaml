@@ -4,6 +4,13 @@ name: Release Gate
 # workflow) from being merged until a reviewer adds the `e2e` label, which
 # triggers the full e2e tests as the final gate before a release is cut.
 #
+# The label is consumed: the SDK's Tests Gate removes it once the run finishes
+# and records the verdict as an `e2e` commit status on the head (FND-3411). So
+# the gate passes on EITHER the label OR a successful `e2e` status on the head
+# commit. A push moves the head to a commit with no status, which re-blocks
+# until the label is added again. The decision lives in
+# .github/scripts/release_gate.py, vendored alongside this file.
+#
 # All other PRs pass this check immediately — it exists solely to gate the
 # auto-created bump-version PRs without requiring `e2e` on every PR.
 #
@@ -39,6 +46,8 @@ on:
 permissions:
   contents: read
   pull-requests: read
+  # Reads the head commit's `e2e` status once the label has been consumed.
+  statuses: read
 
 # A new commit retires the previous commit's run; see conformance.yaml for why
 # the group is run-unique off the PR path and why only `synchronize` cancels.
@@ -68,23 +77,30 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 2
     steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A failed lookup leaves the file empty, which the gate reads as "no e2e
+      # verdict" and fails on - see release_gate.py.
+      - name: Fetch the head commit's e2e status
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${REPO}/commits/${HEAD_SHA}/status" \
+            --jq '.statuses[] | select(.context == "e2e") | .state' > e2e-state.txt
+
       - name: Verify release readiness
         env:
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           set -euo pipefail
-          has_release=$(echo "$LABELS" | jq 'index("release") != null')
-          has_e2e=$(echo "$LABELS" | jq 'index("e2e") != null')
-
-          if [[ "$has_release" != "true" ]]; then
-            echo "Not a release PR — gate passes."
-            exit 0
-          fi
-
-          if [[ "$has_e2e" != "true" ]]; then
-            echo "::error::Release PR requires the 'e2e' label before merging. Add it to trigger e2e tests; this gate unblocks once the label is present and the tests pass."
-            exit 1
-          fi
-
-          echo "Release PR has both 'release' and 'e2e' labels — gate passes."
-          echo "Test pass/fail is enforced separately by 'tests / Tests Gate'."
+          touch e2e-state.txt
+          python3 .github/scripts/release_gate.py \
+            --labels "$LABELS" \
+            --e2e-state-file e2e-state.txt
