@@ -170,9 +170,10 @@ data — so the incident stays open for days instead of being read off the trace
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 - **Interacts with:** ruff BLE001 and the sanitized form: BLE001 accepts a broad except only when the handler
   logs with exc_info or re-raises, so the sanitized no-exc_info log this rule prescribes
-  at a credential catch trips it. Narrow the except (E004) or mark a catch that must
-  stay broad with `# noqa: BLE001 — <reason>`; adding exc_info=True to satisfy BLE001
-  would leak the credentials this exemption protects.
+  at a credential catch trips it. Narrow the except to what the try raises (E004). A
+  catch that genuinely must stay broad is left as it is and reported for a person to
+  decide: never suppress BLE001, and never add exc_info=True to satisfy it, which would
+  leak the credentials this exemption protects.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -193,11 +194,11 @@ safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
 * The sanitized form carries no `exc_info`, so ruff BLE001 (in ruff's default rule set)
 flags it when the catch is a broad `except Exception`. Narrow the catch to what the
 `try` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where
-the catch must stay broad, keep the sanitized log and mark the breadth with `# noqa:
-BLE001 — <why it must be broad>`. Never add `exc_info=True` here to quiet BLE001, and
+the catch genuinely must stay broad, leave the site as it is and report it for a person
+to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet BLE001, and
 never re-raise `from e` for the same reason: the chained cause carries the raw exception
 to whichever log prints it next. An app that selects `TRY` or `ALL` also gets TRY400 on
-the sanitized call, narrowed or not; name it in the same `noqa`.
+the sanitized call, narrowed or not: report that site the same way.
 
 * Everywhere else, `exc_info=True` on the existing log call is the fix.
 

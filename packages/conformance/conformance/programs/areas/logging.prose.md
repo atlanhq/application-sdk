@@ -120,13 +120,13 @@ rule was skipped, the sanitized form records that the credential was handled.
 set) accepts `except Exception` only when the handler logs with `exc_info`
 or re-raises, so the sanitized form above trips it at a broad catch.  Narrow
 the `except` to what the `try` actually raises (E004's fix), and the
-sanitized log stands as it is.  Where the catch must stay broad, keep the
-sanitized log and mark the breadth: `except Exception as exc:  # noqa: BLE001
-— <why it must be broad>`.  Do not add `exc_info=True` to quiet BLE001, and
-do not re-raise `from exc` for that reason either: the chained cause carries
-the raw exception to whichever log prints it next.  If the app selects `TRY`
-or `ALL`, TRY400 also flags the sanitized `logger.error(...)`, narrowed or
-not; name it in the same `noqa`.
+sanitized log stands as it is.  Where the catch genuinely must stay broad,
+leave the site as it is and report it for a person to decide: do not
+suppress BLE001.  Do not add `exc_info=True` to quiet BLE001, and do not
+re-raise `from exc` for that reason either: the chained cause carries the
+raw exception to whichever log prints it next.  If the app selects `TRY` or
+`ALL`, TRY400 also flags the sanitized `logger.error(...)`, narrowed or not;
+report that site the same way.
 
 **Mechanical rules** (`autofixable = true`, `classification = "mechanical"`):
 
