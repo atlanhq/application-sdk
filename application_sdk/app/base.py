@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -186,7 +186,10 @@ def _resolve_transformed_target(local_path: str) -> "Path | None":
 
 
 async def _warn_on_invalid_transformed_assets(
-    local_path: str | Sequence[str], app_name: str
+    local_path: str | Sequence[str],
+    app_name: str,
+    *,
+    not_local: Sequence[str] = (),
 ) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
@@ -248,10 +251,14 @@ async def _warn_on_invalid_transformed_assets(
     a single artifact path and the parts share no local root to hand it.
 
     A declared part that is not on this pod (a distributed fan-in, where the
-    upload streams it from the deployment store) makes the batch incomplete. The
-    orphan pass is then skipped with a warning, and per-asset validation still
-    runs over the parts that are local — reporting a parent as missing because it
-    was written on another pod would be the false positive this fixes.
+    upload streams it from the deployment store) makes the batch incomplete.
+    ``upload_refs`` passes those parts' store keys as ``not_local``. When any of
+    them is a transformed part, the orphan pass is skipped with a warning, and
+    per-asset validation still runs over the parts that are local — reporting a
+    parent as missing because it was written on another pod would be the false
+    positive this fixes. When *no* transformed part is local, the same warning
+    says validation was skipped entirely, so a fully distributed fan-in is never
+    silent.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
@@ -268,18 +275,22 @@ async def _warn_on_invalid_transformed_assets(
         for target in map(_resolve_transformed_target, paths)
         if target is not None
     ]
+    remote = [key for key in not_local if "transformed" in PurePosixPath(key).parts]
+    if remote:
+        _task_logger.warning(
+            "Transformed-asset validation: %d of %d declared transformed file(s) "
+            "are not on this pod, so the batch is incomplete; %s",
+            len(remote),
+            len(remote) + len(targets),
+            (
+                "skipping the referential (orphan) check"
+                if targets
+                else "skipping validation"
+            ),
+        )
     if not targets:
         return
-    not_local = sum(1 for path in paths if not path or not Path(path).exists())
-    check_referential_integrity = not not_local
-    if not_local:
-        _task_logger.warning(
-            "Transformed-asset validation: %d of %d declared file(s) are not on "
-            "this pod, so the batch is incomplete; skipping the referential "
-            "(orphan) check",
-            not_local,
-            len(paths),
-        )
+    check_referential_integrity = not remote
 
     from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
         Asset,
@@ -2059,9 +2070,18 @@ class App(ABC):
         # Validate the declaration as one batch, not per file (FND-3414): a
         # fanned-out connector writes one file per typename, so a child's parent
         # is usually in a sibling file and a per-file orphan pass flags nearly
-        # every cross-typename reference.
+        # every cross-typename reference. A part this pod never held is passed
+        # by store key, so the hook can say the batch is incomplete.
+        local: list[str] = []
+        not_local: list[str] = []
+        for declared in input.files:
+            path = declared.ref.local_path
+            if path and Path(path).exists():
+                local.append(path)
+            else:
+                not_local.append(declared.ref.storage_path or "")
         await _warn_on_invalid_transformed_assets(
-            [d.ref.local_path or "" for d in input.files], self._app_name
+            local, self._app_name, not_local=not_local
         )
 
         delivered: list[FileReference] = []

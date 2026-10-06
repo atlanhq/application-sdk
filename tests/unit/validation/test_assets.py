@@ -381,6 +381,19 @@ class TestMultiPartInput:
         assert len(report.orphans) == 1
         assert report.orphans[0].missing_qualified_name == f"{SCHEMA_QN}/T_MISSING"
 
+    def test_differently_spelled_parts_are_read_once(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # A relative directory and an absolute path to a file inside it name the
+        # same file with different strings; it must still be counted once.
+        _write(tmp_path, "Table", [_table()])
+        monkeypatch.chdir(tmp_path)
+        report = validate_transformed_dir(
+            [Path("transformed"), _part(tmp_path, "Table")],
+            check_referential_integrity=False,
+        )
+        assert report.total == 1
+
     def test_overlapping_parts_are_read_once(self, tmp_path: Path) -> None:
         # A directory and a file inside it, both declared: the file's records must
         # be counted once, not twice.

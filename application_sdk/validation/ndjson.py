@@ -53,6 +53,7 @@ reached. :meth:`NdjsonValidator.validate` splits them.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, time
@@ -113,9 +114,10 @@ def iter_ndjson_lines(
     Also accepts a sequence of such paths, read as **one** artifact: the parts of
     a fanned-in hand-off that ``upload_refs`` delivers as a single tree but that
     share no local root the caller may walk (FND-3414). Each part is expanded by
-    the same rule, and the union is de-duplicated and sorted, so a file named by
-    two overlapping parts is read once and ordering does not depend on the order
-    the parts were declared in.
+    the same rule, and the union is de-duplicated by the file's real path — so a
+    file reached through two overlapping parts, however each spells it
+    (relative or absolute, through a symlink), is read once — then sorted, so
+    ordering does not depend on the order the parts were declared in.
 
     **Both branches apply the same suffix rule, and that symmetry is
     load-bearing.** The single-file branch used to accept any file, while the
@@ -146,7 +148,12 @@ def iter_ndjson_lines(
     caller named the file rather than its parent directory.
     """
     roots = [Path(path)] if isinstance(path, (str, Path)) else [Path(p) for p in path]
-    files = sorted({f for root in roots for f in _ndjson_files(root)})
+    # Keyed on the real path, reported under the first spelling seen.
+    unique: dict[str, str] = {}
+    for root in roots:
+        for file_path in _ndjson_files(root):
+            unique.setdefault(os.path.realpath(file_path), file_path)
+    files = sorted(unique.values())
     for file_path in files:
         with open(file_path, "rb") as handle:
             for line_no, raw in enumerate(handle, start=1):

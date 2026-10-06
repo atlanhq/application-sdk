@@ -9,6 +9,7 @@ subset that ran locally — and on a fully distributed run, nothing at all.
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -147,12 +148,46 @@ class TestUploadRefs(_ResetsRegistries):
                 UploadRefsInput(files=files, source_prefix=SOURCE, prefix=DEST)
             )
 
+        # None of these refs is on this pod (their local paths do not exist), so
+        # each is handed over by store key for the incomplete-batch warning.
         self.validation_hook.assert_awaited_once_with(
-            [f.ref.local_path for f in files], app._app_name
+            [], app._app_name, not_local=[f.ref.storage_path for f in files]
         )
         # ...and never again per file inside the upload.
         assert all(
             c.kwargs == {"validate_assets": False} for c in upload.await_args_list
+        )
+
+    async def test_local_and_remote_parts_are_split_for_validation(
+        self, tmp_path: Path
+    ) -> None:
+        app = self._app()
+        local = tmp_path / "transformed" / "table" / "entities.json"
+        local.parent.mkdir(parents=True)
+        local.write_text("{}\n")
+        files = [
+            DeclaredFile(
+                ref=FileReference(
+                    local_path=str(local),
+                    storage_path=f"{SOURCE}/table/entities.json",
+                    is_durable=True,
+                )
+            ),
+            DeclaredFile(ref=_ref("column")),  # written on another pod
+        ]
+
+        with (
+            self._patch_upload(app),
+            mock.patch.object(app, "_verify_refs_impl", new_callable=mock.AsyncMock),
+        ):
+            await app.upload_refs(
+                UploadRefsInput(files=files, source_prefix=SOURCE, prefix=DEST)
+            )
+
+        self.validation_hook.assert_awaited_once_with(
+            [str(local)],
+            app._app_name,
+            not_local=[f"{SOURCE}/column/entities.json"],
         )
 
     async def test_a_label_names_the_leaf(self) -> None:

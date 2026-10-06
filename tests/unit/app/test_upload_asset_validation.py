@@ -297,17 +297,45 @@ class TestWarnOnInvalidTransformedAssets:
         # the lone Table's parent is not here. Reporting it as an orphan would be
         # the false positive; per-asset validation of the local parts still runs.
         _write_transformed(tmp_path, "Table", [_invalid_table()])
-        parts = [
-            str(tmp_path / "transformed" / "Table" / "entities.json"),
-            str(tmp_path / "transformed" / "Schema" / "entities.json"),  # absent
-        ]
+        parts = [str(tmp_path / "transformed" / "Table" / "entities.json")]
         with patch.object(base_module, "_task_logger") as logger:
-            await _warn_on_invalid_transformed_assets(parts, APP)
+            await _warn_on_invalid_transformed_assets(
+                parts, APP, not_local=["run/transformed/Schema/entities.json"]
+            )
             messages = [c.args[0] for c in logger.warning.call_args_list]
             assert any("not on this pod" in m for m in messages)
             ev = _outcome_event(logger)
             assert ev["assets_invalid"] == 1
             assert ev["assets_orphaned"] == 0
+
+    async def test_a_fully_remote_fan_in_warns_instead_of_going_silent(
+        self,
+    ) -> None:
+        # Every declared part was written on another pod: there is nothing local
+        # to scan, and that must be said rather than skipped without a trace.
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                [],
+                APP,
+                not_local=[
+                    "run/transformed/Table/entities.json",
+                    "run/transformed/Column/entities.json",
+                ],
+            )
+            logger.warning.assert_called_once()
+            assert "not on this pod" in logger.warning.call_args.args[0]
+            assert logger.warning.call_args.args[-1] == "skipping validation"
+            logger.info.assert_not_called()
+
+    async def test_remote_raw_parts_do_not_warn(self) -> None:
+        # Only transformed parts make an asset batch incomplete; a raw part
+        # delivered by the same declaration is not an asset file.
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                [], APP, not_local=["run/raw/table/chunk-0.json"]
+            )
+            logger.warning.assert_not_called()
+            logger.info.assert_not_called()
 
     async def test_transformed_dir_passed_directly_is_scanned(
         self, tmp_path: Path
