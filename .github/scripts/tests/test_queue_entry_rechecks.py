@@ -59,7 +59,14 @@ def test_gated_jobs_skip_only_on_the_skip_answer(name: str, answer: str) -> None
     for job_id in jobs:
         job = workflow["jobs"][job_id]
         assert "queue-diff" in job["needs"], f"{name}:{job_id} must wait on queue-diff"
-        contexts = {"needs": {"queue-diff": {"outputs": {output: answer}}}}
+        # build-and-scan's gates also read `scope` (FND-3328); its empty
+        # output (skipped on a queue entry's sibling events) means "scan".
+        contexts = {
+            "needs": {
+                "queue-diff": {"outputs": {output: answer}},
+                "scope": {"outputs": {"scan": ""}},
+            }
+        }
         runs = evaluate(job["if"], contexts)
         assert runs is (
             answer != skip_value
@@ -78,6 +85,7 @@ def _queue_diff_contexts(event: str) -> dict[str, Any]:
     return {
         "github": {"event_name": event},
         "inputs": {"event_name": event, "force-all": False, "image": "", "ref": ""},
+        "needs": {"scope": {"outputs": {"scan": ""}}},
     }
 
 
@@ -104,7 +112,11 @@ def test_scan_never_skips_for_a_prebuilt_image_or_explicit_ref(
     inputs: dict[str, str], runs: bool
 ) -> None:
     gate = _load("build-and-scan.yaml")["jobs"]["queue-diff"]["if"]
-    contexts = {"github": {"event_name": "merge_group"}, "inputs": inputs}
+    contexts = {
+        "github": {"event_name": "merge_group"},
+        "inputs": inputs,
+        "needs": {"scope": {"outputs": {"scan": ""}}},
+    }
     assert evaluate(gate, contexts) is runs
 
 

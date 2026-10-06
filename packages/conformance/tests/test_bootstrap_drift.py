@@ -333,7 +333,7 @@ def test_vulnerability_scan_hand_added_lfs_opt_in_not_flagged(
     wf = wf_dir / "vulnerability-scan.yml"
     wf.write_text(
         render("vulnerability-scan.yml").replace(
-            "    secrets: inherit", "    with:\n      lfs: true\n    secrets: inherit"
+            "    secrets: inherit", "      lfs: true\n    secrets: inherit"
         )
     )
     assert scan_path(wf, tmp_path) == []

@@ -160,17 +160,24 @@ def test_build_chain_sits_behind_prepare(job_id: str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("ref", "publish", "blocking"),
+    ("ref", "publish", "release_tag", "promote_source", "blocking"),
     [
-        (MAIN, False, True),
-        (MAIN, True, False),
-        ("refs/tags/v1.2.3", True, False),
-        ("refs/heads/feature-x", False, False),
+        (MAIN, False, "", "", True),
+        (MAIN, True, "", "", False),
+        # FND-3328: a release that promoted the scanned bump-PR candidate is
+        # report-only; one that had to rebuild is gated by this scan.
+        ("refs/tags/v1.2.3", True, "v1.2.3", "ghcr.io/atlanhq/x@sha256:ab", False),
+        ("refs/tags/v1.2.3", True, "v1.2.3", "", True),
+        ("refs/heads/feature-x", False, "", "", False),
     ],
 )
 def test_security_scan_blocks_on_a_non_publishing_main_run(
-    ref: str, publish: bool, blocking: bool
+    ref: str, publish: bool, release_tag: str, promote_source: str, blocking: bool
 ) -> None:
     expression = _jobs()["security-scan"]["with"]["fail_on_findings"]
-    contexts = {"github": {"ref": ref}, "inputs": {"publish": publish}}
+    contexts = {
+        "github": {"ref": ref},
+        "inputs": {"publish": publish, "release_tag": release_tag},
+        "needs": {"prepare": {"outputs": {"promote_source": promote_source}}},
+    }
     assert evaluate_operand(expression, contexts) is blocking

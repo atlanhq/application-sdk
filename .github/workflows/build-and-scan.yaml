@@ -6,9 +6,15 @@
 # Fails if any CRITICAL/HIGH CVE is not in the allowlist.
 #
 # Used in two places:
-#   1. Directly by app repos on PR (blocks merge on new vulnerabilities)
+#   1. By app repos' vulnerability-scan.yml on PRs and queue entries. In a repo
+#      with a release flow it scans ONLY the bump-version PR, on the release
+#      candidate image that PR built, and marks it `scanned-<tree>` on a pass
+#      so the release promotes it instead of rebuilding (FND-3328). Every other
+#      PR and queue entry skips (see the `scope` job). Repos without a release
+#      flow still scan every PR.
 #   2. By build-and-publish-app.yaml on the image it pushes (blocking before an
-#      SDR deploy-on-merge, report-only on a publishing run)
+#      SDR deploy-on-merge and on a release that had to rebuild, report-only on
+#      a release that promoted the scanned candidate)
 #
 # Usage (PR check):
 #   jobs:
@@ -46,6 +52,24 @@ on:
           extra runtime for no data. Turn it on per-repo for images that do run
           standalone. Reachability for service images needs INSTRUMENTED
           reachability against a real deployment, which is separate work.
+        required: false
+        type: boolean
+        default: false
+      scan_every_pr:
+        description: >-
+          Scan every PR and merge-queue entry, as before FND-3328. Default false:
+          in a repo with a release flow only the bump-version PR is scanned (see
+          the `scope` job). Repos without a release flow scan every PR whatever
+          this says.
+        required: false
+        type: boolean
+        default: false
+      mark_scanned:
+        description: >-
+          On a passing Security Gate, copy the scanned image (`image`, a
+          `ghcr.io/atlanhq/<repo>:candidate-<tree>@sha256:...` ref from
+          build-and-publish-app's candidate mode) to `scanned-<tree>`, the tag a
+          release promotes. Only meaningful with fail_on_findings true.
         required: false
         type: boolean
         default: false
@@ -87,6 +111,65 @@ permissions:
   pull-requests: write
 
 jobs:
+  # ── Scope: does this PR / queue entry scan at all? (FND-3328) ───────────────
+  # Since FND-3327 the only image a release-flow app ships is the release
+  # image, so scanning an image per PR checks something that never ships. The
+  # scan runs on the bump-version PR instead, and the release promotes the
+  # image that PR scanned. This job answers `scan=false` for every other PR and
+  # every queue entry in such a repo; `build` and `security-gate` then skip,
+  # and a skipped job files the required `scan / Build Image` and
+  # `scan / Security Gate` contexts as passing. That is why the skip lives
+  # here and not in the caller's `on:` filter: a workflow that never starts
+  # files no context, and a required one would block the PR.
+  #
+  # "Release flow" is read from the BASE branch's workflows, so a PR cannot opt
+  # itself out. Repos without one scan every PR, as before. Rules and the
+  # fail-safe direction are in vuln_scan_scope.py.
+  #
+  # Only on a PR or queue entry building the caller's own tree: the prebuilt-
+  # image path (`inputs.image`) and an explicit `inputs.ref` always scan. An
+  # empty output (skipped or failed job) is not `'false'`, so the scan runs.
+  scope:
+    name: Scan scope
+    if: (github.event_name == 'pull_request' || github.event_name == 'merge_group') && inputs.image == '' && inputs.ref == ''
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      scan: ${{ steps.scope.outputs.scan }}
+    steps:
+      # A failed checkout leaves no workflows directory, which the script reads
+      # as "no release flow": the run scans.
+      - name: Checkout base branch workflows
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          path: _base
+          sparse-checkout: .github/workflows
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Fetch vuln_scan_scope.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/vuln_scan_scope.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Decide
+        id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          SCAN_EVERY_PR: ${{ inputs.scan_every_pr }}
+          WORKFLOWS_DIR: _base/.github/workflows
+        run: python3 _sdk/.github/scripts/vuln_scan_scope.py
+
   # ── Merge-queue entry: did combining with the base change the image? ───────
   # The scan's verdict depends on the image's packages, which come from the
   # base image, the Dockerfile and the dependency locks, plus the caller's
@@ -102,7 +185,8 @@ jobs:
   # failed — is not `'false'`, so the scan then runs as before.
   queue-diff:
     name: Queue tree diff
-    if: github.event_name == 'merge_group' && inputs.image == '' && inputs.ref == ''
+    needs: [scope]
+    if: ${{ !cancelled() && github.event_name == 'merge_group' && inputs.image == '' && inputs.ref == '' && needs.scope.outputs.scan != 'false' }}
     runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
@@ -154,14 +238,15 @@ jobs:
   # build-and-publish-app.yaml): the build steps skip, and both scanners pull
   # the published image instead.
   #
-  # Skipped only on a queue entry whose image inputs match the PR head's. The
-  # skipped job still files `Build Image`, as `skipped`, which the required
-  # context counts as a pass; keep `name:` static so it carries the same
-  # string. `!cancelled()` keeps it running when `queue-diff` is skipped.
+  # Skipped on a PR or queue entry `scope` keeps out of the scan, and on a
+  # queue entry whose image inputs match the PR head's. The skipped job still
+  # files `Build Image`, as `skipped`, which the required context counts as a
+  # pass; keep `name:` static so it carries the same string. `!cancelled()`
+  # keeps it running when `scope` / `queue-diff` are skipped.
   build:
     name: Build Image
-    needs: [queue-diff]
-    if: ${{ !cancelled() && needs.queue-diff.outputs.image_changed != 'false' }}
+    needs: [scope, queue-diff]
+    if: ${{ !cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false' }}
     runs-on: ubuntu-latest
     # The job cap is a hard limit from job start, and continue-on-error does
     # not survive it: a job that times out during the Endor scan fails the
@@ -586,11 +671,12 @@ jobs:
     name: Security Gate
     # `always()` so a failed `build` still produces a verdict here, the required
     # check, naming that job as the cause rather than leaving the gate skipped.
-    # The one deliberate skip is the same as `build`'s: a queue entry whose
-    # image inputs match the PR head's, where there are no results to check
-    # and the skipped `Security Gate` counts as the PR's pass.
-    needs: [queue-diff, build]
-    if: always() && !cancelled() && needs.queue-diff.outputs.image_changed != 'false'
+    # The deliberate skips are the same as `build`'s: a PR or queue entry
+    # `scope` keeps out of the scan, and a queue entry whose image inputs match
+    # the PR head's. There are no results to check, and the skipped `Security
+    # Gate` counts as a pass.
+    needs: [scope, queue-diff, build]
+    if: always() && !cancelled() && needs.scope.outputs.scan != 'false' && needs.queue-diff.outputs.image_changed != 'false'
     runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
@@ -658,6 +744,21 @@ jobs:
           # so there is one upstream result to pass.
           BUILD_RESULT: ${{ needs.build.result }}
         run: python3 _sdk/.github/scripts/check_allowlist.py --trivy-results /tmp/trivy_results.json --write-comment
+
+      # The bump PR's candidate passed a BLOCKING gate: copy the exact digest
+      # that was scanned to `scanned-<tree>`, the tag the release looks up and
+      # promotes (FND-3328). Only a passing gate reaches here, so a bump PR
+      # merged past a red scan leaves nothing to promote and the release
+      # rebuilds behind a blocking scan. The org PAT is what can write these
+      # org-level packages; the script only copies manifests within the repo
+      # named in `image`, and validates the ref shape before touching it.
+      - name: Mark the scanned release candidate
+        if: success() && inputs.mark_scanned && inputs.fail_on_findings
+        env:
+          IMAGE: ${{ inputs.image }}
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+        run: python3 _sdk/.github/scripts/release_candidate.py mark
 
       - name: Comment on PR
         if: always() && github.event_name == 'pull_request'

@@ -215,7 +215,7 @@ base-sensitive or not:
 | `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
 | `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree | The suite reads only the tree. |
 | `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
-| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | Skipped unless an image input differs from the PR head | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
+| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input differs from the PR head | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
 runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
@@ -253,8 +253,9 @@ surface.
 * A floating base-image tag (`FROM …:latest`) can move without any file
   changing, and so can the vulnerability DB. Both drift the same way between
   any two scans, queue or no queue. `build-and-publish-app.yaml` scans the
-  image it pushes: blocking on an SDR deploy-on-merge push to `main`, report-only
-  on a publishing run. Non-SDR apps build no image on a merge (FND-3327).
+  image it pushes: blocking on an SDR deploy-on-merge push to `main` and on a
+  release that had to rebuild, report-only on a release that promoted the
+  scanned bump-PR candidate. Non-SDR apps build no image on a merge (FND-3327).
 * A Dockerfile under a name the image-input list does not match (the list is
   by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
   which names the Dockerfile, is on the list. A bespoke name still needs adding
@@ -262,6 +263,46 @@ surface.
 * Unit tests. They are base-sensitive and could skip on an identical tree too,
   but they feed `Tests Gate` with the integration tier, so they were left
   alone.
+
+### The vulnerability scan gates the bump PR, not every PR (FND-3328)
+
+Since FND-3327 the only image a release-flow app ships is the release image,
+so a scan per PR checked an image that never shipped. In a repo whose base
+branch has a workflow calling `release-version-bump.yaml`, `build-and-scan.yaml`
+now scans only the `bump-version*` PR. Its `scope` job
+(`.github/scripts/vuln_scan_scope.py`) answers `scan=false` for every other PR
+and every queue entry, and `Build Image` / `Security Gate` skip on that answer.
+A skipped job files its required context as passing, which is why the skip is
+inside the reusable workflow: dropping the caller's triggers would file no
+context at all and block every PR. Security signed off on this posture.
+
+Repos with no release flow scan every PR and queue entry as before: without a
+bump PR nothing else would gate their image. A caller can also opt back in
+with `scan_every_pr: true`. The release-flow check reads the **base** branch,
+so a PR cannot opt itself out, and an unreadable base reads as "no release
+flow", i.e. scan.
+
+The bump PR scans the image the release ships. The template's `candidate` job
+runs `build-and-publish-app.yaml` with `candidate: true` on the PR's merge
+commit, pushing the full release build as `:candidate-<tree>` (`<tree>` is the
+git tree SHA). The scan scans that digest, blocking, and on a pass tags it
+`:scanned-<tree>`. At release, `prepare` looks up `:scanned-<tree>` for the
+tree being released and `merge` copies that manifest to every release tag with
+no build; the copy reads each tag back and fails unless the digest matches.
+The tree, not the commit, is the key because the squash-merge commit is never
+a commit the PR built. When the base moved before the merge the trees differ,
+nothing is promoted, and the release rebuilds behind a **blocking** scan.
+Mechanics: `.github/scripts/release_candidate.py`; release-side detail in
+`release-flow.md`.
+
+**The Renovate lock refusal moved with it.** A refused lock bump is withheld by
+a lock carrying an undeclared `[options]` table (`renovate_uv_lock_bounded.py`,
+`withhold`). The image build's `uv sync --locked` behind the required
+`scan / Build Image` used to reject it. That job now skips on ordinary PRs, so
+the Pre-commit job of the shared `checks-reusable.yaml` runs `uv lock --check`
+(`.github/scripts/check_uv_lock.py`) whenever `uv.lock` differs from the base.
+It sits in the shared workflow, not a bootstrap template, so it went live in
+the same merge as the skip.
 
 ## Runner sizing
 

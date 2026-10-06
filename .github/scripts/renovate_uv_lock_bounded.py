@@ -290,9 +290,12 @@ def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> boo
     The one lever the driver does hold over a *required* check is the lock's own
     validity. So a refusal writes the baseline's versions — never the rejected
     resolve, never an unbounded one — and adds an ``[options]`` table the repo's
-    ``pyproject.toml`` does not declare. That is exactly what ``uv sync --locked``
-    rejects in the image build, and ``scan / Build Image`` is required in every
-    lock-lane repo, so the branch cannot merge until a human looks at it.
+    ``pyproject.toml`` does not declare. That is exactly what ``uv lock --check``
+    rejects in ``check_uv_lock.py``, run by the Pre-commit job of
+    ``checks-reusable.yaml``, and ``pre-commit / Pre-commit`` is required on every
+    PR, so the branch cannot merge until a human looks at it. (Until FND-3328 the
+    image build's ``uv sync --locked`` behind ``scan / Build Image`` caught it;
+    that job now skips on every PR but the bump-version PR.)
 
     Deliberate, documented, and meant to be temporary: the durable fix is a
     required age check that fails on its own evidence rather than on a lock the

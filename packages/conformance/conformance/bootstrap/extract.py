@@ -1020,7 +1020,8 @@ def extract_vulnerability_scan_lfs(text: str) -> str:
     Read file-wide via ``extract_field`` rather than through
     ``reusable_job_with_block``: that scope is keyed on the job calling
     ``tests-reusable.yaml`` and so does not apply here, and this shim is a
-    17-line file with exactly one job — the same reasoning that lets
+    short file whose two jobs (the bump PR's release-candidate build and the
+    scan, FND-3328) take the same value — the same reasoning that lets
     ``extract_use_ghcr_base`` read ``build-and-publish.yaml`` file-wide.
     """
     return "true" if extract_field(text, "lfs") == "true" else ""

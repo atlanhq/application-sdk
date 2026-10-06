@@ -366,16 +366,21 @@ def test_at_most_two_jobs_and_both_required_contexts_survive():
     The third job, `queue-diff` (FND-3321), is billed only on a merge-queue
     entry, where it exists to let the other two skip; on every other event it
     is skipped. When the two skip, and so may never skip, is pinned in
-    test_queue_entry_rechecks.py."""
+    test_queue_entry_rechecks.py.
+
+    The fourth, `scope` (FND-3328), is a two-step ubuntu-slim decision that
+    runs only on a PR or queue entry and lets the other two skip everywhere
+    but the bump-version PR; pinned in test_release_candidate_gates.py."""
     jobs = yaml.safe_load(BUILD_AND_SCAN.read_text())["jobs"]
     assert {job_id: job["name"] for job_id, job in jobs.items()} == {
+        "scope": "Scan scope",
         "queue-diff": "Queue tree diff",
         "build": "Build Image",
         "security-gate": "Security Gate",
     }
-    assert jobs["queue-diff"]["if"].startswith("github.event_name == 'merge_group' &&")
-    assert jobs["build"]["needs"] == ["queue-diff"]
-    assert jobs["security-gate"]["needs"] == ["queue-diff", "build"]
+    assert "github.event_name == 'merge_group'" in jobs["queue-diff"]["if"]
+    assert jobs["build"]["needs"] == ["scope", "queue-diff"]
+    assert jobs["security-gate"]["needs"] == ["scope", "queue-diff", "build"]
 
 
 def test_endor_scan_script_checkout_is_provenance_pinned():
