@@ -62,8 +62,56 @@ on:
           validated at parse time instead of silently supplying an empty token.
 
 jobs:
+  # Merge-queue entry only: did combining with the base change the tree?
+  # Pre-commit reads the tree and nothing else, so on a queue commit whose tree
+  # is exactly the PR head's it can only repeat the PR's green verdict
+  # (FND-3321). Skipped (not billed) on every other event. An empty output —
+  # skipped or failed — is not `'true'`, so pre-commit then runs as before.
+  # Same job as conformance-reusable.yaml's; see docs/standards/ci.md ("What a
+  # merge-queue entry re-runs").
+  queue-diff:
+    name: Queue tree diff
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identical: ${{ steps.diff.outputs.identical }}
+    steps:
+      # Credentials stay persisted: the script fetches the PR head from this
+      # same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Fetch queue_tree_diff.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
   pre-commit:
     name: Pre-commit
+    needs: [queue-diff]
+    # `!cancelled()` so the skipped `queue-diff` on a PR does not skip this
+    # job too. The one skip is an identical queue tree; the skipped job still
+    # files its `Pre-commit` check run, which a required context counts as a
+    # pass. Keep `name:` static so that run carries the same context string.
+    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
