@@ -218,9 +218,11 @@ async def test_run_query(
 
     # Mock run_in_thread to return cursor and then batches
     mock_run_in_thread.side_effect = [
+        mock_connection,  # Simulate engine.connect
         mock_cursor,  # Simulate connection.execute
         [row1, row2],  # First batch from `fetchmany`
         [],  # End of data from `fetchmany`
+        None,  # Simulate the close
     ]
 
     # Run run_query and collect all results
@@ -274,6 +276,7 @@ async def test_run_query_with_error(
 
     # Mock run_in_thread to return cursor and then batches
     mock_run_in_thread.side_effect = [
+        mock_connection,  # Simulate engine.connect
         mock_cursor,  # Simulate connection.execute
         Exception("Simulated query failure"),  # Simulate error from `fetchmany`
     ]
@@ -1071,16 +1074,18 @@ async def test_run_query_escapes_colons(
 ):
     """The threadpool execute path escapes literal colons before text()."""
     sql_client.engine = MagicMock()
-    sql_client.engine.connect.return_value = MagicMock()
+    connection = MagicMock()
+    sql_client.engine.connect.return_value = connection
 
     cursor = MagicMock()
     col = MagicMock()
     col.name = "a"
     cursor.cursor.description = [col]
 
-    # run_in_thread is called once for execute (returns the cursor) then once
-    # per fetchmany batch — an empty batch ends the loop.
-    mock_run_in_thread.side_effect = [cursor, [("v",)], []]
+    # run_in_thread is called once for connect, once for execute (returns the
+    # cursor), once per fetchmany batch — an empty batch ends the loop — and
+    # once for the close.
+    mock_run_in_thread.side_effect = [connection, cursor, [("v",)], [], None]
 
     async for _ in sql_client.run_query("RLIKE '^(?:cdl)'"):
         pass

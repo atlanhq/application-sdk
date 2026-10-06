@@ -751,10 +751,11 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**Execution-seam rules (P031, P036)** — suggest-only, WARN-tier;
-`classification` is always `"judgment"`.  Both replace a hand-rolled
-concurrency primitive with the SDK seam that owns its lifecycle, and both need
-`result.evidence` citing the seam's own path plus the reference-app call site —
+**Execution-seam rules (P031, P036, P054)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Each replaces a hand-rolled
+concurrency primitive with a shape whose lifecycle is safe on the event loop,
+and each needs `result.evidence` citing that shape's own path plus the
+reference call site —
 the blind gate cannot tell a correct hop from a plausible one.
 
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
@@ -768,8 +769,9 @@ the blind gate cannot tell a correct hop from a plausible one.
   callable **passed, not called** (`run_in_thread(fn, arg)`, never
   `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
   thread, exactly as P023 prescribes.  A `run_in_executor` whose first
-  argument is a *real* executor the app owns is a deliberate choice, not this
-  defect — say so and route to residue rather than rewriting it.  On a
+  argument is an executor other than `None` is not this rule; a `with`-scoped
+  executor is P054, and any other executor the app owns is a deliberate choice —
+  say so and route to residue rather than rewriting it.  On a
   preflight path, F011 sees the swapped call too: use the module-level
   `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
   `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
@@ -794,6 +796,19 @@ the blind gate cannot tell a correct hop from a plausible one.
   functions' own contracts as evidence.  This is a restructure (the child's
   entry function and its arguments must be picklable): route to residue with
   the proposed shape, never a mechanical constructor swap.
+
+- **P054 ScopedExecutorJoinedOnCancel** — inside an `async def`, a `with`
+  statement builds a `ThreadPoolExecutor` and the body offloads to it with
+  `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
+  `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
+  blocking driver call freezes the whole worker, not just the cancelled task
+  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
+  seam, and it does not join on cancel); or, when the calls must stay on one
+  thread (some DB-API cursors break when `execute` and `fetchmany` run on
+  different threads), a dedicated executor created **without** `with` and
+  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
+  goes through `run_in_thread` — and the offending call site.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on

@@ -520,8 +520,8 @@ class BaseSQLClient(ClientInterface):
         )
 
         _install_cursor_cancel_listener(self.engine)
-        connection = self.engine.connect()
-        # Driver calls go through run_in_thread, so a cancelled caller stops
+        engine = self.engine
+        # Driver calls, connect included, go through run_in_thread, so a cancelled caller stops
         # waiting at once — but the thread keeps using the connection until the
         # call returns. The lock keeps the close (below) from running on the
         # connection while an abandoned call still holds it. The cancel handle
@@ -530,6 +530,7 @@ class BaseSQLClient(ClientInterface):
         in_use = threading.Lock()
         handle = CancelHandle()
         read = _CancellableRead(handle, self.cancel_cursor)
+        opened: list["Connection"] = []
 
         def _holding_connection(func: Callable[..., T]) -> Callable[..., T]:
             @functools.wraps(func)  # keeps the callee's name for run_in_thread's label
@@ -539,11 +540,21 @@ class BaseSQLClient(ClientInterface):
 
             return call
 
+        def _connect() -> "Connection":
+            connection = engine.connect()
+            if handle.requested:
+                connection.close()
+                raise concurrent.futures.CancelledError
+            opened.append(connection)
+            return connection
+
         def _close() -> None:
-            _invalidate_if_cancelled(connection, handle)
-            connection.close()
+            for connection in opened:
+                _invalidate_if_cancelled(connection, handle)
+                connection.close()
 
         try:
+            connection = await run_in_thread(handle.bind(_holding_connection(_connect)))
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
@@ -573,7 +584,7 @@ class BaseSQLClient(ClientInterface):
             # that call; hand the close to the pool to run once the call ends.
             submit_in_thread(_holding_connection(_close))
             raise
-        connection.close()
+        await run_in_thread(_holding_connection(_close))
 
         logger.info("Query execution completed")
 

@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**47 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -70,6 +70,7 @@ reassigned.
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
+| [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | — | 0.43.0 |
 
 ---
 
@@ -1661,9 +1662,8 @@ blocking calls can exhaust the pool and deadlock the worker.  Use `run_in_thread
 `App.run_in_thread()` or `self.task_context.run_in_thread()` — which dispatches onto the
 SDK's own dedicated `sdk-blocking-*` thread pool.
 
-`run_in_executor(<some-executor>, ...)` with any executor other than `None` is not
-flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool contention this
-rule targets. `application_sdk/_runtime/offload.py` is exempt: that is where
+`run_in_executor` on an executor other than `None` is not this rule; a `with`-scoped
+executor is P054. `application_sdk/_runtime/offload.py` is exempt: that is where
 `run_in_thread()`'s own dedicated-executor dispatch lives.
 
 Remediation is a restructure (swap in `run_in_thread()`), so findings are fixed per
@@ -2726,5 +2726,49 @@ Land as `WARN`: every hit is a working copy awaiting migration.  A site the seam
 genuinely does not cover — `CredentialRef.resolve` over an object that is not the
 entry-point input — records that with a justified `# conformance: ignore[P053]
 <reason>`.
+
+---
+
+## P054 — `ScopedExecutorJoinedOnCancel` {#p054}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.43.0
+
+> A `with`-scoped ThreadPoolExecutor joined on cancel blocks the event loop
+
+**Rationale:** `with ThreadPoolExecutor() as pool:` exits by calling `pool.shutdown(wait=True)` on the
+event loop thread. When the awaiting task is cancelled while the executor runs a
+blocking driver call, that `wait=True` blocks the loop until the call returns and
+freezes the whole worker — every other task on the loop stops with it (FND-2873). The
+fix is a dedicated executor created without `with` and shut down with
+`shutdown(wait=False)` in `finally`, or `run_in_thread(fn, ...)` when the call has no
+thread affinity.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
+  `_execute_async_read_operation` offload every driver call with `run_in_thread` instead
+  of a `with`-scoped executor, so cancelling the awaiting task never joins a blocked
+  driver call on the event loop.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+Inside an `async def`, a `with` statement constructs a `ThreadPoolExecutor` bound to a
+name and the body offloads work to it with `.run_in_executor(<that name>, ...)`, e.g.
+`with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)`.
+
+A task cancelled inside that `with` block leaves through `pool.shutdown(wait=True)`,
+which runs on the event loop thread and blocks until the driver call returns — freezing
+the whole worker, not just the cancelled task.
+
+Fix (a): use `run_in_thread(fn, ...)`, which dispatches onto the SDK's dedicated pool
+and does not join on cancel — the shape `application_sdk/clients/sql.py`
+`BaseSQLClient.run_query` uses. Fix (b): when the calls must stay on one thread (some
+DB-API cursors break when `execute` and `fetchmany` run on different threads), keep a
+dedicated executor created **without** `with` and call `executor.shutdown(wait=False)`
+in `finally`.
+
+`run_in_executor(None, ...)` is P031, not this rule; a `with`-scoped executor that only
+calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception
+on the `with` line (the finding anchors there, not on the `run_in_executor` call) with
+`# conformance: ignore[P054] <reason>`.
 
 ---
