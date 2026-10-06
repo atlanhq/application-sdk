@@ -22,6 +22,7 @@ from typing import (
     ClassVar,
     Literal,
     Never,
+    Sequence,
     TypeVar,
     cast,
     get_type_hints,
@@ -184,7 +185,9 @@ def _resolve_transformed_target(local_path: str) -> "Path | None":
     return None
 
 
-async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
+async def _warn_on_invalid_transformed_assets(
+    local_path: str | Sequence[str], app_name: str
+) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
@@ -197,10 +200,10 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     event). A ``clean`` outcome is emitted too, so there is a denominator to rank
     flag-rate against. A human-readable WARNING with the full ``format_report()``
     is additionally logged only when the batch is flagged. Extracts and transforms
-    are full by design by default, so the batch is complete and the orphan pass is
-    accurate. This **never** blocks the upload and **never** raises — a defect in
-    the scaffold must not break a real handoff — and it scans every record (no
-    sampling) so the summary is accurate.
+    are full by design by default, so the batch — the whole hand-off, see below —
+    is complete and the orphan pass is accurate. This **never** blocks the upload
+    and **never** raises — a defect in the scaffold must not break a real handoff
+    — and it scans every record (no sampling) so the summary is accurate.
 
     **The check is reached through the generic wrapper** (ADR-0020, FND-690):
     ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
@@ -233,10 +236,22 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     validation must not stall an upload forever. The wrapper is synchronous by
     design precisely so this caller owns that decision.
 
-    Referential (orphan) integrity runs by default on this hook: extracts and
-    transforms are full by design by default, so every referenced parent is
-    present in the same batch and the orphan pass is accurate. Even on an
-    atypical partial batch the worst case is a spurious warning.
+    **The batch is the whole hand-off, not one file** (FND-3414). The orphan pass
+    is only accurate over everything delivered together: a fanned-out connector
+    writes one file per typename, so a child's parent is routinely in a sibling
+    file. ``local_path`` is therefore either one path (``upload``) or every
+    declared part of a fan-in delivery (``upload_refs``), validated as one batch
+    with one :data:`ASSET_VALIDATION_EVENT`. One part goes through the wrapper as
+    above; several go straight to
+    :func:`~application_sdk.validation.assets.validate_assets_as_artifact` — the
+    cell the wrapper dispatches that one part to — because the wrapper's unit is
+    a single artifact path and the parts share no local root to hand it.
+
+    A declared part that is not on this pod (a distributed fan-in, where the
+    upload streams it from the deployment store) makes the batch incomplete. The
+    orphan pass is then skipped with a warning, and per-asset validation still
+    runs over the parts that are local — reporting a parent as missing because it
+    was written on another pod would be the false positive this fixes.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
@@ -247,9 +262,24 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     # pays for a child-process dispatch.
     if not VALIDATE_ASSETS_ON_UPLOAD:
         return
-    target = _resolve_transformed_target(local_path)
-    if target is None:
+    paths = [local_path] if isinstance(local_path, str) else list(local_path)
+    targets = [
+        str(target)
+        for target in map(_resolve_transformed_target, paths)
+        if target is not None
+    ]
+    if not targets:
         return
+    not_local = sum(1 for path in paths if not path or not Path(path).exists())
+    check_referential_integrity = not not_local
+    if not_local:
+        _task_logger.warning(
+            "Transformed-asset validation: %d of %d declared file(s) are not on "
+            "this pod, so the batch is incomplete; skipping the referential "
+            "(orphan) check",
+            not_local,
+            len(paths),
+        )
 
     from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
         Asset,
@@ -260,19 +290,30 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
         ModelSource,
         asset_validation_event_fields,
         validate_artifact,
+        validate_assets_as_artifact,
     )
 
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
-    report = await run_best_effort(
-        validate_artifact,
-        str(target),
-        ModelSource(model=Asset),
-        label="Transformed-asset validation",
-        logger=_task_logger,
-        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-    )
+    if len(targets) == 1 and check_referential_integrity:
+        report = await run_best_effort(
+            validate_artifact,
+            targets[0],
+            ModelSource(model=Asset),
+            label="Transformed-asset validation",
+            logger=_task_logger,
+            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
+    else:
+        report = await run_best_effort(
+            validate_assets_as_artifact,
+            targets,
+            check_referential_integrity=check_referential_integrity,
+            label="Transformed-asset validation",
+            logger=_task_logger,
+            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
 
     if report is None:
         # run_best_effort swallowed a native crash / timeout / error (it already
@@ -1520,13 +1561,17 @@ class App(ABC):
         """
         return await self._upload_impl(input)
 
-    async def _upload_impl(self, input: UploadInput) -> UploadOutput:
+    async def _upload_impl(
+        self, input: UploadInput, *, validate_assets: bool = True
+    ) -> UploadOutput:
         """Body of :meth:`upload`, callable from inside another ``@task``.
 
         ``upload`` is a ``@task``, and a ``@task`` cannot call another one — so
         every framework task that needs the same store routing, dual-write
         fan-out and pre-handoff validation calls this instead of duplicating
-        them. :meth:`upload_refs` is the other caller.
+        them. :meth:`upload_refs` is the other caller; it passes
+        ``validate_assets=False`` because it validates its whole declaration as
+        one batch instead of one file at a time (FND-3414).
         """
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
@@ -1554,7 +1599,8 @@ class App(ABC):
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
-        await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
+        if validate_assets:
+            await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
@@ -2010,6 +2056,14 @@ class App(ABC):
 
         source_prefix = input.source_prefix.strip("/")
 
+        # Validate the declaration as one batch, not per file (FND-3414): a
+        # fanned-out connector writes one file per typename, so a child's parent
+        # is usually in a sibling file and a per-file orphan pass flags nearly
+        # every cross-typename reference.
+        await _warn_on_invalid_transformed_assets(
+            [d.ref.local_path or "" for d in input.files], self._app_name
+        )
+
         delivered: list[FileReference] = []
         file_count = 0
         for declared in input.files:
@@ -2045,7 +2099,8 @@ class App(ABC):
                     # A declared file that contributes zero objects is a hole in
                     # the tree the consumer will walk — fail here, loudly.
                     raise_on_empty=True,
-                )
+                ),
+                validate_assets=False,
             )
             delivered.append(out.ref)
             file_count += out.ref.file_count

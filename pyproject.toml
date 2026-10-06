@@ -46,6 +46,11 @@ dependencies = [
     # Temporal runtime (httpx-retries at L29 is the Dapr HTTP client replacement)
     "temporalio>=1.25.0,<2.0.0",
     "orjson>=3.11.6,<4.0.0",
+    # Disk-backed SpillableDict. Core (not the [storage] extra) because the
+    # upload hook's referential-integrity (orphan) pass needs it: as an extra,
+    # whether an app got that check depended on an install choice nobody made
+    # for that reason (FND-3414).
+    "rocksdict>=0.3.0,<0.4.0",
 ]
 
 [project.scripts]
@@ -89,18 +94,14 @@ sql = [
 # resolved by the installer, not imported — so the removal version is carried
 # here, in docs/upgrade-guide-v3.md, and by the D010 conformance rule.
 daft = ["atlan-application-sdk[sql]"]
-# Disk-backed RocksDB storage utilities (SpillableDict, rocksdb_utils).
-# Standalone extra — non-incremental connectors that want disk-backed
-# scratch state pull this in directly without needing the full
-# incremental analytics stack.
+# Backwards-compatibility shim — rocksdict promoted to core (FND-3414); keeping
+# this extra means existing connector pyproject.toml files that specify
+# [storage] continue to install without error.
 storage = [
-    "rocksdict>=0.3.0",
+    "rocksdict>=0.3.0,<0.4.0",
 ]
-# Incremental extraction: sql + RocksDB state store.
-# Includes ``storage`` because the incremental TableScope pattern uses
-# RocksDB for state — keep one source of truth for the rocksdict pin.
+# Incremental extraction: sql + RocksDB state store (rocksdict is core).
 incremental = [
-    "atlan-application-sdk[storage]",
     "pandas>=2.2.3,<3.0.0",
     "pyarrow>=23.0.1,<24.0.0",
     "sqlalchemy[asyncio]>=2.0.36,<3.0.0",
@@ -417,8 +418,6 @@ extend-select = [
 "contract-toolkit/examples/**/generated/_input.py" = ["F401"]
 # Mid-file import required to break circular dependency between models.py and assertions.py
 "application_sdk/testing/integration/models.py" = ["E402"]
-# Post-importorskip imports required so the test module skips cleanly when rocksdict is absent.
-"tests/unit/common/test_spillable_dict.py" = ["E402"]
 # sys.path bootstrap required so the test module can import the sibling script it tests.
 ".github/scripts/tests/test_fetch_dataforge_source.py" = ["E402"]
 ".github/scripts/tests/test_resolve_e2e_source.py" = ["E402"]

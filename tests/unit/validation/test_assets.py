@@ -8,7 +8,6 @@ exactly as it runs in production.
 
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -19,12 +18,6 @@ from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
 from application_sdk.validation import AssetValidationReport, ReferentialFailure
 from application_sdk.validation import assets as assets_module
 from application_sdk.validation import validate_asset, validate_transformed_dir
-
-_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
-requires_rocksdict = pytest.mark.skipif(
-    not _HAS_ROCKSDICT,
-    reason="referential-integrity pass needs rocksdict (the [storage] extra)",
-)
 
 CONN = "default/snow/123"
 DB_QN = f"{CONN}/DB"
@@ -202,9 +195,6 @@ class TestPerAssetValidation:
 # ---------------------------------------------------------------------------
 # validate_transformed_dir — referential-integrity (orphan) pass
 # ---------------------------------------------------------------------------
-
-
-@requires_rocksdict
 class TestReferentialIntegrity:
     def test_full_hierarchy_no_orphan(self, tmp_path: Path) -> None:
         # Complete Database → Schema → Table → Column chain: every parent key is
@@ -286,7 +276,7 @@ class TestReferentialIntegrity:
 
 
 # ---------------------------------------------------------------------------
-# rocksdict-absent fallback (covered unconditionally, no [storage] extra needed)
+# rocksdict-absent fallback (a hand-removed core dependency)
 # ---------------------------------------------------------------------------
 
 
@@ -348,6 +338,58 @@ class TestSingleFileInput:
         assert report.passed == 1
         assert report.failed == 1
         assert not report.ok
+
+
+# ---------------------------------------------------------------------------
+# multi-part input: the declared parts of a fan-in hand-off (FND-3414)
+# ---------------------------------------------------------------------------
+
+
+def _part(base: Path, entity: str) -> Path:
+    return base / "transformed" / entity / "entities.json"
+
+
+class TestMultiPartInput:
+    def test_a_parent_in_a_sibling_part_is_not_an_orphan(self, tmp_path: Path) -> None:
+        # One file per typename, as a fanned-out connector writes them. Each
+        # Column's parent Table lives in the Table part, not its own.
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write(tmp_path, "Table", [_table()])
+        _write(tmp_path, "Column", [_column("C1", TABLE_QN)])
+        parts = [_part(tmp_path, e) for e in ("Database", "Schema", "Table", "Column")]
+
+        # The per-file view is what produced the false positives: the Column part
+        # alone cannot see its parent.
+        assert len(validate_transformed_dir(parts[-1]).orphans) == 1
+
+        report = validate_transformed_dir(parts)
+        assert report.total == 4
+        assert report.orphans == []
+        assert report.ok
+
+    def test_a_parent_absent_from_every_part_is_still_an_orphan(
+        self, tmp_path: Path
+    ) -> None:
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write(tmp_path, "Table", [_table()])
+        _write(tmp_path, "Column", [_column("C1", f"{SCHEMA_QN}/T_MISSING")])
+        parts = [_part(tmp_path, e) for e in ("Database", "Schema", "Table", "Column")]
+
+        report = validate_transformed_dir(parts)
+        assert len(report.orphans) == 1
+        assert report.orphans[0].missing_qualified_name == f"{SCHEMA_QN}/T_MISSING"
+
+    def test_overlapping_parts_are_read_once(self, tmp_path: Path) -> None:
+        # A directory and a file inside it, both declared: the file's records must
+        # be counted once, not twice.
+        _write(tmp_path, "Table", [_table()])
+        report = validate_transformed_dir(
+            [tmp_path / "transformed", _part(tmp_path, "Table")],
+            check_referential_integrity=False,
+        )
+        assert report.total == 1
 
 
 # ---------------------------------------------------------------------------

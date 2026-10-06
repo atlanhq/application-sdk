@@ -13,6 +13,7 @@ from unittest import mock
 
 import pytest
 
+from application_sdk.app import base as base_module
 from application_sdk.app.base import App
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
@@ -60,6 +61,19 @@ class _ResetsRegistries:
 
 
 class TestUploadRefs(_ResetsRegistries):
+    @pytest.fixture(autouse=True)
+    def _validation(self):
+        # The pre-handoff validation hook is covered in
+        # test_upload_asset_validation.py; here it is only observed, so the
+        # delivery tests never spawn a scan child over paths that do not exist.
+        with mock.patch.object(
+            base_module,
+            "_warn_on_invalid_transformed_assets",
+            new_callable=mock.AsyncMock,
+        ) as hook:
+            self.validation_hook = hook
+            yield
+
     def _app(self) -> App:
         from application_sdk.app.context import AppContext
 
@@ -76,7 +90,7 @@ class TestUploadRefs(_ResetsRegistries):
     def _patch_upload(self, app: App) -> mock.AsyncMock:
         """Stand in for ``_upload_impl``, echoing the destination key back."""
 
-        async def _impl(input):  # noqa: ANN001 — mirrors UploadInput at the seam
+        async def _impl(input, *, validate_assets=True):  # noqa: ANN001 — mirrors UploadInput at the seam
             return UploadOutput(
                 ref=FileReference(
                     local_path=input.local_path or None,
@@ -119,6 +133,27 @@ class TestUploadRefs(_ResetsRegistries):
         assert out.prefix == DEST
         assert out.file_count == 2
         verify.assert_awaited_once()
+
+    async def test_the_declaration_is_validated_once_as_one_batch(self) -> None:
+        """FND-3414: a per-file orphan pass flags every cross-file parent."""
+        app = self._app()
+        files = [DeclaredFile(ref=_ref(e)) for e in ("database", "table", "column")]
+
+        with (
+            self._patch_upload(app) as upload,
+            mock.patch.object(app, "_verify_refs_impl", new_callable=mock.AsyncMock),
+        ):
+            await app.upload_refs(
+                UploadRefsInput(files=files, source_prefix=SOURCE, prefix=DEST)
+            )
+
+        self.validation_hook.assert_awaited_once_with(
+            [f.ref.local_path for f in files], app._app_name
+        )
+        # ...and never again per file inside the upload.
+        assert all(
+            c.kwargs == {"validate_assets": False} for c in upload.await_args_list
+        )
 
     async def test_a_label_names_the_leaf(self) -> None:
         """The metabase shape: refs whose own keys carry no entity structure."""
