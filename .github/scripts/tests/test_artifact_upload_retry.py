@@ -82,6 +82,11 @@ EXEMPT = {
         "workflows/daily-security-scan.yml",
         "security-scan-raw-results",
     ): "scheduled scan; nothing gates on it and there is no merge queue to eject",
+    (
+        "workflows/actions-cost-report.yaml",
+        "actions-cost-report",
+    ): "weekly scheduled report; nothing gates on it, and the alert and "
+    "Kryptonite publish do not read the artifact",
 }
 
 # Files that are not valid YAML, so their steps cannot be inspected. Empty, and
