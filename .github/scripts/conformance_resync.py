@@ -20,19 +20,13 @@ same roster ``renovate.yaml`` builds) it:
      place from the fresh render, closed when main already carries the
      changes, and any duplicate lane PR closed;
   5. arms auto-merge only when the lane switch is on AND the repo's
-     ``renovate.json`` lets Renovate auto-merge;
-  6. for an existing lane PR this run did NOT touch, whose required checks are
-     green and which atlan-ci has not yet approved with the resync signature,
-     dispatches that repo's own ``renovate-auto-approve.yml`` by
-     ``workflow_dispatch(pr_number=...)`` — the app repos' approver only
-     listens for ``workflow_run`` on ``renovate/**`` branches, and
-     ``bot/conformance-resync`` is not re-rendered by this lane, so nothing
-     else would ever ask it to look at these PRs.
+     ``renovate.json`` lets Renovate auto-merge.
 
-The byte-for-byte proof that a lane PR is safe to approve lives in
-``resync_approval_conditions.py`` (the atlan-ci gate in this same repo); this
-script imports its shared constants and staging/compare helpers rather than
-keeping a second copy that could drift out of sync with what the gate expects.
+No approval is requested for a lane PR: no app repo's ruleset requires one,
+so the app repos no longer carry ``renovate-auto-approve.yml`` (it is a
+retired bootstrap file). This script still imports its identity constants
+and staging/compare helpers from ``resync_approval_conditions.py`` rather
+than keeping a second copy.
 
 Usage:
     python3 .github/scripts/conformance_resync.py [--repos owner/a,owner/b]
@@ -65,7 +59,6 @@ DEFAULT_OWNER = "atlanhq"
 EXCLUDE_REPOS = {"atlanhq/application-sdk"}
 BASE_BRANCH = "main"
 RESYNC_LABEL = "conformance-resync"
-APPROVE_WORKFLOW = "renovate-auto-approve.yml"
 _REPO_RE = re.compile(r"^atlanhq/[A-Za-z0-9._-]+$")
 
 
@@ -345,30 +338,6 @@ def render_pr_body(
     return "\n".join(lines) + "\n"
 
 
-# ── Approval dispatch (new: FND-2868) ────────────────────────────────────
-
-
-def should_dispatch_approval(
-    pr: dict | None, checks_ok: bool, reviews: list[dict]
-) -> bool:
-    """Whether the lane should nudge this repo's own ``renovate-auto-approve.yml``
-    to look at ``pr`` right now.
-
-    Pure and independent of any subprocess: the caller resolves ``checks_ok``
-    (``gh pr checks --required``) and ``reviews`` (the PR's review list), so
-    this is unit-testable without gh/network. All three must hold:
-    the PR is open, its required checks are all completed and green, and
-    atlan-ci has not already approved this exact head with the resync
-    signature (``resync_approval_conditions.count_resync_approvals``).
-    """
-    if not pr or pr.get("state") != "open":
-        return False
-    head_sha = (pr.get("head") or {}).get("sha")
-    if not head_sha or not checks_ok:
-        return False
-    return gate.count_resync_approvals(reviews, head_sha) == 0
-
-
 def choose_resolved_at(keep: dict | None, pinned: str, now: str) -> str:
     """Reuse the open PR's resolution timestamp while it renders the same
     suite, so an unchanged PR re-renders identically and its body stays put.
@@ -424,7 +393,7 @@ def withdraw_lane_pr(
     runner: Runner,
     result: dict,
 ) -> None:
-    """A held or ineligible repo must not keep an approvable lane PR open."""
+    """A held or ineligible repo must not keep a mergeable lane PR open."""
     if not keep:
         return
     if not dry_run:
@@ -459,46 +428,19 @@ def lane_commits_ok(repo: str, pr_number: int, head_sha: str, runner: Runner) ->
     return bool(lane_parent(repo, pr_number, head_sha, runner))
 
 
-def unchanged_pr_approvable(
-    repo: str, parent_sha: str, pinned: str, repo_automerges: bool, runner: Runner
+def unchanged_pr_current(
+    repo: str, parent_sha: str, pinned: str, runner: Runner
 ) -> tuple[bool, str]:
-    """Whether an unchanged lane PR can still pass the gate's parent checks.
+    """Whether an unchanged lane PR still sits on a parent pinning ``pinned``.
 
-    The gate re-renders at the version the PR parent's ``uv.lock`` pins, and
-    only approves when the parent's ``renovate.json`` auto-merges. A bump on
-    main that leaves the rendered files the same changes neither the PR nor
-    its parent, so leaving such a PR alone would strand it: never approvable,
-    re-dispatched every run. Re-pushing onto current main fixes both.
-
-    The mode is only required when main auto-merges. Otherwise no approval is
-    dispatched, and requiring it would re-push the PR on every run.
+    A bump on main that leaves the rendered files the same changes neither the
+    PR nor its parent, so leaving such a PR alone would keep it on the old
+    suite. Re-pushing onto current main fixes that.
     """
-    if repo_automerges:
-        return gate.parent_preconditions(repo, parent_sha, pinned, runner)
     parent_pin = gate.parent_pinned_conformance(repo, parent_sha, runner)
     if parent_pin != pinned:
         return False, f"uv.lock at the parent pins {parent_pin}, main pins {pinned}"
     return True, ""
-
-
-def dispatch_approval(repo: str, pr_number: int, runner: Runner) -> str:
-    """Empty string on success, else the failure reason."""
-    result = _run(
-        [
-            "gh",
-            "workflow",
-            "run",
-            APPROVE_WORKFLOW,
-            "-R",
-            repo,
-            "-f",
-            f"pr_number={pr_number}",
-        ],
-        runner,
-    )
-    if result.returncode == 0:
-        return ""
-    return (result.stderr or "").strip()[-300:] or f"gh exited {result.returncode}"
 
 
 # ── One repo ─────────────────────────────────────────────────────────────
@@ -584,8 +526,7 @@ def process_repo(
         resolved_at = choose_resolved_at(keep, pinned, resolved_now)
         result["resolvedAt"] = resolved_at
 
-        repo_automerge = automerge_allowed(renovate_json)
-        automerge, automerge_reason = repo_automerge
+        automerge, automerge_reason = automerge_allowed(renovate_json)
         if automerge and not automerge_enabled:
             automerge, automerge_reason = (
                 False,
@@ -729,10 +670,8 @@ def process_repo(
             if not parent_sha:
                 same_content = False
             if same_content:
-                approvable, why = unchanged_pr_approvable(
-                    repo, parent_sha, pinned, repo_automerge[0], runner
-                )
-                if not approvable:
+                current, why = unchanged_pr_current(repo, parent_sha, pinned, runner)
+                if not current:
                     step(f"Re-pushing PR #{keep['number']}: {why}.")
                     same_content = False
             if same_content:
@@ -850,64 +789,7 @@ def process_repo(
         else None,
         automergeReason=automerge_reason,
     )
-    _maybe_dispatch(
-        repo,
-        pr if pushed_this_run else keep,
-        dry_run,
-        runner,
-        result,
-        skip_if_pushed=pushed_this_run,
-        repo_automerge=repo_automerge,
-    )
     return result
-
-
-def _maybe_dispatch(
-    repo: str,
-    pr: dict | None,
-    dry_run: bool,
-    runner: Runner,
-    result: dict,
-    *,
-    skip_if_pushed: bool = False,
-    repo_automerge: tuple[bool, str] = (False, "repo auto-merge mode not evaluated"),
-) -> None:
-    """Approval-dispatch pass: only for a PR this run left untouched, in a repo
-    whose renovate.json auto-merges. Elsewhere a person reviews the PR."""
-    if skip_if_pushed or not pr or pr.get("state") != "open":
-        return
-    allowed, reason = repo_automerge
-    if not allowed:
-        result["trace"].append(
-            f"no approval dispatch: {reason}; a person reviews this PR."
-        )
-        result["approvalSkipped"] = reason
-        return
-    number = pr.get("number")
-    if not number:
-        return
-    checks_ok = gate.required_checks_green(repo, str(number), runner, echo=False)
-    reviews = _flatten(
-        gh_json(
-            ["api", f"repos/{repo}/pulls/{number}/reviews", "--paginate", "--slurp"],
-            runner,
-            what="listing reviews",
-        )
-    )
-    if should_dispatch_approval(pr, checks_ok, reviews):
-        if not dry_run:
-            failure = dispatch_approval(repo, number, runner)
-            if failure:
-                result["trace"].append(
-                    f"could not dispatch {APPROVE_WORKFLOW} for PR #{number}: {failure}"
-                )
-                result["approvalDispatchError"] = failure
-                return
-        result["trace"].append(
-            f"{'would dispatch' if dry_run else 'dispatched'} {APPROVE_WORKFLOW} for PR #{number} "
-            "(checks green, not yet approved, head unchanged this run)."
-        )
-        result["approvalDispatched"] = not dry_run
 
 
 # ── Driver ────────────────────────────────────────────────────────────────
@@ -927,8 +809,6 @@ def _summary(results: list[dict], dry_run: bool) -> str:
     ]
     for r in results:
         notes = [r.get("reason") or ""]
-        if r.get("approvalDispatched"):
-            notes.append("approval dispatched")
         if r.get("duplicatesClosed"):
             notes.append(
                 "closed duplicates: "

@@ -16,25 +16,17 @@ name: Conformance Resync
 #     changes, duplicates closed. The branch is the lane's; a repo where
 #     someone else has a PR on it is skipped as a best-effort courtesy;
 #   - arms auto-merge only when vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED is
-#     "true" AND the repo's renovate.json lets Renovate auto-merge;
-#   - for an existing lane PR this run left untouched, whose required checks
-#     are all green and which atlan-ci has not yet approved with the resync
-#     signature, dispatches that repo's own renovate-auto-approve.yml by
-#     workflow_dispatch(pr_number=...). That approver's workflow_run trigger
-#     only listens on `renovate/**` branches, and this lane's branch
-#     (bot/conformance-resync) is not one of them and is never re-rendered by
-#     the resync itself, so without this dispatch nothing would ever ask the
-#     approver to look at these PRs at all.
+#     "true" AND the repo's renovate.json lets Renovate auto-merge.
+#     No approval is requested: no app repo's ruleset requires one.
 #
 # The render itself (third-party PyPI code) runs in a pinned uv container,
 # resync_approval_conditions.RENDER_IMAGE, never on the runner host: this job
 # holds a fleet-wide workflows-write token, and on a hosted runner a same-host
 # child can read any process's environment or the runner's memory.
 #
-# The independent byte-for-byte proof that a lane PR is safe to approve is
-# .github/scripts/resync_approval_conditions.py (the atlan-ci code-owner
-# gate), which this lane's script imports its shared constants and
-# staging/compare helpers from rather than keeping a second copy.
+# The lane's script imports its identity constants and staging/compare
+# helpers from .github/scripts/resync_approval_conditions.py rather than
+# keeping a second copy.
 #
 # Dry run by default. Live only when BOTH vars.CONFORMANCE_RESYNC_LIVE is
 # "true" AND (for a manual dispatch) the dry_run input is false — a scheduled
@@ -50,8 +42,9 @@ name: Conformance Resync
 #     RESYNC_AUTHOR). Needs, on every atlan-*-app repo: contents (write —
 #     push the resync branch), pull_requests (write — open/update/close the
 #     lane PR, review list), workflows (write — the managed .github/workflows
-#     shims are bootstrap-managed), actions (write — dispatch
-#     renovate-auto-approve.yml).
+#     shims are bootstrap-managed). The actions (write) grant it once needed
+#     to dispatch the retired app-side renovate-auto-approve.yml can be
+#     dropped from the App.
 #   vars.CONFORMANCE_RESYNC_LIVE — "true" arms live pushes/PRs (see above).
 #   vars.CONFORMANCE_RESYNC_AUTOMERGE_ENABLED — "true" lets the lane arm
 #     auto-merge (still subject to each repo's renovate.json); unset/false =

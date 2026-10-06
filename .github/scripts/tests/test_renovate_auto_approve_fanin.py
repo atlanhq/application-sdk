@@ -22,16 +22,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import renovate_approval_conditions as gate  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_TEMPLATES = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
 _REUSABLE = _REPO_ROOT / ".github/workflows/renovate-auto-approve-reusable.yml"
 
-# (caller, the workflow file the anchor name must belong to)
+# (caller, the workflow file the anchor name must belong to). application-sdk is
+# the only caller: the app repos' bootstrap copy is retired.
 _CALLERS = [
-    pytest.param(
-        _TEMPLATES / "renovate-auto-approve.yml",
-        _TEMPLATES / "tests.yaml",
-        id="bootstrap-template",
-    ),
     pytest.param(
         _REPO_ROOT / ".github/workflows/renovate-auto-approve.yml",
         _REPO_ROOT / ".github/workflows/sdk-gate.yaml",
@@ -40,8 +35,7 @@ _CALLERS = [
 ]
 
 _ANCHOR_RE = re.compile(r"github\.event\.workflow_run\.name == '([^']+)'")
-# The bootstrap templates carry render placeholders, so the anchor workflow is
-# read by its top-level `name:` line rather than parsed as YAML.
+# The anchor workflow is read by its top-level `name:` line rather than parsed as YAML.
 _NAME_RE = re.compile(r"^name:\s*[\"']?(.+?)[\"']?\s*$", re.MULTILINE)
 
 

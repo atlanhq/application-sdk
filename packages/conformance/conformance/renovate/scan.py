@@ -151,14 +151,17 @@ def _auto_merge_stats(merged_raw: list[dict]) -> AutoMergeStats:
     """
     Count auto-merged vs human-merged PRs.
 
-    A PR counts as auto-merged if any review from 'atlan-ci' with state
-    'APPROVED' starts with the stable auto-approval signature.
+    A PR counts as auto-merged if a bot merged it (GitHub-native auto-merge or
+    the merge queue acting for the bot that armed it), or if any review from
+    'atlan-ci' with state 'APPROVED' starts with the stable auto-approval
+    signature. The merger is the signal for app repos, which no longer get an
+    atlan-ci approval; the signature still covers application-sdk.
     """
     auto_merged = 0
     human_merged = 0
     for pr in merged_raw:
         reviews = pr.get("reviews", [])
-        was_auto = any(
+        was_auto = bool((pr.get("mergedBy") or {}).get("is_bot")) or any(
             r.get("author", {}).get("login") == "atlan-ci"
             and r.get("state") == "APPROVED"
             and (r.get("body") or "").startswith(_AUTO_APPROVE_SIGNATURE)

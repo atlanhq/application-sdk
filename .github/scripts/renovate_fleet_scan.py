@@ -204,6 +204,7 @@ commits(last: 1) {
 _MERGED_PR_FIELDS = """
 url
 repository { nameWithOwner }
+mergedBy { __typename login }
 reviews(first: 50) {
   nodes {
     state
@@ -714,8 +715,14 @@ def normalize_open_pr(pr: dict, repo_modes: Optional[dict] = None) -> dict:
 
 def normalize_merged_pr(pr: dict) -> dict:
     """Map a GraphQL PullRequest node to the subset of `gh pr list --json ...` fields
-    `conformance.renovate.scan._auto_merge_stats` actually reads (only `reviews`)."""
+    `conformance.renovate.scan._auto_merge_stats` actually reads (`mergedBy` and
+    `reviews`). `mergedBy` keeps the `gh pr list --json mergedBy` shape's `is_bot`."""
+    merged_by = pr.get("mergedBy") or {}
     return {
+        "mergedBy": {
+            "login": merged_by.get("login"),
+            "is_bot": merged_by.get("__typename") == "Bot",
+        },
         "reviews": [
             {
                 "state": r.get("state"),
