@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -240,8 +240,9 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.41.0"
+version = "3.42.0"
 source = { editable = "." }
+default-groups = ["dev", "test"]
 dependencies = [
     { name = "aiohttp" },
     { name = "azure-identity" },
