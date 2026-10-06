@@ -45,6 +45,30 @@ _SDK_ERROR_BASES: dict[str, tuple[str, ...]] = {
     "ObjectStoreDownloadError": ("DependencyUnavailableError",),
     "DiskFullError": ("ResourceExhaustedError",),
     "LocalVolumeUnwritableError": ("ResourceExhaustedError",),
+    "SourceWarmupExhaustedError": ("SourceUnavailableError",),
+}
+_SDK_AUDIENCE: dict[str, str] = {
+    "AppError": "APP_OWNER",
+    "CancelledError": "APP_OWNER",
+    "AppTimeoutError": "APP_OWNER",
+    "RateLimitedError": "USER",
+    "AuthError": "USER",
+    "AppPermissionDeniedError": "USER",
+    "NotFoundError": "USER",
+    "AlreadyExistsError": "USER",
+    "InvalidInputError": "USER",
+    "PreconditionError": "USER",
+    "DependencyUnavailableError": "PLATFORM",
+    "SourceUnavailableError": "USER",
+    "ResourceExhaustedError": "PLATFORM",
+    "DataIntegrityError": "APP_OWNER",
+    "InternalError": "APP_OWNER",
+    "UnimplementedError": "APP_OWNER",
+}
+_VOICE = {
+    "USER": "write a customer-facing next step the customer can take",
+    "APP_OWNER": "write an engineer-facing remediation for the connector owners",
+    "PLATFORM": "write an operator hint for platform on-call",
 }
 _BUILTIN_ERROR_BASES = frozenset({"ValueError", "Exception", "BaseException"})
 
@@ -59,6 +83,25 @@ def _sdk_error_leaf(name: str) -> str | None:
 def _canonical_error(name: str) -> str:
     leaf = _sdk_error_leaf(name)
     return _SDK_ERRORS + leaf if leaf is not None else name
+
+
+def sdk_error_audience(name: str) -> str | None:
+    """Return the ``Audience`` value an SDK error class declares.
+
+    Tabled like the ancestry above and pinned to the runtime ``audience``
+    ClassVar by a drift test.
+    """
+    pending = [name.rsplit(".", 1)[-1]]
+    while pending:
+        leaf = pending.pop(0)
+        if leaf in _SDK_AUDIENCE:
+            return _SDK_AUDIENCE[leaf]
+        pending.extend(
+            base
+            for base in _SDK_ERROR_BASES.get(leaf, ("AppError",))
+            if base not in _BUILTIN_ERROR_BASES
+        )
+    return None
 
 
 def sdk_error_ancestry(name: str) -> set[str]:
@@ -125,11 +168,20 @@ def _nodes(node: ast.AST):
             yield from _nodes(child)
 
 
+def _audience_value(node: ast.AST | None) -> str | None:
+    """An ``Audience`` member or its string value, as the enum coerces both."""
+    if isinstance(node, ast.Attribute) and node.attr in _VOICE:
+        return node.attr
+    if isinstance(node, ast.Constant) and node.value in _VOICE:
+        return node.value
+    return None
+
+
 class _Checker:
     def __init__(self, reg: Registry):
         self.reg = reg
         self.findings: list[Finding] = []
-        self.seen: set[tuple[str, int, str]] = set()
+        self.seen: set[tuple[str, int, int, str]] = set()
 
     def emit(
         self,
@@ -139,7 +191,7 @@ class _Checker:
         message: str,
         cleared_by: frozenset[str] = frozenset(),
     ) -> None:
-        key = (src.rel, node.lineno, rule)
+        key = (src.rel, node.lineno, node.col_offset, rule)
         if key not in self.seen:
             self.seen.add(key)
             self.findings.append(
@@ -196,6 +248,33 @@ class _Checker:
             *(self.error_names(owner, base, visited | {id(cls)}) for base in cls.bases)
         )
         return bases | {name} if bases else set()
+
+    def audience(self, src: Source, node: ast.AST, visited=frozenset()) -> str | None:
+        name = _qualified(src, node)
+        if _sdk_error_leaf(name) is not None:
+            return sdk_error_audience(name)
+        resolved = self.symbol(src, node)
+        if resolved is None:
+            return None
+        owner, cls = resolved
+        if not isinstance(cls, ast.ClassDef) or id(cls) in visited:
+            return None
+        for stmt in cls.body:
+            target: ast.expr | None = None
+            value: ast.expr | None = None
+            if isinstance(stmt, ast.AnnAssign):
+                target, value = stmt.target, stmt.value
+            elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target, value = stmt.targets[0], stmt.value
+            if isinstance(target, ast.Name) and target.id == "audience":
+                found = _audience_value(value)
+                if found is not None:
+                    return found
+        for base in cls.bases:
+            found = self.audience(owner, base, visited | {id(cls)})
+            if found is not None:
+                return found
+        return None
 
     def typed_error(self, src: Source, node: ast.AST) -> bool:
         return bool(self.error_names(src, node))
@@ -270,6 +349,13 @@ class _Checker:
             return
         values = self.defaults(src, error.func)
         values.update(_kwargs(error))
+        audience = self.audience(src, error.func)
+        if details:
+            audience = _audience_value(values.get("audience")) or "APP_OWNER"
+        subject = _qualified(src, error.func).rsplit(".", 1)[-1]
+        if audience is not None:
+            subject = f"{subject}, audience {audience}"
+        missing: list[str] = []
         for field in ("message", "suggested_action"):
             value = _literal(values.get(field))
             if field == "suggested_action" and value is _UNKNOWN and field in values:
@@ -287,12 +373,9 @@ class _Checker:
                 or details
                 and field not in values
             ):
-                self.emit(
-                    src,
-                    error,
-                    "F007",
-                    f"Preflight failure has missing or blank {field}; provide a meaningful explanation and audience-appropriate next action. Unresolved factory values require behavioral validation.",
-                )
+                missing.append(field)
+        if missing:
+            self.emit(src, error, "F007", _f007_message(subject, missing, audience))
 
     def row(
         self,
@@ -616,6 +699,20 @@ class _Checker:
                             "F010",
                             "Workflow-constructed PreflightInput does not preserve its known entrypoint; pass the selected entrypoint and resolve credentials before the SDK gate. Interactive inputs may omit entrypoint.",
                         )
+
+
+def _f007_message(subject: str, missing: list[str], audience: str | None) -> str:
+    asks = []
+    if "message" in missing:
+        asks.append("provide a meaningful explanation of what failed")
+    if "suggested_action" in missing:
+        asks.append(
+            _VOICE.get(audience or "", "write an audience-appropriate next step")
+        )
+    return (
+        f"Preflight failure ({subject}) has missing or blank {' and '.join(missing)}; "
+        f"{', and '.join(asks)}. Keep internal file paths and exception text out of it."
+    )
 
 
 def scan(reg: Registry) -> list[Finding]:

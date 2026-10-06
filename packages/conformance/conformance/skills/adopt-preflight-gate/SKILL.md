@@ -613,7 +613,10 @@ Write the handler to the agreed tree. Requirements:
   `error=AuthError(message="...", suggested_action="...", cause=exc).to_failure_details()`
 - `message` = one clean sentence, no hosts/credentials/stack traces (the
   `cause=` chain carries a redacted, capped repr for diagnostics).
-- `suggested_action` only when there is a concrete user-fixable step.
+- `suggested_action` on every failed check — F007 blocks without it. Write it
+  for the leaf's audience (ADR 0013): a step the customer can take for USER, an
+  engineer-facing remediation for APP_OWNER, an operator hint for PLATFORM. No
+  internal file paths or exception text: some surfaces forward it unfiltered.
 
 Leaf selection quick table (`application_sdk.errors`):
 
@@ -621,16 +624,19 @@ Leaf selection quick table (`application_sdk.errors`):
 |---|---|---|
 | bad credentials / login rejected | `AuthError` | USER |
 | host unreachable / refused / DNS | `SourceUnavailableError` | USER |
+| source throttled the probe (429) | `RateLimitedError` | USER |
 | missing grants / scopes | `AppPermissionDeniedError` | USER |
 | required state/extension/version absent | `PreconditionError` | USER |
+| Atlan-side dependency down (object store, sidecar) | `DependencyUnavailableError` | PLATFORM |
 | app-internal inconsistency | `InternalError` (or subclass) | APP_OWNER |
 
 ### 2f. App-specific error classes (when the leaves aren't enough)
 
 Three tiers, lightest first — pick the lightest that fits:
 
-1. **Bare leaf** — `AuthError(message="...")`. Semantics (category/code/
-   audience/retryable) come from the leaf. Fine for standard failures.
+1. **Bare leaf** — `AuthError(message="...", suggested_action="...")`.
+   Semantics (category/code/audience/retryable) come from the leaf. Fine for
+   standard failures; the generic leaves ship no default action, so pass one.
 2. **Per-instance overrides** — `AuthError(message="...", suggested_action="...",
    retryable=True, cause=exc)`. `message`, `suggested_action`, `retryable`,
    `cause` are instance fields on every leaf. Right for one-off checks; no
