@@ -354,6 +354,7 @@ class _Checker:
         subject = _qualified(src, error.func).rsplit(".", 1)[-1]
         if audience is not None:
             subject = f"{subject}, audience {audience}"
+        missing: list[str] = []
         for field in ("message", "suggested_action"):
             value = _literal(values.get(field))
             if field == "suggested_action" and value is _UNKNOWN and field in values:
@@ -371,12 +372,9 @@ class _Checker:
                 or details
                 and field not in values
             ):
-                self.emit(
-                    src,
-                    error,
-                    "F007",
-                    _f007_message(subject, field, audience),
-                )
+                missing.append(field)
+        if missing:
+            self.emit(src, error, "F007", _f007_message(subject, missing, audience))
 
     def row(
         self,
@@ -702,14 +700,17 @@ class _Checker:
                         )
 
 
-def _f007_message(subject: str, field: str, audience: str | None) -> str:
-    if field == "message":
-        ask = "provide a meaningful explanation of what failed"
-    else:
-        ask = _VOICE.get(audience or "", "write an audience-appropriate next step")
+def _f007_message(subject: str, missing: list[str], audience: str | None) -> str:
+    asks = []
+    if "message" in missing:
+        asks.append("provide a meaningful explanation of what failed")
+    if "suggested_action" in missing:
+        asks.append(
+            _VOICE.get(audience or "", "write an audience-appropriate next step")
+        )
     return (
-        f"Preflight failure ({subject}) has missing or blank {field}; {ask}. "
-        "Keep internal file paths and exception text out of it."
+        f"Preflight failure ({subject}) has missing or blank {' and '.join(missing)}; "
+        f"{', and '.join(asks)}. Keep internal file paths and exception text out of it."
     )
 
 

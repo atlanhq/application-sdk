@@ -511,3 +511,13 @@ def test_f007_full_description_names_each_audience_voice():
     for audience in ("USER", "APP_OWNER", "PLATFORM"):
         assert audience in f007.full_description
     assert "exception text" in f007.full_description
+
+
+def test_f007_message_lists_every_missing_field(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails())])",
+    )
+    assert "message and suggested_action" in message
+    assert "explanation" in message
+    assert "engineer-facing" in message
