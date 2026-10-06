@@ -170,6 +170,81 @@ Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
 deliberately partial evaluator that raises on anything it does not model rather
 than guessing.
 
+## CI cost
+
+Cost is part of authoring a workflow, not an afterthought. Review it at the
+diff, before a pattern is copied into every connector.
+
+### Billing model
+
+* **Each job is rounded up to a whole minute.** A 9-second job bills 60
+  seconds, and so does a job that starts and then skips every step.
+* **Larger runners and macOS cost a multiple of standard Linux.** Pick the
+  runner from measured need (see "Runner sizing" below).
+* **Artifact storage is billed per GB-day** for as long as the artifact is kept,
+  not once at upload.
+* Standard runners are free on public repos, so application-sdk's own workflows
+  cost nothing to run. The bill comes from private connector repos running the
+  reusables and bootstrap templates this repo ships.
+
+### Levers, in priority order
+
+1. **Number of billed jobs.** Every job carries the one-minute floor, so job
+   count dominates for short work. Collapse fan-out before tuning steps.
+2. **Churn: how many times the workflow fires.** Superseded runs left running,
+   rebases, `workflow_run` fan-out and crons multiply everything else.
+3. **Duplicate work across PR, merge queue and release.** A check whose inputs
+   are unchanged since it last passed repeats a verdict and bills for it (see
+   "What a merge-queue entry re-runs" below).
+4. **Run length and runner size.** Matters only once the three above are right.
+
+### Rules
+
+* **Filter at job level, not step level.** A job skipped by its `if:` is not
+  billed. See "Skip whole jobs, not steps" below.
+* **No matrix for sub-minute work.** Each matrix leg is its own billed job, so
+  a matrix of N 10-second legs bills N minutes. Loop inside one job instead.
+* **Every PR-triggered workflow cancels superseded runs.** Declare a
+  `concurrency:` group keyed on the PR ref with `cancel-in-progress: true` on PR
+  refs (the pattern is in "`concurrency:` is not a lock, and not a queue"
+  below). A workflow that must not cancel, such as one holding a tenant, says
+  why in a comment beside its `concurrency:` block.
+* **Every `upload-artifact` sets `retention-days`.** Without it the artifact
+  keeps the repository's retention setting (90 days unless changed), far
+  longer than any CI consumer needs. Pick the shortest window that covers
+  the artifact's real readers.
+* **Every new `workflow_run` trigger counts its fan-in.** It fires once for each
+  completed run of each workflow it names, on every branch unless `branches:`
+  narrows it. The PR description states how many runs that is per PR.
+* **Every new cron justifies its frequency.** A schedule bills on every repo
+  that carries it, whether or not anything changed. State in a comment why the
+  interval cannot be longer.
+
+### Fleet multiplier
+
+Anything in a bootstrap template or a reusable workflow runs in roughly 140
+repos. One extra billed minute per PR there is ~140 minutes per fleet-wide PR
+cycle, and a cron that fires hourly is ~3,360 jobs a day. Judge a template or
+reusable change by its fleet total, not by the single run you watched.
+
+### Review checklist
+
+For any change under `.github/workflows/`, a reusable, or a bootstrap template:
+
+- [ ] Does the change add billed jobs? Could the work run as steps in an
+      existing job instead?
+- [ ] Is every "nothing to do" filter on the job's `if:`, not on its steps or an
+      early exit?
+- [ ] Is there a matrix whose legs finish in under a minute?
+- [ ] Does each PR-triggered workflow cancel superseded runs, or explain why
+      not?
+- [ ] Does every `upload-artifact` set `retention-days`?
+- [ ] Does a new `workflow_run` trigger state its fan-in? Does a new cron state
+      why its frequency is needed?
+- [ ] Does the same check now run on PR, merge queue and release with unchanged
+      inputs?
+- [ ] For a template or reusable: what is the cost multiplied by ~140?
+
 ## Skip whole jobs, not steps
 
 **Rule:** when a job has nothing to do on some event, actor or branch, put the
