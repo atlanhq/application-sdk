@@ -16,7 +16,7 @@ description: >
   are the same multiset. Key layout, tiers, empty-output semantics, file
   formats and entrypoint-contract changes stop for an owner decision.
 runs_before: [migrate-orchestration, migrate-deprecated-symbols]
-also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store, get_object_store_prefix, build_output_path]
+also_clears: [ParquetFileReader, ParquetFileWriter, JsonFileReader, JsonFileWriter, upload_to_atlan, _download_files, _resolve_store]
 mandatory_triggers:
   - "/migrate-storage"
   - "migrate storage seam"
@@ -188,7 +188,8 @@ for a customer bucket.
    the newest release that is at least 7 days old and at or above that floor
    (dependency cooldown; never a release younger than 7 days unless it fixes
    a known vulnerability). List releases with dates:
-   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
+   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | select((.value | length) > 0 and (.value[0].yanked | not)) | "\(.key) \(.value[0].upload_time)"'`
+   (yanked releases are skipped).
 3. Record the baseline outside the repo:
    `atlan-application-sdk-conformance detect --rule P008,P009,P010,P011,P012,P044,B001,B008 --exit-zero --output "$TMPDIR/before.sarif"`,
    and the tests: `UV_FROZEN=1 uv sync --all-groups --all-extras` once (frozen,
@@ -273,13 +274,13 @@ each use to the inventory.
 
 Private storage helpers routed here by `migrate-deprecated-symbols` (B008):
 `_download_files` (a **hand-off** or **inbound** site),
-`storage.ops._resolve_store` (a **store** site), and the private
+and `storage.ops._resolve_store` (a **store** site). The private
 `execution._temporal.activity_utils.get_object_store_prefix` /
-`build_output_path` (a **hand-off** site once the shared path goes). Until
-then, import `get_object_store_prefix` from the public
-`application_sdk.execution`. Do not replace `build_output_path` with a path
-composed from `input.workflow_id` alone when the path feeds a published key:
-that drops the run id from the key; keep it and record the call. Private
+`build_output_path` imports are a `migrate-deprecated-symbols` swap; this
+skill only removes their calls when the shared path they build goes. Do not
+replace `build_output_path` with a path composed from `input.workflow_id`
+alone when the path feeds a published key: that drops the run id from the
+key; keep it and record the call. Private
 non-storage names such as `_HTTP_POOL_LIMITS` stay with that skill.
 
 **Owner decisions** — record each; do not apply without an answer:

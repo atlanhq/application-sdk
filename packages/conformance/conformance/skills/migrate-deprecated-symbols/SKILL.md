@@ -16,6 +16,7 @@ description: >
   after any skill that raises the SDK, because a newer SDK can deprecate more
   symbols.
 routes_to: [migrate-storage]
+also_clears: [get_object_store_prefix, build_output_path, _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS, _current_outputs, _app_error_to_http_status]
 mandatory_triggers:
   - "/migrate-deprecated-symbols"
   - "deprecated SDK symbol"
@@ -66,8 +67,10 @@ on names that exist in the repo, or on dunders.
 
 `detect` does not scan `tests/`, but test code breaks on the same SDK
 changes. Find those sites yourself and add them to the inventory:
-`grep -rnE 'application_sdk[^ ]*\._|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`
-plus every deprecated symbol the app-code findings named. Iterating the enum
+`grep -rnE 'application_sdk[^ ]*\._|from application_sdk[^ ]* import .*\b_[A-Za-z]|PreflightStatus\.PARTIAL|in PreflightStatus|list\(PreflightStatus' tests/`
+plus every deprecated symbol the app-code findings named, and every symbol in
+this skill's `also_clears` list (other skills route those here, and their
+`tests/` sites produce no finding). Iterating the enum
 (`for status in PreflightStatus`) still yields PARTIAL. List string patch
 targets too (`patch("app.app.download_files")`): they move with the symbol
 they name.

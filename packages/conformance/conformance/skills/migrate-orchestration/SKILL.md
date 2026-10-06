@@ -74,11 +74,14 @@ this skill (P017 does not see a bare temporalio `Worker(...)` or
 `WorkflowEnvironment`, but they are still v2 residue).
 
 **Routing:** P005 also fires on private SDK names that are not orchestration.
-Storage helpers (`storage.ops._resolve_store`, `storage.formats.utils._download_files`,
-`activity_utils.get_object_store_prefix` / `build_output_path`) belong to
-`migrate-storage`; other non-orchestration privates (`constants._HTTP_POOL_*`,
-`outputs._current_outputs`, `handler.service._app_error_to_http_status`)
-belong to `migrate-deprecated-symbols`. List them; do not migrate them here.
+Storage helpers (`storage.ops._resolve_store`,
+`storage.formats.utils._download_files`) belong to `migrate-storage`.
+
+The private `activity_utils.get_object_store_prefix` / `build_output_path`
+imports and other non-orchestration privates (`constants._HTTP_POOL_LIMITS`,
+`constants._HTTP_POOL_TIMEOUT_SECONDS`, `outputs._current_outputs`,
+`handler.service._app_error_to_http_status`) belong to
+`migrate-deprecated-symbols`. List them; do not migrate them here.
 
 ## After-shape APIs
 
@@ -148,7 +151,8 @@ parameter instead.
    the newest release that is at least 7 days old and at or above that floor
    (dependency cooldown; never a release younger than 7 days unless it fixes
    a known vulnerability). List releases with dates:
-   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
+   `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | select((.value | length) > 0 and (.value[0].yanked | not)) | "\(.key) \(.value[0].upload_time)"'`
+   (yanked releases are skipped).
 3. Record the baseline outside the repo:
    `atlan-application-sdk-conformance detect --rule P004,P005,P017,P018,P021,B008 --exit-zero --output "$TMPDIR/before.sarif"`
    (`detect` prints SARIF and exits non-zero on findings; list each result's

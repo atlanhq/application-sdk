@@ -141,7 +141,8 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
      SDK to the newest release that is at least 7 days old and at or above that floor
      (dependency cooldown; never a release younger than 7 days unless it fixes
      a known vulnerability). List releases with dates:
-     `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | "\(.key) \(.value[0].upload_time)"'`.
+     `curl -s https://pypi.org/pypi/atlan-application-sdk/json | jq -r '.releases | to_entries[] | select((.value | length) > 0 and (.value[0].yanked | not)) | "\(.key) \(.value[0].upload_time)"'`
+     (yanked releases are skipped).
      Creators set a random placeholder guid on every call, and only
      `entity_bytes` from 3.39.0 removes it; without it, publish sees every
      entity as changed on every run. An app that only reads `.qualified_name`
