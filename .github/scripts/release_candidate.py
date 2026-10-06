@@ -45,7 +45,8 @@ Subcommands and their environment:
              ``ghcr_branch_tag``, ``gm_version``.
 ``pin``      IMAGE (``ghcr.io/atlanhq/<repo>:candidate-<tree>``), GHCR_USER,
              GHCR_TOKEN. Writes ``image_ref`` (``<IMAGE>@<digest>``).
-``mark``     IMAGE (a ``pin`` output), GHCR_USER, GHCR_TOKEN.
+``mark``     IMAGE (a ``pin`` output), EXPECTED_REPO (the calling repository;
+             IMAGE must name it), GHCR_USER, GHCR_TOKEN.
 ``lookup``   REPO, RELEASE_TAG, GHCR_USER, GHCR_TOKEN; reads git and
              ``pyproject.toml``. Writes ``promote_source``
              (``ghcr.io/atlanhq/<repo>@<digest>``) or nothing. Never fails the
@@ -81,6 +82,9 @@ SCANNED_PREFIX = "scanned-"
 _TREE_RE = r"[0-9a-f]{40}"
 _DIGEST_RE = r"sha256:[0-9a-f]{64}"
 _REPO_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
+# A PEP 440 version's character set. Anything else (a newline above all) would
+# be written into GITHUB_OUTPUT and the image tags, so it is refused here.
+_VERSION_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z.+!_-]{0,63}$")
 _CANDIDATE_RE = re.compile(
     rf"^{GHCR_HOST}/{GHCR_ORG}/(?P<repo>[A-Za-z0-9][A-Za-z0-9._-]*)"
     rf":{CANDIDATE_PREFIX}(?P<tree>{_TREE_RE})$"
@@ -126,9 +130,10 @@ def pyproject_version(path: Path = Path("pyproject.toml")) -> str:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
     except (OSError, tomllib.TOMLDecodeError) as exc:
         raise CandidateError(f"cannot read {path}: {exc}") from exc
-    version = data.get("project", {}).get("version")
-    if not isinstance(version, str) or not version.strip():
-        raise CandidateError(f"{path} has no [project].version")
+    project = data.get("project")
+    version = project.get("version") if isinstance(project, dict) else None
+    if not isinstance(version, str) or not _VERSION_RE.fullmatch(version.strip()):
+        raise CandidateError(f"{path} has no valid [project].version")
     return version.strip()
 
 
@@ -296,6 +301,12 @@ def cmd_mark(
     match = _PINNED_RE.fullmatch(image)
     if not match:
         raise CandidateError(f"not a pinned candidate image ref: {image!r}")
+    expected = env.get("EXPECTED_REPO", "")
+    if not expected or match["repo"] != expected:
+        raise CandidateError(
+            f"refusing to mark {image!r}: not an image of the calling "
+            f"repository {expected!r}"
+        )
     registry = factory(
         match["repo"], env.get("GHCR_USER", ""), env.get("GHCR_TOKEN", "")
     )
@@ -405,6 +416,10 @@ def main(argv: list[str]) -> int:
     ) as exc:
         print(f"::error::release_candidate {argv[1]}: {exc}", flush=True)
         return 1
+    for key, value in outputs.items():
+        if "\n" in value or "\r" in value:
+            print(f"::error::release_candidate {argv[1]}: {key} has a line break")
+            return 1
     path = os.environ.get("GITHUB_OUTPUT")
     if path and outputs:
         with open(path, "a", encoding="utf-8") as fh:

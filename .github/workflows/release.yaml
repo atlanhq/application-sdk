@@ -18,7 +18,7 @@ jobs:
     # Serialise bumps; a burst of merges coalesces into the newest pending run.
     # See release-version-bump.yaml for why this queues instead of cancelling.
     concurrency:
-      group: release-version-bump-${{ github.ref_name }}
+      group: release-version-bump-${{ github.event.pull_request.base.ref }}
       cancel-in-progress: false
     permissions:
       contents: write

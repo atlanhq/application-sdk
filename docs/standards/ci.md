@@ -213,27 +213,35 @@ base-sensitive or not:
 | `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels. A release PR without `e2e` fails on the PR and never enters the queue. |
 | `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
 | `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
-| `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree | The suite reads only the tree. |
-| `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
-| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input differs from the PR head | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
+| `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
+| `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
+| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
 
 The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
 runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
 head SHA from the queue branch name
-(`gh-readonly-queue/<base>/pr-<N>-<head sha>`), fetches that one commit, and
-compares it with the queue commit. It writes two outputs: `identical` (the
-whole tree matches) and `image_changed` (a path in the script's image-input
-list differs). The skipping job's gate is
+(`gh-readonly-queue/<base>/pr-<N>-<head sha>`) and the queue's base from
+`merge_group.base_sha`, fetches the commits and trees (no blobs, bounded depth)
+behind both, and compares them with the queue commit. It writes two outputs:
+`identical` (the whole tree matches and the head already contains the base) and
+`image_changed` (a path in the script's image-input list may differ). Every git
+call has a timeout, and a timeout runs every check. The skipping job's gate is
 `!cancelled() && needs.queue-diff.outputs.<x> != '<skip value>'`, so an empty
 output still runs the check. That covers a skipped `queue-diff` on every
 non-queue event and a failed one. `test_queue_entry_rechecks.py` evaluates
 each gate in both directions.
 
-**Comparing with the PR head is the conservative choice.** The PR's run built
-`refs/pull/N/merge`: the head merged with the base as it was then. The diff
-against the head can only include more than the diff against that merge ref,
-never less. When a group batches several PRs, the queue branch names the last
-one. The PRs ahead of it then show up as a difference, and the checks run.
+**What "may differ" means.** The PR's run built `refs/pull/N/merge`: the head
+merged with the base as it was then, a base commit the queue cannot know. The
+head-to-queue diff alone misses one case: a base change that was there when the
+PR ran and was reverted before the queue entry. The queue tree then equals the
+head's but not the tree that was tested. So the paths that may differ are the
+head-to-queue diff plus every path a base commit touched since the PR forked
+(`git log fork..base`), reverted or not. When the head already contains the
+base, that second set is empty and the tested tree was the head's own: the only
+case in which `identical` can be true. A fork point beyond the fetched depth
+runs every check. When a group batches several PRs, the queue branch names the
+last one. The PRs ahead of it then show up as a difference, and the checks run.
 
 **No separate `queue-gate` reporter.** A job-level skip with a static `name:`
 already files the check run the required context waits for. A reporter job
@@ -268,7 +276,9 @@ surface.
 
 Since FND-3327 the only image a release-flow app ships is the release image,
 so a scan per PR checked an image that never shipped. In a repo whose base
-branch has a workflow calling `release-version-bump.yaml`, `build-and-scan.yaml`
+branch has a job calling `release-version-bump.yaml` (a job-level `uses:`; a
+comment or string naming the file does not count, since a false match turns
+scans off), `build-and-scan.yaml`
 now scans only the `bump-version*` PR. Its `scope` job
 (`.github/scripts/vuln_scan_scope.py`) answers `scan=false` for every other PR
 and every queue entry, and `Build Image` / `Security Gate` skip on that answer.
@@ -300,7 +310,8 @@ a lock carrying an undeclared `[options]` table (`renovate_uv_lock_bounded.py`,
 `withhold`). The image build's `uv sync --locked` behind the required
 `scan / Build Image` used to reject it. That job now skips on ordinary PRs, so
 two shared workflows run `uv lock --check` (`.github/scripts/check_uv_lock.py`)
-whenever `uv.lock` differs from the base: the Pre-commit job of
+whenever `uv.lock` or any `pyproject.toml` differs from the base (a dependency
+added without relocking leaves the lock unchanged): the Pre-commit job of
 `checks-reusable.yaml`, and the Conformance Gate job of
 `conformance-reusable.yaml`. The second is the one that holds fleet-wide:
 `suite / Conformance Gate` is required in every repo, while some repos require

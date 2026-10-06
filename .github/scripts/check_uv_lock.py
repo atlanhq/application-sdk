@@ -28,11 +28,13 @@ tests/test_check_uv_lock.py, which runs the real ``uv``).
 
 When it runs
 ------------
-Only when the lock could have changed: a repo with no ``uv.lock`` passes, and a
-PR or queue entry whose ``uv.lock`` is byte-identical to its base's passes
-without running ``uv``. That keeps a repo whose base already carries a stale
-lock from going red on every unrelated PR; a refused lock PR always changes
-``uv.lock``. Anything the comparison cannot establish (no base SHA, a failed
+Only when the lock or what it resolves from could have changed: a repo with no
+``uv.lock`` passes, and a PR or queue entry whose ``uv.lock`` and every
+``pyproject.toml`` are byte-identical to its base's passes without running
+``uv``. That keeps a repo whose base already carries a stale lock from going red
+on every unrelated PR; a refused lock PR always changes ``uv.lock``, and a PR
+that edits dependencies in ``pyproject.toml`` without relocking is checked too.
+Anything the comparison cannot establish (no base SHA, a failed or stalled
 fetch) runs the check: the only direction an error may push is towards it.
 
 Environment:
@@ -48,6 +50,10 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 LOCK = "uv.lock"
+#: What the lock is resolved from: the root and any workspace member manifests.
+LOCK_INPUTS = (LOCK, ":(glob)**/pyproject.toml")
+#: A stalled fetch must not hold the required gate open until the runner limit.
+FETCH_TIMEOUT_S = 120
 
 Runner = Callable[[Sequence[str]], int]
 
@@ -57,19 +63,27 @@ def _run(cmd: Sequence[str]) -> int:
 
 
 def _quiet(cmd: Sequence[str]) -> int:
-    return subprocess.run(
-        list(cmd), check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-    ).returncode
+    try:
+        return subprocess.run(
+            list(cmd),
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=FETCH_TIMEOUT_S,
+        ).returncode
+    except subprocess.TimeoutExpired:
+        print(f"::warning::{' '.join(cmd[:2])} timed out after {FETCH_TIMEOUT_S}s")
+        return 124
 
 
 def lock_changed(base_sha: str, quiet: Runner = _quiet) -> bool:
-    """True unless git proves ``uv.lock`` is identical to the base's."""
+    """True unless git proves ``uv.lock`` and its manifests match the base's."""
     if not base_sha:
         return True
     if quiet(["git", "fetch", "--no-tags", "--depth=1", "origin", base_sha]) != 0:
         return True
     # exit 0: no difference; 1: differs; anything else: unknown -> check.
-    return quiet(["git", "diff", "--quiet", base_sha, "HEAD", "--", LOCK]) != 0
+    return quiet(["git", "diff", "--quiet", base_sha, "HEAD", "--", *LOCK_INPUTS]) != 0
 
 
 def main(
@@ -83,7 +97,10 @@ def main(
         print(f"No {LOCK}: nothing to check.", flush=True)
         return 0
     if not lock_changed(env.get("BASE_SHA", "").strip(), quiet):
-        print(f"{LOCK} is unchanged from the base: not re-checked.", flush=True)
+        print(
+            f"{LOCK} and pyproject.toml are unchanged from the base: not re-checked.",
+            flush=True,
+        )
         return 0
     code = run(["uv", "lock", "--check"])
     if code != 0:

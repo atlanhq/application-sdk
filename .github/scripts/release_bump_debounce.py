@@ -58,9 +58,25 @@ _VERSION_LINE_RE = re.compile(
 )
 
 
+#: A stalled git call must fail open (push) promptly, not hold the bump job
+#: until its outer timeout.
+GIT_TIMEOUT_S = 90
+
+
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub git."""
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    """Single seam so tests can stub git.
+
+    A command that outlives ``GIT_TIMEOUT_S`` reads as a failure (exit 124),
+    which every caller already treats as "cannot tell, push".
+    """
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=GIT_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, 124, "", f"timed out after {GIT_TIMEOUT_S}s"
+        )
 
 
 def _git_show(ref: str, path: str) -> str | None:

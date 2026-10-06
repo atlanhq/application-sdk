@@ -68,6 +68,47 @@ def test_missing_workflows_dir_fails_safe_to_scanning(tmp_path: Path) -> None:
     assert scope.has_release_flow(tmp_path / "absent") is False
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "# See release-version-bump.yaml for why this queues.\n",
+        "#   uses: atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main\n",
+        "jobs:\n  x:\n    steps:\n      - run: echo release-version-bump.yaml\n",
+        "env:\n  NOTE: 'calls release-version-bump.yaml'\n",
+    ],
+)
+def test_a_mention_that_is_not_a_job_call_does_not_count(
+    tmp_path: Path, text: str
+) -> None:
+    """A false "release flow" turns ordinary PR scans OFF, so only a job-level
+    `uses:` of the bump workflow may count."""
+    wf = _workflows(tmp_path, release_flow=False)
+    (wf / "notes.yaml").write_text(text)
+    assert scope.has_release_flow(wf) is False
+
+
+@pytest.mark.parametrize(
+    "uses",
+    [
+        "atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main",
+        '"atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@v3"',
+        "./.github/workflows/release-version-bump.yaml",
+        "atlanhq/application-sdk/.github/workflows/release-version-bump.yaml@main # pin",
+    ],
+)
+def test_every_job_call_form_counts(tmp_path: Path, uses: str) -> None:
+    wf = tmp_path / "wf"
+    wf.mkdir()
+    (wf / "release.yaml").write_text(f"jobs:\n  bump:\n    uses: {uses}\n")
+    assert scope.has_release_flow(wf) is True
+
+
+def test_this_repos_own_workflows_are_not_a_release_flow() -> None:
+    """application-sdk's workflows name the file in comments only."""
+    root = Path(__file__).resolve().parents[2] / "workflows"
+    assert scope.has_release_flow(root) is False
+
+
 def test_non_yaml_mention_does_not_count(tmp_path: Path) -> None:
     wf = _workflows(tmp_path, release_flow=False)
     (wf / "README.md").write_text("see release-version-bump.yaml\n")

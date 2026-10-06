@@ -127,7 +127,10 @@ def test_mark_copies_the_scanned_digest_not_whatever_the_tag_holds_now() -> None
     # The tag was pushed again after the scan: mark must ignore it.
     registry.add(f"candidate-{TREE}", _manifest("re-pushed"))
     rc.cmd_mark(
-        {"IMAGE": f"{BASE}:candidate-{TREE}@{scanned.digest}"},
+        {
+            "IMAGE": f"{BASE}:candidate-{TREE}@{scanned.digest}",
+            "EXPECTED_REPO": REPO,
+        },
         factory=_factory(registry),
     )
     assert registry.store[f"scanned-{TREE}"].digest == scanned.digest
@@ -144,7 +147,64 @@ def test_mark_copies_the_scanned_digest_not_whatever_the_tag_holds_now() -> None
 )
 def test_mark_refuses_anything_but_a_pinned_ghcr_candidate(image: str) -> None:
     with pytest.raises(rc.CandidateError):
-        rc.cmd_mark({"IMAGE": image}, factory=_factory(FakeRegistry(REPO)))
+        rc.cmd_mark(
+            {"IMAGE": image, "EXPECTED_REPO": REPO},
+            factory=_factory(FakeRegistry(REPO)),
+        )
+
+
+@pytest.mark.parametrize("expected", ["", "atlan-other-app"])
+def test_mark_refuses_an_image_of_another_repository(expected: str) -> None:
+    """A caller may only mark its own package: the org PAT could write any."""
+    registry = FakeRegistry(REPO)
+    scanned = _manifest("scanned")
+    registry.add(scanned.digest, scanned)
+    with pytest.raises(rc.CandidateError, match="calling repository"):
+        rc.cmd_mark(
+            {
+                "IMAGE": f"{BASE}:candidate-{TREE}@{scanned.digest}",
+                "EXPECTED_REPO": expected,
+            },
+            factory=_factory(registry),
+        )
+    assert f"scanned-{TREE}" not in registry.store
+
+
+@pytest.mark.parametrize(
+    "toml",
+    [
+        '[project]\nversion = "1.2.3\\nbranch=main\\nimage_tag=known"\n',
+        '[project]\nversion = "1.2\\r.3"\n',
+        '[project]\nversion = "1.2.3 extra"\n',
+        '[project]\nversion = ""\n',
+        'project = "oops"\n',
+        "[tool.x]\ny = 1\n",
+    ],
+)
+def test_pyproject_version_refuses_anything_but_a_plain_version(
+    tmp_path: Path, toml: str
+) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text(toml)
+    with pytest.raises(rc.CandidateError):
+        rc.pyproject_version(path)
+
+
+def test_lookup_rebuilds_on_malformed_project_metadata(tmp_path: Path) -> None:
+    path = tmp_path / "pyproject.toml"
+    path.write_text('project = "oops"\n')
+    env = {"REPO": REPO, "RELEASE_TAG": "v1.2.3", "PYPROJECT": str(path)}
+    assert rc.cmd_lookup(env, factory=_factory(FakeRegistry(REPO)), git=_git()) == {}
+
+
+def test_main_never_writes_a_line_break_into_outputs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output = tmp_path / "out"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setitem(rc.COMMANDS, "name", lambda _env: {"gm_version": "v1\nx=y"})
+    assert rc.main(["release_candidate.py", "name"]) == 1
+    assert not output.exists()
 
 
 # ── lookup ────────────────────────────────────────────────────────────────────

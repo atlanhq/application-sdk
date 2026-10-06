@@ -126,7 +126,9 @@ The bump PR is the one PR the vulnerability scan gates in a release-flow repo
    identity: `app_version` is `v<pyproject version>`, the tag Stage 2 cuts. No
    Docker Hub copy, scan, deploy or publish.
 2. `scan` — `build-and-scan.yaml` on `candidate-<tree>@<digest>`, blocking. On
-   a pass the Security Gate copies that digest to `:scanned-<tree>`.
+   a pass the Security Gate copies that digest to `:scanned-<tree>`. It only
+   marks the calling repository's own package: an `image` naming any other
+   package is refused, since the org token it writes with could reach any.
 
 If the candidate build fails, `scan` falls back to the scan's own single-arch
 build, so the required checks still mean something; the release then rebuilds.

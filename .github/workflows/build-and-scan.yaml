@@ -217,6 +217,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: python3 _sdk/.github/scripts/queue_tree_diff.py
 
   # ── Build Docker image and scan it (single-arch, no push) ──────────────────
@@ -750,12 +751,13 @@ jobs:
       # promotes (FND-3328). Only a passing gate reaches here, so a bump PR
       # merged past a red scan leaves nothing to promote and the release
       # rebuilds behind a blocking scan. The org PAT is what can write these
-      # org-level packages; the script only copies manifests within the repo
-      # named in `image`, and validates the ref shape before touching it.
+      # org-level packages; the script refuses an `image` that is not this
+      # repository's own package, and validates the ref shape before touching it.
       - name: Mark the scanned release candidate
         if: success() && inputs.mark_scanned && inputs.fail_on_findings
         env:
           IMAGE: ${{ inputs.image }}
+          EXPECTED_REPO: ${{ github.event.repository.name }}
           GHCR_USER: ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
         run: python3 _sdk/.github/scripts/release_candidate.py mark

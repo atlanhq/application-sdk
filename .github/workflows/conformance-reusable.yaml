@@ -335,6 +335,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
           QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
         run: python3 _sdk/.github/scripts/queue_tree_diff.py
 
   # ── The suite, the ledger guard and the gate, in one job ────────────────────

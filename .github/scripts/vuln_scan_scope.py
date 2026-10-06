@@ -48,6 +48,7 @@ Environment:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -59,6 +60,20 @@ BUMP_BRANCH_PREFIX = "bump-version"
 #: The reusable workflow a release-flow repo's ``release.yaml`` calls.
 RELEASE_FLOW_MARKER = "release-version-bump.yaml"
 
+#: A job-level ``uses:`` key whose value is the bump workflow, local or remote.
+#: Anchored on the key at the start of a line, so a comment or prose that
+#: merely names the file (``# see release-version-bump.yaml``) never matches:
+#: a false match here would turn scans OFF. Reusable workflows are called only
+#: by a job's ``uses:`` mapping key, never by a ``- uses:`` step, so the step
+#: form is deliberately not matched either.
+_RELEASE_FLOW_CALL_RE = re.compile(
+    r"^[ \t]+uses:[ \t]*[\"']?"
+    r"(?:[\w.-]+/[\w.-]+/|\./)\.github/workflows/"
+    + re.escape(RELEASE_FLOW_MARKER)
+    + r"(?:@[^\s\"'#]+)?[\"']?[ \t]*(?:#.*)?$",
+    re.MULTILINE,
+)
+
 SCOPED_EVENTS = ("pull_request", "merge_group")
 
 
@@ -69,7 +84,10 @@ class Scope:
 
 
 def has_release_flow(workflows_dir: Path) -> bool:
-    """Return True when any workflow in *workflows_dir* calls the bump workflow."""
+    """Return True when a job in *workflows_dir* calls the bump workflow.
+
+    Only a job-level ``uses:`` counts; a mention in a comment or string does not.
+    """
     try:
         files = sorted(workflows_dir.iterdir())
     except OSError:
@@ -81,7 +99,7 @@ def has_release_flow(workflows_dir: Path) -> bool:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
-        if RELEASE_FLOW_MARKER in text:
+        if _RELEASE_FLOW_CALL_RE.search(text):
             return True
     return False
 

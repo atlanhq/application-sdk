@@ -91,6 +91,61 @@ def test_unchanged_lock_is_not_rechecked(tmp_path: Path) -> None:
     assert check_uv_lock.main(tmp_path, {"BASE_SHA": "abc"}, run, lambda cmd: 0) == 0
 
 
+def _git(cwd: Path, *args: str) -> str:
+    return subprocess.run(
+        ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+    ).stdout.strip()
+
+
+@pytest.mark.parametrize(
+    ("path", "changed"),
+    [
+        ("pyproject.toml", True),
+        ("packages/member/pyproject.toml", True),
+        ("app/main.py", False),
+    ],
+)
+def test_a_manifest_change_counts_as_a_lock_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, path: str, changed: bool
+) -> None:
+    """A dependency added to pyproject.toml without relocking leaves uv.lock
+    byte-identical, and is exactly what `uv lock --check` exists to catch."""
+    _git(tmp_path, "init", "-q", "-b", "main")
+    _git(tmp_path, "config", "user.email", "ci@example.com")
+    _git(tmp_path, "config", "user.name", "ci")
+    files = [
+        "uv.lock",
+        "pyproject.toml",
+        "packages/member/pyproject.toml",
+        "app/main.py",
+    ]
+    for name in files:
+        (tmp_path / name).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / name).write_text("a\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / path).write_text("b\n")
+    _git(tmp_path, "commit", "-q", "-am", "pr")
+    monkeypatch.chdir(tmp_path)
+
+    def quiet(cmd: Sequence[str]) -> int:
+        if cmd[1] == "fetch":
+            return 0
+        return subprocess.run(list(cmd), check=False).returncode
+
+    assert check_uv_lock.lock_changed(base, quiet) is changed
+
+
+def test_a_stalled_git_reads_as_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def stall(*_a, **_k):
+        raise subprocess.TimeoutExpired(["git", "fetch"], check_uv_lock.FETCH_TIMEOUT_S)
+
+    monkeypatch.setattr(check_uv_lock.subprocess, "run", stall)
+    assert check_uv_lock._quiet(["git", "fetch", "origin", "abc"]) != 0
+    assert check_uv_lock.lock_changed("abc") is True
+
+
 @pytest.mark.parametrize(
     ("base", "fetch", "diff", "changed"),
     [

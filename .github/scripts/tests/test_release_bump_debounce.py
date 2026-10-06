@@ -247,3 +247,13 @@ def test_changelog_section_ignores_the_heading_date() -> None:
     assert a is not None and a == b
     assert "v1.0.0" not in a  # stops at the next section
     assert mod.changelog_section(_changelog("1.0.1", "d", []), "1.0.2") is None
+
+
+def test_a_stalled_git_call_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A fetch that hangs must read as "cannot tell", so the bump is pushed."""
+
+    def stall(*_a, **_k):
+        raise subprocess.TimeoutExpired(["git", "fetch"], mod.GIT_TIMEOUT_S)
+
+    monkeypatch.setattr(mod.subprocess, "run", stall)
+    assert mod.run(["git", "fetch", "origin", "x"]).returncode != 0
