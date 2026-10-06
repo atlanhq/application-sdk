@@ -803,7 +803,12 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                 "FileReference declaration as one tree, which is the shape a "
                 "fanned-out connector needs — and never mark this finding a false "
                 "positive without "
-                "a green full-DAG e2e proving assets land in Atlas."
+                "a green full-DAG e2e proving assets land in Atlas. Bytes may "
+                "already move through a path this check does not recognise: an app "
+                "task calling storage.transfer.upload, or the inherited "
+                "upload_to_atlan shim. Run the full-DAG e2e on main first as a "
+                "baseline, then convert keeping keys identical (pin storage_path, "
+                "or declare refs with labels) and compare the Atlas inventory."
             ),
         )
     )

@@ -883,6 +883,40 @@ say so.
   already calls `upload_refs`, there is no P030 finding to remedy: do not
   propose a second upload.
 
+  **Working transfers that still fire P030.**  Before drafting, check whether
+  bytes already move through a path this check does not recognise: an app
+  task that calls `storage.transfer.upload` (against
+  `create_store_from_binding` or `upstream_storage`), or a call to the
+  inherited `BaseMetadataExtractor.upload_to_atlan` shim.  The shim forwards to
+  `self.upload(local_path=output_path, tier=RETAINED)`, which writes under
+  `App.upload`'s own run prefix: it delivers only when the app hands that same
+  prefix downstream, and is the re-rooting trap above when it does not —
+  compare the two before calling it working.  Neither shape is the named
+  bridge P042 reports, so both land here.  The proposal is the conversion,
+  framed as a refactor that must not move a key:
+
+  - `App.upload` / `upload_refs` are tasks: call them from the entrypoint,
+    never inside another task;
+  - either keep the activity and have it stage a local tree mirroring the key
+    layout, returned as a directory `FileReference`, then upload it once with
+    `storage_path` pinned to the prefix the app returns (replay-safe only for
+    runs pinned to this build; an unversioned or `AUTO_UPGRADE` worker
+    replays in-flight runs against the new entrypoint, so guard the new
+    `App.upload` call with `workflow.patched(...)`); or declare the task
+    outputs to `upload_refs` with a
+    `DeclaredFile.label` per key;
+  - skip empty entities (`upload_refs` raises on an empty declared file);
+  - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
+    files) — a second private write left behind is the same bridge again;
+  - upload the whole tree when downstream nodes read more than `transformed/`
+    (for example `parsed/`); for the shim, swap in its own body and pin
+    `storage_path` if the published prefix differs from the run prefix.
+
+  Evidence: run the full-DAG e2e on main first as a baseline, then on the
+  change, and compare the Atlas inventory per type; a type the inventory does
+  not list in either run is not proven by it.  Cite both runs in
+  `result.evidence`.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
   **does** perform a real storage transfer, with neither `self.upload(` nor
   `self.upload_refs(` anywhere in
@@ -911,6 +945,11 @@ say so.
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.
+
+  Detection is name-based: only an app method named `upload_to_atlan` is
+  graded here.  The same working shape under another name, and calls to the
+  inherited SDK shim, are reported as P030 — use the P030 conversion recipe
+  for them.
 
 - **P051 SdrPreflightUnavailable** (WARN) — an SDR app (`self_deployed_runtime:
   true` in `atlan.yaml`) locks `atlan-application-sdk` below `3.30.0` in
