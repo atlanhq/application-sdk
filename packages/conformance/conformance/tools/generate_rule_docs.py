@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.rules import _ALL_SERIES, assert_registry_consistent
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import RemediationKind, RuleDefinition
 from conformance.suite.schema.disposition import EnforcementTier
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,7 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
-            "`suite.checks.determinism` (P020–P024, P031), "
+            "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
             "`suite.checks.app_name_alignment` (P025), "
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), "
             "`suite.checks.transform_templates` (P040, scans template YAML), "
@@ -398,6 +398,34 @@ def _rule_anchor(rule: RuleDefinition) -> str:
     return rule.id.lower()
 
 
+_PACKAGE_BLOB = "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/"
+
+_REMEDIATION_LABEL = {
+    RemediationKind.PRESCRIPTION: "Fix by",
+    RemediationKind.COMMAND: "Fix by",
+    RemediationKind.SKILL: "Migrate with",
+    RemediationKind.GUIDE: "Migrate with",
+    RemediationKind.DECISION: "Decision",
+}
+
+
+def _remediation_line(rule: RuleDefinition) -> tuple[str, str]:
+    ref = rule.remediation_reference
+    if ref is None:
+        return ("Fix by", "")
+    if ref.kind is RemediationKind.SKILL:
+        value = f"the ``{ref.target}`` skill (``skills-dir``)"
+    elif ref.kind is RemediationKind.DECISION:
+        value = f"{ref.target} decides"
+    elif ref.kind is RemediationKind.COMMAND:
+        value = f"``{ref.target}``"
+    else:
+        value = f"[`{ref.target}`]({_PACKAGE_BLOB}{ref.target})"
+    if ref.note:
+        value = f"{value} — {ref.note}"
+    return (_REMEDIATION_LABEL[ref.kind], value)
+
+
 def _render_rule_block(rule: RuleDefinition) -> list[str]:
     """One rule's full documentation block (shared by the per-series doc and
     the per-rule file, so the two can never drift)."""
@@ -447,11 +475,18 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
     # actually do about this" block.  Deliberately ABOVE the full description:
     # it answers where the fix belongs and what "already correct" looks like,
     # which is what a reader needs before the mechanics of the check.
-    if rule.canonical_reference or rule.rule_interactions or rule.terminal_state:
+    remediation = _remediation_line(rule)
+    if (
+        rule.canonical_reference
+        or rule.rule_interactions
+        or rule.terminal_state
+        or remediation[1]
+    ):
         lines.append("### What correct looks like")
         lines.append("")
         for label, value in (
             ("Compliant example", rule.canonical_reference),
+            remediation,
             ("Interacts with", rule.rule_interactions),
             ("Already correct when", rule.terminal_state),
         ):

@@ -1061,6 +1061,8 @@ app/generated/
 
 Credential files are hoisted by matching `connectorConfigName`. If two entrypoints produce the same filename with different content, generation fails — use unique `connectorConfigName` values for genuinely different credentials.
 
+**Per-entrypoint input class names:** in a bundle, each entrypoint's `_input.py` declares its class as `<PascalCase(entrypoint name)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `query-miner` → `QueryMinerAppInputContract`; `-` and `_` both split words) and ends with `AppInputContract = <that class>`, so existing `from app.generated.<entrypoint>._input import AppInputContract` imports keep working. Give each entrypoint a distinct class name so tools that key contracts by class name (the conformance contract ledger) do not conflate them; import the unique name in new code. Generation fails when two entrypoints map to the same class name (`foo-bar` and `foo_bar`) or a name does not start with a letter. Single-entrypoint contracts are unchanged: `app/generated/_input.py` still declares `class AppInputContract` and emits no alias.
+
 ### Other App.pkl Properties
 
 | Property | Type | Default | Description |
@@ -1274,6 +1276,8 @@ contract/app.pkl
     ├─▶ miner/manifest.json
     └─▶ miner/_input.py
 ```
+
+Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `AppInputContract` alias as an `App.pkl` bundle (see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle)).
 
 `atlan-connectors-agent.json` is intentionally not part of this app output shape. Apps reference that shared configmap from `AgentSelector.agentConfigEntries`; the canonical payload is owned by `AgentConfig.pkl` and generated separately.
 
@@ -2088,13 +2092,50 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
-| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
+| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. `SageV2` only: `warmup` (default `false`), see [SageV2 warmup](#sagev2-warmup). |
 | `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
 | `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
+
+##### SageV2 warmup
+
+`warmup: Boolean = false` on `SageV2` (both `Widgets.SageV2` and the legacy
+`Config.SageV2`) tells the setup UI, before it calls anything, that the app
+has a warmup:
+
+- `warmup = true`: the UI runs the warmup flow. It polls
+  `POST /workflows/v1/warmup` until it answers `ready`, then calls `/check`
+  with `tiers=["warmup"]`.
+- `warmup = false` (default): the UI calls `/check` as before.
+
+```pkl
+["preflight-check"] = new SageV2 {
+  title = ""
+  warmup = true
+}
+```
+
+Generated output: `true` adds `"warmup": true` to the widget's `ui` block in
+the workflow config (`app/generated/{name}.json`). The default renders
+nothing, so contracts that do not set it generate byte-identical output. The
+generated `_input.py`, `manifest.json` and credential config do not change.
+
+Set it if and only if the app's handler overrides `Handler.warmup`. The flag
+is a declaration for the UI; the preflight gate decides from the handler
+itself. When the two disagree:
+
+- Flag set, no override: `/warmup` always answers `ready`, so the UI makes one
+  wasted round trip.
+- Override, flag not set: setup never runs the warmup-tier checks, so missing
+  grants on those checks are not caught at setup. The gate still runs them on
+  a real run.
+
+The flag lives in the contract, not in the handler service, because the
+served form must match the committed contract. The v1 `Sage` widget does not
+take the flag: the warmup flow is built on the `sageV2` component only.
 
 #### Computed
 

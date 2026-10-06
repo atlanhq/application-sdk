@@ -11,11 +11,12 @@ that, and neither is exercisable here by a runner:
    this from (hand-adding it locally trips C002 drift), so the trigger is pinned
    there.
 
-2. **The reusable must conclude `success` on that event.** There is no PR title
-   to inspect, so every validating/commenting step is `pull_request`-gated and a
-   final no-op step carries the conclusion. If the no-op's gate were ever
-   narrowed — or the fail step's widened — a merge-group entry would either have
-   no successful step or go red on an empty verdict.
+2. **The reusable must pass on that event.** There is no PR title to inspect,
+   so the job carries a job-level `pull_request` gate and is *skipped* there.
+   A skipped job still files its check run, and GitHub counts `skipped` as a
+   pass for a required check; it also costs no runner minute, which a job that
+   started only to skip every step did (FND-3320). If that gate were ever
+   widened, the job would run on merge_group with an empty event payload.
 
 Both are GitHub-evaluated `if:` expressions, so each gate is lifted verbatim out
 of the YAML and evaluated against synthetic contexts — the same approach as
@@ -41,16 +42,14 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _REUSABLE = _REPO_ROOT / ".github/workflows/commits.yaml"
 _SHIM = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates/commits.yaml"
 
-#: Steps that need a PR title and must therefore be skipped on merge_group.
-_PR_ONLY_STEPS = (
-    "Checkout SDK helper scripts",
-    "Validate PR title",
-    "Post sticky comment on violation",
-    "Clear sticky comment when resolved",
-)
+#: Steps that run on every pull_request the job runs for.
+_UNGATED_STEPS = ("Checkout SDK helper scripts", "Validate PR title")
 
-#: The step that carries the conclusion when there is no PR title.
-_NOOP_STEP = "Non-PR event no-op"
+#: Steps that act on the verdict, each paired with the verdict that applies it.
+_VERDICT_STEPS_WITH_VERDICT = (
+    ("Post sticky comment on violation", "true"),
+    ("Clear sticky comment when resolved", "false"),
+)
 
 #: The step that turns a violation into a failure.
 _FAIL_STEP = "Fail on invalid PR title"
@@ -60,8 +59,12 @@ def _load(path: Path) -> dict[str, Any]:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _job() -> dict[str, Any]:
+    return _load(_REUSABLE)["jobs"]["conventional-commits"]
+
+
 def _steps() -> list[dict[str, Any]]:
-    return _load(_REUSABLE)["jobs"]["conventional-commits"]["steps"]
+    return _job()["steps"]
 
 
 def _gate(name: str) -> str:
@@ -109,37 +112,44 @@ def test_shim_still_dispatches_on_edited() -> None:
     assert "edited" in triggers["pull_request"]["types"]
 
 
-# ── 2. The reusable concludes success on merge_group ─────────────────────────
+# ── 2. The reusable is skipped, at job level, on merge_group ────────────────
 
 
-@pytest.mark.parametrize("name", _PR_ONLY_STEPS)
-def test_pr_only_steps_are_skipped_on_merge_group(name: str) -> None:
-    gate = _gate(name)
-    assert evaluate(gate, _contexts(event="merge_group", violation="")) is False
+@pytest.mark.parametrize("event", ["merge_group", "push", "workflow_dispatch"])
+def test_job_is_skipped_off_the_pull_request_event(event: str) -> None:
+    """A job-level skip files a `skipped` check run — a pass for a required
+    check — and bills nothing. A started job that skipped every step billed a
+    full runner minute on every queue entry."""
+    gate = str(_job()["if"])
+    assert evaluate(gate, _contexts(event=event, violation="")) is False
 
 
-#: Each PR-only step paired with the verdict that makes it the applicable one:
-#: checkout/validate run either way, post-comment only on a violation, and
-#: clear-comment only once the title is fixed.
-_PR_ONLY_STEPS_WITH_VERDICT = (
-    ("Checkout SDK helper scripts", ""),
-    ("Validate PR title", ""),
-    ("Post sticky comment on violation", "true"),
-    ("Clear sticky comment when resolved", "false"),
-)
+def test_job_runs_on_a_pull_request() -> None:
+    gate = str(_job()["if"])
+    assert evaluate(gate, _contexts(event="pull_request", violation="")) is True
 
 
-@pytest.mark.parametrize("name, violation", _PR_ONLY_STEPS_WITH_VERDICT)
-def test_pr_only_steps_run_on_a_non_fork_pull_request(
+def test_job_name_is_static() -> None:
+    """The check-run name is the required context. An expression in it would
+    file the skipped run under a different name than the PR run, and the
+    required context would sit at "Expected" on the queue entry."""
+    assert "${{" not in str(_job()["name"])
+
+
+@pytest.mark.parametrize("name", _UNGATED_STEPS)
+def test_validation_steps_run_on_every_pull_request(name: str) -> None:
+    """The job gate already selects the event; a step gate here could only
+    narrow which PRs get a verdict."""
+    step = next(step for step in _steps() if step.get("name") == name)
+    assert not step.get("if"), f"step {name!r} regained a step-level gate"
+
+
+@pytest.mark.parametrize("name, violation", _VERDICT_STEPS_WITH_VERDICT)
+def test_verdict_steps_run_on_a_non_fork_pull_request(
     name: str, violation: str
 ) -> None:
     gate = _gate(name)
     assert evaluate(gate, _contexts(event="pull_request", violation=violation)) is True
-
-
-def test_every_pr_only_step_has_a_verdict_case() -> None:
-    """Keeps the two lists from drifting apart when a step is added."""
-    assert tuple(name for name, _ in _PR_ONLY_STEPS_WITH_VERDICT) == _PR_ONLY_STEPS
 
 
 # ── Coverage: the classifications are pinned to the YAML, not to each other ──
@@ -161,20 +171,16 @@ def test_every_step_is_classified() -> None:
     merge_group or fork design it was never checked against.
     """
     named = {str(step["name"]) for step in _steps()}
-    classified = set(_PR_ONLY_STEPS) | {_NOOP_STEP, _FAIL_STEP}
+    classified = (
+        set(_UNGATED_STEPS)
+        | {name for name, _ in _VERDICT_STEPS_WITH_VERDICT}
+        | {_FAIL_STEP}
+    )
     assert named == classified, (
         "unclassified step(s): "
         f"{sorted(named - classified)}; stale classification(s): "
         f"{sorted(classified - named)}"
     )
-
-
-def test_every_step_is_gated() -> None:
-    """Every step in this job is conditional on the event or the verdict. An
-    ungated one would run on merge_group, where there is no PR title to act on
-    and no verdict to read."""
-    for step in _steps():
-        assert step.get("if"), f"step {step['name']!r} has no `if:` gate"
 
 
 # ── The sticky comment cannot be raced by an overlapping run ─────────────────
@@ -206,22 +212,9 @@ def test_reusable_queues_rather_than_cancelling() -> None:
     assert _load(_REUSABLE)["concurrency"]["cancel-in-progress"] is False
 
 
-def test_noop_step_runs_on_merge_group() -> None:
-    """The one step that must carry the conclusion when there is no PR title."""
-    gate = _gate(_NOOP_STEP)
-    assert evaluate(gate, _contexts(event="merge_group", violation="")) is True
-
-
-def test_noop_step_is_skipped_on_a_pull_request() -> None:
-    gate = _gate(_NOOP_STEP)
-    assert evaluate(gate, _contexts(event="pull_request", violation="false")) is False
-
-
-def test_fail_step_is_skipped_on_merge_group() -> None:
-    """An empty verdict must not be read as a violation — a merge-group entry
-    would go red on a title that already passed at PR time."""
+def test_fail_step_is_skipped_on_a_clean_title() -> None:
     gate = _gate(_FAIL_STEP)
-    assert evaluate(gate, _contexts(event="merge_group", violation="")) is False
+    assert evaluate(gate, _contexts(event="pull_request", violation="false")) is False
 
 
 def test_fail_step_fires_on_a_real_violation() -> None:

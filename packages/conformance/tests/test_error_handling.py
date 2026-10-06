@@ -2732,6 +2732,76 @@ def fail():
     _single(src, "E018")
 
 
+@pytest.mark.parametrize(
+    ("imports", "cancelled_error"),
+    [
+        ("import asyncio", "asyncio.CancelledError()"),
+        ("import asyncio as tasklib", "tasklib.CancelledError()"),
+        ("from asyncio import CancelledError", "CancelledError()"),
+    ],
+)
+def test_p018_no_finding_stdlib_asyncio_cancelled_error(
+    imports: str, cancelled_error: str
+) -> None:
+    _none(
+        f"""\
+{imports}
+
+async def cancel_work():
+    raise {cancelled_error}
+"""
+    )
+
+
+def test_p018_no_finding_dotted_asyncio_exceptions_import() -> None:
+    _none(
+        """\
+import asyncio.exceptions
+
+async def cancel_work():
+    raise asyncio.exceptions.CancelledError()
+"""
+    )
+
+
+def test_p018_rebound_asyncio_name_is_not_trusted() -> None:
+    # The name was rebound after the import, so it no longer names the stdlib module.
+    _single(
+        """\
+import asyncio
+import domain_errors
+
+asyncio = domain_errors
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_sdk_cancelled_error_still_flagged() -> None:
+    _single(
+        """\
+def fail():
+    raise application_sdk.errors.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_other_module_aliased_as_asyncio_still_flagged() -> None:
+    _single(
+        """\
+import domain_errors as asyncio
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
 def test_p018_no_finding_classification_pending() -> None:
     _none(
         """\
@@ -3589,6 +3659,65 @@ def test_e005_silent_for_sanitize_helper_attribute() -> None:
         "    logger.error('auth failed: %s', util.sanitize_cause_repr(e))\n"
     )
     assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_cause_with_qualified_error_code() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s (%s)', failure.qualified_code,\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_classified_error_with_status_code() -> None:
+    src = (
+        "try:\n    request()\nexcept Exception as failure:\n"
+        "    logger.warning('request failed (%s): %s', failure.status_code,\n"
+        "                   sanitize_cause_repr(classify_failure(failure)))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+@pytest.mark.parametrize("field", ["message", "payload", "response"])
+def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
+    field: str,
+) -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        f"    logger.warning('operation failed: %s %s', failure.{field},\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_for_metadata_beside_a_sanitized_local_alias() -> None:
+    # The sanitized exception may reach the log through a local first; the metadata fields
+    # beside it are as safe as when the sanitizer is called inline.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    detail = sanitize_cause_repr(failure)\n"
+        "    logger.warning('failed (%s): %s', failure.status_code, detail)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_the_sanitizer_covers_something_else() -> None:
+    # The metadata fields are only safe beside a sanitizer of the caught exception itself:
+    # redacting an unrelated value does not make the exception's own fields a boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('failed: %s %s', failure.status_code, redact(config))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_for_typed_code_without_sanitizer() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s', failure.qualified_code)\n"
+    )
+    assert "E005" in _findings(src)
 
 
 def test_e005_still_fires_without_sanitizer() -> None:

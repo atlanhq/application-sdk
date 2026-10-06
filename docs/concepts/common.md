@@ -56,6 +56,7 @@ AppError  (base — application_sdk.errors)
 │   ├── RateLimitedError       RATE_LIMITED               retryable=True   audience=USER
 │   ├── DependencyUnavailableError  DEPENDENCY_UNAVAILABLE retryable=True  audience=PLATFORM
 │   ├── SourceUnavailableError   SOURCE_UNAVAILABLE        retryable=True   audience=USER
+│   │   └── SourceWarmupExhaustedError  SOURCE_UNAVAILABLE (SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED)  retryable=True   audience=USER
 │   ├── ResourceExhaustedError RESOURCE_EXHAUSTED         retryable=True   audience=PLATFORM
 │   │   └── DiskFullError      RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_DISK_FULL)  retryable=True   audience=PLATFORM
 │   │   └── LocalVolumeUnwritableError  RESOURCE_EXHAUSTED (RESOURCE_EXHAUSTED_VOLUME_UNWRITABLE)  retryable=True   audience=PLATFORM

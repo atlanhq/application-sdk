@@ -2,41 +2,53 @@
 #
 # Reusable workflow: full conformance suite gate.
 #
-# Runs each rule series (C, E, P, O, D, L, T, I, B, K, S) as a separate leg of one matrix job so
-# each appears as its own status check:
-#   Conformance / suite / CI
-#   Conformance / suite / Error handling
-#   Conformance / suite / Prescriptions
-#   Conformance / suite / Optimizations
-#   Conformance / suite / Dependencies
-#   Conformance / suite / Logging
-#   Conformance / suite / Tests
-#   Conformance / suite / Container images
-#   Conformance / suite / Deprecations
-#   Conformance / suite / Contract toolkit
-#   Conformance / suite / Security
-#   Conformance / Contracts
-#   Conformance / Conformance Gate  (required gate)
+# ONE job runs every rule series (C, E, P, F, O, L, T, I, B, K, S, D) in
+# sequence, plus the contract-ledger guard, and reports as the required check:
+#   Conformance / suite / Conformance Gate
+# (ruleset context `suite / Conformance Gate`: the caller's job id `suite`, then
+# this job's name).
 #
-# The series share an identical job body (checkout → changed-files filter → uv →
-# run → upload → Security-tab upload), so they are expressed as a single
-# `strategy.matrix` rather than copy-pasted jobs.  The only per-series
-# values are the matrix entries (series letter, display name, sarif slug,
-# changed-files path glob, and the caller's exclude-paths input).  Note C-series
-# watches `.github/**`, D-series watches `**/pyproject.toml`, T-series watches
-# `{tests/**,**/pyproject.toml}`, I-series watches `Dockerfile`, and the AST
-# series (E/P/O/L) watch `**/*.py`; that asymmetry is just a matrix field, not a
-# separate job.
+# It used to be a 12-leg matrix (one job per series) plus a `Contracts` job and
+# a `Conformance Gate` job that aggregated them — 14 billed jobs a run, most of
+# them a runner, a checkout and a one-minute minimum spent on a series whose
+# paths had not changed (FND-3318).  Now the path filter is computed once, the
+# series whose paths changed run one after another, and the rest are skipped
+# steps that cost nothing.  Only `Conformance Gate` was ever a required
+# context in the fleet rulesets, and this job carries that name, so the gate
+# a merge waits on is unchanged; the per-series check runs are gone.
+#
+# The one other job, `queue-diff`, runs only on a merge-queue entry: a slim
+# job that lets the suite skip when the queue commit's tree is the PR head's
+# (FND-3321).  On every other event it is skipped and bills nothing.
+#
+# Per-series visibility without per-series jobs:
+#   - every series is its own `<letter> · <name>` step, so a red series is red
+#     in the job's step list;
+#   - every series still uploads its own `conformance-<slug>-sarif` artifact,
+#     the name conformance-upload-sarif-reusable.yaml and
+#     fetch_conformance_sarif.py resolve, so the Security tab keeps one
+#     `conformance-<slug>` category per series;
+#   - the job summary carries a table of each series' outcome.
+#
+# A failing series must not stop the ones after it — the matrix ran with
+# fail-fast off — so every series step is `if: !cancelled() && (relevant)`
+# rather than relying on the implicit `success()`.  The job still fails if any
+# series failed, which is the verdict the old gate job computed.
+#
+# Per-series path filters: C-series watches `.github/**`, D-series watches
+# `**/pyproject.toml`, T-series watches `{tests/**,**/pyproject.toml,...}`,
+# I-series watches `Dockerfile`, and the AST series (E/P/O/L/B/S) watch
+# `**/*.py`.  Each is one named filter in the `changes` step.
+#
+# D runs LAST: it is the only series that materialises the caller's
+# environment (`uv sync`), and running it first would leave a `.venv/` in the
+# workspace for every later series to walk.
 #
 # Scope: the runner auto-detects whether the caller repo is the SDK or a consumer
 # app (from its `[project].name`) and runs only the rules in scope.  The
 # app-scoped rules (D001/D002 and the bootstrap-workflow-drift rule C002) no-op on
 # the SDK itself with no per-caller configuration; the both-scoped rules — which
 # include D003 (UnusedDependency) — run on the SDK as well.
-#
-# The matrix job is intentionally inline (not delegating to sub-workflows) so
-# GitHub reports the legs at the correct depth — one level of workflow_call from
-# the caller produces three-level check paths, not four.
 #
 # Usage from a connector SDK/app:
 #   uses: atlanhq/application-sdk/.github/workflows/conformance-reusable.yaml@main
@@ -192,8 +204,9 @@ on:
           Repo-relative path to the app's committed contract ledger
           (contract_schema.lock.json).  The guard compares this file between
           origin/main and HEAD and blocks any deletion or type change.
-          Default: contract_schema.lock.json (repo root — convention for app repos).
-          The SDK overrides this to packages/conformance/conformance/data/contract_schema.lock.json.
+          Default: contract_schema.lock.json (repo root — the convention for app
+          repos and the SDK alike; the SDK's conformance wheel packages its root
+          ledger at build time).
         required: false
         default: "contract_schema.lock.json"
         type: string
@@ -211,9 +224,9 @@ on:
         type: string
         default: ""
         description: |
-          Space-separated Ubuntu packages apt-installed before the D-series
-          leg's `uv sync` (the detect action's needs-env step).  Only the
-          D-series leg materialises the caller's environment; every other
+          Space-separated Ubuntu packages apt-installed before the D
+          series' `uv sync` (the detect action's needs-env step).  Only the
+          D series materialises the caller's environment; every other
           series runs from an isolated `uvx` env, so this step is a no-op on
           them.  Empty (the default) skips the step entirely, so every existing
           caller is unaffected.
@@ -230,7 +243,7 @@ on:
       private-git-deps:
         description: >
           Set true when the app's lockfile pins a PRIVATE atlanhq git dependency
-          (e.g. query-redaction).  The D-series leg is the only one that
+          (e.g. query-redaction).  The D series is the only one that
           materialises the environment (`uv sync`, via the detect action's
           needs-env step), and an unauthenticated clone of a private atlanhq repo
           fails there — so with this flag the suite job rewrites atlanhq remotes
@@ -257,7 +270,7 @@ on:
           checks that the preflight scenarios are defined (F016 reads their
           registrations statically, and a fully defined matrix clears F019's
           value-level gaps); whether those tests pass is the test gate's measure,
-          so no conformance leg syncs an environment or runs pytest for it.
+          so no conformance series syncs an environment or runs pytest for it.
         required: false
         default: false
         type: boolean
@@ -276,189 +289,502 @@ permissions:
   pull-requests: read
 
 jobs:
-  # ── Per-series checks (one matrix leg per rule series) ──────────────────────
-  # Every leg shares this body; only the matrix entry differs.  `series`, `name`
-  # and `slug` are workflow-controlled constants (safe to interpolate into the
-  # shell); `exclude_paths` is the only caller-controlled value and is passed via
-  # the step-level `EXCLUDE_PATHS` env var and quoted — never interpolated into
-  # the `run:` script — so an exclude-path string can never inject shell.
+  # ── Merge-queue entry: did combining with the base change the tree? ─────────
+  # Conformance reads the tree and nothing else, so on a queue commit whose
+  # tree is exactly the PR head's it can only repeat the verdict the PR already
+  # earned — a PR cannot enter the queue until this gate is green on its head
+  # (FND-3321).  This job answers that one question; `suite` skips on it.
+  #
+  # Runs only on a real queue entry and never when forcing: on every other
+  # event it is skipped (not billed) and its outputs are empty, which `suite`
+  # reads as "run".  Fails safe the same way — an error here leaves the outputs
+  # empty and the suite runs.  docs/standards/ci.md ("What a merge-queue entry
+  # re-runs") has the classification this is one row of.
+  queue-diff:
+    name: "Queue tree diff"
+    if: github.event_name == 'merge_group' && inputs.event_name == 'merge_group' && !inputs.force-all
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identical: ${{ steps.diff.outputs.identical }}
+    steps:
+      # The queue commit, depth 1. Credentials stay persisted: the script
+      # fetches the PR head from this same remote, and the repo may be private.
+      - name: "Checkout queue commit"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      # Pinned to `job.workflow_sha` so the script always matches the workflow
+      # running it (same as tests-reusable.yaml's Detect merge queue).
+      - name: "Fetch queue_tree_diff.py from SDK"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: "Compare the queue commit with the PR head"
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
+  # ── The suite, the ledger guard and the gate, in one job ────────────────────
+  # `series`, `slug` and the filter globs are workflow-controlled constants;
+  # the exclude-paths inputs are the only caller-controlled values, and they
+  # reach the shell through the detect action's `EXCLUDE_PATHS` env var, quoted
+  # — never interpolated into a `run:` script — so an exclude-path string can
+  # never inject shell.
+  #
+  # The job-level `if:` skips it in exactly one case: a merge-queue entry whose
+  # tree is identical to the PR head's.  A skipped job still files its
+  # `Conformance Gate` check run, as `skipped`, which the required context
+  # counts as a pass, so the queue drains on the PR's own verdict.  The queue
+  # commit is unique to its entry, so no other run on that SHA can be the
+  # "newest suite" that this skip would override.  Everywhere else the job
+  # always runs: `!cancelled()` keeps it running when `queue-diff` is skipped
+  # (every non-queue event) or fails, and an empty output is not `'true'`.  A
+  # job of only skipped series steps passes, exactly as the old gate passed a
+  # suite whose legs had all self-skipped.
   suite:
-    name: ${{ matrix.name }}
+    name: "Conformance Gate"
+    needs: [queue-diff]
+    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
     runs-on: ubuntu-latest
     env:
       # Surfaced as env because a step-level `if:` cannot read the secrets
       # context, and the rewrite step must gate on the credential being
       # present rather than on the flag alone.
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - series: C
-            name: "CI"
-            slug: ci
-            paths: ".github/**"
-            exclude_paths: ${{ inputs.exclude-paths-c }}
-          - series: E
-            name: "Error handling"
-            slug: error-handling
-            paths: "**/*.py"
-            exclude_paths: ${{ inputs.exclude-paths-e }}
-          - series: P
-            name: "Prescriptions"
-            slug: prescriptions
-            # P016 reads both Python sources (@entrypoint code) and the
-            # app/generated/ + contract/ trees (contract-side artifacts), so a
-            # PR that only re-runs pkl eval and commits regenerated app/generated/
-            # files — the canonical BLDX-1425 drift shape — must still trigger
-            # this leg.  Brace expansion (micromatch) covers all three sources
-            # with a single paths filter entry and no template change.
-            paths: "{**/*.py,app/generated/**,contract/**}"
-            exclude_paths: ${{ inputs.exclude-paths-p }}
-          # F-series is the preflight gate.  F015 reads deployment declarations
-          # under .github/workflows/, deploy/, deployment/, helm/ and k8s/ for
-          # gate configuration removed by SDK PR #3685, so a manifest-only PR
-          # must still trigger this leg (picomatch never matches a leading dot
-          # with a wildcard, hence the explicit .github/** entry).
-          - series: F
-            name: "Preflight"
-            slug: preflight
-            paths: "{**/*.py,.github/**,deploy/**,deployment/**,helm/**,k8s/**}"
-            exclude_paths: ${{ inputs.exclude-paths-f }}
-          - series: O
-            name: "Optimizations"
-            slug: optimizations
-            paths: "**/*.py"
-            exclude_paths: ${{ inputs.exclude-paths-o }}
-          # D003 (UnusedDependency) reads source imports too, but the changed-files
-          # filter watches only `**/pyproject.toml` to keep this (env-syncing,
-          # heavier) leg off every `*.py` PR.  A PR that removes the last import of
-          # a still-declared dependency therefore won't re-run this leg — that
-          # staleness is caught on push to main, where every leg runs
-          # unconditionally.  Acceptable at WARN tier (mirrors the T-series above).
-          - series: D
-            name: "Dependencies"
-            slug: dependency
-            paths: "**/pyproject.toml"
-            exclude_paths: ${{ inputs.exclude-paths-d }}
-            # D001/D002/D003 all map declared dependencies to import name(s) via
-            # installed package metadata, so the leg must run in an environment
-            # where the caller's dependencies are installed — not the isolated
-            # `uvx` env used by the other series.
-            needs_env: "true"
-          - series: L
-            name: "Logging"
-            slug: logging
-            paths: "**/*.py"
-            exclude_paths: ${{ inputs.exclude-paths-l }}
-          # T005-T009/T013 walk the whole `tests/` tree (not just integration) and
-          # T010-T012/T014-T015 read `pyproject.toml` directly, so the filter covers
-          # both.
-          #
-          # Two more sources, both NOT optional — a T checker that reads only
-          # these was previously invisible to the filter, so the leg reported
-          # success without ever grading the diff:
-          #
-          # * `.github/**` — e2e_workflow_shape (T020/T021/T022) globs
-          #   `.github/workflows/`, e2e_deployment_name rglobs all of `.github`
-          #   for compose overlays, coverage_config reads the workflow's own
-          #   `--fail-under`.  Without it a PR that ONLY edits
-          #   `.github/workflows/tests.yaml` — dropping the reusable caller,
-          #   flipping `enable-e2e` to false, removing `two-store: true` —
-          #   matched no filter path, on exactly the diff shape T020-T022 grade.
-          # * `app/generated/**` + `contract/**` — e2e_generated_harness reads
-          #   the committed `_e2e_base.py` under both trees, so a PR that only
-          #   re-runs the toolkit was equally invisible.  Same reasoning (and
-          #   same two entries) as the P-series glob above.
-          #
-          # A wildcard alternative cannot substitute for these: picomatch does not
-          # match a leading dot with `*`, so `**/*.yaml` never matches
-          # `.github/...`.  `test_series_globs_cover_their_checkers` fails if a
-          # future checker reads a tree its leg's glob does not watch.
-          #
-          # Staleness for the remaining edge cases is caught on push to main, where
-          # every leg runs unconditionally.  Acceptable at WARN tier.
-          - series: T
-            name: "Tests"
-            slug: tests
-            paths: "{tests/**,**/pyproject.toml,.github/**,app/generated/**,contract/**}"
-            exclude_paths: ${{ inputs.exclude-paths-t }}
-          # I-series (container image) is APP-scoped and no-ops on the SDK itself
-          # since the SDK Dockerfile builds the base image, not a consumer app.
-          # Watches only the root Dockerfile so Python-only PRs don't trigger it.
-          - series: I
-            name: "Container images"
-            slug: container-image
-            paths: "Dockerfile"
-            exclude_paths: ${{ inputs.exclude-paths-i }}
-          # B-series is mixed-scope: B001 (app) flags consumption of deprecated
-          # SDK symbols, B002/B003/B004 (sdk) check the SDK's own deprecation
-          # authoring.  Scope is auto-detected per caller, so on a consumer app
-          # only B001 runs and on the SDK only B002–B004 run — no per-app config.
-          - series: B
-            name: "Deprecations"
-            slug: deprecation
-            paths: "**/*.py"
-            exclude_paths: ${{ inputs.exclude-paths-b }}
-          # K-series is APP-scoped and no-ops on the SDK itself (no contract/
-          # directory).  Watches the contract source (K001/K002/K003) AND the
-          # generated artifacts (K004/K005): a hand-edit to atlan.yaml or
-          # app/generated/** with no contract/ change must still trigger this leg.
-          - series: K
-            name: "Contract toolkit"
-            slug: contract-toolkit
-            paths: "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
-            exclude_paths: ${{ inputs.exclude-paths-k }}
-          # S-series (secret hygiene) is mixed-scope: S001 (hardcoded credentials)
-          # is 'both'; S002 (raw-env credential reads) is APP-scoped and no-ops on
-          # the SDK, which is the provider of the secret-store seam.  Scope is
-          # auto-detected per caller, so no per-app config is needed.
-          - series: S
-            name: "Security"
-            slug: security
-            paths: "**/*.py"
-            exclude_paths: ${{ inputs.exclude-paths-s }}
     steps:
+      # Full history only where the ledger guard runs (it diffs against
+      # origin/main); push-to-main skips the guard, so it keeps the shallow
+      # clone.  `push && 1 || 0`, not `!push && 0 || 1`: 0 is falsy in an
+      # expression, so the latter always yields 1.
       - name: "Checkout caller repo"
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: ${{ inputs.event_name == 'push' && 1 || 0 }}
 
+      # Computed ONCE for every series — one named filter per series slug, so
+      # `steps.changes.outputs.<slug>` is that series' relevance.
+      #
+      # Skipped when forcing (release/version-bump/tag) or on push-to-main: in
+      # all those cases every series fires regardless (their `if:`s OR in
+      # `inputs.event_name == 'push' || inputs.force-all`), and a tag push has
+      # no clean diff base for paths-filter — running it could hard-fail the
+      # job and turn the gate red on a release. Mirrors sdk-gate.yaml, which
+      # skips its own outer filter for the same reason.
+      #
+      # picomatch never matches a leading dot with a wildcard, so `**/*.yaml`
+      # never matches `.github/...`: every series that reads `.github/` names
+      # it explicitly.  `test_series_globs_cover_their_checkers` fails if a
+      # checker reads a tree its series' filter does not watch.
       - name: "Detect changed files"
         id: changes
-        # Skip when forcing (release/version-bump/tag) or on push-to-main: in
-        # all those cases the downstream steps fire regardless (their `if:`s OR
-        # in `inputs.event_name == 'push' || inputs.force-all`), and a tag push
-        # has no clean diff base for paths-filter — running it could hard-fail
-        # the leg and turn the gate red on a release. Mirrors sdk-gate.yaml,
-        # which skips its own outer filter for the same reason.
         if: inputs.event_name != 'push' && !inputs.force-all
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
           filters: |
-            relevant:
-              - "${{ matrix.paths }}"
+            ci:
+              - ".github/**"
+            error-handling:
+              - "**/*.py"
+            # P016 reads both Python sources (@entrypoint code) and the
+            # app/generated/ + contract/ trees (contract-side artifacts), so a
+            # PR that only re-runs pkl eval and commits regenerated
+            # app/generated/ files — the canonical BLDX-1425 drift shape — must
+            # still trigger P.
+            prescriptions:
+              - "{**/*.py,app/generated/**,contract/**}"
+            # F-series is the preflight gate.  F015 reads deployment
+            # declarations under .github/workflows/, deploy/, deployment/,
+            # helm/ and k8s/ for gate configuration removed by SDK PR #3685, so
+            # a manifest-only PR must still trigger F.
+            preflight:
+              - "{**/*.py,.github/**,deploy/**,deployment/**,helm/**,k8s/**}"
+            optimizations:
+              - "**/*.py"
+            logging:
+              - "**/*.py"
+            # T005-T009/T013 walk the whole `tests/` tree and T010-T012/
+            # T014-T015 read `pyproject.toml`.  `.github/**` because
+            # e2e_workflow_shape (T020-T022), e2e_deployment_name and
+            # coverage_config read the workflows — a PR that ONLY edits
+            # `.github/workflows/tests.yaml` is exactly the diff T020-T022
+            # grade.  `app/generated/**` + `contract/**` because
+            # e2e_generated_harness reads the committed `_e2e_base.py` under
+            # both trees.  Remaining edge cases are caught on push to main,
+            # where every series runs.  Acceptable at WARN tier.
+            tests:
+              - "{tests/**,**/pyproject.toml,.github/**,app/generated/**,contract/**}"
+            # I-series is APP-scoped and no-ops on the SDK itself (the SDK
+            # Dockerfile builds the base image, not a consumer app).
+            container-image:
+              - "Dockerfile"
+            # B-series is mixed-scope: B001 (app) flags consumption of
+            # deprecated SDK symbols, B002-B004 (sdk) check the SDK's own
+            # deprecation authoring.  Scope is auto-detected per caller.
+            deprecation:
+              - "**/*.py"
+            # K-series is APP-scoped and no-ops on the SDK itself.  Watches the
+            # contract source (K001-K003) AND the generated artifacts
+            # (K004/K005): a hand-edit to atlan.yaml or app/generated/** with no
+            # contract/ change must still trigger K.
+            contract-toolkit:
+              - "{contract/**,atlan.yaml,app.yaml,app/generated/**}"
+            # S-series (secret hygiene): S001 is 'both'; S002 is APP-scoped.
+            security:
+              - "**/*.py"
+            # D003 (UnusedDependency) reads source imports too, but the filter
+            # watches only `**/pyproject.toml` to keep this (env-syncing,
+            # heavier) series off every `*.py` PR.  A PR that removes the last
+            # import of a still-declared dependency won't re-run D; that is
+            # caught on push to main.  Acceptable at WARN tier.
+            dependency:
+              - "**/pyproject.toml"
 
+      # Unconditional: the ledger guard needs uv on every non-push event, and
+      # a run where every series is skipped is a few seconds either way.
       - name: "Set up uv"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.22"
+          version: "0.12.23"
 
-      # Only the D-series leg materialises the caller's environment (the detect
-      # action's needs-env `uv sync`); the other series run from an isolated
-      # `uvx` env and never install caller dependencies, so the
-      # `matrix.needs_env == 'true'` clause keeps this step off them.  That
-      # condition stays in `if:`, never in the shell (docs/standards/ci.md).
-      # The leg is scheduled on every PR but only does work when its
-      # `**/pyproject.toml` filter matches, so the install follows the same
-      # relevance gate as `Set up uv` and the detect step — otherwise it
-      # installs packages for a leg that then no-ops.
-      # The value is routed through env, never interpolated into the script,
-      # and matched WHOLE against the same strict Debian package-name allowlist
-      # as tests-reusable.yaml before it is used.
+      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
+      # would redirect every atlanhq URL — including a git-ref conformance
+      # install — to an unauthenticated token URL, failing far from the cause.
+      # Condition stays in `if:`, never in the shell (docs/standards/ci.md).
+      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        shell: bash
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # Only the D-series materialises the environment (the detect action's
+      # needs-env `uv sync`).  --global writes ~/.gitconfig, so it applies to
+      # the clone uv performs inside the action.
+      - name: "Authenticate private atlanhq git dependencies"
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        shell: bash
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
+      # ── Refused Renovate lock ───────────────────────────────────────────────
+      # A refused Renovate lock bump is withheld by writing a lock no
+      # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
+      # `withhold`).  The required `scan / Build Image` used to reject it; since
+      # FND-3328 that job skips on every PR but the bump-version PR.  The same
+      # check also runs in checks-reusable.yaml's Pre-commit job, but not every
+      # repo requires that context; every repo requires this one (FND-3404).
+      # Same script, same base-diff rule: runs only when uv.lock differs from
+      # the base.  Not subject to `exit-zero`, which softens conformance
+      # findings, not this.  After the private-deps rewrite, since resolving
+      # can reach a private git dependency.  Fetched at this workflow's own
+      # SHA into its own path, and removed before any series walks the tree.
+      - name: "Fetch check_uv_lock.py from SDK"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-lock-check
+          persist-credentials: false
+
+      - name: "uv.lock matches pyproject.toml"
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+
+      - name: "Remove the fetched SDK script"
+        if: "!cancelled()"
+        run: rm -rf .sdk-lock-check
+
+      # ── Series ──────────────────────────────────────────────────────────────
+      # Each series is a detect step and a SARIF upload.  The upload is
+      # `continue-on-error`: `upload-artifact` classifies the artifact
+      # service's finalize 403 as non-retryable and fails on the first
+      # occurrence, even though the bytes already landed — and a failed upload
+      # would fail the gate and eject the merge-queue entry.  The series
+      # verdict is the gate; the artifact only feeds the Security tab, and
+      # conformance-upload-sarif.yaml already treats a missing artifact as an
+      # expected state.  The retries follow the last series.
+      #
+      # Every upload sets `overwrite: true` on the FIRST attempt too: artifacts
+      # survive across attempts of a run, so re-running a failed job would
+      # otherwise 409 here.  It is also what holds the invariant every
+      # consumer of these uploads globs on: at most ONE live artifact ever
+      # matches `<name>*`.  `retention-days` is explicit, or it falls back to
+      # the 90-day repo default (FND-3313); the one reader,
+      # conformance-upload-sarif.yaml, fires on workflow_run as soon as this
+      # run completes.
+      - name: "C · CI"
+        id: detect-ci
+        if: "!cancelled() && (steps.changes.outputs.ci == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: C
+          slug: ci
+          exclude-paths: ${{ inputs.exclude-paths-c }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "C · upload SARIF"
+        id: upload-ci
+        if: "!cancelled() && (steps.changes.outputs.ci == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-ci-sarif
+          path: ci.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "E · Error handling"
+        id: detect-error-handling
+        if: "!cancelled() && (steps.changes.outputs.error-handling == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: E
+          slug: error-handling
+          exclude-paths: ${{ inputs.exclude-paths-e }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "E · upload SARIF"
+        id: upload-error-handling
+        if: "!cancelled() && (steps.changes.outputs.error-handling == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-error-handling-sarif
+          path: error-handling.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "P · Prescriptions"
+        id: detect-prescriptions
+        if: "!cancelled() && (steps.changes.outputs.prescriptions == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: P
+          slug: prescriptions
+          exclude-paths: ${{ inputs.exclude-paths-p }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "P · upload SARIF"
+        id: upload-prescriptions
+        if: "!cancelled() && (steps.changes.outputs.prescriptions == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-prescriptions-sarif
+          path: prescriptions.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "F · Preflight"
+        id: detect-preflight
+        if: "!cancelled() && (steps.changes.outputs.preflight == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: F
+          slug: preflight
+          exclude-paths: ${{ inputs.exclude-paths-f }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "F · upload SARIF"
+        id: upload-preflight
+        if: "!cancelled() && (steps.changes.outputs.preflight == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-preflight-sarif
+          path: preflight.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "O · Optimizations"
+        id: detect-optimizations
+        if: "!cancelled() && (steps.changes.outputs.optimizations == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: O
+          slug: optimizations
+          exclude-paths: ${{ inputs.exclude-paths-o }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "O · upload SARIF"
+        id: upload-optimizations
+        if: "!cancelled() && (steps.changes.outputs.optimizations == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-optimizations-sarif
+          path: optimizations.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "L · Logging"
+        id: detect-logging
+        if: "!cancelled() && (steps.changes.outputs.logging == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: L
+          slug: logging
+          exclude-paths: ${{ inputs.exclude-paths-l }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "L · upload SARIF"
+        id: upload-logging
+        if: "!cancelled() && (steps.changes.outputs.logging == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-logging-sarif
+          path: logging.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "T · Tests"
+        id: detect-tests
+        if: "!cancelled() && (steps.changes.outputs.tests == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: T
+          slug: tests
+          exclude-paths: ${{ inputs.exclude-paths-t }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "T · upload SARIF"
+        id: upload-tests
+        if: "!cancelled() && (steps.changes.outputs.tests == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-tests-sarif
+          path: tests.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "I · Container images"
+        id: detect-container-image
+        if: "!cancelled() && (steps.changes.outputs.container-image == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: I
+          slug: container-image
+          exclude-paths: ${{ inputs.exclude-paths-i }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "I · upload SARIF"
+        id: upload-container-image
+        if: "!cancelled() && (steps.changes.outputs.container-image == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-container-image-sarif
+          path: container-image.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "B · Deprecations"
+        id: detect-deprecation
+        if: "!cancelled() && (steps.changes.outputs.deprecation == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: B
+          slug: deprecation
+          exclude-paths: ${{ inputs.exclude-paths-b }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "B · upload SARIF"
+        id: upload-deprecation
+        if: "!cancelled() && (steps.changes.outputs.deprecation == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-deprecation-sarif
+          path: deprecation.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "K · Contract toolkit"
+        id: detect-contract-toolkit
+        if: "!cancelled() && (steps.changes.outputs.contract-toolkit == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: K
+          slug: contract-toolkit
+          exclude-paths: ${{ inputs.exclude-paths-k }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "K · upload SARIF"
+        id: upload-contract-toolkit
+        if: "!cancelled() && (steps.changes.outputs.contract-toolkit == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-contract-toolkit-sarif
+          path: contract-toolkit.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "S · Security"
+        id: detect-security
+        if: "!cancelled() && (steps.changes.outputs.security == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        uses: ./.github/actions/run-conformance-detect
+        with:
+          series: S
+          slug: security
+          exclude-paths: ${{ inputs.exclude-paths-s }}
+          exit-zero: ${{ inputs.exit-zero }}
+          conformance-ref: ${{ inputs.conformance-ref }}
+
+      - name: "S · upload SARIF"
+        id: upload-security
+        if: "!cancelled() && (steps.changes.outputs.security == 'true' || inputs.event_name == 'push' || inputs.force-all)"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-security-sarif
+          path: security.sarif
+          retention-days: 7
+          overwrite: true
+
+      # D-series only: the detect action's needs-env `uv sync` builds the
+      # caller's environment, and a native sdist (e.g. pykerberos needs
+      # libkrb5-dev) fails there without its headers.  Follows D's relevance
+      # gate, so it installs nothing on a PR that then skips D.  The value is
+      # routed through env, never interpolated into the script, and matched
+      # WHOLE against the same strict Debian package-name allowlist as
+      # tests-reusable.yaml before it is used.  D detect does not run after a
+      # failed install — it would only fail again, further from the cause.
       - name: Install system packages (apt-packages)
+        id: apt-packages
         if: >-
-          inputs.apt-packages != '' && matrix.needs_env == 'true'
-          && (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all)
+          !cancelled() && inputs.apt-packages != ''
+          && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
         env:
           APT_PACKAGES: ${{ inputs.apt-packages }}
         run: |
@@ -469,150 +795,251 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends $APT_PACKAGES
 
-      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
-      # would redirect every atlanhq URL — including the caller checkout above —
-      # to an unauthenticated token URL, failing far from the cause. Condition
-      # stays in `if:`, never in the shell (docs/standards/ci.md).
-      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
-        if: inputs.private-git-deps && env.GIT_TOKEN == ''
-        shell: bash
-        run: |
-          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
-          exit 1
-
-      # Only the D-series leg materialises the environment (the detect action's
-      # needs-env `uv sync`), but gating on the input and the token — rather
-      # than also duplicating the series condition — keeps this a one-second
-      # no-op on the other legs. --global writes ~/.gitconfig, so it applies to
-      # the clone uv performs inside the action.
-      - name: "Authenticate private atlanhq git dependencies"
-        if: inputs.private-git-deps && env.GIT_TOKEN != ''
-        shell: bash
-        run: |
-          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
-          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
-
-      - name: "Run ${{ matrix.series }}-series checks"
-        if: steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all
+      - name: "D · Dependencies"
+        id: detect-dependency
+        if: >-
+          !cancelled() && steps.apt-packages.outcome != 'failure'
+          && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)
         uses: ./.github/actions/run-conformance-detect
         with:
-          series: ${{ matrix.series }}
-          slug: ${{ matrix.slug }}
-          exclude-paths: ${{ matrix.exclude_paths }}
+          series: D
+          slug: dependency
+          exclude-paths: ${{ inputs.exclude-paths-d }}
           exit-zero: ${{ inputs.exit-zero }}
           conformance-ref: ${{ inputs.conformance-ref }}
-          needs-env: ${{ matrix.needs_env }}
+          needs-env: "true"
 
-      # `upload-artifact` classifies the artifact service's finalize 403 as
-      # non-retryable and fails on the first occurrence, even though the bytes
-      # already landed and the next attempt normally succeeds. That failed the
-      # job, which failed the aggregate gate, which ejected the merge-queue
-      # entry. So: retry once, and never fail the gate on it:
-      # the series verdict is the gate; this artifact only feeds the
-      # Security tab, and conformance-upload-sarif.yaml already treats a
-      # missing artifact as an expected state.
-      - name: "Upload SARIF artifact"
-        id: upload-sarif
-        if: (steps.changes.outputs.relevant == 'true' || inputs.event_name == 'push' || inputs.force-all) && !cancelled()
+      - name: "D · upload SARIF"
+        id: upload-dependency
+        if: "!cancelled() && (steps.changes.outputs.dependency == 'true' || inputs.event_name == 'push' || inputs.force-all)"
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: conformance-${{ matrix.slug }}-sarif
-          path: ${{ matrix.slug }}.sarif
-          # Overwrite on the FIRST attempt too. Artifacts survive across attempts of
-          # a run, so re-running a failed job would otherwise 409 here and burn the
-          # retry on a conflict that has nothing to do with a finalize failure. It is
-          # also what holds the invariant every consumer of this upload globs on:
-          # at most ONE live artifact ever matches `<name>*`.
+          name: conformance-dependency-sarif
+          path: dependency.sarif
+          retention-days: 7
           overwrite: true
 
-      # A finalize 403 comes from an intermediary having a moment, and the
-      # retry runs about a second later — well inside the same window. Wait
-      # it out, so the two attempts fail independently or not at all.
-      - name: Wait before the upload retry
-        if: steps.upload-sarif.outcome == 'failure'
+      # A finalize 403 comes from an intermediary having a moment, and a retry
+      # a second later lands in the same window.  One wait covers every series:
+      # each retry below already runs at least this long after its own first
+      # attempt.
+      - name: Wait before the SARIF upload retries
+        if: >-
+          !cancelled() && (
+          steps.upload-ci.outcome == 'failure'
+          || steps.upload-error-handling.outcome == 'failure'
+          || steps.upload-prescriptions.outcome == 'failure'
+          || steps.upload-preflight.outcome == 'failure'
+          || steps.upload-optimizations.outcome == 'failure'
+          || steps.upload-logging.outcome == 'failure'
+          || steps.upload-tests.outcome == 'failure'
+          || steps.upload-container-image.outcome == 'failure'
+          || steps.upload-deprecation.outcome == 'failure'
+          || steps.upload-contract-toolkit.outcome == 'failure'
+          || steps.upload-security.outcome == 'failure'
+          || steps.upload-dependency.outcome == 'failure')
         run: sleep 20
 
-      - name: "Upload SARIF artifact (retry)"
-        if: steps.upload-sarif.outcome == 'failure'
+      # A DISTINCT name, never the first attempt's: a FinalizeArtifact failure
+      # leaves an unfinalized record holding that name for the whole run.  The
+      # list API cannot see it, so `overwrite` cannot clear it and
+      # CreateArtifact 409s — a same-named retry could never have worked.
+      # Consumers resolve these artifacts by `<name>*` glob, not exact name.
+      - name: "C · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-ci.outcome == 'failure'"
         continue-on-error: true
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          # A DISTINCT name, never the first attempt's: a FinalizeArtifact
-          # failure leaves an unfinalized record holding that name for the whole
-          # run. The list API cannot see it, so `overwrite` cannot clear it and
-          # CreateArtifact 409s — a same-named retry could never have worked.
-          # Consumers resolve this artifact by `<name>*` glob, not exact name.
-          name: conformance-${{ matrix.slug }}-sarif-retry
-          path: ${{ matrix.slug }}.sarif
+          name: conformance-ci-sarif-retry
+          path: ci.sarif
+          retention-days: 7
           overwrite: true
 
-  # ── Contract ledger append-only guard ─────────────────────────────────────
-  # Verifies that no entry was deleted from the committed contract ledger and
-  # no recorded type was changed between origin/main and HEAD.  Adding entries
-  # and status changes (active→deprecated→sunset) are always allowed.
-  #
-  # Uses `uvx atlan-application-sdk-conformance ledger-guard` so the guard
-  # travels with the published package — no local script copy needed in app repos.
-  # The ledger-path input lets each caller point to its own ledger; the SDK
-  # overrides the default via conformance.yaml / sdk-gate.yaml.
-  #
-  # Requires fetch-depth: 0 so the full git history (and origin/main) is
-  # available to `git show`.  Skipped on push to main (no base-ref diff).
-  contract-ledger-guard:
-    name: "Contracts"
-    runs-on: ubuntu-latest
-    if: inputs.event_name != 'push'
-    steps:
-      - name: "Checkout (full history)"
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: "E · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-error-handling.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          fetch-depth: 0
+          name: conformance-error-handling-sarif-retry
+          path: error-handling.sarif
+          retention-days: 7
+          overwrite: true
 
-      - name: "Set up uv"
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: "P · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-prescriptions.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          version: "0.12.22"
+          name: conformance-prescriptions-sarif-retry
+          path: prescriptions.sarif
+          retention-days: 7
+          overwrite: true
 
+      - name: "F · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-preflight.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-preflight-sarif-retry
+          path: preflight.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "O · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-optimizations.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-optimizations-sarif-retry
+          path: optimizations.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "L · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-logging.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-logging-sarif-retry
+          path: logging.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "T · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-tests.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-tests-sarif-retry
+          path: tests.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "I · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-container-image.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-container-image-sarif-retry
+          path: container-image.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "B · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-deprecation.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-deprecation-sarif-retry
+          path: deprecation.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "K · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-contract-toolkit.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-contract-toolkit-sarif-retry
+          path: contract-toolkit.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "S · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-security.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-security-sarif-retry
+          path: security.sarif
+          retention-days: 7
+          overwrite: true
+
+      - name: "D · upload SARIF (retry)"
+        if: "!cancelled() && steps.upload-dependency.outcome == 'failure'"
+        continue-on-error: true
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-dependency-sarif-retry
+          path: dependency.sarif
+          retention-days: 7
+          overwrite: true
+
+      # ── Contract ledger append-only guard ───────────────────────────────────
+      # Verifies that no entry was deleted from the committed contract ledger
+      # and no recorded type was changed between origin/main and HEAD.  Adding
+      # entries and status changes (active→deprecated→sunset) are always
+      # allowed.  Uses `uvx atlan-application-sdk-conformance ledger-guard` so
+      # the guard travels with the published package.  Skipped on push to main
+      # (no base-ref diff).
+      #
+      # `continue-on-error`: this was its own `Contracts` job, which the old
+      # gate did NOT depend on and no ruleset requires, so a ledger violation
+      # never blocked a merge.  Folding it into the gate job must not change
+      # that verdict; the failure is surfaced as an error annotation and in the
+      # summary table instead of as a red check.
       - name: "Guard contract_schema.lock.json (published package)"
-        if: inputs.conformance-ref == ''
+        id: ledger-published
+        if: "!cancelled() && inputs.event_name != 'push' && inputs.conformance-ref == ''"
+        continue-on-error: true
         env:
           LEDGER_PATH: ${{ inputs.ledger-path }}
         run: uvx atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
       - name: "Guard contract_schema.lock.json (in-flight conformance-ref)"
-        if: inputs.conformance-ref != ''
+        id: ledger-ref
+        if: "!cancelled() && inputs.event_name != 'push' && inputs.conformance-ref != ''"
+        continue-on-error: true
         env:
           LEDGER_PATH: ${{ inputs.ledger-path }}
+          # Through env, never interpolated into the script: the ref is a
+          # caller-supplied string and `${{ }}` would splice it into shell source.
+          CONFORMANCE_REF: ${{ inputs.conformance-ref }}
         run: >-
           uvx
-          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${{ inputs.conformance-ref }}#subdirectory=packages/conformance"
+          --from "atlan-application-sdk-conformance @ git+https://github.com/atlanhq/application-sdk@${CONFORMANCE_REF}#subdirectory=packages/conformance"
           atlan-application-sdk-conformance ledger-guard --base-ref origin/main --ledger-path "$LEDGER_PATH"
 
-  # ── Required gate ─────────────────────────────────────────────────────────
-  # Always runs so it can be marked a required check without ever becoming
-  # "skipped" and blocking the merge queue.  A matrix job's aggregate result is
-  # 'failure' if any leg fails, so a single `needs: [suite]` covers all series.
-  gate:
-    name: "Conformance Gate"
-    runs-on: ubuntu-latest
-    needs: [suite]
-    if: always()
-    steps:
-      - name: "Evaluate conformance results"
+      - name: "Report a contract ledger violation"
+        if: >-
+          !cancelled()
+          && (steps.ledger-published.outcome == 'failure' || steps.ledger-ref.outcome == 'failure')
+        run: echo "::error title=Contract ledger guard::An entry was removed from, or a recorded type changed in, the contract ledger. Not merge-blocking; see the guard step's log."
+
+      # Per-series visibility in one place.  Straight-line by design
+      # (docs/standards/ci.md): an outcome is `success`, `failure` or `skipped`
+      # (nothing relevant changed), passed through env and printed as-is.
+      - name: "Summarise series results"
+        if: "!cancelled()"
         env:
-          SUITE_RESULT: ${{ needs.suite.result }}
+          C_OUTCOME: ${{ steps.detect-ci.outcome }}
+          E_OUTCOME: ${{ steps.detect-error-handling.outcome }}
+          P_OUTCOME: ${{ steps.detect-prescriptions.outcome }}
+          F_OUTCOME: ${{ steps.detect-preflight.outcome }}
+          O_OUTCOME: ${{ steps.detect-optimizations.outcome }}
+          L_OUTCOME: ${{ steps.detect-logging.outcome }}
+          T_OUTCOME: ${{ steps.detect-tests.outcome }}
+          I_OUTCOME: ${{ steps.detect-container-image.outcome }}
+          B_OUTCOME: ${{ steps.detect-deprecation.outcome }}
+          K_OUTCOME: ${{ steps.detect-contract-toolkit.outcome }}
+          S_OUTCOME: ${{ steps.detect-security.outcome }}
+          D_OUTCOME: ${{ steps.detect-dependency.outcome }}
+          # A skipped step's outcome is the truthy 'skipped', so pick the one that ran.
+          LEDGER_OUTCOME: ${{ inputs.conformance-ref == '' && steps.ledger-published.outcome || steps.ledger-ref.outcome }}
         run: |
           set -euo pipefail
-          # Fail closed on anything that is not a clean pass. The matrix job's
-          # aggregate result is 'failure' if any leg failed, 'cancelled' if a
-          # run was cancelled, 'skipped' if every series self-skipped (nothing
-          # relevant changed), 'success' otherwise. Only success|skipped pass —
-          # 'cancelled' must NOT slip through (the old contains(...,'failure')
-          # rule let it).
-          if [[ "$SUITE_RESULT" == "success" || "$SUITE_RESULT" == "skipped" ]]; then
-            echo "Conformance gate passed (suite result: $SUITE_RESULT)."
-          else
-            echo "::error::Conformance gate FAILED — suite result: $SUITE_RESULT."
-            exit 1
-          fi
+          printf '### Conformance series\n\n| Series | Name | Result |\n| --- | --- | --- |\n' >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' C "CI" "${C_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' E "Error handling" "${E_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' P "Prescriptions" "${P_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' F "Preflight" "${F_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' O "Optimizations" "${O_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' L "Logging" "${L_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' T "Tests" "${T_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' I "Container images" "${I_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' B "Deprecations" "${B_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' K "Contract toolkit" "${K_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' S "Security" "${S_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| %s | %s | %s |\n' D "Dependencies" "${D_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"
+          printf '| — | Contract ledger | %s |\n' "${LEDGER_OUTCOME:-skipped}" >> "$GITHUB_STEP_SUMMARY"

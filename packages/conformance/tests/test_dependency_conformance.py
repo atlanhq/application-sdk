@@ -2319,6 +2319,87 @@ def test_d010_fires_when_lock_lacks_duckdb(tmp_path: Path) -> None:
     assert findings[0].line == 5
 
 
+def test_d010_message_says_to_check_the_import_site_is_live_first(
+    tmp_path: Path,
+) -> None:
+    findings = _d010_scan(
+        tmp_path,
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock='[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n',
+    )
+    assert len(findings) == 1
+    message = findings[0].message
+    assert "dead code" in message
+    assert "delete" in message
+    assert "pyproject.toml" in message
+    assert message.index("dead code") < message.index("[sql]' (or [incremental])")
+
+
+def test_d010_suppression_is_read_from_the_pyproject_anchor_line(
+    tmp_path: Path,
+) -> None:
+    lock = '[[package]]\nname = "atlan-application-sdk"\nversion = "3.24.0"\n'
+    directive = "  # conformance: ignore[D010] only frozen reference code imports it"
+    anchored = _D010_PYPROJECT_NO_EXTRA.splitlines(keepends=True)
+    anchored[4] = anchored[4].rstrip("\n") + directive + "\n"
+    (tmp_path / "anchor").mkdir()
+    (tmp_path / "import").mkdir()
+    (on_anchor,) = _d010_scan(
+        tmp_path / "anchor",
+        pyproject="".join(anchored),
+        source=_D010_TRANSFORMER_IMPORT,
+        uv_lock=lock,
+    )
+    (on_import,) = _d010_scan(
+        tmp_path / "import",
+        pyproject=_D010_PYPROJECT_NO_EXTRA,
+        source=_D010_TRANSFORMER_IMPORT.rstrip("\n") + directive + "\n",
+        uv_lock=lock,
+    )
+    assert on_anchor.suppressed
+    assert not on_import.suppressed
+
+
+def test_d010_suppression_falls_back_to_line_1_without_an_sdk_dependency(
+    tmp_path: Path,
+) -> None:
+    pyproject = (
+        "[project]\n"
+        'name = "my-connector"\n'
+        'version = "0.1.0"\n'
+        'dependencies = ["httpx>=0.27"]\n'
+    )
+    directive = "  # conformance: ignore[D010] only frozen reference code imports it"
+    (tmp_path / "bare").mkdir()
+    (tmp_path / "suppressed").mkdir()
+    (bare,) = _d010_scan(
+        tmp_path / "bare", pyproject=pyproject, source=_D010_TRANSFORMER_IMPORT
+    )
+    first, rest = pyproject.split("\n", 1)
+    (on_line_1,) = _d010_scan(
+        tmp_path / "suppressed",
+        pyproject=first + directive + "\n" + rest,
+        source=_D010_TRANSFORMER_IMPORT,
+    )
+    assert bare.line == 1
+    assert "pyproject.toml:1" in bare.message
+    assert "else line 1" in bare.message
+    assert not bare.suppressed
+    assert on_line_1.suppressed
+
+
+def test_d010_full_description_says_to_check_the_import_site_is_live_first() -> None:
+    from conformance.suite.rules.dependency import RULES
+
+    (d010,) = [r for r in RULES if r.id == "D010"]
+    remediation = d010.full_description.split("**Remediation:**", 1)[1]
+    assert "dead code" in remediation
+    assert "delete" in remediation
+    assert "suppress" in remediation
+    assert "pyproject.toml" in remediation
+
+
 def test_d010_silent_when_lock_resolves_duckdb_for_the_app(tmp_path: Path) -> None:
     """duckdb reachable from the app's own production deps via the [sql] extra."""
     findings = _d010_scan(

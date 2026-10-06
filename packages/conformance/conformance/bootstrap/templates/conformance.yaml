@@ -6,13 +6,16 @@ on:
   push:
     branches: [main]
   # Force-refresh: re-run the full suite against the latest published rules
-  # every 6h, independent of whether Renovate's conformance-package lock bump
-  # has been merged. Timed 30 min ahead of connector-pulse's fleet ingest
-  # (refresh-conformance-dashboard.yml polls k.atlan.dev at :47 past every
-  # 6th hour UTC) so this run, plus the dashboard publish it triggers, land
-  # before that pull.
+  # once a day, independent of whether Renovate's conformance-package lock
+  # bump has been merged. Daily, not 6-hourly (FND-3315): four force-all runs
+  # a day, each with its SARIF and dashboard follow-ons, cost ~70 billed jobs
+  # per repo before any PR activity, and push to main already refreshes the
+  # dashboard whenever the code moves. Timed 30 min ahead of one of
+  # connector-pulse's fleet ingests (refresh-conformance-dashboard.yml polls
+  # k.atlan.dev at :47 past every 6th hour UTC) so this run, plus the
+  # dashboard publish it triggers, land before the 03:47 pull.
   schedule:
-    - cron: "17 */6 * * *"
+    - cron: "17 3 * * *"
   # Lets a human force an out-of-band refresh right after a conformance
   # release lands, without waiting for the next cron tick.
   workflow_dispatch: {}
@@ -20,6 +23,29 @@ on:
 permissions:
   contents: read
   pull-requests: read
+
+# A new commit on a PR retires the previous commit's run (FND-3314) — without
+# this every push, and every Renovate rebase, ran all series to completion.
+#
+# The group is shared only by `opened` and `synchronize`: the PR's first
+# commit and each new one. Everything else — main, schedule,
+# workflow_dispatch, merge_group, `reopened`, and the same-SHA PR events other
+# callers subscribe to (labeled, unlabeled, pull_request_review) — is run-unique,
+# because a shared group holds ONE pending run and a third arrival evicts it,
+# leaving a `cancelled` check (FND-218, docs/standards/ci.md "`concurrency:` is
+# not a lock, and not a queue"). Two label events on top of a running check
+# would do exactly that on the head SHA.
+#
+# Only `synchronize` cancels. That event brings a new head SHA, so the
+# `cancelled` check runs it leaves land on a commit that is no longer head.
+# `reopened` is run-unique for the same reason: it fires on a head SHA that a
+# delayed `synchronize` can share, and a cancel there would park a `cancelled`
+# check on the head itself, which Renovate never merges past (see commits.yaml
+# in application-sdk). A reopened run on a commit that is then superseded is
+# not cancelled; that costs one run, a cancelled head check costs the merge.
+concurrency:
+  group: conformance-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
 
 jobs:
   suite:

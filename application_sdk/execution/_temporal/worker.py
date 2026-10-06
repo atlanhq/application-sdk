@@ -609,13 +609,22 @@ def create_worker(
 
     from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — lazy: handler-activity machinery loaded at worker assembly
         build_preflight_gate_activity,
+        build_preflight_warmup_activity,
         gate_attempts,
         gate_budget_seconds,
         log_gate_posture,
         preflight_gate_activity_name,
+        preflight_warmup_activity_name,
         resolve_gate_mode,
     )
-    from application_sdk.handler.base import DefaultHandler  # noqa: PLC0415
+    from application_sdk.execution._temporal.preflight_transport import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        InProcessPreflightTransport,
+    )
+    from application_sdk.handler._warmup import (  # noqa: PLC0415 — lazy: loaded with the gate machinery above
+        warmup_ceiling_seconds,
+        warmup_probe_timeout_seconds,
+    )
+    from application_sdk.handler.base import DefaultHandler, Handler  # noqa: PLC0415
 
     # When the app ships no Handler, DefaultHandler's no-op (no checks → never blocks)
     # keeps the gate present but non-blocking.
@@ -635,8 +644,19 @@ def create_worker(
     gate_app_names = list(dict.fromkeys(m.name for m in sdr_registered_apps)) or [
         resolved_app_name
     ]
+    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
+
+    # Every app gets the warmup poll activity (FND-3039): whether an app has a
+    # warmup is its handler's answer at run time (Handler.warmup's default
+    # reports READY), not a declaration, so the name is reserved for all and
+    # dispatched only when a run's first probe was not READY.
     gate_activity_names = [
-        preflight_gate_activity_name(name) for name in gate_app_names
+        activity_name
+        for name in gate_app_names
+        for activity_name in (
+            preflight_gate_activity_name(name),
+            preflight_warmup_activity_name(name),
+        )
     ]
 
     # Temporal's own duplicate-activity rejection is an opaque ValueError; surface
@@ -657,13 +677,12 @@ def create_worker(
                 f"App task(s) register activity name(s) {gate_collisions}, which the SDK "
                 "reserves for the injected preflight gate. Rename the offending @task "
                 "method (a discovery step 'preflight' -> 'fetch_databases'/'discover', or "
-                "fold a readiness check into Handler.preflight_check). A worker cannot "
-                "register two activities with the same name."
+                "fold a readiness check into Handler.preflight_check; a warmup step into "
+                "Handler.warmup). A worker cannot register two activities with the "
+                "same name."
             ),
             field="task_name",
         )
-
-    name_to_app_cls = {m.name: m.app_cls for m in sdr_registered_apps}
 
     # ADR-0020 step 8. Deferred for the same reason activities.py defers it:
     # importing any `validation` submodule loads the package __init__, which pulls
@@ -733,22 +752,52 @@ def create_worker(
             # conformance: ignore[L006] same as the artifact-validation notice above: once per hard-mode app at boot, over a single-digit loop, and it is the one line saying a worker will start aborting runs.
             logger.info(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
-                "extraction on a NOT_READY verdict, and on any outcome the gate "
-                "attributes to the source (probe overrunning the %ds budget, "
-                "handler crash, missing credential). Gate plumbing failures still "
-                "fail open. This is the per-app opt-in; the default posture is "
-                "soft (report only, never block).",
+                "extraction on a NOT_READY verdict or an unverifiable source "
+                "whose failure the customer can act on (auth, permission, "
+                "invalid input, precondition, not found). Anything else — a "
+                "probe overrunning the %ds budget, an unreachable source, a "
+                "handler crash — is reported and the run proceeds, as do gate "
+                "plumbing failures. This is the per-app opt-in; the default "
+                "posture is soft (report only, never block).",
                 name,
                 budget_seconds,
             )
+        ceiling, ceiling_complaint = warmup_ceiling_seconds(
+            getattr(app_cls, "preflight_warmup_ceiling_seconds", None)
+        )
+        if ceiling_complaint:
+            logger.warning(
+                "preflight_warmup_ceiling_seconds: %s; using %ds",
+                ceiling_complaint,
+                ceiling,
+            )
+        probe_timeout, probe_complaint = warmup_probe_timeout_seconds(
+            getattr(app_cls, "preflight_warmup_probe_timeout_seconds", None), ceiling
+        )
+        if probe_complaint:
+            logger.warning(
+                "preflight_warmup_probe_timeout_seconds: %s; using %ds",
+                probe_complaint,
+                probe_timeout,
+            )
         gate_activities.append(
             build_preflight_gate_activity(
-                gate_handler,
+                InProcessPreflightTransport(gate_handler),
                 name,
                 mode=mode,
                 budget_seconds=budget_seconds,
                 attempts=attempts,
                 verify_storage=_resolve_verify_storage(app_cls),
+            )
+        )
+        gate_activities.append(
+            build_preflight_warmup_activity(
+                InProcessPreflightTransport(gate_handler),
+                name,
+                probe_timeout_seconds=probe_timeout,
+                # The default Handler.warmup answers READY; knowing that here
+                # spares every app without a warmup a credential read per run.
+                has_warmup=type(gate_handler).warmup is not Handler.warmup,
             )
         )
     task_activities = [*task_activities, *gate_activities]

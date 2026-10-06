@@ -496,6 +496,8 @@ app/generated/
 
 **Shared credentials:** Set `connectorConfigName = "atlan-connectors-teradata"` in each entrypoint contract. The bundle hoists the credential config to `app/generated/` root and deduplicates by filename. Duplicate names with different content fail generation.
 
+**Per-entrypoint input classes:** each `{entrypoint}/_input.py` declares `<PascalCase(entrypoint)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `miner` → `MinerAppInputContract`) and keeps `AppInputContract = <that class>` as an alias, so existing imports still work. Single-entrypoint apps still get `class AppInputContract`. See [docs/reference.md](docs/reference.md#multi-entrypoint-bundle).
+
 See [`examples/bundle/`](examples/bundle/) for a runnable example.
 
 ## Widget Types
@@ -567,6 +569,13 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 | `Widgets.CloudProvider` | `CloudProvider` | `str` |
 | `Widgets.CustomWidget` | `<widgetName>` | `str` |
 | `Widgets.Sage` / `Widgets.SageV2` | `sage`/`sageV2` | `str` |
+
+`SageV2.warmup` (default `false`) declares that the app's handler overrides
+`Handler.warmup`, so the setup UI runs the warmup flow (poll `/warmup`, then
+`/check` with `tiers=["warmup"]`). `true` adds `"warmup": true` to the
+widget's `ui` block; the default leaves generated output unchanged. Keep it in
+step with the handler. See
+[docs/reference.md](docs/reference.md#sagev2-warmup).
 
 `ConditionalInput` with `baseWidgetType = "apitree"` takes the apitree props
 `metadataTemplateKey`, `metadataTransformerTemplateKey`, `flatten`, `strict`,

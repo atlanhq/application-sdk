@@ -28,7 +28,11 @@ suppressions).  An id never migrates, changes, or gets reused.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -101,6 +105,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "negatives.  All are suppressible with ``# conformance: ignore[B001]``.\n"
         ),
         help_uri=f"{_HELP_BASE}#b001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B002",
@@ -226,9 +234,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "here — a constructor change off `Any` is still a break."
         ),
         terminal_state=(
-            "Four shapes are NOT breaks and do not fire: a field whose ledger status "
+            "Five shapes are NOT breaks and do not fire: a field whose ledger status "
             "is `sunset` (the retirement marker — `deprecated` still requires the "
-            "field to be present), a type that was WIDENED (including nested "
+            "field to be present), an INHERITED field the SDK retired (absent "
+            "because an SDK contract the class still inherits from, directly or "
+            "through in-repo bases, dropped it and the SDK's own bundled ledger "
+            "records it `sunset` on that contract with the same name and type — a "
+            "field the app or an in-repo base declared under another type, or one "
+            "lost by leaving the SDK base, still fires; a removed app field with "
+            "the SDK field's exact name and type cannot be told apart from it and "
+            "is excused too), a "
+            "type that was WIDENED (including nested "
             "containers), an INHERITED field whose base class changed the type, and "
             "a move OFF `Any` that keeps the same outer shape (`Any` replaced in "
             "place; a type alias declared at the top level of the same module, "
@@ -296,8 +312,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "contract from a mixin (the documented pattern) does not require\n"
             "redeclaring the mixin's fields to stay ledger-protected.\n"
             "\n"
+            "The same resolution means an app ledger records fields its contract\n"
+            "only inherits from an SDK template (``ExtractionInput`` and the rest)\n"
+            "or an SDK contract base (``Input``, ``Output``, ``PublishInputMixin``).\n"
+            "When the SDK deliberately retires one, it marks the field ``sunset``\n"
+            "in its own ledger — the SDK repo's root ``contract_schema.lock.json``,\n"
+            "which this package ships as package data. A missing field\n"
+            "that ledger records ``sunset`` on an SDK contract the app contract\n"
+            "still inherits from is not reported: the SDK's own B005 run guards\n"
+            "that field, and the app did not remove it and cannot restore it.\n"
+            "The app's ledger entry is left as it is.\n"
+            "\n"
             "Only entrypoint contracts are gated — Input/Output classes bound to an\n"
-            "``@entrypoint``-decorated method or an ``App.run()`` method.  ``@task``\n"
+            "``@entrypoint``-decorated method or an undecorated ``async def run``\n"
+            "on a class that subclasses, directly or through in-repo bases, ``App``\n"
+            "or an SDK App template imported from ``application_sdk`` (``SqlApp``,\n"
+            "``BaseMetadataExtractor``, ...).  ``@task``\n"
             "boundary contracts are explicitly excluded: tasks are internal and may\n"
             "evolve with breaking changes.\n"
             "\n"
@@ -306,8 +336,22 @@ RULES: tuple[RuleDefinition, ...] = (
             "it ``deprecated`` or ``sunset`` in the Pkl widget definition, regenerate\n"
             "the contract, run ``gen-contract-ledger`` to record the new status, and\n"
             "commit the updated ledger in the same PR.\n"
+            "\n"
+            "A field keeps its recorded type for life: the ledger keys entries by\n"
+            "contract and field name, so a retype cannot be recorded under the same\n"
+            "name. To change a type deliberately, either revert it, or retire the\n"
+            "field (``sunset``) and add a new field under a new name with the new\n"
+            "type, moving producers to it. Replacing an untyped object\n"
+            "(``dict[str, Any]``) with a model is such a retype — a model can require\n"
+            "keys or value types that payloads already in flight do not carry — and\n"
+            "not the in-place\n"
+            "``Any`` replacement P001 mandates, which keeps the outer shape.\n"
         ),
         help_uri=f"{_HELP_BASE}#b005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
     RuleDefinition(
         id="B006",
@@ -385,7 +429,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "leaves the finding standing with no diff to commit — a dead end on a\n"
             "BLOCK-tier rule, which is what FND-607 hit.  In the SDK repo itself the\n"
             "suite is in-tree, so there the command is ``uv run\n"
-            "atlan-application-sdk-conformance gen-contract-ledger``.\n"
+            "atlan-application-sdk-conformance gen-contract-ledger``, which writes\n"
+            "the repo-root ``contract_schema.lock.json`` from any directory in the\n"
+            "checkout.\n"
             "\n"
             "The generator is append-only — it appends new live fields and refreshes\n"
             "``status`` from source but never deletes an entry or rewrites a recorded\n"
@@ -397,6 +443,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "the ledger will be regenerated before the first deploy.\n"
         ),
         help_uri=f"{_HELP_BASE}#b006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="uvx atlan-application-sdk-conformance==<version> gen-contract-ledger",
+            note="<version> is the version of the checker that raised the finding; "
+            "copy the pinned command from the finding message verbatim (FND-607)",
+        ),
     ),
     RuleDefinition(
         id="B007",
@@ -473,6 +525,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "<reason>`` where the receiver is genuinely not an SDK reader frame.\n"
         ),
         help_uri=f"{_HELP_BASE}#b007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-off-daft",
+        ),
     ),
     RuleDefinition(
         id="B008",
@@ -565,5 +621,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "false positives.\n"
         ),
         help_uri=f"{_HELP_BASE}#b008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/deprecation.prose.md",
+        ),
     ),
 )

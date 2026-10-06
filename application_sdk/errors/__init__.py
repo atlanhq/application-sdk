@@ -57,6 +57,7 @@ from application_sdk.errors.leaves import (
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    SourceWarmupExhaustedError,
     TaskStalledError,
     UnimplementedError,
 )
@@ -104,6 +105,7 @@ STORAGE_INTEGRITY = ErrorCode("STR", 7)
 STORAGE_RELOCATION = ErrorCode("STR", 8)
 STORAGE_HANDOFF_INCOMPLETE = ErrorCode("STR", 9)
 STORAGE_GATEWAY_AUTH = ErrorCode("STR", 10)
+STORAGE_DISK_FULL = ErrorCode("STR", 11)
 
 # CTR - Contract errors
 CONTRACT_VALIDATION = ErrorCode("CTR", 1)
@@ -157,6 +159,7 @@ __all__ = [
     "DiskFullError",
     "LocalVolumeUnwritableError",
     "SourceUnavailableError",
+    "SourceWarmupExhaustedError",
     "InternalError",
     "InvalidInputError",
     "InvalidInputValueError",
@@ -187,6 +190,7 @@ __all__ = [
     "STORAGE_INTEGRITY",
     "STORAGE_HANDOFF_INCOMPLETE",
     "STORAGE_GATEWAY_AUTH",
+    "STORAGE_DISK_FULL",
     "CONTRACT_VALIDATION",
     "PAYLOAD_SAFETY",
     "HANDLER_ERROR",

@@ -18,10 +18,8 @@ dedicated escape hatch, ``run_in_thread()`` (``App.run_in_thread()`` /
 in ``storage/reference.py`` shipped with a raw ``asyncio.to_thread(...)`` call
 that nothing caught in review; this rule closes that gap.
 
-This deliberately does **not** flag ``run_in_executor(<some-executor>, ...)`` when
-the executor is anything other than the ``None`` literal — a call-site-owned
-``ThreadPoolExecutor`` (e.g. ``clients/sql.py``'s per-connection pool) is not the
-shared-pool contention this rule is about.
+``run_in_executor`` on an executor other than ``None`` is not this rule; a
+``with``-scoped executor is P054.
 
 ``_runtime/offload.py`` itself is exempt: that is where ``run_in_thread()``'s own
 dedicated-executor dispatch lives, and it never calls into the shared default

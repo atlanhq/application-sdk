@@ -69,7 +69,19 @@ permissions:
 jobs:
   bump-version:
     name: Update version and changelog
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
+    # One bump per repo and target at a time. Without it, a burst of merges ran
+    # concurrent bumps that each force-pushed the branch (or lost the
+    # --force-with-lease race and went red). Queued, not cancelled: a run is
+    # never killed between its push and its PR sync. A burst coalesces because
+    # the group holds one pending run and a newer arrival replaces it — the
+    # replacement checks out a later merge commit, so it builds everything the
+    # evicted one would have. The evicted run shows `cancelled` on its merged
+    # PR, which gates nothing.
+    concurrency:
+      group: release-version-bump-${{ github.repository }}-${{ inputs.target_branch }}
+      cancel-in-progress: false
 
     env:
       # Referenced from step-level `if:` guards below, which cannot read
@@ -112,7 +124,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.22"
+          version: "0.12.23"
 
       - name: Get current version
         id: versions
@@ -193,13 +205,32 @@ jobs:
         if: inputs.private_git_auth && env.GIT_TOKEN != ''
         run: git config --global --unset-all url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf
 
-      - name: Commit and open PR
-        if: steps.bump.outputs.skip != 'true'
+      # Every force-push of the bump branch is a `synchronize` that re-runs all
+      # PR CI on the open bump PR. Most merges — every Renovate one, since its
+      # commits are forced to `chore` — change neither the version nor the
+      # rendered notes, so the push would re-test an identical release (FND-3322).
+      # The script sets push=false only when the open branch already carries
+      # this version and these notes and still merges cleanly; anything it
+      # cannot establish resolves to push=true. Skipped when the script is
+      # absent (a caller pinning an older sdk_scripts_ref): the output is then
+      # empty and the push step below runs exactly as before.
+      - name: Decide whether the bump branch needs a push
+        id: debounce
+        if: steps.bump.outputs.skip != 'true' && hashFiles('.sdk-scripts/.github/scripts/release_bump_debounce.py') != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           TARGET_BRANCH: ${{ inputs.target_branch }}
-          RELEASE_LABEL: ${{ inputs.release_label }}
-          CURRENT_VERSION: ${{ steps.versions.outputs.current }}
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
+        run: |
+          python3 .sdk-scripts/.github/scripts/release_bump_debounce.py \
+            --branch "bump-version-${TARGET_BRANCH}" \
+            --version-file pyproject.toml \
+            --changelog CHANGELOG.md \
+            --new-version "${NEW_VERSION}"
+
+      - name: Commit and push bump branch
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
+        env:
+          TARGET_BRANCH: ${{ inputs.target_branch }}
           NEW_VERSION: ${{ steps.bump.outputs.new }}
         run: |
           set -euo pipefail
@@ -213,6 +244,22 @@ jobs:
           # --force-with-lease: safer than --force — fails if another CI run pushed
           # to this bot-owned bump branch concurrently, which is the correct behavior.
           git push origin "$BRANCH" --force-with-lease
+
+      # Runs whether or not the branch was pushed: it re-attaches the release
+      # label and creates the PR if a human closed it, and is a no-op when the
+      # title/body/label already match — which they do on a debounced run,
+      # because the version they are built from is the one the branch carries.
+      - name: Open or sync bump PR
+        if: steps.bump.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+          RELEASE_LABEL: ${{ inputs.release_label }}
+          CURRENT_VERSION: ${{ steps.versions.outputs.current }}
+          NEW_VERSION: ${{ steps.bump.outputs.new }}
+        run: |
+          set -euo pipefail
+          BRANCH="bump-version-${TARGET_BRANCH}"
 
           cat > "${RUNNER_TEMP}/bump-pr-body.md" <<EOF
           Automated version bump after merge to ${TARGET_BRANCH}.

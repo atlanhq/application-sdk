@@ -422,18 +422,25 @@ def test_extract_vulnerability_scan_lfs_ignores_commented_opt_in() -> None:
     assert extract_vulnerability_scan_lfs(text) == ""
 
 
-def test_vulnerability_scan_default_render_is_unchanged_by_the_slot() -> None:
-    """Adding the slot must not churn the ~53 repos that do not opt in.
-
-    The no-opt-in render has to stay byte-identical to the pre-slot template,
-    or every non-LFS repo reports C002 until it re-runs bootstrap.
-    """
+def test_vulnerability_scan_default_render_has_no_lfs_line() -> None:
+    """A repo that does not opt in renders no ``lfs:`` line in either job, so
+    the slot itself never reads as drift on the repos that say nothing."""
     rendered = render("vulnerability-scan.yml")
-    assert "with:" not in rendered
+    assert "lfs:" not in rendered
     assert rendered.endswith(
         "    uses: atlanhq/application-sdk/.github/workflows/build-and-scan.yaml@main\n"
+        "    with:\n"
+        "      image: ${{ needs.candidate.outputs.candidate_image }}\n"
+        "      mark_scanned: ${{ needs.candidate.outputs.candidate_image != '' }}\n"
         "    secrets: inherit\n"
     )
+
+
+def test_vulnerability_scan_lfs_slot_reaches_both_image_builds() -> None:
+    """The bump PR's candidate build and the scan's own build both read the
+    LFS assets, so the one opt-in has to land on both jobs (FND-3328)."""
+    rendered = render("vulnerability-scan.yml", vuln_scan_lfs="true")
+    assert rendered.count("      lfs: true\n") == 2
 
 
 # ---------------------------------------------------------------------------

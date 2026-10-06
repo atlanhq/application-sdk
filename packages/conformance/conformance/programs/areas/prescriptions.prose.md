@@ -551,6 +551,82 @@ around `finding.line` before drafting any proposal.
   prefix call to a different module — the finding is about the level of the
   abstraction, not its location.
 
+**Typed-boundary / contract-modeling rules (P013–P015)** — migration rules
+(`autofixable = false`), scope=app; `classification` is always `"judgment"`.
+The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.prescriptions`.
+
+- **P013 UntypedEntrypointBoundary** (BLOCK) — an `@entrypoint` method, or an
+  `async def run()` on an `App` subclass (the implicit entrypoint), has an
+  input parameter or return annotation that is missing, a primitive/container
+  (`dict`, `list`, `str`, `Any`, `dict[str, str]`, …), or an in-tree class that
+  does not reach `Input` / `Output` (a plain `pydantic.BaseModel`, a
+  dataclass).  A class the checker cannot find in the scanned tree is not
+  flagged.  Target shape, from `atlan-metabase-app` `app/connector.py`:
+  `async def extract_metadata(self, input: MetabaseInput) -> MetabaseOutput`,
+  both sides SDK contract subclasses.  The brief names the new (or re-based)
+  `Input` / `Output` classes and every caller that builds the old payload.  The
+  runtime decorator already rejects these at import, so a shipped violation
+  crash-loops the worker.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2b;
+  `docs/concepts/contracts.md` (Input and Output).
+
+- **P014 UntypedTaskBoundary** (BLOCK) — the same check on a `@task` method's
+  input parameter and return annotation.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: each task has its own pair, e.g.
+  `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`.  The brief
+  names the per-task `Input` / `Output` pair and the call sites in `run()` /
+  the entrypoint that pass the old dict or string.  Same import-time rejection
+  and pointers as P013.
+
+- **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
+  `Output` contract is a container of primitives or `Any`, bare or bounded
+  (`Annotated[dict[str, str], MaxItems(N)]`).  The bound satisfies P001 but the
+  keys and values still have no schema.  Containers of a typed class
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  `atlan-metabase-app` `app/contracts.py`:
+  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
+  where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
+  model (its fields read off how the app uses the container) and every reader
+  and writer of the field.  Keep the `MaxItems` bound: P001 still needs it.
+  When the key set is genuinely open, propose
+  `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+**Entrypoint-conformance rules (P017–P018)** — migration rules
+(`autofixable = false`), scope=app, WARN-tier; `classification` is always
+`"judgment"`.  The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.entrypoint`, which scans test files
+too.
+
+- **P017 ManualWorkerBootstrap** (WARN) — the app calls `create_worker(...)`,
+  `create_temporal_client(...)` or `AppWorker(...)` from
+  `application_sdk.execution`; imports removed v2 boot surface
+  (`application_sdk.worker`, `application_sdk.application`,
+  `application_sdk.clients.temporal`); or calls `setup_workflow` /
+  `start_workflow` / `start_worker` on `self`, `app` or an SDK-imported name.
+  Target shape, from `atlan-mysql-app` `app/run_dev.py`: `main()` is one
+  `await run_dev_combined(MySQLApp, ...)`, and nothing under `app/` builds a
+  worker or client; production boots through the base-image CLI
+  (`application-sdk --mode worker|combined --app module:ClassName`).  The brief
+  names the boot file to delete or collapse onto `run_dev_combined` and the
+  `ATLAN_APP_MODULE` / CLI wiring it needs.  Exemption: files under
+  `tests/integration/` are exempt from the construction and lifecycle calls
+  (the harness needs a worker handle), but not from the v2 imports.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `.claude/skills/upgrade-v3` Phase 2b step 3; `docs/concepts/entry-points.md`
+  (`run_dev_combined()`, Worker Auto-Discovery).
+
+- **P018 ManualServerBootstrap** (WARN) — the app constructs `FastAPI(...)`,
+  `uvicorn.Server(...)` / `uvicorn.Config(...)`, calls `uvicorn.run(...)`, or
+  calls `setup_server` / `start_server` / `include_router` on `self`, `app` or
+  an SDK-imported name.  Target shape, from `atlan-openapi-app`
+  `app/run_dev.py`: the HTTP surface comes from the same
+  `run_dev_combined(OpenAPIConnector, ...)` call as the worker; HTTP surface
+  is `@entrypoint` methods triggered by
+  `POST /workflows/v1/start?entrypoint=<name>`.  The brief lists each
+  hand-rolled route and which `@entrypoint` or SDK handler endpoint replaces
+  it.  No `tests/integration/` exemption for this rule.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `docs/concepts/server.md`, `docs/concepts/entry-points.md` (HTTP dispatch).
+
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
 around `finding.line` before drafting any proposal — the proposal is a
@@ -675,10 +751,11 @@ drafting.
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
 
-**Execution-seam rules (P031, P036)** — suggest-only, WARN-tier;
-`classification` is always `"judgment"`.  Both replace a hand-rolled
-concurrency primitive with the SDK seam that owns its lifecycle, and both need
-`result.evidence` citing the seam's own path plus the reference-app call site —
+**Execution-seam rules (P031, P036, P054)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Each replaces a hand-rolled
+concurrency primitive with a shape whose lifecycle is safe on the event loop,
+and each needs `result.evidence` citing that shape's own path plus the
+reference call site —
 the blind gate cannot tell a correct hop from a plausible one.
 
 - **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
@@ -692,8 +769,9 @@ the blind gate cannot tell a correct hop from a plausible one.
   callable **passed, not called** (`run_in_thread(fn, arg)`, never
   `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
   thread, exactly as P023 prescribes.  A `run_in_executor` whose first
-  argument is a *real* executor the app owns is a deliberate choice, not this
-  defect — say so and route to residue rather than rewriting it.  On a
+  argument is an executor other than `None` is not this rule; a `with`-scoped
+  executor is P054, and any other executor the app owns is a deliberate choice —
+  say so and route to residue rather than rewriting it.  On a
   preflight path, F011 sees the swapped call too: use the module-level
   `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
   `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
@@ -718,6 +796,19 @@ the blind gate cannot tell a correct hop from a plausible one.
   functions' own contracts as evidence.  This is a restructure (the child's
   entry function and its arguments must be picklable): route to residue with
   the proposed shape, never a mechanical constructor swap.
+
+- **P054 ScopedExecutorJoinedOnCancel** — inside an `async def`, a `with`
+  statement builds a `ThreadPoolExecutor` and the body offloads to it with
+  `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
+  `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
+  blocking driver call freezes the whole worker, not just the cancelled task
+  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
+  seam, and it does not join on cancel); or, when the calls must stay on one
+  thread (some DB-API cursors break when `execute` and `fetchmany` run on
+  different threads), a dedicated executor created **without** `with` and
+  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
+  goes through `run_in_thread` — and the offending call site.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
@@ -792,6 +883,40 @@ say so.
   already calls `upload_refs`, there is no P030 finding to remedy: do not
   propose a second upload.
 
+  **Working transfers that still fire P030.**  Before drafting, check whether
+  bytes already move through a path this check does not recognise: an app
+  task that calls `storage.transfer.upload` (against
+  `create_store_from_binding` or `upstream_storage`), or a call to the
+  inherited `BaseMetadataExtractor.upload_to_atlan` shim.  The shim forwards to
+  `self.upload(local_path=output_path, tier=RETAINED)`, which writes under
+  `App.upload`'s own run prefix: it delivers only when the app hands that same
+  prefix downstream, and is the re-rooting trap above when it does not —
+  compare the two before calling it working.  Neither shape is the named
+  bridge P042 reports, so both land here.  The proposal is the conversion,
+  framed as a refactor that must not move a key:
+
+  - `App.upload` / `upload_refs` are tasks: call them from the entrypoint,
+    never inside another task;
+  - either keep the activity and have it stage a local tree mirroring the key
+    layout, returned as a directory `FileReference`, then upload it once with
+    `storage_path` pinned to the prefix the app returns (replay-safe only for
+    runs pinned to this build; an unversioned or `AUTO_UPGRADE` worker
+    replays in-flight runs against the new entrypoint, so guard the new
+    `App.upload` call with `workflow.patched(...)`); or declare the task
+    outputs to `upload_refs` with a
+    `DeclaredFile.label` per key;
+  - skip empty entities (`upload_refs` raises on an empty declared file);
+  - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
+    files) — a second private write left behind is the same bridge again;
+  - upload the whole tree when downstream nodes read more than `transformed/`
+    (for example `parsed/`); for the shim, swap in its own body and pin
+    `storage_path` if the published prefix differs from the run prefix.
+
+  Evidence: run the full-DAG e2e on main first as a baseline, then on the
+  change, and compare the Atlas inventory per type; a type the inventory does
+  not list in either run is not proven by it.  Cite both runs in
+  `result.evidence`.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
   **does** perform a real storage transfer, with neither `self.upload(` nor
   `self.upload_refs(` anywhere in
@@ -820,6 +945,11 @@ say so.
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.
+
+  Detection is name-based: only an app method named `upload_to_atlan` is
+  graded here.  The same working shape under another name, and calls to the
+  inherited SDK shim, are reported as P030 — use the P030 conversion recipe
+  for them.
 
 - **P051 SdrPreflightUnavailable** (WARN) — an SDR app (`self_deployed_runtime:
   true` in `atlan.yaml`) locks `atlan-application-sdk` below `3.30.0` in
@@ -928,6 +1058,36 @@ which scans template YAML, not Python.
   parent, and every shipped template carries `typeName:` and `status:` as
   top-level leaf keys under `columns:`, emitted bare.  The alias-slot argument
   is the whole reason, and it stands on its own.
+
+**Error-seam rules (P043, P045)** — migration rules (`autofixable = false`),
+scope=app, WARN-tier; `classification` is always `"judgment"`.  The lane
+applies nothing: return `not_remediable = true` with a `migration_brief`.
+Backed by `suite.checks.error_seam`, which scans test files too.  Both cover
+only `Error`-suffixed classes under `application_sdk.storage.formats` today,
+bound with the `from X import Y` form.
+
+- **P043 NonPublicErrorControlFlow** (WARN) — `except X`, `except (X, Y)`,
+  `isinstance(e, X)`, `issubclass(t, X)` or `class Y(X)` depends on such a
+  class that `application_sdk.errors` does not export.  A class the public
+  surface does export is left to P045.  Target shape, from `atlan-mysql-app`
+  `app/handler.py` (`if isinstance(e, AppError): raise`) and
+  `app/failures.py` (subclasses of `AuthError`), both imported from
+  `application_sdk.errors`.  The brief replaces the branch with
+  `except AppError` plus a decision on `.code`, and names the codes the old
+  handler meant to match.  Read them off the SDK source, not the class name:
+  the old and new classes are usually siblings, so the brief must also say
+  which exception the boundary raises today.  Update test fixtures that
+  freeze the old class in the same brief.
+
+- **P045 PrivateErrorClassImport** (WARN) — the app imports an `Error`-suffixed
+  class from `application_sdk.storage.formats.*` (most often `format_errors`).
+  Target shape, from `atlan-metabase-app` `app/errors.py`: every SDK error class
+  comes from `from application_sdk.errors import (...)`.  When the class is
+  exported there (the finding message says "Import it from
+  'application_sdk.errors' instead"), the brief is the import-path change.
+  When it is not, the brief is the P043 shape — catch `AppError`, branch on
+  `.code` — and, if the app needs the typed class, a request to the SDK team
+  to promote it.  Helper functions in the same modules are not flagged.
 
 **Portability rule (P046)** — suggest-only, scope=sdk,
 `classification = "judgment"`; backed by `suite.checks.text_io_encoding`, which

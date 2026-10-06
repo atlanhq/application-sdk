@@ -426,6 +426,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # envelope (K020), and a filter field typed as a strict dict that rejects the
     # AE's flat JSON string (K021, CONNECT-1333 / CONNECT-1389). All four need an
     # app's contract/ + app/generated/ tree, which the SDK does not have.
+    # K027: entrypoint contract classes sharing one bare class name — the SDK
+    # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -520,6 +522,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
         "P004",
         "P005",
         "P008",
@@ -770,6 +773,8 @@ def test_catalog_p_series_present() -> None:
     CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
     declaring its own CredentialValue alias, instead of the SDK's
     route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
+    P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
+    whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -823,6 +828,7 @@ def test_catalog_p_series_present() -> None:
         "P051",
         "P052",
         "P053",
+        "P054",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -910,7 +916,8 @@ def test_catalog_k_series_present() -> None:
     and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
-    writer contradicts) (ADR-0020)."""
+    writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
+    contract classes under one bare class name) (FND-3140)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -935,6 +942,7 @@ def test_catalog_k_series_present() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"

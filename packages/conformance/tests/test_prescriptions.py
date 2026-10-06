@@ -1297,6 +1297,33 @@ def test_p013_silent_on_correctly_typed_entrypoint(tmp_path: Path) -> None:
     assert p013 == []
 
 
+def test_p013_silent_on_subclass_of_a_rebound_generated_contract(
+    tmp_path: Path,
+) -> None:
+    """A base imported by a module-level alias name resolves to the class it names."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "generated/_input.py": (
+            "from application_sdk.contracts import Input\n"
+            "class MinerAppInputContract(Input):\n"
+            "    x: str = ''\n"
+            "AppInputContract = MinerAppInputContract\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import FetchOutput\n"
+            "from generated._input import AppInputContract as _Gen\n"
+            "class MinerInputContract(_Gen):\n"
+            "    y: str = ''\n"
+            "class MyApp(App):\n"
+            "    @entrypoint\n"
+            "    async def run_it(self, input: MinerInputContract) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_silent_on_contracts_in_same_file(tmp_path: Path) -> None:
     """Contracts defined in the same file as the App → resolved correctly."""
     src = (
@@ -1387,6 +1414,97 @@ def test_p013_implicit_run_fires_on_app_subclass(tmp_path: Path) -> None:
     p013 = [f for f in findings if f.rule_id == "P013"]
     assert len(p013) == 1
     assert "input" in p013[0].message
+
+
+@pytest.mark.parametrize("base", ["BaseMetadataExtractor", "SqlApp"])
+def test_p013_implicit_run_fires_on_sdk_template_subclass(
+    tmp_path: Path, base: str
+) -> None:
+    """Implicit run() on an SDK App-template subclass with untyped input → P013."""
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": (
+            f"from application_sdk.templates import {base}\n"
+            "from contracts import FetchOutput\n"
+            "\n"
+            f"class MyConnector({base}):\n"
+            "    async def run(self, input: dict) -> FetchOutput:\n"
+            "        return FetchOutput()\n"
+        ),
+    }
+    p013 = [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+    assert len(p013) == 1
+
+
+def test_p013_implicit_run_silent_on_local_class_named_like_a_template(
+    tmp_path: Path,
+) -> None:
+    """A local class that merely shares a template's name is not an App base."""
+    src = (
+        "class SqlApp:\n"
+        "    pass\n"
+        "\n"
+        "class MyConnector(SqlApp):\n"
+        "    async def run(self, input: dict) -> dict:\n"
+        "        return {}\n"
+    )
+    p013 = [f for f in _scan_one(tmp_path, src) if f.rule_id == "P013"]
+    assert p013 == []
+
+
+_RUN_ON_APP_SUBCLASS = (
+    "from contracts import FetchOutput\n"
+    "\n"
+    "class MyConnector(App):\n"
+    "    async def run(self, input: dict) -> FetchOutput:\n"
+    "        return FetchOutput()\n"
+)
+
+
+def _p013_for_app_prelude(tmp_path: Path, prelude: str) -> list:
+    files = {
+        "contracts.py": _TYPED_CONTRACTS,
+        "connector.py": prelude + _RUN_ON_APP_SUBCLASS,
+    }
+    return [f for f in _scan_files(tmp_path, files) if f.rule_id == "P013"]
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        pytest.param("class App:\n    pass\n\n", id="local-class"),
+        pytest.param("from vendor.base import App\n\n", id="non-sdk-import"),
+        pytest.param("from vendor.base import Base as App\n\n", id="non-sdk-alias"),
+        pytest.param(
+            "from application_sdk.app import App\nfrom vendor.base import App\n\n",
+            id="sdk-import-shadowed-by-later-import",
+        ),
+    ],
+)
+def test_p013_implicit_run_silent_when_app_is_not_the_sdk_app(
+    tmp_path: Path, prelude: str
+) -> None:
+    """A base spelled ``App`` that the module binds to something else is not App."""
+    p013 = _p013_for_app_prelude(tmp_path, prelude)
+    assert p013 == []
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        pytest.param("", id="unimported"),
+        pytest.param("from application_sdk.app import App\n\n", id="sdk-import"),
+        pytest.param(
+            "from vendor.base import App\nfrom application_sdk.app import App\n\n",
+            id="later-sdk-import-wins",
+        ),
+    ],
+)
+def test_p013_implicit_run_fires_when_app_is_the_sdk_app(
+    tmp_path: Path, prelude: str
+) -> None:
+    p013 = _p013_for_app_prelude(tmp_path, prelude)
+    assert len(p013) == 1
 
 
 def test_p013_implicit_run_silent_on_non_app_class(tmp_path: Path) -> None:

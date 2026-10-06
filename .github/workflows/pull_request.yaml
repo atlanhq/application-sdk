@@ -32,10 +32,6 @@ jobs:
       #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
       #          in the merge queue — otherwise workflow-only PRs merge blind.
       ci: ${{ steps.filter.outputs.ci }}
-      # 'scan' — wider net for the Trivy filesystem scan: every first-party
-      #          source tree + the dependency lockfiles. Still short-circuits on
-      #          pure docs/, .github-meta, and .security-only PRs.
-      scan: ${{ steps.filter.outputs.scan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
@@ -76,13 +72,6 @@ jobs:
               # exclusion is handled in the sdk-refine step below instead.
             ci:
               - '.github/workflows/pull_request.yaml'
-            scan:
-              - 'application_sdk/**'
-              - 'contract-toolkit/**'
-              - 'tests/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.github/actions/trivy/**'
 
       # paths-filter sdk=true is necessary but not sufficient: the broad
       # application_sdk/** pattern also matches .md files, so a PR that only
@@ -129,31 +118,6 @@ jobs:
         with:
           module-name: application_sdk
           fail-under: "30"
-
-  # Security Checks
-  # Required status check — must ALWAYS run and ALWAYS conclude (never skip via a
-  # job-level `if:`, which GitHub reports as "skipped" and leaves a required check
-  # pending forever, blocking the merge queue). Instead the job always runs and
-  # short-circuits its real steps when no first-party source/deps changed.
-  trivy:
-    name: Trivy Code Scan
-    needs: changes
-    runs-on: ubuntu-latest
-    steps:
-      - name: Short-circuit when nothing to scan
-        if: needs.changes.outputs.scan != 'true'
-        run: echo "No first-party source or dependency changes — Trivy code scan not needed."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.scan == 'true'
-      - uses: "./.github/actions/trivy"
-        if: needs.changes.outputs.scan == 'true'
-        with:
-          # Reporting and enforcement are separate switches on purpose — see the
-          # action's input docs. Both are passed explicitly so that a future edit
-          # to one is visibly not an edit to the other. The action itself skips
-          # the comments on merge_group; enforcement runs on every event.
-          add-report-comment-to-pr: "true"
-          fail-on-findings: "true"
 
   trivy-container:
     name: Trivy Container Scan

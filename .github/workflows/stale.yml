@@ -80,7 +80,7 @@ permissions:
 
 jobs:
   stale:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # actions/stale finishes in seconds; cap the job so a hung GitHub API call or
     # rate-limit wait can't hold a runner up to the 6-hour default.
     timeout-minutes: 10

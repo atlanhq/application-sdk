@@ -21,10 +21,9 @@ pytest-covered (tests/test_endor_scan_prep.py).
       ``--platform linux/amd64``. Docker 29 rejects ``docker save`` on a
       multi-arch reference without one ("both OS and Architecture must be
       provided"), and endorctl shells out to ``docker save`` itself.
-    * ``PREBUILT`` empty (the PR path): the build job's buildx
-      ``outputs: type=docker,dest=/tmp/image.tar`` already produced the
-      tarball and the artifact download placed it at ``TARBALL``; nothing to
-      pull. The build tagged the local image ``scan-target:<sha>``, which is
+    * ``PREBUILT`` empty (the PR path): the build step's buildx
+      ``outputs: type=docker,dest=/tmp/image.tar``, earlier in the same job,
+      already wrote the tarball at ``TARBALL``; nothing to pull. The build tagged the local image ``scan-target:<sha>``, which is
       meaningless in the Endor UI, so the scan is reported under the name the
       image will be published as (``ghcr.io/atlanhq/<repo>:<sha7>``) and PR
       scans line up with published images on one container.
@@ -132,9 +131,9 @@ def run_materialise(env: dict[str, str], run: RunFn = _run) -> int:
         run(cmd)
     if not Path(tarball).is_file():
         print(
-            f"::error::no image tarball at {tarball}. On the PR path the "
-            "`docker-image*` artifact download must have placed it there; on the "
-            "prebuilt path `docker save` should have written it.",
+            f"::error::no image tarball at {tarball}. On the PR path the image "
+            "build step must have written it there; on the prebuilt path "
+            "`docker save` should have.",
             file=sys.stderr,
         )
         return 1
@@ -152,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub.add_parser(
         "materialise",
-        help="pull+save PREBUILT, or name the downloaded tarball; report ref=",
+        help="pull+save PREBUILT, or name the locally built tarball; report ref=",
     )
     args = parser.parse_args(argv)
     env = dict(os.environ)

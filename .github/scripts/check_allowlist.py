@@ -8,7 +8,9 @@ Environment:
     FAIL_ON_FINDINGS  "true" (default) to exit 1 on blockers; "false" for warning only.
     BUILD_RESULT      Result of the upstream image-build job, for diagnosing a
                       missing results file. Optional.
-    SCAN_RESULT       Result of the upstream scan job, same purpose. Optional.
+    SCAN_RESULT       Result of a separate upstream scan job, same purpose.
+                      Optional; build-and-scan.yaml builds and scans in one job
+                      and passes BUILD_RESULT alone.
 """
 
 import argparse
@@ -32,8 +34,9 @@ def missing_results_reason(build_result: str, scan_result: str) -> str:
         return "Cause: unknown — no upstream job results were passed to this check."
     if build_result not in ("", "success", "skipped"):
         return (
-            f"Cause: the image build did not succeed (result: {build_result}), so "
-            "nothing was ever scanned. Read that job's log, not this one."
+            f"Cause: the image build job did not succeed (result: {build_result}), "
+            "so no scan results were produced — in build-and-scan.yaml that one "
+            "job also runs Trivy. Read that job's log, not this one."
         )
     if scan_result not in ("", "success"):
         return (

@@ -63,6 +63,7 @@ time-to-resolution.
   wrote %d records" with `len(records)` passed positionally, and every other @task in
   the file logs the same way. One template per line, so every run of that line groups
   together in ClickHouse.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Using an f-string creates a unique message string per call, breaking log grouping and
 aggregation in Grafana/ClickHouse.  It also always evaluates eagerly — __str__ /
@@ -98,6 +99,7 @@ under the run.
   application_sdk.observability.logger_adaptor. No shipped app/ module in the three
   reference apps calls logging.getLogger, structlog.get_logger, or loguru's logger; the
   test files that do sit outside what this rule scans.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Every module must obtain its logger via the SDK adapter:
 
@@ -138,6 +140,7 @@ present in the record but invisible to GROUP BY/filter.
 - **Compliant example:** No reference app passes `extra={}`. Context travels positionally in the %-style body —
   atlan-metabase-app app/utils.py, `to_epoch_ms`: "Datetime %r did not match format %r",
   dt_str, fmt.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Whether `extra={}` is correct depends on the logging framework.  For structlog and
 loguru, `extra={}` is usually wrong — the data lands in an unindexed nested dict
@@ -164,15 +167,54 @@ data — so the incident stays open for days instead of being read off the trace
   exc_info=True) inside their except blocks, so the trace rides with the message. The
   rule inspects warning and error calls only; `_authentication_check` logs at DEBUG
   through sanitize_cause_repr() with no exc_info, a deliberate no-traceback boundary.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** ruff BLE001 and the sanitized form: BLE001 accepts a broad except only when the handler
+  logs with exc_info or re-raises, so the sanitized no-exc_info log this rule prescribes
+  at a credential catch trips it. Narrow the except to what the try raises (E004). A
+  catch that genuinely must stay broad is left as it is and reported for a person to
+  decide: never suppress BLE001, and never add exc_info=True to satisfy it, which would
+  leak the credentials this exemption protects.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
-the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
-`logger.error()` calls within an except block. `.exception()` is exempt.
+the root cause is invisible.  Add `exc_info=True` to `logger.warning()` /
+`logger.error()` calls within an except block, unless the call uses the redaction
+boundary below, or it is a later status-only call that does not expose the raw exception
+after this same handler logged its caught exception's sanitized traceback.
+`.exception()` is exempt.
 
 Exempt: calls whose arguments flow through a recognised redaction helper
 (redact*/sanitiz*/safe_traceback/scrub_secret*/mask_secret*) — these mark a deliberate
 no-traceback boundary where exc_info=True would serialize the raw exception past the
-sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies).
+sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodies). A
+later status-only warning/error call that does not expose the raw exception also needs
+no duplicate trace after a prior straight-line call at the same level or higher (an
+ERROR is not covered by a WARNING, which a `LOG_LEVEL=ERROR` filter drops) has logged
+that same exception's sanitized traceback — inline, as `safe_traceback(e)`, or through a
+local assigned from it earlier in the handler. A cause-only sanitizer, a trace for a
+different exception, or a trace inside a different handler does not satisfy this
+condition.
+
+**Fixing it well**
+
+* At a catch around credential resolution, auth or a JDBC/driver call, raw
+`exc_info=True` can print a connection string or password held in the exception: log the
+sanitized traceback instead, as the reference apps do — `logger.error("... failed: %s",
+safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
+
+* The sanitized form carries no `exc_info`, so ruff BLE001 (in ruff's default rule set)
+flags it when the catch is a broad `except Exception`. Narrow the catch to what the
+`try` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where
+the catch genuinely must stay broad, leave the site as it is and report it for a person
+to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet BLE001, and
+never re-raise `from e` for the same reason: the chained cause carries the raw exception
+to whichever log prints it next. An app that selects `TRY` or `ALL` also gets TRY400 on
+the sanitized call, narrowed or not: report that site the same way.
+
+* Everywhere else, `exc_info=True` on the existing log call is the fix.
+
+* A site that already logs a sanitized traceback
+(`redact_secrets("".join(traceback.format_exception(exc)))` passed to the logger)
+delivers the rationale: leave it.
 
 ---
 
@@ -192,6 +234,7 @@ sink or interleave with structured lines, invisible to observability.
   print(); no print() exists under app/ in any of the three reference apps. The repo's
   pyproject.toml backs this with T201 in the lint select, ignored only for
   `.github/**/*.py`, where a CI script's stdout is the point.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 `print()` produces no level, no structured fields, no correlation IDs. In production
 services, output may go to stdout unformatted, be lost, or interleave with structured
@@ -218,6 +261,7 @@ per-item progress belongs at DEBUG.
 - **Compliant example:** atlan-metabase-app app/extracts/process.py — the per-dashboard skip inside
   `process_assets` logs at DEBUG. INFO belongs to the run's lifecycle, not to one
   iteration of it.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Per-item INFO logging in a large loop drowns meaningful signals and degrades
 performance.  INFO is for lifecycle milestones, not per-item events.  Use DEBUG per-item
@@ -242,6 +286,7 @@ is built to consume. Use ERROR (with exc_info=True) and let the failure propagat
 - **Compliant example:** No reference app calls logger.critical(). The top severity in use is ERROR at a boundary
   — atlan-mysql-app app/handler.py, `test_auth`. There is no CRITICAL sink behind the
   adaptor, so the level only costs a reader their filter.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 CRITICAL is not a meaningful level in distributed systems — every service failure is
 "critical" from some perspective.  Use ERROR and handle severity through alerting rules
@@ -267,6 +312,7 @@ expensive argument expressions still need an explicit guard.
 - **Compliant example:** atlan-mysql-app app/client.py — `provide_token` logs "IAM token refreshed for connection
   (length: %d)", len(token). The argument is cheap, and %-style defers interpolation
   until the level is known to be enabled.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Python evaluates all arguments before calling the log method, so expensive expressions
 in log arguments run on every call regardless of level:
@@ -301,6 +347,7 @@ without dedup logic.
 - **Compliant example:** atlan-metabase-app app/connector.py — `transform_data` raises MissingTypenameInputError
   and `_build_client` raises MetabaseCredentialInputError, with no log line before
   either. The raise is the record; whichever handler catches it logs it once.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Logging an error immediately before re-raising creates duplicate records in the log
 stream, inflating error counts in dashboards.  Acceptable only when adding context not
@@ -326,6 +373,7 @@ of whether it was ever exploited.
 - **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` logs the role ARN, host and user,
   reports the external ID only as `bool(external_id)`, and never logs the value of the
   token it returns. Log that a credential was used, never the credential.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Credentials in log output are a security vulnerability — logs are often stored in
 plaintext in log aggregation systems, accessible to more people than the credential
@@ -366,6 +414,7 @@ aggregation store.
 - **Compliant example:** atlan-metabase-app app/extracts/databases.py — `fetch_databases_summaries` logs "Failed
   to fetch databases: %s" with the status as an argument, so the template stays constant
   across every failure.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Like f-strings (L001), string concatenation embeds values into the message string in a
 way that breaks log grouping.  Rewrite as %-style message body.
@@ -392,6 +441,7 @@ a KeyError raised by its own logging call instead of reporting the original prob
   a stdlib caller would reach for extra={"name": ...}, a reserved LogRecord attribute.
   The SDK adaptor (application_sdk/observability/logger_adaptor.py) injects the Temporal
   context itself, so no caller-supplied key is needed.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 stdlib's `Logger.makeRecord()` raises `KeyError` if any key in `extra={}` matches a
 `LogRecord` attribute.  This crash propagates directly to the caller — NOT caught by
@@ -419,6 +469,7 @@ first in the tenant.
   which accepts the SDK adaptor's kwargs. No shipped app/ module in the three reference
   apps creates a stdlib logging.Logger, and it is the stdlib one that raises TypeError
   on arbitrary kwargs.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 stdlib `logger.info()` only accepts `exc_info`, `extra`, `stack_info`, and `stacklevel`.
 Any other kwarg raises `TypeError` and crashes the caller.  Very common when migrating
@@ -441,6 +492,7 @@ message and field in one call.
 - **Compliant example:** atlan-metabase-app app/api_types.py — one factory, `get_logger`, in every module.
   structlog is not a dependency of any reference app, so no call site can shadow the
   message with an `event=` kwarg.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 In structlog, the first positional argument is stored as the `event` key — it IS the log
 message.  Passing `event=` as a keyword argument silently overwrites the message with
@@ -465,6 +517,7 @@ dictConfig() — so a misconfigured call makes all library logging vanish with n
   example_input=...)`; the module imports asyncio, the SDK launcher and the app's own
   connector and handler: no `logging`, no dictConfig. Handler configuration belongs to
   the SDK runtime; an app calling dictConfig is reaching past it.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 `logging.config.dictConfig()`'s `disable_existing_loggers` defaults to `True`, which
 silently disables all loggers created before the call.  This is the most common source
@@ -487,6 +540,7 @@ calls rely on import order to decide which wins; the rest are silently dropped.
 - **Compliant example:** atlan-openapi-app app/run_dev.py — the dev entrypoint boots the SDK runtime and never
   calls logging.basicConfig(). The first caller wins and every later call is a silent
   no-op, which is why the SDK owns this exactly once.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 `logging.basicConfig()` is silently ignored if the root logger already has handlers.
 Multiple calls across the codebase mean whichever runs first wins; the rest are dropped
@@ -512,6 +566,11 @@ instead.
 - **Compliant example:** atlan-metabase-app app/handler.py — `test_auth` logs warning(..., exc_info=True). The
   level is chosen for the site and exc_info is explicit; logger.exception() would have
   pinned it to ERROR regardless.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** ruff G201 is this rule's inverse: it rewrites logger.error(..., exc_info=True) to
+  logger.exception(...). L021 requires every app's ruff config to ignore G201, so the
+  replacement this rule prescribes lints clean. logger.warning(..., exc_info=True)
+  satisfies G201 and this rule either way.
 
 `logger.exception()` is not a sanctioned logging method in this project. ADR-0011
 restricts app logging to four levels (DEBUG/INFO/WARNING/ERROR) and `exc_info=True` is
@@ -519,6 +578,11 @@ the canonical way to attach a traceback.  Beyond that, `logger.exception()` read
 `sys.exc_info()` implicitly — capturing nothing (or a stale exception) when called
 outside an active except block. Replace every call site with `logger.error(...,
 exc_info=True)`.
+
+ruff G201 flags that replacement and asks for `logger.exception()` back; it is in ruff's
+default rule set, so it is on in any config that only extends the defaults.  The policy
+wins: L021 requires the app's ruff config to turn it off with `extend-ignore =
+["G201"]`.
 
 Checker note: the `AtlanLoggerAdapter`'s own `exception()` shim is exempt — it exists
 only to satisfy third-party Temporal callers and immediately delegates to
@@ -542,6 +606,7 @@ blob aggregation can't reach — context belongs in the message body via %-style
   exclude=%s" with the two filters as positional arguments to the %-style template, not
   as kwargs. Kwargs on an application log call land in an unindexed blob and never reach
   the message a reader greps.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 Arbitrary kwargs in log calls are an anti-pattern in this project. Framework context
 (Temporal fields, correlation IDs) is auto-injected by the logging adapter; all other
@@ -565,6 +630,7 @@ discards it; the log call that follows has no extra context attached.
 - **Compliant example:** atlan-metabase-app app/handler.py — the module-level logger is used directly and no
   reference app calls logger.bind(). Workflow/run correlation is injected by the
   adaptor, so there is no bound logger to discard by accident.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 `structlog` and `loguru` `bind()` returns a *new* bound logger; the original is
 unchanged.  A bare `logger.bind(key=value)` expression discards the result, so the
@@ -589,6 +655,7 @@ is a trivial rename.
   warning logger.warning(...), and no shipped app/ module in the three reference apps
   calls .warn(). The repo's pyproject.toml also selects LOG009, so ruff rejects a
   regression at edit time.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
 
 `logger.warn()` / `logging.warn()` is a deprecated alias for `logger.warning()` that
 will be removed in a future Python version. Rename every call site to
@@ -600,7 +667,7 @@ will be removed in a future Python version. Rename every call site to
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
-> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009)
+> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009) or does not ignore G201
 
 **Rationale:** The conformance suite catches logging anti-patterns at review time; ruff catches the
 same issues at edit time and in pre-commit. The two are complementary — ruff gives
@@ -609,19 +676,24 @@ rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equival
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", "G004", "T201",
-  "LOG009"]`, which is the exact set this rule looks for. atlan-metabase-app spells the
-  same list one rule per line, with a comment on why G002 is deliberately absent.
-- **Interacts with:** L001 and L011 box in the order of this fix. G004 and G003 are the ruff twins of those
-  rules, so enabling them while L001/L011 findings are still open makes the repo's
-  pre-commit ruff hook fail on every open call site, and the L021 change goes red on its
-  own. Land L021 with or after the L001/L011 fixes, and run `ruff check --select
-  G003,G004` first. L020 (`logger.warn()`) is ruff G010, which L021 does not require, so
-  it does not belong in this pre-scan. T201 overlaps L005 but is broader: it also flags
-  intentional print() in tests/ and in .github/**/*.py CLI scripts, which a
-  per-file-ignores entry scopes out (atlan-mysql-app pyproject.toml); the checker does
-  not read per-file-ignores, so that entry still satisfies L021. Found in a consumer app
-  during an auto-fixable remediation run (FND-2493).
+- **Compliant example:** atlan-metabase-app pyproject.toml — `select` lists G001, G003, G004, T201 and LOG009 one
+  per line, with a comment on why G002 is deliberately absent; with `extend-ignore =
+  ["G201"]` added, as every app needs, it is the shape this rule asks for. A config that
+  keeps the defaults and only adds `extend-select = ["G001", "G003", "G004", "T201",
+  "LOG009"]` needs the same ignore.
+- **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** L017 is why G201 must be ignored: G201 demands logger.exception(...) over
+  logger.error(..., exc_info=True), the exact inverse of L017. L001 and L011 box in the
+  order of this fix. G004 and G003 are the ruff twins of those rules, so enabling them
+  while L001/L011 findings are still open makes the repo's pre-commit ruff hook fail on
+  every open call site, and the L021 change goes red on its own. Land L021 with or after
+  the L001/L011 fixes, and run `ruff check --select G003,G004` first. L020
+  (`logger.warn()`) is ruff G010, which L021 does not require, so it does not belong in
+  this pre-scan. T201 overlaps L005 but is broader: it also flags intentional print() in
+  tests/ and in .github/**/*.py CLI scripts, which a per-file-ignores entry scopes out
+  (atlan-mysql-app pyproject.toml); the checker does not read per-file-ignores, so that
+  entry still satisfies L021. Found in a consumer app during an auto-fixable remediation
+  run (FND-2493).
 
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):
@@ -635,11 +707,14 @@ A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed r
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
 `extend-ignore`.
 
-Pin the five rules individually. Selecting the bare `G` category satisfies this check
-but also enables `G201`, which demands `.exception(...)` over `.error(...,
-exc_info=True)` — the exact inverse of conformance L017 (LoggerExceptionUsage). With `G`
-selected, ruff and the conformance suite contradict each other on every except-block log
-call.
+`G201` must be ignored.  It demands `.exception(...)` over `.error(..., exc_info=True)`
+— the exact inverse of conformance L017 (LoggerExceptionUsage) — so with it on, ruff and
+the conformance suite contradict each other on every except-block log call.  ruff's
+default rule set includes `G201` from 0.16, so a config with no `select` key has it on,
+as does any `select` reaching it through `G`, `G2` or `ALL`; a `select` that leaves it
+out today turns it on the day someone adds `G`.  So every app ignores it explicitly: add
+`extend-ignore = ["G201"]` (an ignore of `G201` or a prefix of it in `ignore` /
+`extend-ignore` counts).
 
 Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
 `atlan-application-sdk` are skipped (the SDK's own tooling config is managed

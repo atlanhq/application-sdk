@@ -40,21 +40,31 @@ _ENV = jinja2.Environment(
 # ``.github/workflows/``).  The C002 drift check iterates this registry.
 MANAGED_WORKFLOWS: tuple[str, ...] = (
     "conformance.yaml",
-    "conformance-upload-sarif.yaml",
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
     "connector-review-gate.yaml",
-    "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",
     "renovate-auto-approve.yml",
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
-    "auto-fix.yml",
     "generated-freshness.yaml",
 )
+
+# Opt-in managed shim (FND-3336): installed only under ``bootstrap
+# --sarif-upload true``, and removed on any other run. Uploading SARIF to a
+# private repo's Security tab needs GitHub Advanced Security, which the org
+# does not buy, so on the private fleet this workflow's five-leg matrix only
+# ever probed, skipped the upload and billed five jobs per merge to main. The
+# public repos keep it: their runners are free and their Security tab is the
+# one place the upload shows anything. Nothing else reads its output — the
+# conformance dashboard downloads the SARIF artifacts from the Conformance run
+# itself. Not a RETIRED_FILES entry because it is not retired everywhere; the
+# reusable and ``probe_code_scanning.py`` stay, the probe still guarding a
+# private repo that keeps an old copy.
+SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 
 # Workflow shims bootstrap once managed and now actively removes (relative to
 # ``.github/workflows/``).  A retired name must be deleted rather than merely
@@ -71,9 +81,26 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
 # shim's shape was wrong outright.  Every call therefore failed at startup:
 # conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
 # than repointed — the check is not wanted on connectors.
+#
+# ``auto-fix.yml``: an ``issue_comment`` shim gated on a ``/fix-vulnerabilities``
+# comment. Every PR comment (mostly Renovate's) queued a run that the job-level
+# ``if`` then skipped — hundreds of skipped runs per repo, no real invocations.
+# Retired as noise; the reusable workflow it called is left in place here.
+#
+# ``update-dashboard.yml`` (FND-3337): a ``workflow_run`` shim on Vulnerability
+# Scan, Build & Publish and Conformance that pushed this repo's rows to the
+# security, conformance and test-readiness dashboards. Every merge to main
+# fired it up to three times with up to three jobs each. Those dashboards are
+# now pulled for the whole fleet by application-sdk's scheduled
+# ``update-fleet-dashboards.yaml``, so the per-repo push has nothing left to do.
+# Its reusable stays in application-sdk until resync has removed every copy.
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, not only a workflow.
-RETIRED_FILES: tuple[str, ...] = (".github/workflows/docstring-coverage.yaml",)
+RETIRED_FILES: tuple[str, ...] = (
+    ".github/workflows/docstring-coverage.yaml",
+    ".github/workflows/auto-fix.yml",
+    ".github/workflows/update-dashboard.yml",
+)
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")
     for path in RETIRED_FILES

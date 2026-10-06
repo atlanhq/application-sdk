@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -49,6 +53,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "`./` composite-action refs are exempt (no version to pin)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C002",
@@ -84,6 +92,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "Re-run `bootstrap` to re-sync (the same bare re-run removes a retired "
             "file); structural drift is flagged while intentional per-repo value "
             "choices (e.g. `unit_tests_workflow_file`) are preserved. "
+            "`conformance-upload-sarif.yaml` is opt-in, for public repos only: "
+            "absent is clean, since a private repo cannot accept the upload "
+            "without GitHub Advanced Security. A copy without the "
+            "`bootstrap --sarif-upload true` marker is reported for removal, which "
+            "a bare re-run does. "
             "The exceptions are `tests.yaml` and `renovate.json`, write-if-absent "
             "scaffolds a bare re-run never rewrites — pass `--resync` to pull their "
             "structure forward, which likewise preserves each file's recognized "
@@ -130,6 +143,14 @@ RULES: tuple[RuleDefinition, ...] = (
             "`--use-ghcr-base false` to remove it."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.COMMAND,
+            target="atlan-application-sdk-conformance bootstrap --json",
+            note=(
+                "run with no other flags; `--resync` is a human-only remedy for "
+                "drifted `tests.yaml` / `renovate.json` (FND-2542)"
+            ),
+        ),
     ),
     RuleDefinition(
         id="C003",
@@ -179,6 +200,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "autofixed, which is why this rule's `autofixable` is false overall."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
     RuleDefinition(
         id="C004",
@@ -236,5 +261,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "`atlanhq/application-sdk/.github/actions/setup-deps@main`."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/ci.md#c004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/ci.prose.md",
+        ),
     ),
 )

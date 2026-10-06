@@ -69,7 +69,11 @@ being present in ``atlan.yaml``.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -189,6 +193,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p029"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P030",
@@ -293,6 +301,42 @@ RULES: tuple[RuleDefinition, ...] = (
             "  written, but never to the tenant bucket (observed for a key-value\n"
             "  store connector in fleet testing).\n"
             "\n"
+            "**Transfers that still fire P030.**  Two shapes move bytes but are not\n"
+            "``self.upload`` / ``self.upload_refs`` and are not the named\n"
+            "``upload_to_atlan`` bridge P042 reports.  An app task that calls\n"
+            "``storage.transfer.upload`` (against ``create_store_from_binding`` or\n"
+            "``upstream_storage``) skips the SDK's upstream checks, dual-write and\n"
+            "cross-pod fallback.  A call to the inherited\n"
+            "``BaseMetadataExtractor.upload_to_atlan`` shim forwards to\n"
+            "``self.upload(local_path=output_path, tier=RETAINED)``, which writes\n"
+            "under ``App.upload``'s own run prefix: it works only when the app hands\n"
+            "that same prefix downstream, and is the re-rooting trap above when it\n"
+            "does not.  Convert both, as a refactor that must not move a key — and\n"
+            "if the shim's keys and the published prefix differ, the conversion is\n"
+            "the fix.\n"
+            "\n"
+            "*Conversion recipe.*  ``App.upload`` and ``upload_refs`` are tasks, so\n"
+            "call them from the entrypoint, never from inside another task.  Either\n"
+            "keep the activity and have it stage a local tree that mirrors the key\n"
+            "layout, returned as a directory ``FileReference``, then upload it once\n"
+            "with ``storage_path`` pinned to the prefix the app returns.  That is\n"
+            "replay-safe only for runs pinned to the build that started them\n"
+            "(``PINNED`` worker versioning); an unversioned or ``AUTO_UPGRADE``\n"
+            "worker replays in-flight runs against the new entrypoint, so guard the\n"
+            "new ``App.upload`` call with ``workflow.patched(...)``.  Or declare the\n"
+            "task outputs to\n"
+            "``upload_refs`` with a ``DeclaredFile.label`` per key.  Skip empty\n"
+            "entities (``upload_refs`` raises on an empty declared file), keep side\n"
+            "outputs such as ``resolvable/`` or miner files in a delivery, and\n"
+            "upload the whole tree when downstream nodes read more than\n"
+            "``transformed/``.  For the shim, swap in its own body, and pin\n"
+            "``storage_path`` if the published prefix differs from the run prefix.\n"
+            "\n"
+            "*Verification.*  Run the full-DAG e2e on main first as a baseline, then\n"
+            "on the change, and compare the Atlas inventory per type.  The\n"
+            "inventory need not list every type a connector writes; a type absent\n"
+            "from both runs is not proven either way.\n"
+            "\n"
             "**Never mark a P030 finding a false positive without a green full-DAG\n"
             "e2e** (extract → publish) proving assets actually land in Atlas.  The\n"
             "workflow status is not evidence — every failure mode above reports\n"
@@ -349,6 +393,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p030"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
     RuleDefinition(
@@ -426,6 +474,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p037"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
     RuleDefinition(
@@ -517,6 +569,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p038"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
     RuleDefinition(
@@ -619,6 +675,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p039"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
     RuleDefinition(
@@ -727,6 +787,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p042"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P051",
@@ -830,6 +894,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/prescriptions.md#p051"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
         ),
     ),
 )

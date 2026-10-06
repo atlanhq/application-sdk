@@ -92,9 +92,10 @@ with a retry (first attempt `continue-on-error: true`, companion step guarded on
    re-running a failed job 409s on the *first* attempt, hands the upload to the
    retry, and leaves both `<name>` (from the earlier attempt) and
    `<name>-retry` live. A `merge-multiple` consumer then flattens two files of
-   the same inner name in undefined order — for `docker-image` that means
-   scanning the previous attempt's image. Overwrite is what keeps **at most one
-   live artifact per name**, which is the invariant the globs below rest on.
+   the same inner name in undefined order — for `trivy-results` that means the
+   Security Gate judging the previous attempt's scan. Overwrite is what keeps
+   **at most one live artifact per name**, which is the invariant the globs
+   below rest on.
 
 4. **Consumers accept the retry name.** Three shapes, pick per call site:
    - same-run `download-artifact`: `pattern: <name>*` + `merge-multiple: true`,
@@ -168,6 +169,245 @@ added one parenthesis out is a no-op that a textual check waves through.
 Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
 deliberately partial evaluator that raises on anything it does not model rather
 than guessing.
+
+## Skip whole jobs, not steps
+
+**Rule:** when a job has nothing to do on some event, actor or branch, put the
+filter on the job's `if:`, not on each of its steps or as an early exit in its
+script.
+
+**Why:** a job skipped by its own `if:` is not billed. A job that starts and
+then skips every step, or runs a script that passes at once, is billed a full
+runner minute. In a reusable that every connector calls, that minute is paid on
+every PR, push and merge-group run across the fleet (FND-3320:
+`renovate-artifacts` in `tests-reusable.yaml`, and the merge-group no-ops in
+`commits.yaml`, `release-gate.yaml` and `connector-review-gate.yaml`).
+
+**It is safe for a required check** as long as the job `name:` is a static
+string. A job-level skip still files its check run, with conclusion `skipped`,
+and GitHub counts `skipped` as a pass for a required context (see "A skipped job
+is not a silent job" below for the same-commit trap). What leaves a required
+context pending forever is no check run at all, which happens when the caller
+never dispatches on the event (no `merge_group:` trigger) or when the job name
+is an expression that renders differently on the skipping event. When a
+downstream gate reads the skipped job's `needs.<job>.result`, make it accept
+`skipped` explicitly.
+
+## What a merge-queue entry re-runs
+
+**Rule:** on `merge_group`, a check runs only if its result can change when the
+PR is combined with the latest base. Every other check skips at job level, as
+above, and its skipped check run passes the required context.
+
+**Why:** the queue exists to catch what the combination changes. A PR cannot
+enter the queue until its required checks are green on its head, so a check
+whose inputs are identical on the queue commit can only repeat that verdict,
+and every repeat bills a runner across the fleet (FND-3321).
+
+Seven bootstrap callers declare `merge_group:`. Each check is either
+base-sensitive or not:
+
+| Caller → job | Base-sensitive? | On a queue entry | Why |
+| --- | --- | --- | --- |
+| `commits.yaml` → Conventional Commits | No | Skipped (FND-3320) | The PR title and commit messages do not change when the PR is combined with the base. |
+| `release-gate.yaml` → Release Gate | No | Skipped (FND-3320) | It reads PR labels. A release PR without `e2e` fails on the PR and never enters the queue. |
+| `connector-review-gate.yaml` → Connector Review | No | Skipped (FND-3320) | It reads PR reviews, which the queue does not change. |
+| `tests.yaml` → unit, integration | Yes | Always runs | Behaviour of the merged code. Integration is skipped on the PR when a queue is detected, so the queue run is the one that gates. |
+| `conformance.yaml` → Conformance Gate | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | The suite reads only the tree. |
+| `checks.yml` → Pre-commit | Only through the tree | Skipped when the queue tree equals the PR head tree and the head already contains the queue's base | Lint and type checks read only the tree. A base change can break them (a renamed symbol), so a different tree re-runs them. |
+| `vulnerability-scan.yml` → Build Image, Security Gate | Only through image inputs | In a repo with a release flow: always skipped (FND-3328, see below). Otherwise: skipped unless an image input may differ from what the PR tested | Findings come from the image's packages: base image, Dockerfile, dependency locks and manifests, vendored binaries, install scripts. The caller's `.security/` allowlist changes the verdict too. Python source never adds a finding. |
+
+The last three share a decision job, `queue-diff`, a `ubuntu-slim` job that
+runs `.github/scripts/queue_tree_diff.py` only on `merge_group`. It reads the PR
+head SHA from the queue branch name
+(`gh-readonly-queue/<base>/pr-<N>-<head sha>`) and the queue's base from
+`merge_group.base_sha`, fetches the commits and trees (no blobs, bounded depth)
+behind both, and compares them with the queue commit. It writes two outputs:
+`identical` (the whole tree matches and the head already contains the base) and
+`image_changed` (a path in the script's image-input list may differ). Every git
+call has a timeout, and a timeout runs every check. The skipping job's gate is
+`!cancelled() && needs.queue-diff.outputs.<x> != '<skip value>'`, so an empty
+output still runs the check. That covers a skipped `queue-diff` on every
+non-queue event and a failed one. `test_queue_entry_rechecks.py` evaluates
+each gate in both directions.
+
+**What "may differ" means.** The PR's run built `refs/pull/N/merge`: the head
+merged with the base as it was then, a base commit the queue cannot know. The
+head-to-queue diff alone misses one case: a base change that was there when the
+PR ran and was reverted before the queue entry. The queue tree then equals the
+head's but not the tree that was tested. So the paths that may differ are the
+head-to-queue diff plus every path a base commit touched since the PR forked
+(`git log fork..base`), reverted or not. When the head already contains the
+base, that second set is empty and the tested tree was the head's own: the only
+case in which `identical` can be true. A fork point beyond the fetched depth
+runs every check. When a group batches several PRs, the queue branch names the
+last one. The PRs ahead of it then show up as a difference, and the checks run.
+
+**No separate `queue-gate` reporter.** A job-level skip with a static `name:`
+already files the check run the required context waits for. A reporter job
+that posts the contexts itself would need `checks: write` in every caller,
+and it would have to keep its context strings in sync with the job names by
+hand.
+
+**Newest suite wins, and that is safe here.** A queue commit belongs to one
+entry. Nothing else runs on its SHA, so no later `skipped` run can override a
+real failure. That differs from the same-commit `labeled` trap below. A
+requeue after an ejection builds a new queue commit. The skip adds no
+`concurrency:` group either, so it adds nothing to the FND-218 eviction
+surface.
+
+**What it does not cover:**
+
+* A floating base-image tag (`FROM …:latest`) can move without any file
+  changing, and so can the vulnerability DB. Both drift the same way between
+  any two scans, queue or no queue. `build-and-publish-app.yaml` scans the
+  image it pushes: blocking on an SDR deploy-on-merge push to `main` and on a
+  release that had to rebuild, report-only on a release that promoted the
+  scanned bump-PR candidate. Non-SDR apps build no image on a merge (FND-3327).
+* A Dockerfile under a name the image-input list does not match (the list is
+  by basename: `Dockerfile*`, `*.dockerfile`, `Containerfile`). `atlan.yaml`,
+  which names the Dockerfile, is on the list. A bespoke name still needs adding
+  there.
+* Unit tests. They are base-sensitive and could skip on an identical tree too,
+  but they feed `Tests Gate` with the integration tier, so they were left
+  alone.
+
+### The vulnerability scan gates the bump PR, not every PR (FND-3328)
+
+Since FND-3327 the only image a release-flow app ships is the release image,
+so a scan per PR checked an image that never shipped. In a repo whose base
+branch has a job calling `release-version-bump.yaml` (a job-level `uses:`; a
+comment or string naming the file does not count, since a false match turns
+scans off), `build-and-scan.yaml`
+now scans only the `bump-version*` PR. Its `scope` job
+(`.github/scripts/vuln_scan_scope.py`) answers `scan=false` for every other PR
+and every queue entry, and `Build Image` / `Security Gate` skip on that answer.
+A skipped job files its required context as passing, which is why the skip is
+inside the reusable workflow: dropping the caller's triggers would file no
+context at all and block every PR. Security signed off on this posture.
+
+Repos with no release flow scan every PR and queue entry as before: without a
+bump PR nothing else would gate their image. A caller can also opt back in
+with `scan_every_pr: true`. The release-flow check reads the **base** branch,
+so a PR cannot opt itself out, and an unreadable base reads as "no release
+flow", i.e. scan.
+
+The bump PR scans the image the release ships. The template's `candidate` job
+runs `build-and-publish-app.yaml` with `candidate: true` on the PR's merge
+commit, pushing the full release build as `:candidate-<tree>` (`<tree>` is the
+git tree SHA). The scan scans that digest, blocking, and on a pass tags it
+`:scanned-<tree>`. At release, `prepare` looks up `:scanned-<tree>` for the
+tree being released and `merge` copies that manifest to every release tag with
+no build; the copy reads each tag back and fails unless the digest matches.
+The tree, not the commit, is the key because the squash-merge commit is never
+a commit the PR built. When the base moved before the merge the trees differ,
+nothing is promoted, and the release rebuilds behind a **blocking** scan.
+Mechanics: `.github/scripts/release_candidate.py`; release-side detail in
+`release-flow.md`.
+
+**The Renovate lock refusal moved with it.** A refused lock bump is withheld by
+a lock carrying an undeclared `[options]` table (`renovate_uv_lock_bounded.py`,
+`withhold`). The image build's `uv sync --locked` behind the required
+`scan / Build Image` used to reject it. That job now skips on ordinary PRs, so
+two shared workflows run `uv lock --check` (`.github/scripts/check_uv_lock.py`)
+whenever `uv.lock` or any `pyproject.toml` differs from the base (a dependency
+added without relocking leaves the lock unchanged): the Pre-commit job of
+`checks-reusable.yaml`, and the Conformance Gate job of
+`conformance-reusable.yaml`. The second is the one that holds fleet-wide:
+`suite / Conformance Gate` is required in every repo, while some repos require
+no `pre-commit / Pre-commit` context or never call `checks-reusable.yaml`.
+Both sit in shared workflows, not bootstrap templates, so they go live in the
+same merge as the skip.
+
+## Runner sizing
+
+**Rule:** a short glue job (it calls the GitHub API, rolls up results, posts a
+comment or uploads a file) runs on `ubuntu-slim`. Everything else stays on
+`ubuntu-latest` until it has a measured reason to move.
+
+**Why:** every job is billed in whole minutes, so a 9-second job costs the same
+60 seconds as a 59-second one. `ubuntu-slim` (1 vCPU) is billed at $0.002/min
+against `ubuntu-latest`'s $0.006/min, so a sub-minute job costs a third as much
+there. This only matters for jobs that run in private repos: standard runners
+are free on public ones. application-sdk is public, so its own workflows save
+nothing by moving. The saving comes from the reusables and bootstrap templates
+that private connector repos run (FND-3335).
+
+### What `ubuntu-slim` provides
+
+Checked on 2026-10-06 against GitHub's hosted-runner reference and the
+runner-images `ubuntu-slim` README and Dockerfile (image `20260925`). Check
+them again before relying on anything not listed here.
+
+* 1 vCPU, 5 GB RAM, 14 GB disk, x64, Ubuntu 24.04.
+* **A hard 15-minute job timeout.** A longer `timeout-minutes` is ignored. The
+  job is killed and fails.
+* An unprivileged container, not a VM: no Docker daemon. That rules out
+  `services:`, `container:`, Docker actions, and `docker build/run/pull`. The
+  Docker CLI is installed but has nothing to talk to.
+* Installed: `gh`, `git`, `jq`, `yq`, `curl`, `aws`, Node 24, Python 3.12 with
+  `pip` and `venv`, `sudo`. **Not installed:** `uv` (use `astral-sh/setup-uv`),
+  `pkl`, `trivy`, and the apt Python modules the full image's system
+  interpreter has (PyYAML, `packaging`). A script run with the system `python3`
+  must import the stdlib only.
+* `sudo` is present, but nothing here has verified it inside the unprivileged
+  container. Jobs that `sudo`/`apt-get` stay on `ubuntu-latest` until a canary
+  confirms it, and that includes `install-pkl`, which does `sudo mv`.
+
+`.github/scripts/tests/test_runner_sizing.py` enforces all of this for every
+`runs-on: ubuntu-slim` job: a declared timeout of 15 or less, no Docker, no
+root, only allowlisted actions (each checked to be `node24` at its pinned
+SHA), and stdlib-only system Python. To move a job, add it and let that test
+tell you what it needs.
+
+### Which jobs moved, and which stayed
+
+Medians come from `actions_minutes_report.py`. Moved to `ubuntu-slim`:
+
+* `tests-reusable.yaml`: Detect merge queue, Detect integration suite, Discover
+  e2e suites, Recheck the dispatched SDK ref, Release tenant lease, Report to
+  application-sdk, Test-readiness scorecard, Renovate artifacts, Tests Gate.
+* `build-and-publish-app.yaml`: Validate Channel + Branch, Dispatch App
+  Deployment, Publish.
+* `build-and-scan.yaml`: Security Gate.
+* `update-dashboard.yaml`: all three jobs (since retired for the central
+  `update-fleet-dashboards.yaml`, FND-3337).
+* `commits.yaml`, `conformance-upload-sarif-reusable.yaml`, `stale.yml`,
+  `tag-and-release.yaml`, `release-version-bump.yaml`: their one job each.
+* Bootstrap templates: `connector-review-gate.yaml`, `release-gate.yaml`.
+
+Short fleet jobs that stay on `ubuntu-latest`:
+
+| Job | Why it stays |
+| --- | --- |
+| `renovate-auto-approve` | A conformance-resync PR is verified by rendering in a Docker container, and the job only finds out which kind of PR it has after it starts. Its 25-minute ceiling (fan-in wait) is also over the slim cap. Moving it needs the resync render split into its own job. |
+| build-and-publish-app `prepare` | Runs `parse_atlan_yaml.py` / `validate_atlan_yaml.py` on the system `python3`, which import PyYAML and `packaging` from the full image. |
+| build-and-publish-app `leak-scan`, `certify`; `generated-freshness` | `sudo` (gitleaks / `install-pkl`), not yet verified on slim. |
+| tests-reusable `lease-tenant` | Waits up to 90 minutes for a tenant. |
+| tests-reusable `wake-` / `pause-dataforge-source` | GlobalProtect VPN needs a tun device, which an unprivileged container cannot create. |
+| `checks-reusable` pre-commit, tests-reusable `unit`, conformance `suite` | `sudo apt-get` plus a full `uv sync` and CPU-bound work. On 1 vCPU these would be slower, closer to the 15-minute cap, and not clearly cheaper. |
+| Image build, merge, scan and e2e jobs | Docker. |
+
+Jobs that only run in application-sdk itself stay put because moving them saves
+nothing.
+
+### arm64 for Python jobs: not now
+
+`ubuntu-24.04-arm` is $0.005/min, about 17% under `ubuntu-latest`. The
+SDK, conformance, mysql and metabase locks all resolve to wheels with an
+aarch64 build. openapi's does not: `scalene` (a dev dependency) ships x86_64
+wheels only, so its `uv sync` would compile it from source, which costs more
+than the 17% saves. The other cost is a second architecture to debug in every
+connector's test tier.
+
+The measured upside is small. The billed-minutes report for 12 private fleet
+repos over 2026-09-28..10-04 (`--sample 12 --seed 3312`) counts 69,376 billed
+minutes. Unit and Integration are 5,015 of them (7.2%), with medians of 55s
+and 145s. A 17% cut on 7.2% is 1.2% of the bill, and that assumes arm64 runs
+no slower. The glue jobs moved to `ubuntu-slim` above billed 15,000 minutes
+(21.6%) of the same week. At a third of the price, moving them saves about 14%
+of the fleet's cost, roughly $60 a week on that sample alone. Revisit arm64
+with a measured pilot of the `unit` job on mysql or metabase.
 
 ## Mask secrets before writing them to `$GITHUB_ENV`
 

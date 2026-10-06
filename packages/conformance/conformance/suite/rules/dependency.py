@@ -33,7 +33,11 @@ SDK upgrades.  These rules enforce two invariants:
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     FixLocus,
@@ -87,6 +91,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d001"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D002",
@@ -130,6 +138,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d002"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D004",
@@ -172,6 +184,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d004"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -218,6 +234,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d005"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D006",
@@ -259,6 +279,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d006"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D007",
@@ -291,6 +315,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d007"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -328,6 +356,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d008"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -413,6 +445,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d003"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D009",
@@ -462,13 +498,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "dirs_exist_ok=True)``. This requires application-sdk to already "
             "be installed into the venv before the task runs (true both "
             "locally and in the Docker build, where ``uv sync`` precedes "
-            "``poe download-components``). Inline suppression: "
+            "``poe download-components``). Copy the whole folder and name no "
+            "files: the set the wheel ships changes between versions (an early "
+            "``secretstore.yaml`` ships as ``secretstore.yaml.example`` later), "
+            "so a copy of named files fails against the SDK the app locks. "
+            "Inline suppression: "
             "``# conformance: ignore[D009] <reason>`` on the line above the "
             "offending entry."
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d009"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -535,8 +579,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "automated upgrade crossing the 3.22 line.  That is fixed at the\n"
             "root: from 3.28.0 ``[daft]`` aliases ``[sql]`` again, and a version\n"
             "bump alone resolves ``duckdb`` for every such app with no repo-side\n"
-            "change.  If this rule fires on an app pinned to ``[daft]``, upgrade\n"
-            "the SDK rather than editing the app's extras.\n"
+            "change.  If this rule fires on a live import in an app pinned to\n"
+            "``[daft]``, upgrade the SDK rather than editing the app's extras.\n"
             "\n"
             "Resolution order of the check:\n"
             "\n"
@@ -554,7 +598,30 @@ RULES: tuple[RuleDefinition, ...] = (
             "  specifically.  Dependency groups and optional-dependency arrays do\n"
             "  not count: they are not installed by default.\n"
             "\n"
-            "**Remediation:** change the SDK reference to\n"
+            "**Remediation:** first confirm the import site the finding names is\n"
+            "live — that a production code path imports that module.  The check\n"
+            "matches the import anywhere in the source and does not test\n"
+            "reachability, so it also fires on dead code: a superseded\n"
+            "transformer module nothing imports any more, or frozen reference\n"
+            "code kept during a port.  Adding ``[sql]`` there ships an unused\n"
+            "``duckdb`` to production for no runtime benefit.\n"
+            "\n"
+            "*Dead code* (nothing imports the module): delete it.  The finding\n"
+            "clears because its cause is gone, with no dependency change.\n"
+            "\n"
+            "*Code the repo keeps on purpose* (e.g. reference code for an\n"
+            "in-progress port): suppress D010 with a trailing\n"
+            "``# conformance: ignore[D010] <reason>`` on the finding's anchor line\n"
+            "in ``pyproject.toml``: the SDK dependency line in\n"
+            "``[project] dependencies``, or line 1 of the file when no SDK\n"
+            "dependency is declared there (the finding names the line).  Only\n"
+            "that file's suppressions are read, so a directive on the Python\n"
+            "import line has no effect.  Name the dead import path in the reason,\n"
+            "and remove the suppression when that code is deleted.  This applies\n"
+            "on a ``[daft]`` pin too: the SDK bump below is for live imports only,\n"
+            "and would ship an unused ``duckdb`` here.\n"
+            "\n"
+            "*A live import*: change the SDK reference to\n"
             "``atlan-application-sdk[sql]`` (or ``[incremental]`` for the\n"
             "incremental analytics stack) in ``[project.dependencies]`` and relock\n"
             "(``uv lock``).  That is the fix.\n"
@@ -574,11 +641,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "``uv.lock`` the check walks what the app's own extras actually resolve,\n"
             "so once the SDK bump to >= 3.28.0 is locked (where ``[daft]`` aliases\n"
             "``[sql]``) ``duckdb`` is reachable and the finding clears with no\n"
-            "app-side edit.  Bump the SDK; do not reach for a suppression.\n"
+            "app-side edit.  For a live import, bump the SDK; do not reach for a\n"
+            "suppression.  Retained code that nothing imports is the exception:\n"
+            "suppress it as above, since the bump would activate ``[sql]`` and\n"
+            "ship an unused ``duckdb``.\n"
         ),
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d010"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -700,6 +774,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d011"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D012",
@@ -778,6 +856,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d012"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D013",
@@ -851,6 +933,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d013"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
     RuleDefinition(
@@ -952,6 +1038,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d014"
         ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
+        ),
     ),
     RuleDefinition(
         id="D015",
@@ -1051,6 +1141,10 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/dependency.md#d015"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/dependency.prose.md",
         ),
     ),
 )

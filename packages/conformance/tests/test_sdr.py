@@ -1210,6 +1210,36 @@ def test_p039_fires_on_closed_bare_input_contract(tmp_path: Path) -> None:
     assert p039[0].file == "app/generated/_input.py"
 
 
+@pytest.mark.parametrize(
+    ("name", "fires"),
+    [
+        ("CrawlerAppInputContract", True),
+        ("QueryMinerAppInputContract", True),
+        ("CrawlerInputContract", False),
+        ("appInputContract", False),
+    ],
+)
+def test_p039_matches_per_entrypoint_bundle_class_names(
+    tmp_path: Path, name: str, fires: bool
+) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/crawler/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/crawler/_input.py": _INPUT_BARE_CLOSED.replace(
+                "class AppInputContract(", f"class {name}("
+            )
+            + f"\n\nAppInputContract = {name}\n",
+        },
+    )
+    p039 = [f for f in _run(tmp_path) if f.rule_id == "P039"]
+    assert len(p039) == (1 if fires else 0)
+    if fires:
+        assert p039[0].file == "app/generated/crawler/_input.py"
+        assert f"'{name}'" in p039[0].message
+
+
 def test_p039_silent_when_contract_allows_unbounded(tmp_path: Path) -> None:
     _write(
         tmp_path,
@@ -2006,3 +2036,51 @@ def test_p051_silent_on_unparseable_lock(tmp_path: Path) -> None:
         {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": "this is : not valid = toml ["},
     )
     assert not any(f.rule_id == "P051" for f in _run(tmp_path))
+
+
+def test_p030_absence_message_names_working_bridge_shapes(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    (p030,) = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert "storage.transfer.upload" in p030.message
+    assert "inherited upload_to_atlan" in p030.message
+    assert "baseline" in p030.message
+    assert "storage_path" in p030.message
+
+
+def test_p030_full_description_gives_the_conversion_recipe() -> None:
+    rule = get_rule("P030")
+    for needle in (
+        "storage.transfer.upload",
+        "inherited",
+        "storage_path",
+        "from the entrypoint",
+        "baseline",
+    ):
+        assert needle in rule.full_description, needle
+
+
+def test_p030_remediation_prose_covers_working_bridges() -> None:
+    import conformance
+
+    prose = (
+        Path(conformance.__file__).parent
+        / "programs"
+        / "areas"
+        / "prescriptions.prose.md"
+    ).read_text(encoding="utf-8")
+    section = prose[
+        prose.index("- **P030 SdrUploadNotCalled**") : prose.index("- **P042 ")
+    ]
+    for needle in (
+        "storage.transfer.upload",
+        "storage_path",
+        "baseline",
+        "resolvable/",
+    ):
+        assert needle in section, needle

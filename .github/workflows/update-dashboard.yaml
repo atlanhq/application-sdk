@@ -1,22 +1,15 @@
-# Update Security Dashboard — reusable workflow.
+# Update Security Dashboard — reusable workflow. RETIRED, kept for transition.
 #
-# Triggered after a vulnerability scan completes. Downloads scan results,
-# generates per-repo dashboard data, and deploys to Kryptonite (k.atlan.dev).
+# Superseded by update-fleet-dashboards.yaml (FND-3337), which pulls all three
+# dashboards below for the whole fleet on a schedule. Bootstrap no longer
+# installs the per-repo `update-dashboard.yml` shim that calls this, and
+# `bootstrap --resync` deletes existing copies (RETIRED_FILES). This file stays
+# only so a repo that has not resynced yet keeps working rather than failing
+# at startup. Delete it once no fleet repo still carries the shim. Do not add
+# callers.
 #
-# Usage in each app repo:
-#   on:
-#     workflow_run:
-#       workflows: ["Vulnerability Scan"]
-#       types: [completed]
-#     workflow_dispatch:
-#   permissions:
-#     id-token: write
-#     actions: read
-#     contents: read
-#   jobs:
-#     dashboard:
-#       uses: atlanhq/application-sdk/.github/workflows/update-dashboard.yaml@main
-#       secrets: inherit
+# While both run, they write the same S3 keys. That is harmless: the docs have
+# the same shape, and both history paths keep one line per date.
 #
 name: Update Security Dashboard
 
@@ -58,7 +51,7 @@ jobs:
       github.event_name == 'workflow_dispatch'
       || (github.event.workflow_run.head_branch == github.event.repository.default_branch
           && github.event.workflow_run.name != 'Conformance')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     steps:
       - name: Checkout repo
@@ -387,7 +380,7 @@ jobs:
   conformance:
     name: Update Conformance Dashboard
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     # Serialize concurrent runs so the history-file download→merge→upload
     # sequence is never racing against itself. cancel-in-progress: false
@@ -619,7 +612,7 @@ jobs:
     name: Update Test-Readiness Dashboard
     # Runs for all triggers on the default branch (same gate as conformance).
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.head_branch == github.event.repository.default_branch
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     # Serialize so the history download→merge→upload sequence never races itself.
     concurrency:
