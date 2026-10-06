@@ -6,6 +6,13 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.29.0] - 2026-10-05
+
+### Features
+
+- declare an app's warmup on the SageV2 widget (#4162) ([9d4301b](https://github.com/atlanhq/application-sdk/commit/9d4301b))
+- FND-3140 unique entrypoint contract class names and conformance K027 (#4102) ([1eb754a](https://github.com/atlanhq/application-sdk/commit/1eb754a))
+
 ## [0.28.0] - 2026-10-02
 
 ### Features
