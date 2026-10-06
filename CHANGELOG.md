@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.42.1 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.0...v3.42.1
+
+### Bug Fixes
+
+- skip duplicate and never-created connection QNs in teardown (FND-3405) (#4197) (by @cmgrote in [1c4c0d4](https://github.com/atlanhq/application-sdk/commit/1c4c0d4))
+- run the orphan pass over the whole upload_refs declaration (FND-3414) (#4198) (by @cmgrote in [5901772](https://github.com/atlanhq/application-sdk/commit/5901772))
+
+
 ## v3.42.0 (October 06, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.41.0...v3.42.0
