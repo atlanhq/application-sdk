@@ -285,7 +285,7 @@ and bypasses that seam (BLDX-1417).
   application_sdk.app import App, entrypoint, task`, and the string temporalio appears
   nowhere under that repo's app/ or tests/. Everything a workflow needs, including
   `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -320,7 +320,7 @@ longer evolve the seam safely (BLDX-1417).
   `application_sdk.observability.logger_adaptor`. None reaches an underscore-prefixed
   path such as application_sdk.execution._temporal, which the SDK may move without a
   deprecation cycle.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
 under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
@@ -853,7 +853,7 @@ consistent, SDK-controlled way (BLDX-1411).
   temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
   is constructed anywhere under app/. The launcher is what wires interceptors, the
   activity registry and the task queue together.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -896,7 +896,7 @@ safely (BLDX-1411).
 - **Compliant example:** atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same
   `run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none of the
   SDK's platform endpoints (/workflows/v1/auth, /check, /metadata).
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
 `uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
@@ -1024,7 +1024,7 @@ whose result is durably recorded in workflow history.
   the object-store download live inside those tasks. The comment above the download call
   states the rule in the app's own words: cloud I/O must run in an activity, not
   workflow code.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 - **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
   self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
   this finding for P008 findings: those helpers are framework tasks and must be called

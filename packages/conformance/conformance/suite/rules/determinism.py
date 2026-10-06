@@ -164,8 +164,8 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri=f"{_HELP_BASE}#p021",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
-            target="programs/areas/prescriptions.prose.md",
+            kind=RemediationKind.SKILL,
+            target="migrate-orchestration",
         ),
     ),
     RuleDefinition(
