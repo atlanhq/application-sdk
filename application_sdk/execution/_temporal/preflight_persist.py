@@ -86,9 +86,14 @@ _PREFLIGHT_KEY = "preflight"
 _VERDICT_WIRE_FIELDS = frozenset({"status", "total_duration_ms"})
 
 #: Per-check fields that may cross: which check, whether it passed, how long it
-#: took. ``name`` is the app's own identifier for the check ("connectivity"), not
-#: a description of what went wrong.
-_CHECK_WIRE_FIELDS = frozenset({"name", "passed", "duration_ms"})
+#: took, and its cost tier. ``name`` is the app's own identifier for the check
+#: ("connectivity"), not a description of what went wrong. ``tier`` is a closed
+#: enum (``preflight`` / ``warmup``) and is on the wire only for a ``warmup``
+#: check (:meth:`PreflightCheck.to_wire`), so an untiered app's payload is unchanged; it is what tells the two rows a
+#: warmup app's run writes — one per tier dispatch — apart. The warmup phase's
+#: own outcome and timing stay on the log row: they describe the gate's wait,
+#: not the verdict this store relays.
+_CHECK_WIRE_FIELDS = frozenset({"name", "passed", "duration_ms", "tier"})
 
 #: Typed-failure fields that may cross: the routing fields the store derives its
 #: columns from. ``code`` is app-owned but a code, not a sentence.

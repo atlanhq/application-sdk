@@ -179,6 +179,119 @@ def test_alias_mapping_without_getattr_serves_nothing():
     }
 
 
+def test_a_reexport_inside_a_top_level_with_block_is_surface():
+    """`preflight_gate` re-exports through `imports_passed_through()`.
+
+    A `with` block opens no scope, so the name is as importable as one bound
+    beside it. Moving the definition elsewhere and re-exporting it from inside
+    the block must not read as a removal.
+    """
+    base = snap("EMPTY_CHECK_MATRIX = '[]'")
+    head = snap(
+        "with workflow.unsafe.imports_passed_through():\n"
+        "    from application_sdk.handler._outcome import (\n"
+        "        EMPTY_CHECK_MATRIX as EMPTY_CHECK_MATRIX,\n"
+        "    )\n"
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_dropping_a_reexport_from_a_with_block_is_a_removal():
+    """The other direction: the block is read on the base side too."""
+    base = snap(
+        "with workflow.unsafe.imports_passed_through():\n"
+        "    from application_sdk.errors.leaves import PreconditionError\n"
+    )
+    head = snap("")
+    assert blocking(mod.compare(base, head)) == {
+        "application_sdk.thing:PreconditionError"
+    }
+
+
+def test_type_checking_binding_alone_is_not_surface():
+    """`if TYPE_CHECKING:` binds nothing at runtime, so it serves nothing."""
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "__all__ = ['create_service']\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
+
+
+def test_pep562_lazy_reexport_is_surface():
+    """`handler/__init__` serves the HTTP service names lazily (FND-3280).
+
+    The `TYPE_CHECKING` import, a module `__getattr__` and an `__all__` entry
+    together declare an importable name, so it is still present.
+    """
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'create_service'})\n"
+        "def __getattr__(name):\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        from application_sdk.thing import service\n"
+        "        return getattr(service, name)\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = ['create_service']\n"
+    )
+    assert mod.compare(base, head) == []
+
+
+def test_a_getter_that_never_names_the_export_is_a_removal():
+    """Declared in `__all__` and `TYPE_CHECKING`, but the getter dropped it.
+
+    `from ... import create_service` fails at runtime, so the name is gone even
+    though the type-only import and the `__all__` entry survived.
+    """
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "_SERVICE_NAMES = frozenset({'run_service'})\n"
+        "def __getattr__(name):\n"
+        "    if name in _SERVICE_NAMES:\n"
+        "        return object()\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = ['create_service', 'run_service']\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
+
+
+def test_a_getter_that_names_the_export_only_to_reject_it_is_a_removal():
+    """A literal in the getter body is not evidence it serves the name.
+
+    `raise AttributeError("create_service was removed")` mentions the name and
+    serves nothing. Only an allowlist the getter reads counts.
+    """
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "def __getattr__(name):\n"
+        "    if name == 'create_service':\n"
+        "        raise AttributeError('create_service was removed')\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = ['create_service']\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
+
+
+def test_lazy_name_missing_from_all_is_still_a_removal():
+    """Without the `__all__` declaration the gate cannot tell it is served."""
+    base = snap("from application_sdk.thing.service import create_service")
+    head = snap(
+        "if TYPE_CHECKING:\n"
+        "    from application_sdk.thing.service import create_service\n"
+        "def __getattr__(name):\n"
+        "    raise AttributeError(name)\n"
+        "__all__ = []\n"
+    )
+    assert blocking(mod.compare(base, head)) == {"application_sdk.thing:create_service"}
+
+
 def test_deleting_what_the_base_already_deprecated_is_clean():
     """The deletion the deprecation cycle bought.
 

@@ -318,6 +318,11 @@ of names.
 
 The `SageV2` widget must always be the **last** property in the final step.
 
+If your handler overrides `Handler.warmup`, set `warmup = true` on the
+`SageV2` widget so the setup UI runs the warmup flow before the warmup-tier
+checks. Leave it unset otherwise; the flag must match the handler. See
+[SageV2 warmup](https://github.com/atlanhq/application-sdk/blob/main/contract-toolkit/docs/reference.md#sagev2-warmup).
+
 ## Bumping the Toolkit Version
 
 When a new toolkit version ships:

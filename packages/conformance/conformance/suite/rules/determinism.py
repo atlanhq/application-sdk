@@ -525,10 +525,10 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P054",
         canonical_reference=(
-            "application_sdk/clients/sql.py — `BaseSQLClient.run_query` keeps a dedicated "
-            "`max_workers=1` executor out of a `with` block and calls "
-            "`executor.shutdown(wait=False)` in `finally`, so cancelling the awaiting task "
-            "never joins a blocked driver call on the event loop."
+            "application_sdk/clients/sql.py — `BaseSQLClient.run_query` and "
+            "`_execute_async_read_operation` offload every driver call with "
+            "`run_in_thread` instead of a `with`-scoped executor, so cancelling the "
+            "awaiting task never joins a blocked driver call on the event loop."
         ),
         scope=RuleScope.BOTH,
         name="ScopedExecutorJoinedOnCancel",
@@ -562,13 +562,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "blocks until the driver call returns — freezing the whole worker, not just\n"
             "the cancelled task.\n"
             "\n"
-            "Fix (a): if the call has no thread affinity, use ``run_in_thread(fn, ...)``,\n"
-            "which dispatches onto the SDK's dedicated pool and does not join on cancel.\n"
-            "Fix (b): when the calls are thread-affine (DB-API cursors break when\n"
-            "``execute`` and ``fetchmany`` run on different threads), keep a dedicated\n"
-            "executor created **without** ``with`` and call\n"
-            "``executor.shutdown(wait=False)`` in ``finally`` — the canonical shape in\n"
-            "``application_sdk/clients/sql.py`` ``BaseSQLClient.run_query``.\n"
+            "Fix (a): use ``run_in_thread(fn, ...)``, which dispatches onto the SDK's\n"
+            "dedicated pool and does not join on cancel — the shape\n"
+            "``application_sdk/clients/sql.py`` ``BaseSQLClient.run_query`` uses.\n"
+            "Fix (b): when the calls must stay on one thread (some DB-API cursors break\n"
+            "when ``execute`` and ``fetchmany`` run on different threads), keep a\n"
+            "dedicated executor created **without** ``with`` and call\n"
+            "``executor.shutdown(wait=False)`` in ``finally``.\n"
             "\n"
             "``run_in_executor(None, ...)`` is P031, not this rule; a ``with``-scoped\n"
             "executor that only calls ``pool.submit(...)`` is out of scope.  Land as\n"

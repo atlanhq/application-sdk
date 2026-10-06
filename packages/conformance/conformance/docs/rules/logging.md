@@ -168,6 +168,12 @@ data — so the incident stays open for days instead of being read off the trace
   rule inspects warning and error calls only; `_authentication_check` logs at DEBUG
   through sanitize_cause_repr() with no exc_info, a deliberate no-traceback boundary.
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** ruff BLE001 and the sanitized form: BLE001 accepts a broad except only when the handler
+  logs with exc_info or re-raises, so the sanitized no-exc_info log this rule prescribes
+  at a credential catch trips it. Narrow the except to what the try raises (E004). A
+  catch that genuinely must stay broad is left as it is and reported for a person to
+  decide: never suppress BLE001, and never add exc_info=True to satisfy it, which would
+  leak the credentials this exemption protects.
 
 Logging an exception without `exc_info=True` produces a message with no stack trace —
 the root cause is invisible.  Add `exc_info=True` to all `logger.warning()` /
@@ -184,6 +190,15 @@ sanitizer and can leak credentials (JDBC URLs, Authorization headers, OAuth bodi
 `exc_info=True` can print a connection string or password held in the exception: log the
 sanitized traceback instead, as the reference apps do — `logger.error("... failed: %s",
 safe_traceback(e))`, with `sanitize_cause_repr(e)` for the message.
+
+* The sanitized form carries no `exc_info`, so ruff BLE001 (in ruff's default rule set)
+flags it when the catch is a broad `except Exception`. Narrow the catch to what the
+`try` actually raises, as E004 prescribes, and the sanitized log stands as it is. Where
+the catch genuinely must stay broad, leave the site as it is and report it for a person
+to decide; do not suppress BLE001. Never add `exc_info=True` here to quiet BLE001, and
+never re-raise `from e` for the same reason: the chained cause carries the raw exception
+to whichever log prints it next. An app that selects `TRY` or `ALL` also gets TRY400 on
+the sanitized call, narrowed or not: report that site the same way.
 
 * Everywhere else, `exc_info=True` on the existing log call is the fix.
 
@@ -542,6 +557,10 @@ instead.
   level is chosen for the site and exc_info is explicit; logger.exception() would have
   pinned it to ERROR regardless.
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
+- **Interacts with:** ruff G201 is this rule's inverse: it rewrites logger.error(..., exc_info=True) to
+  logger.exception(...). L021 requires every app's ruff config to ignore G201, so the
+  replacement this rule prescribes lints clean. logger.warning(..., exc_info=True)
+  satisfies G201 and this rule either way.
 
 `logger.exception()` is not a sanctioned logging method in this project. ADR-0011
 restricts app logging to four levels (DEBUG/INFO/WARNING/ERROR) and `exc_info=True` is
@@ -549,6 +568,11 @@ the canonical way to attach a traceback.  Beyond that, `logger.exception()` read
 `sys.exc_info()` implicitly — capturing nothing (or a stale exception) when called
 outside an active except block. Replace every call site with `logger.error(...,
 exc_info=True)`.
+
+ruff G201 flags that replacement and asks for `logger.exception()` back; it is in ruff's
+default rule set, so it is on in any config that only extends the defaults.  The policy
+wins: L021 requires the app's ruff config to turn it off with `extend-ignore =
+["G201"]`.
 
 Checker note: the `AtlanLoggerAdapter`'s own `exception()` shim is exempt — it exists
 only to satisfy third-party Temporal callers and immediately delegates to
@@ -633,7 +657,7 @@ will be removed in a future Python version. Rename every call site to
 
 **Tier:** `warn` · **Scope:** `both` · **Category:** `log-config` · **Autofixable:** yes · **Since:** 0.4.0
 
-> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009)
+> pyproject.toml ruff config is missing logging lint rules (G001, G003, G004, T201, LOG009) or does not ignore G201
 
 **Rationale:** The conformance suite catches logging anti-patterns at review time; ruff catches the
 same issues at edit time and in pre-commit. The two are complementary — ruff gives
@@ -642,20 +666,24 @@ rules enabled, engineers get no in-editor signal for L001/L005/L011/L020 equival
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app pyproject.toml — `extend-select = ["G001", "G003", "G004", "T201",
-  "LOG009"]`, which is the exact set this rule looks for. atlan-metabase-app spells the
-  same list one rule per line, with a comment on why G002 is deliberately absent.
+- **Compliant example:** atlan-metabase-app pyproject.toml — `select` lists G001, G003, G004, T201 and LOG009 one
+  per line, with a comment on why G002 is deliberately absent; with `extend-ignore =
+  ["G201"]` added, as every app needs, it is the shape this rule asks for. A config that
+  keeps the defaults and only adds `extend-select = ["G001", "G003", "G004", "T201",
+  "LOG009"]` needs the same ignore.
 - **Fix by:** [`programs/areas/logging.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/logging.prose.md)
-- **Interacts with:** L001 and L011 box in the order of this fix. G004 and G003 are the ruff twins of those
-  rules, so enabling them while L001/L011 findings are still open makes the repo's
-  pre-commit ruff hook fail on every open call site, and the L021 change goes red on its
-  own. Land L021 with or after the L001/L011 fixes, and run `ruff check --select
-  G003,G004` first. L020 (`logger.warn()`) is ruff G010, which L021 does not require, so
-  it does not belong in this pre-scan. T201 overlaps L005 but is broader: it also flags
-  intentional print() in tests/ and in .github/**/*.py CLI scripts, which a
-  per-file-ignores entry scopes out (atlan-mysql-app pyproject.toml); the checker does
-  not read per-file-ignores, so that entry still satisfies L021. Found in a consumer app
-  during an auto-fixable remediation run (FND-2493).
+- **Interacts with:** L017 is why G201 must be ignored: G201 demands logger.exception(...) over
+  logger.error(..., exc_info=True), the exact inverse of L017. L001 and L011 box in the
+  order of this fix. G004 and G003 are the ruff twins of those rules, so enabling them
+  while L001/L011 findings are still open makes the repo's pre-commit ruff hook fail on
+  every open call site, and the L021 change goes red on its own. Land L021 with or after
+  the L001/L011 fixes, and run `ruff check --select G003,G004` first. L020
+  (`logger.warn()`) is ruff G010, which L021 does not require, so it does not belong in
+  this pre-scan. T201 overlaps L005 but is broader: it also flags intentional print() in
+  tests/ and in .github/**/*.py CLI scripts, which a per-file-ignores entry scopes out
+  (atlan-mysql-app pyproject.toml); the checker does not read per-file-ignores, so that
+  entry still satisfies L021. Found in a consumer app during an auto-fixable remediation
+  run (FND-2493).
 
 The project's `[tool.ruff.lint]` `select` / `extend-select` must cover the following
 rules (or their category prefixes, or `ALL`):
@@ -669,11 +697,14 @@ A rule is covered if its full ID, any prefix (e.g. `G` covers all `G`-prefixed r
 or `ALL` appears in `select` or `extend-select` and is not in `ignore` /
 `extend-ignore`.
 
-Pin the five rules individually. Selecting the bare `G` category satisfies this check
-but also enables `G201`, which demands `.exception(...)` over `.error(...,
-exc_info=True)` — the exact inverse of conformance L017 (LoggerExceptionUsage). With `G`
-selected, ruff and the conformance suite contradict each other on every except-block log
-call.
+`G201` must be ignored.  It demands `.exception(...)` over `.error(..., exc_info=True)`
+— the exact inverse of conformance L017 (LoggerExceptionUsage) — so with it on, ruff and
+the conformance suite contradict each other on every except-block log call.  ruff's
+default rule set includes `G201` from 0.16, so a config with no `select` key has it on,
+as does any `select` reaching it through `G`, `G2` or `ALL`; a `select` that leaves it
+out today turns it on the day someone adds `G`.  So every app ignores it explicitly: add
+`extend-ignore = ["G201"]` (an ignore of `G201` or a prefix of it in `ignore` /
+`extend-ignore` counts).
 
 Self-check exemption: `pyproject.toml` files whose `[project].name` starts with
 `atlan-application-sdk` are skipped (the SDK's own tooling config is managed

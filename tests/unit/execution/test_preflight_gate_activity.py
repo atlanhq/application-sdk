@@ -312,12 +312,12 @@ class TestPreflightGateActivity:
     async def test_not_ready_prefers_aggregate_output_error(self) -> None:
         # A non-fatal row sits ahead of the real cause in ``checks``. The handler
         # pinned the real cause on ``result.error``, so the block's primary detail
-        # must come from there — not the first failed check with an error.
-        from application_sdk.errors.leaves import SourceUnavailableError
-
+        # must come from there — not the first failed check with an error. Both
+        # categories block a hard gate, so the block alone cannot tell them apart;
+        # the category on details[0] does.
         out = PreflightOutput(
             status=PreflightStatus.NOT_READY,
-            error=SourceUnavailableError(
+            error=AppPermissionDeniedError(
                 message="Configured object store is not accessible.",
                 suggested_action="Grant read and write access.",
             ),
@@ -330,7 +330,7 @@ class TestPreflightGateActivity:
                 PreflightCheck(
                     name="objstore",
                     passed=False,
-                    error=SourceUnavailableError(
+                    error=AppPermissionDeniedError(
                         message="Configured object store is not accessible."
                     ),
                 ),
@@ -339,8 +339,8 @@ class TestPreflightGateActivity:
         with pytest.raises(ApplicationError) as excinfo:
             await _verdict_gate(out)(PreflightGateInput())
         details = excinfo.value.details[0]
-        # From result.error (SOURCE_UNAVAILABLE), not the first check's AuthError.
-        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        # From result.error (PERMISSION), not the first check's AuthError.
+        assert details.category is FailureCategory.PERMISSION
         assert details.suggested_action == "Grant read and write access."
         assert "Configured object store is not accessible." in excinfo.value.message
 
@@ -2029,21 +2029,29 @@ class TestPreflightGateStorageChecks:
         assert result.status is PreflightStatus.READY
         checker.assert_not_awaited()
 
-    async def test_relocation_blocks_hard_gate_with_typed_code(self) -> None:
-        """A failed probe downgrades READY and blocks in hard mode, platform-attributed."""
+    async def test_relocation_is_reported_not_blocked_in_hard_gate_with_typed_code(
+        self,
+    ) -> None:
+        """A failed probe downgrades READY, platform-attributed, and a hard gate
+        reports it without blocking: a relocation is DEPENDENCY_UNAVAILABLE, which
+        a retry resolves and the customer cannot (FND-3040)."""
         gate = build_preflight_gate_activity(
             _StubHandler(),
             app_name="myapp",
             mode=PreflightGateMode.HARD,
             verify_storage=True,
         )
-        with self._storage_patches([self._reloc_result()]):
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        assert excinfo.value.type == "PreflightFailed"
-        details = excinfo.value.details[0]
-        assert details.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
-        assert details.audience is Audience.PLATFORM
+        with self._storage_patches([self._reloc_result()]), mock.patch(_LOGGER) as ml:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        failed = next(c for c in result.checks if not c.passed)
+        assert failed.error is not None
+        assert failed.error.code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
+        assert failed.error.audience is Audience.PLATFORM
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "would_block"
+        assert ev[GATE_MODE_KEY] == "hard"
+        assert ev["reason"] == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     async def test_relocation_soft_gate_reports_not_ready(self) -> None:
         """Soft mode: verdict honestly NOT_READY, run proceeds (no raise)."""
@@ -2154,10 +2162,10 @@ class TestPreflightGateStorageChecks:
         assert failed.error.audience is Audience.USER
 
     async def test_storage_failure_on_non_final_attempt_retries(self) -> None:
-        """A failed probe defers to the gate's retry policy before blocking.
+        """A failed probe defers to the gate's retry policy before a verdict.
 
-        One flaky probe must not abort a hard-mode run on the first attempt —
-        the block is only a verdict once the app's declared attempts are
+        One flaky probe must not settle a hard-mode run on the first attempt —
+        the failure is only a verdict once the app's declared attempts are
         exhausted (mirrors the handler no-verdict path).
         """
         from datetime import timedelta
@@ -2185,8 +2193,12 @@ class TestPreflightGateStorageChecks:
         assert excinfo.value.type == PREFLIGHT_NO_VERDICT_ERROR_TYPE
         assert excinfo.value.non_retryable is False
 
-    async def test_storage_failure_on_final_attempt_blocks(self) -> None:
-        """Retries exhausted → the storage failure becomes the blocking verdict."""
+    async def test_storage_failure_on_final_attempt_is_reported_not_blocked(
+        self,
+    ) -> None:
+        """Retries exhausted → the storage failure becomes the verdict, which a
+        hard gate reports as ``would_block``: DEPENDENCY_UNAVAILABLE never blocks
+        (FND-3040)."""
         from datetime import timedelta
 
         gate = build_preflight_gate_activity(
@@ -2202,13 +2214,13 @@ class TestPreflightGateStorageChecks:
         with (
             self._storage_patches([self._reloc_result()]),
             mock.patch(f"{_GATE}.activity.info", return_value=info),
+            mock.patch(_LOGGER) as ml,
         ):
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        assert excinfo.value.type == "PreflightFailed"
-        assert (
-            excinfo.value.details[0].code == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
-        )
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        ev = _outcome_event(ml)
+        assert ev["outcome"] == "would_block"
+        assert ev["reason"] == "DEPENDENCY_UNAVAILABLE_STORAGE_RELOCATION"
 
     def test_every_classifier_bucket_maps_to_a_typed_leaf(self) -> None:
         """The gate mapper covers every bucket the storage classifier can emit.
@@ -2991,9 +3003,11 @@ class TestOutcomeRowNamesTheFailure:
             await _verdict_gate(out)(PreflightGateInput())
         assert FAILURE_SUGGESTED_ACTION_KEY not in _outcome_event(ml)
 
-    async def test_a_crashing_handler_puts_its_message_on_the_block_row(self) -> None:
+    async def test_a_crashing_handler_puts_its_message_on_the_row(self) -> None:
         # The source_unverifiable path, through the activity itself rather than
-        # the row builder: a handler that raised instead of answering.
+        # the row builder: a handler that raised instead of answering. An untyped
+        # crash is INTERNAL, which a hard gate reports rather than blocks on
+        # (FND-3040), so the message rides the would_block row.
         class _Crashing(DefaultHandler):
             async def preflight_check(self, input: PreflightInput) -> PreflightOutput:
                 raise RuntimeError("driver blew up: connection reset by peer")
@@ -3001,10 +3015,11 @@ class TestOutcomeRowNamesTheFailure:
         gate = build_preflight_gate_activity(
             _Crashing(), app_name="myapp", mode=PreflightGateMode.HARD, attempts=1
         )
-        with mock.patch(_LOGGER) as ml, pytest.raises(ApplicationError):
-            await gate(PreflightGateInput())
+        with mock.patch(_LOGGER) as ml:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
         ev = _outcome_event(ml)
-        assert ev["outcome"] == "blocked"
+        assert ev["outcome"] == "would_block"
         assert "driver blew up" in ev[FAILURE_MESSAGE_KEY]
         assert ev[FAILURE_CHECK_KEY] == UNVERIFIABLE_CHECK_NAME
 

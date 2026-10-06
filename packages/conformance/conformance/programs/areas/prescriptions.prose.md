@@ -802,13 +802,13 @@ the blind gate cannot tell a correct hop from a plausible one.
   `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
   `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
   blocking driver call freezes the whole worker, not just the cancelled task
-  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` when the
-  call has no thread affinity (the SDK seam, and it does not join on cancel); or,
-  when the calls are thread-affine (DB-API cursors break when `execute` and
-  `fetchmany` run on different threads), a dedicated executor created **without**
-  `with` and `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
-  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — the canonical
-  `max_workers=1` / `shutdown(wait=False)` shape — and the offending call site.
+  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
+  seam, and it does not join on cancel); or, when the calls must stay on one
+  thread (some DB-API cursors break when `execute` and `fetchmany` run on
+  different threads), a dedicated executor created **without** `with` and
+  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
+  goes through `run_in_thread` — and the offending call site.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on

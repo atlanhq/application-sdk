@@ -2745,10 +2745,10 @@ thread affinity.
 
 ### What correct looks like
 
-- **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` keeps a dedicated
-  `max_workers=1` executor out of a `with` block and calls
-  `executor.shutdown(wait=False)` in `finally`, so cancelling the awaiting task never
-  joins a blocked driver call on the event loop.
+- **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
+  `_execute_async_read_operation` offload every driver call with `run_in_thread` instead
+  of a `with`-scoped executor, so cancelling the awaiting task never joins a blocked
+  driver call on the event loop.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `async def`, a `with` statement constructs a `ThreadPoolExecutor` bound to a
@@ -2759,12 +2759,12 @@ A task cancelled inside that `with` block leaves through `pool.shutdown(wait=Tru
 which runs on the event loop thread and blocks until the driver call returns — freezing
 the whole worker, not just the cancelled task.
 
-Fix (a): if the call has no thread affinity, use `run_in_thread(fn, ...)`, which
-dispatches onto the SDK's dedicated pool and does not join on cancel. Fix (b): when the
-calls are thread-affine (DB-API cursors break when `execute` and `fetchmany` run on
-different threads), keep a dedicated executor created **without** `with` and call
-`executor.shutdown(wait=False)` in `finally` — the canonical shape in
-`application_sdk/clients/sql.py` `BaseSQLClient.run_query`.
+Fix (a): use `run_in_thread(fn, ...)`, which dispatches onto the SDK's dedicated pool
+and does not join on cancel — the shape `application_sdk/clients/sql.py`
+`BaseSQLClient.run_query` uses. Fix (b): when the calls must stay on one thread (some
+DB-API cursors break when `execute` and `fetchmany` run on different threads), keep a
+dedicated executor created **without** `with` and call `executor.shutdown(wait=False)`
+in `finally`.
 
 `run_in_executor(None, ...)` is P031, not this rule; a `with`-scoped executor that only
 calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception

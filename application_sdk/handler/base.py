@@ -26,6 +26,9 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
 )
 
 if TYPE_CHECKING:
@@ -122,7 +125,8 @@ class Handler(ABC):
 
             raise AppContextError(
                 "Handler context is not set. "
-                "Access self.context only inside test_auth, preflight_check, or fetch_metadata."
+                "Access self.context only inside a handler method "
+                "(test_auth, preflight_check, fetch_metadata, warmup)."
             )
         return ctx
 
@@ -194,6 +198,37 @@ class Handler(ABC):
             HandlerError: On fetch errors that should surface as HTTP 500.
         """
         ...
+
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        """Probe the source's compute, pushing its warmup forward.
+
+        Optional. The default reports ``READY``, so an app that does not
+        override it passes on the first probe and behaves exactly as it did
+        before warmup existed.
+
+        Idempotent and stateless: each call both pushes the warmup forward and
+        reports where it is, and the SDK holds no warmup state between calls.
+        The gate calls it once per poll on durable timers, and
+        ``POST /workflows/v1/warmup`` once per request. A query-probe app
+        submits its probe query (which wakes a suspended warehouse), waits up to
+        ``input.probe_timeout_seconds``, and reports ``READY`` if it answered,
+        ``WARMING`` / ``QUEUED`` if not. Whether to cancel a probe still pending
+        at the timeout is the app's call; each poll submits again, so the
+        default guidance is to cancel.
+
+        Raise a typed AUTH / PERMISSION / NOT_FOUND ``AppError`` for a failure
+        no amount of waiting fixes; return ``UNAVAILABLE`` for a source that
+        will not get ready on its own. Never use privileges beyond what the
+        app's checks already verify.
+
+        Args:
+            input: Credentials and connection config, as sent to ``/check``,
+                plus the probe timeout.
+
+        Returns:
+            What this probe saw.
+        """
+        return WarmupObservation(state=WarmupState.READY)
 
 
 class DefaultHandler(Handler):

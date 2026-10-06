@@ -55,6 +55,16 @@ permissions:
   contents: read
   pull-requests: read
 
+# A new commit retires the previous commit's run; see conformance.yaml for why
+# the group is run-unique off the PR path and why only `synchronize` cancels.
+# A `pull_request_review` run is on the head SHA, so it takes a run-unique
+# group: in the PR's group, two reviews arriving behind an in-flight run would
+# evict the pending one and leave a `cancelled` check on the head. It still has
+# the last word, since the required check reads the newest run on the SHA.
+concurrency:
+  group: connector-review-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+
 jobs:
   connector-review:
     name: Connector Review

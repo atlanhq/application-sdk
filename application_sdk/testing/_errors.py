@@ -33,3 +33,11 @@ class CursorPageLimitError(InvalidInputError):
     """``cursor_page`` was configured with a non-positive page limit."""
 
     code: ClassVar[str] = "INVALID_INPUT_CURSOR_PAGE_LIMIT"
+
+
+@dataclass(kw_only=True)
+class WarmingScriptEmptyError(InvalidInputError):
+    """A ``WarmingSource`` was given a script with no states."""
+
+    code: ClassVar[str] = "INVALID_INPUT_WARMING_SCRIPT_EMPTY"
+    field: str | None = "script"
