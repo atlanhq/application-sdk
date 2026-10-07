@@ -15,6 +15,10 @@ module com.atlan.app.contract.Widgets
 /// Visual style variants supported by the workflows v2 InfoBanner component.
 typealias InfoBannerType = "info"|"warning"|"error"|"prerequisites"|"side-note"
 
+/// A whole number greater than zero, for count and length limits where zero or
+/// a negative value has no meaning (e.g. `TagsInput.maxTagCount`).
+typealias PositiveInt = Int(this > 0)
+
 /// Escape a string for embedding in a double-quoted JSON literal.
 const local function escapeJsonStr(s: String): String =
   s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n").replaceAll("\r", "\\r").replaceAll("\t", "\\t")
@@ -331,6 +335,19 @@ class Widget {
 
   /// Mode of the widget.
   mode: String?
+
+  /// Strings that split typed or pasted text into separate tags (`TagsInput`).
+  tokenSeparators: List<String(!isEmpty)>?
+
+  /// Whether a select shows a button that clears every value (`TagsInput`).
+  allowClear: Boolean?
+
+  /// How many tags a select shows before it collapses the rest into `+N`
+  /// (`TagsInput`). `"responsive"` fits as many as the width allows.
+  maxTagCount: (PositiveInt|"responsive")?
+
+  /// Longest tag text a select shows before it truncates it (`TagsInput`).
+  maxTagTextLength: PositiveInt?
 
   /// TBC
   start: Int?
@@ -918,11 +935,50 @@ class TagsInput extends UIElement {
   /// submitted as a tag.
   hidden placeholderText: String?
 
+  /// Strings that split typed or pasted text into separate tags, so pasting
+  /// `A, B, C` gives three tags. Renders as `ui.tokenSeparators`; unset (the
+  /// default) emits no key, so existing output does not change.
+  ///
+  /// The frontend does not trim the parts: with `{ "," }` that paste gives
+  /// `A`, ` B`, ` C`. Use `{ ", "; "," }` to split on a comma with or without a
+  /// following space. An empty separator is rejected, as it would split every
+  /// character into its own tag.
+  hidden tokenSeparators: Listing<String(!isEmpty)>?
+
+  /// Set to `false` to disable the field (`ui.disabled = true`).
+  /// Unset (the default) emits no `disabled` key.
+  hidden enabled: Boolean?
+
+  /// Set to `true` to disable the field only in BYOC mode
+  /// (`ui.BYOCdisabled`). Unset (the default) emits no key.
+  hidden byocDisabled: Boolean?
+
+  /// Shows a button that clears every tag; clearing submits `[]`. Renders as
+  /// `ui.allowClear`; unset (the default) emits no key.
+  hidden allowClear: Boolean?
+
+  /// Collapses tags past this count into a `+N` chip so a long list does not
+  /// fill the form. `"responsive"` fits as many tags as the width allows. Display
+  /// only: every tag is still submitted. A number must be at least 1. Renders as
+  /// `ui.maxTagCount`; unset (the default) shows every tag.
+  hidden maxTagCount: (PositiveInt|"responsive")?
+
+  /// Truncates the text of each tag chip past this many characters. Display
+  /// only: the full value is still submitted. Must be at least 1. Renders as
+  /// `ui.maxTagTextLength`; unset (the default) shows the full text.
+  hidden maxTagTextLength: PositiveInt?
+
   fixed ui {
     widget = "select"
     mode = "tags"
     `open` = openByDefault
     placeholder = placeholderText
+    tokenSeparators = outer.tokenSeparators?.toList()
+    disabled = if (enabled != null) !enabled else null
+    BYOCdisabled = byocDisabled
+    allowClear = outer.allowClear
+    maxTagCount = outer.maxTagCount
+    maxTagTextLength = outer.maxTagTextLength
   }
 }
 

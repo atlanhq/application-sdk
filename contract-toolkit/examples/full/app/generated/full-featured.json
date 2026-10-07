@@ -164,6 +164,12 @@
           "placeholder": "OwningTeam",
           "grid": 4,
           "mode": "tags",
+          "tokenSeparators": [
+            ", ",
+            ","
+          ],
+          "allowClear": true,
+          "maxTagCount": "responsive",
           "open": false
         }
       },
