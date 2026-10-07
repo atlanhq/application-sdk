@@ -3423,6 +3423,129 @@ def test_p013_fires_on_alias_over_a_same_named_non_contract_base(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
+_NO_SDK_CONTRACTS_APP = (
+    "from application_sdk.app import App, entrypoint, task\n"
+    "from x import Output\n"
+    "class O(Output):\n"
+    "    pass\n"
+)
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/generated.py": (
+                    "from x import Input\nclass C(Input):\n    a: str = ''\n"
+                ),
+                "app/contracts.py": (
+                    "from .generated import C as _C\n"
+                    "class C(_C):\n"
+                    "    b: str = ''\n"
+                    "Domain = C\n"
+                ),
+            },
+            [],
+            id="relative-import-of-same-named-input",
+        ),
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "gen.py": "from x import Input\nclass C(Input):\n    pass\n",
+                "app/contracts.py": (
+                    "import gen\nclass C(gen.C):\n    pass\nDomain = C\n"
+                ),
+            },
+            [],
+            id="attribute-base-of-same-named-input",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_by_import_provenance(
+    tmp_path: Path,
+    files: dict[str, str],
+    expected: list[str],
+    reverse_order: bool,
+) -> None:
+    """A same-named base resolves through the class in the module it is imported
+    from, never through a same-named class elsewhere."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_unrelated_same_named_input_elsewhere_still_fires(
+    tmp_path: Path,
+) -> None:
+    """A third-party same-named base is not resolved through an in-repo class of
+    that name in another module."""
+    files = {
+        "app/__init__.py": "",
+        "app/contracts.py": (
+            "from thirdparty import C as _C\nclass C(_C):\n    pass\nDomain = C\n"
+        ),
+        "app/other.py": "from x import Input\nclass C(Input):\n    pass\n",
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_p014_same_named_walk_does_not_poison_the_shared_cache(
+    tmp_path: Path, reverse_order: bool
+) -> None:
+    """The walk into the same-named base must not cache a cycle-cut result for a
+    class a later boundary looks up."""
+    files = {
+        "d.py": "from x import Input\nclass A(Input):\n    pass\n",
+        "c.py": "from d import A\nclass X(A):\n    pass\n",
+        "b.py": "from c import X\nclass A(X):\n    pass\n",
+        "mix.py": "from x import Input\nclass Mixin(Input):\n    pass\n",
+        "a.py": (
+            "from b import A as _A\n"
+            "from mix import Mixin\n"
+            "class A(_A, Mixin):\n"
+            "    pass\n"
+        ),
+    }
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from a import A\n"
+            "from c import X\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: A) -> O:\n"
+            "        return O()\n"
+            "    @task\n"
+            "    async def f(self, input: X) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
     """The self-name escape hatch must not leak: an ordinary resolvable class
     that does not reach Input is still a violation."""

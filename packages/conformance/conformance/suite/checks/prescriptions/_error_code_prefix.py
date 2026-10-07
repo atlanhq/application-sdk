@@ -68,6 +68,10 @@ class ClassRecord:
     """Entries of :attr:`bases` that the defining module binds by a ``from …
     import`` of a module outside ``application_sdk``, each mapped to that
     module's top-level package (``None`` for a relative import)."""
+    base_modules: Mapping[str, str] = field(default_factory=dict)
+    """Entries of :attr:`bases` mapped to the dotted module the defining module
+    imports them from (``from m import X``, ``import m`` + ``m.X``), relative
+    imports resolved against the defining file."""
 
 
 # The ONE method that, when overridden, takes the emitted code out of ``code``'s
@@ -281,6 +285,65 @@ def collect_import_aliases(tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
+def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str:
+    if node.level == 0:
+        return node.module or ""
+    package = rel_file.replace("\\", "/").split("/")[:-1]
+    if node.level > 1:
+        package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])])
+
+
+def _import_modules(
+    tree: ast.AST, rel_file: str
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Per-file ``{local: module}`` for imported names and for imported modules."""
+    name_modules: dict[str, str] = {}
+    module_bindings: dict[str, str] = {}
+    if not isinstance(tree, ast.Module):
+        return name_modules, module_bindings
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = _absolute_module(node, rel_file)
+            for alias in node.names:
+                local = alias.asname or alias.name
+                name_modules[local] = module
+                module_bindings[local] = (
+                    f"{module}.{alias.name}" if module else alias.name
+                )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    module_bindings[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".")[0]
+                    module_bindings[root] = root
+    return name_modules, module_bindings
+
+
+def _base_module(
+    base: ast.expr, name_modules: dict[str, str], module_bindings: dict[str, str]
+) -> str | None:
+    if isinstance(base, ast.Name):
+        return name_modules.get(base.id)
+    if not isinstance(base, ast.Attribute):
+        return None
+    parts: list[str] = []
+    value: ast.expr = base.value
+    while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
+        value = value.value
+    if not isinstance(value, ast.Name) or value.id not in module_bindings:
+        return None
+    return ".".join([module_bindings[value.id], *reversed(parts)])
+
+
+def _defines_module(rec: ClassRecord, module: str) -> bool:
+    path = rec.file.replace("\\", "/").removesuffix(".py").removesuffix("/__init__")
+    dotted = path.replace("/", ".")
+    return dotted == module or dotted.endswith("." + module)
+
+
 def collect_classes(
     tree: ast.AST, rel_file: str, aliases: dict[str, str]
 ) -> list[ClassRecord]:
@@ -292,12 +355,14 @@ def collect_classes(
     records: list[ClassRecord] = []
     sdk_bindings = sdk_app_base_bindings(tree)
     foreign_roots = non_sdk_import_roots(tree)
+    name_modules, module_bindings = _import_modules(tree, rel_file)
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         bases: list[str] = []
         sdk_app_bases: set[str] = set()
         non_sdk_bases: dict[str, str | None] = {}
+        base_modules: dict[str, str] = {}
         for base in node.bases:
             n = _get_name(base)
             if n is None:
@@ -307,6 +372,9 @@ def collect_classes(
                 sdk_app_bases.add(bases[-1])
             if isinstance(base, ast.Name) and base.id in foreign_roots:
                 non_sdk_bases[bases[-1]] = foreign_roots[base.id]
+            module = _base_module(base, name_modules, module_bindings)
+            if module:
+                base_modules[bases[-1]] = module
         code_value, code_node = _extract_code(node)
         records.append(
             ClassRecord(
@@ -319,6 +387,7 @@ def collect_classes(
                 overrides_emission=_overrides_emission(node),
                 sdk_app_bases=frozenset(sdk_app_bases),
                 non_sdk_bases=non_sdk_bases,
+                base_modules=base_modules,
             )
         )
     return records
@@ -368,9 +437,18 @@ def _shadowed_base_reaches(
     known_ancestors: frozenset[str],
     by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
 ) -> bool:
-    """Whether a record named *base_name*, other than *rec*, reaches *target*."""
+    """Whether the record *rec*'s base *base_name* is imported from reaches *target*.
+
+    Walks with private copies of *cache* and *visiting*, so nothing it learns
+    leaks into the shared memo.
+    """
+    module = rec.base_modules.get(base_name)
+    if module is None:
+        return False
+    cache = dict(cache)
+    visiting = set(visiting)
     for other in (by_name_all or {}).get(base_name, ()):
-        if other is rec:
+        if other is rec or not _defines_module(other, module):
             continue
         for base in other.bases:
             if base == other.name:
@@ -420,9 +498,9 @@ def resolve_ancestor(
         generated — assumed OK to avoid false positives).
 
     *by_name_all* holds every record per bare name. When a class subclasses a
-    same-named class from another module, the other records of that name are
-    walked too, and any one that reaches *target* makes the result ``True``.
-    It can only turn ``None``/``False`` into ``True``, never the reverse.
+    same-named class, the record of that name defined in the module the base is
+    imported from is walked with a private memo; if it reaches *target*, the
+    result is ``True``.
     """
     if name == target or name in known_targets:
         return True
@@ -444,12 +522,8 @@ def resolve_ancestor(
     same_name_base = False
     for base in rec.bases:
         if base == name:
-            # A base that de-aliases to the class's own name is an import of a
-            # SAME-NAMED class from another module — Python forbids literal
-            # self-inheritance, so this is always
-            # ``from other import X as _X`` + ``class X(_X)``. The registry is
-            # keyed on the bare name and cannot hold both, so the chain is
-            # genuinely unresolvable rather than definitively negative.
+            # A same-named class from another module: resolve it by import
+            # provenance, else the chain is unresolvable, not negative.
             if _shadowed_base_reaches(
                 base,
                 rec,
