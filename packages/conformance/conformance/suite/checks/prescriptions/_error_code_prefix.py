@@ -299,9 +299,31 @@ def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str | None:
     return ".".join([*package, *([node.module] if node.module else [])]) or None
 
 
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _module_scope_nodes(tree: ast.AST) -> list[ast.AST]:
+    """Nodes that bind in *tree*'s module scope: never a function, lambda or
+    class body, but the ``def``/``class`` statement itself does bind its name."""
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if node is not tree and isinstance(node, _SCOPES):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return nodes
+
+
 def _single_bindings(tree: ast.AST) -> set[str]:
     counts: dict[str, int] = {}
+    # ``global X`` lets a nested scope rebind the module name: never single.
     for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            for name in node.names:
+                counts[name] = 2
+    for node in _module_scope_nodes(tree):
         if isinstance(node, ast.ImportFrom) and any(
             alias.name == "*" for alias in node.names
         ):
@@ -378,6 +400,26 @@ def _defines_module(rec: ClassRecord, module: str) -> bool:
     path = rec.file.replace("\\", "/").removesuffix(".py").removesuffix("/__init__")
     dotted = path.replace("/", ".")
     return dotted in (module, f"src.{module}")
+
+
+def _provenance_record(
+    base: str,
+    owner: ClassRecord,
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+) -> ClassRecord | None:
+    """The one top-level class *owner*'s base *base* names: the class in the
+    module it is imported from, else the class of that name in *owner*'s file."""
+    records = (by_name_all or {}).get(base, ())
+    module = owner.base_modules.get(base)
+    if module is not None:
+        matches = [r for r in records if _defines_module(r, module)]
+    else:
+        matches = [
+            r
+            for r in records
+            if r.file == owner.file and r.node.col_offset == 0 and not r.rebound
+        ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def collect_classes(
@@ -493,8 +535,43 @@ def _shadowed_base_reaches(
         return False
     if not known_targets:
         cache = dict(cache)
-    for other in candidates:
-        for base in other.bases:
+    return _record_reaches(
+        candidates[0],
+        target,
+        by_name,
+        cache,
+        visiting,
+        known_targets,
+        known_ancestors,
+        by_name_all,
+        set(),
+    )
+
+
+def _record_reaches(
+    rec: ClassRecord,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+    known_targets: frozenset[str],
+    known_ancestors: frozenset[str],
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+    seen: set[int],
+) -> bool:
+    """Whether *rec* reaches *target*, following each base to the class its
+    import provenance names rather than the first-wins *by_name* record.
+
+    A base with no single provenance record is unknown and does not confirm.
+    Only names absent from the registry go through :func:`resolve_ancestor`.
+    """
+    if id(rec) in seen:
+        return False
+    seen.add(id(rec))
+    for base in rec.bases:
+        if base == target or base in known_targets:
+            return True
+        if base not in by_name:
             if (
                 resolve_ancestor(
                     base,
@@ -509,6 +586,20 @@ def _shadowed_base_reaches(
                 is True
             ):
                 return True
+            continue
+        other = _provenance_record(base, rec, by_name_all)
+        if other is not None and _record_reaches(
+            other,
+            target,
+            by_name,
+            cache,
+            visiting,
+            known_targets,
+            known_ancestors,
+            by_name_all,
+            seen,
+        ):
+            return True
     return False
 
 

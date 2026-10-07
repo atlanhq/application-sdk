@@ -3706,6 +3706,128 @@ def test_p013_same_named_base_resolves_across_module_layouts(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
+def _subclass_entrypoint(files: dict[str, str], reverse_order: bool) -> dict[str, str]:
+    """*files* plus an entrypoint typed as ``app.w.Sub``, a subclass of ``app.w.X``."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    return files | {
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.w import Sub\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Sub) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+
+
+_WRAPPER_SUB = "class X(_G):\n    pass\nclass Sub(X):\n    pass\n"
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("w", "expected"),
+    [
+        pytest.param(
+            "from app.gen import X as _G\ndef _reset():\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="function-local-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nclass Holder:\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="class-body-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nf = lambda _G: _G\n" + _WRAPPER_SUB,
+            [],
+            id="lambda-parameter",
+        ),
+    ],
+)
+def test_p013_nested_scope_store_keeps_base_provenance(
+    tmp_path: Path, w: str, expected: list[str], reverse_order: bool
+) -> None:
+    """Only module-scope bindings make a base import ambiguous; a store in a
+    nested scope does not."""
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, reverse_order)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_global_store_in_nested_scope_rebinds_the_base(
+    tmp_path: Path,
+) -> None:
+    """A ``global`` store rebinds the module name, so the base has no provenance.
+
+    Forward order only: with ``gen.py`` scanned first, the first-wins registry
+    resolves ``Sub`` through ``gen.X`` before provenance is consulted.
+    """
+    w = (
+        "from app.gen import X as _G\n"
+        "def _reset():\n"
+        "    global _G\n"
+        "    _G = None\n" + _WRAPPER_SUB
+    )
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, False)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_W_OVER_GEN = "from app.gen import X as _G\n" + _WRAPPER_SUB
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/earlier.py": "from x import Input\nclass Base(Input):\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "class Base:\n    pass\n",
+            },
+            ["P013"],
+            id="unrelated-same-named-contract-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "from x import Input\nclass Base(Input):\n    pass\n",
+            },
+            [],
+            id="imported-contract-shadowed-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": (
+                    "from x import Input\n"
+                    "class Base(Input):\n"
+                    "    pass\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                ),
+            },
+            [],
+            id="same-file-contract-shadowed-elsewhere",
+        ),
+    ],
+)
+def test_p013_same_named_walk_follows_provenance_below_the_base(
+    tmp_path: Path, files: dict[str, str], expected: list[str], reverse_order: bool
+) -> None:
+    """Below the selected same-named base, each parent resolves to the class its
+    import names, never to the first-wins record of that bare name."""
+    findings = _scan_files(tmp_path, _subclass_entrypoint(files, reverse_order))
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
 @pytest.mark.parametrize("reverse_order", [False, True])
 def test_p014_same_named_walk_does_not_poison_the_shared_cache(
     tmp_path: Path, reverse_order: bool
