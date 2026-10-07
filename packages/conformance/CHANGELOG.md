@@ -2,6 +2,13 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.43.1] - 2026-10-07
+
+### Bug fixes
+
+- sync SDK contract registry with atlan-application-sdk 3.42.0 (#4203) ([fa871e7](https://github.com/atlanhq/application-sdk/commit/fa871e7))
+- retire the app-side Renovate auto-approve workflow (#4201) ([163f5be](https://github.com/atlanhq/application-sdk/commit/163f5be))
+
 ## [0.43.0] - 2026-10-06
 
 ### Features
