@@ -1,4 +1,4 @@
-// Tests for TagsInput.placeholderText and tokenSeparators, emitted into the widget's `ui`.
+// Tests for the TagsInput settings emitted into the widget's `ui`.
 
 amends "pkl:test"
 
@@ -12,24 +12,44 @@ local fullConfig = new json.Parser { useMapping = true }.parse(
 
 local tagsUi = fullConfig["tag_keys"]["ui"]
 
+local plainUi = new App.TagsInput { title = "x" }.ui
+
 facts {
-  ["TagsInput placeholder and separators render into the generated configmap ui block"] {
+  ["TagsInput settings render into the generated configmap ui block"] {
     tagsUi["widget"] == "select"
     tagsUi["mode"] == "tags"
     tagsUi["placeholder"] == "OwningTeam"
     tagsUi["tokenSeparators"].toList() == List(", ", ",")
+    tagsUi["allowClear"] == true
+    tagsUi["maxTagCount"] == "responsive"
   }
 
-  ["TagsInput without placeholderText leaves ui.placeholder null"] {
-    new App.TagsInput { title = "x" }.ui.placeholder == null
+  ["TagsInput leaves every optional setting unset by default"] {
+    plainUi.placeholder == null
+    plainUi.tokenSeparators == null
+    plainUi.disabled == null
+    plainUi.allowClear == null
+    plainUi.maxTagCount == null
+    plainUi.maxTagTextLength == null
   }
 
-  ["TagsInput without tokenSeparators leaves ui.tokenSeparators null"] {
-    new App.TagsInput { title = "x" }.ui.tokenSeparators == null
+  ["TagsInput enabled = false renders ui.disabled"] {
+    new App.TagsInput { title = "x"; enabled = false }.ui.disabled == true
+  }
+
+  ["TagsInput maxTagCount takes a number and maxTagTextLength truncates chips"] {
+    local ui = new App.TagsInput { title = "x"; maxTagCount = 3; maxTagTextLength = 20 }.ui
+    ui.maxTagCount == 3
+    ui.maxTagTextLength == 20
   }
 
   // An empty separator would split every character into its own chip.
   ["TagsInput rejects an empty token separator"] {
     module.catchOrNull(() -> new App.TagsInput { title = "x"; tokenSeparators { "" } }.ui.tokenSeparators) != null
+  }
+
+  ["TagsInput rejects a negative maxTagCount and a non-positive maxTagTextLength"] {
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagCount = -1 }.ui.maxTagCount) != null
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagTextLength = 0 }.ui.maxTagTextLength) != null
   }
 }

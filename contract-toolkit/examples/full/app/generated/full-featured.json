@@ -168,6 +168,8 @@
             ", ",
             ","
           ],
+          "allowClear": true,
+          "maxTagCount": "responsive",
           "open": false
         }
       },

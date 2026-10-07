@@ -335,6 +335,16 @@ class Widget {
   /// Strings that split typed or pasted text into separate tags (`TagsInput`).
   tokenSeparators: List<String>?
 
+  /// Whether a select shows a button that clears every value (`TagsInput`).
+  allowClear: Boolean?
+
+  /// How many tags a select shows before it collapses the rest into `+N`
+  /// (`TagsInput`). `"responsive"` fits as many as the width allows.
+  maxTagCount: (Int|"responsive")?
+
+  /// Longest tag text a select shows before it truncates it (`TagsInput`).
+  maxTagTextLength: Int?
+
   /// TBC
   start: Int?
 
@@ -931,12 +941,35 @@ class TagsInput extends UIElement {
   /// character into its own tag.
   hidden tokenSeparators: Listing<String(!isEmpty)>?
 
+  /// Set to `false` to render the field read-only (`ui.disabled = true`).
+  /// Unset (the default) emits no `disabled` key.
+  hidden enabled: Boolean?
+
+  /// Shows a button that clears every tag; clearing submits `[]`. Renders as
+  /// `ui.allowClear`; unset (the default) emits no key.
+  hidden allowClear: Boolean?
+
+  /// Collapses tags past this count into a `+N` chip so a long list does not
+  /// fill the form. `"responsive"` fits as many tags as the width allows. Display
+  /// only: every tag is still submitted. Renders as `ui.maxTagCount`; unset (the
+  /// default) shows every tag.
+  hidden maxTagCount: (Int(isPositive)|"responsive")?
+
+  /// Truncates the text of each tag chip past this many characters. Display
+  /// only: the full value is still submitted. Renders as `ui.maxTagTextLength`;
+  /// unset (the default) shows the full text.
+  hidden maxTagTextLength: Int(this > 0)?
+
   fixed ui {
     widget = "select"
     mode = "tags"
     `open` = openByDefault
     placeholder = placeholderText
     tokenSeparators = outer.tokenSeparators?.toList()
+    disabled = if (enabled != null) !enabled else null
+    allowClear = outer.allowClear
+    maxTagCount = outer.maxTagCount
+    maxTagTextLength = outer.maxTagTextLength
   }
 }
 

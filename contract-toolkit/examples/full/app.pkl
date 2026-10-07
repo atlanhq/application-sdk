@@ -256,6 +256,8 @@ uiConfig = new UIConfig {
           helpText = "Source tag keys to sync; leave empty to sync none."
           placeholderText = "OwningTeam"
           tokenSeparators { ", "; "," }
+          allowClear = true
+          maxTagCount = "responsive"
           width = 4
         }
         ["lineage_depth"] = new NumericInput {

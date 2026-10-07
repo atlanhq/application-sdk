@@ -538,11 +538,11 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 `default` by hand on a multi-select is rejected. See `docs/reference.md` and the
 [`full`](examples/full/) example.
 
-`TagsInput` takes an optional `placeholderText`, shown while no tags are entered.
-It renders as `ui.placeholder`; unset, no `placeholder` key is emitted.
-`tokenSeparators { ", "; "," }` splits typed or pasted text into separate tags
-(`ui.tokenSeparators`). The frontend does not trim the parts, so list `", "`
-before `","` for comma lists.
+`TagsInput` takes optional `placeholderText`, `tokenSeparators`, `enabled`,
+`allowClear`, `maxTagCount` and `maxTagTextLength`; each renders into `ui` only
+when set. `tokenSeparators { ", "; "," }` splits a pasted comma list into tags
+(the frontend does not trim the parts). See `docs/reference.md` for each
+setting and for what is not supported yet.
 
 ### Connection & Credential
 

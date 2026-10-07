@@ -2028,8 +2028,27 @@ the [`full`](../examples/full/) example.
 |---|---|---|---|
 | `Radio` | `radio` | `str` | `possibleValues` (required), `default` (required) |
 | `DropDown` | `select` | `str` or `list[str]` | `possibleValues`, `multiSelect`, `default` |
-| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags. `placeholderText` (renders `ui.placeholder`, display only, omitted when unset), `tokenSeparators` (renders `ui.tokenSeparators`; splits typed or pasted text into tags; parts are not trimmed, so use `{ ", "; "," }` for comma lists; omitted when unset), `openByDefault` |
+| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags. Settings below. |
 | `BooleanInput` | `boolean` | `bool` | `defaultSelection` |
+
+`TagsInput` settings. Each one is optional; unset emits no key, so output only
+changes for the settings an app sets.
+
+| Setting | Renders | Effect |
+|---|---|---|
+| `placeholderText` | `ui.placeholder` | Example text shown while no tags are entered. Never submitted. |
+| `tokenSeparators` | `ui.tokenSeparators` | Splits typed or pasted text into tags. Parts are not trimmed, so use `{ ", "; "," }` for comma lists. Empty separators are rejected. |
+| `enabled` | `ui.disabled` | `false` renders the field read-only. |
+| `allowClear` | `ui.allowClear` | Shows a button that clears every tag; clearing submits `[]`. |
+| `maxTagCount` | `ui.maxTagCount` | Collapses tags past this count into `+N`; `"responsive"` fits the width. Display only. |
+| `maxTagTextLength` | `ui.maxTagTextLength` | Truncates each chip's text. Display only. |
+| `openByDefault` | `ui.open` | Opens the dropdown. |
+
+Not supported yet: default tags and suggested values. Both need a frontend
+change first (the `select` widget does not parse a JSON value in tags mode, and
+`ui.open` is always emitted, which keeps a suggestion list closed). Per-tag
+format checks are app-side validation; the `select` widget has no setting for
+them.
 
 #### Connection & Credential
 
