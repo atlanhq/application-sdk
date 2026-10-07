@@ -2,8 +2,9 @@
 
 An ``Input``/``Output`` contract subclass declared with the
 ``allow_unbounded_fields=True`` class keyword opts out of payload-safety
-enforcement; the opt-out must be an inline, justified suppression at the
-declaration site.
+enforcement. The fix is to type every field payload-safely and drop the
+opt-out; an opt-out that genuinely cannot be removed must carry an inline,
+justified suppression at the declaration site.
 
 The rule also catches the INVERSE, which is how a well-meaning remediation
 breaks an app: drop the opt-out from a class that still has an ``Any``-typed
@@ -150,10 +151,15 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     message=(
                         f"Contract '{node.name}' opts out of payload-safety "
                         "enforcement via allow_unbounded_fields — arbitrary untyped "
-                        "fields may cross task boundaries. This must be exceptional: "
-                        "justify it with an inline '# conformance: ignore[P001] "
-                        "<reason>' directive at the declaration site (and prefer a "
-                        "non-dynamic value so the opt-out is statically auditable)."
+                        "fields may cross task boundaries. Fix: type every declared "
+                        "field payload-safely (replace Any with a concrete type in the "
+                        "same outer shape, e.g. the SDK's FilterMap for filter maps; "
+                        "MaxItems alone does not make Any safe), then remove "
+                        "allow_unbounded_fields. Only if the opt-out is genuinely "
+                        "unavoidable, keep it with a justified inline '# conformance: "
+                        "ignore[P001] <reason>' directive at the declaration site (and "
+                        "prefer a non-dynamic value so the opt-out is statically "
+                        "auditable)."
                     ),
                     directives=self._directives,
                 )
