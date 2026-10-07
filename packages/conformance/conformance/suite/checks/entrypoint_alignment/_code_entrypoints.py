@@ -163,6 +163,27 @@ def _extract_app_name(class_node: ast.ClassDef) -> str | None:
     return None
 
 
+def _owner_name(class_node: ast.ClassDef, app_aliases: frozenset[str]) -> str | None:
+    """The name an ``@entrypoint`` on this class registers under, if knowable.
+
+    A direct ``App`` subclass uses :func:`_extract_app_name` (literal ``name`` or
+    the kebab-cased class name, as the SDK does). Any other class — a mixin or a
+    template base — counts only with a literal ``name``: a mixin's methods
+    register under whichever App inherits it, so its own class name proves
+    nothing.
+    """
+    bases = {
+        base.id if isinstance(base, ast.Name) else getattr(base, "attr", None)
+        for base in class_node.bases
+    }
+    if bases & app_aliases:
+        return _extract_app_name(class_node)
+    value = _class_attribute_value(class_node, "name")
+    if isinstance(value, ast.Constant) and isinstance(value.value, str) and value.value:
+        return value.value
+    return None
+
+
 def _extract_legacy_aliases(
     class_node: ast.ClassDef,
 ) -> tuple[dict[str, str], bool]:
@@ -224,6 +245,10 @@ class EntrypointLocation:
     node: ast.AST
     """The ``@entrypoint`` decorator node — anchored here so ``# conformance: ignore``
     on the line directly above the decorator suppresses the finding correctly."""
+    owner_app: str | None = None
+    """The registered name of the class that defines this method (literal
+    ``name = "..."`` or the kebab-cased class name), or ``None`` when that name is
+    not statically knowable or the method sits outside any class."""
 
 
 @dataclass
@@ -299,6 +324,14 @@ def scan_file_for_entrypoints(
     if not ep_aliases and not app_aliases:
         return  # No SDK imports in this file — skip entirely.
 
+    owners: dict[int, str | None] = {}
+    for cls in ast.walk(tree):
+        if isinstance(cls, ast.ClassDef):
+            cls_name = _owner_name(cls, app_aliases)
+            for inner in ast.walk(cls):
+                if isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    owners[id(inner)] = cls_name
+
     for node in ast.walk(tree):
         # ── App subclass detection ────────────────────────────────────────────
         if app_aliases and isinstance(node, ast.ClassDef):
@@ -353,6 +386,7 @@ def scan_file_for_entrypoints(
                         name=ep_name,
                         filename=filename,
                         node=deco,
+                        owner_app=owners.get(id(node)),
                     )
                 )
             break  # Only the first @entrypoint decorator on a method counts.

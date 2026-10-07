@@ -11,8 +11,10 @@ is a no-op and ``scan_all`` does all the work.
 
 Currently implemented:
 
-* ``P016`` EntryPointContractCodeDrift — multi-EP apps: ``@entrypoint`` wire
-  names must exactly equal ``app/generated/<name>/`` subdir names; single-EP
+* ``P016`` EntryPointContractCodeDrift — multi-EP apps: every
+  ``app/generated/<name>/`` tile must reach an ``@entrypoint``, by its own
+  node's ``workflow_type`` or else by name, and every ``@entrypoint`` must be
+  reached; single-EP
   apps: at most one ``@entrypoint`` allowed; non-literal ``name=`` flagged as
   unverifiable.
 """

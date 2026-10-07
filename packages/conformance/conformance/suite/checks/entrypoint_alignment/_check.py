@@ -13,9 +13,11 @@ Let ``contract`` = subdir names under ``app/generated/`` that contain a
 
 * **absent** → no-op.
 * **single** → require ``len(code) <= 1`` (name unconstrained).
-* **multi** → require ``code == contract``, where a tile whose own node
-  starts ``"<app>:<wire>"`` stands for ``@entrypoint <wire>`` on the App
-  registered as ``<app>`` (route/card split).
+* **multi** → a tile whose own node starts ``"<app>:<wire>"`` must reach
+  ``@entrypoint <wire>`` on the class registered as ``<app>`` (route/card
+  split; an owner whose name is not statically knowable cannot disprove it);
+  any other tile must equal an ``@entrypoint`` name, and every ``@entrypoint``
+  must be reached by a tile.
 
 In all modes, unresolvable ``name=`` values produce an additional finding.
 """
@@ -95,17 +97,6 @@ def _best_anchor(
         ep = code.entrypoints[0]
         return ep.filename, ep.node
     return "app", _synthetic_node()
-
-
-def _entrypoint_owners(code: CodeEntrypointScan) -> dict[int, str | None]:
-    """Map each ``@entrypoint`` decorator node to its App's registered name."""
-    owners: dict[int, str | None] = {}
-    for app in code.app_classes:
-        for stmt in app.node.body:
-            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                for deco in stmt.decorator_list:
-                    owners[id(deco)] = app.app_name
-    return owners
 
 
 def check_p016(
@@ -247,22 +238,23 @@ def check_p016(
     code_names = code.name_set()
     contract_names = contract.names
     contract_list = ", ".join(sorted(contract_names))
-    owners = _entrypoint_owners(code)
-    owned = {(owners.get(id(ep.node)), ep.name) for ep in code.entrypoints}
-    resolved = {
-        (tile, app, wire)
-        for tile, app, wire in contract.tile_targets
-        if (app, wire) in owned
-    }
-    routed_entrypoints = {(app, wire) for _, app, wire in resolved}
-    routed_tiles = {tile for tile, _, _ in resolved}
-    targets = {tile: f"{app}:{wire}" for tile, app, wire in contract.tile_targets}
+    targets = {tile: (app, wire) for tile, app, wire in contract.tile_targets}
+    named_tiles = contract_names - targets.keys()
+    reached: set[tuple[str | None, str]] = set()
+    routed_tiles: set[str] = set()
+    for tile, (app, wire) in targets.items():
+        matches = [
+            ep
+            for ep in code.entrypoints
+            if ep.name == wire and ep.owner_app in (app, None)
+        ]
+        if matches:
+            routed_tiles.add(tile)
+            reached.update((ep.owner_app, ep.name) for ep in matches)
 
     # Code-only names: in @entrypoint code but absent from app/generated/
     for ep in code.entrypoints:
-        if ep.name in contract_names:
-            continue
-        if (owners.get(id(ep.node)), ep.name) in routed_entrypoints:
+        if ep.name in named_tiles or (ep.owner_app, ep.name) in reached:
             continue
         findings.append(
             make_finding(
@@ -274,8 +266,8 @@ def check_p016(
                     f"contract (contract defines: {contract_list}). "
                     f'Pin the name with @entrypoint(name="<contract-name>") to '
                     "match the contract, route a tile to it (workflowType = "
-                    f'"<app>:{ep.name}" on the tile in contract/app.pkl), '
-                    "or update contract/app.pkl and re-run pkl eval. "
+                    f'"{ep.owner_app or "<app>"}:{ep.name}" on the tile in '
+                    "contract/app.pkl), or update contract/app.pkl and re-run pkl eval. "
                     "Note: renaming is a breaking wire change "
                     "(workflow_type and ?entrypoint= value both change)."
                 ),
@@ -288,7 +280,9 @@ def check_p016(
     anchor_file, anchor_node = _best_anchor(code)
     anchor_directives = directives_by_file.get(anchor_file, _empty_directives())
 
-    for missing_name in sorted(contract_names - code_names - routed_tiles):
+    for missing_name in sorted(
+        (named_tiles - code_names) | (targets.keys() - routed_tiles)
+    ):
         if missing_name in targets:
             findings.append(
                 make_finding(
@@ -297,7 +291,7 @@ def check_p016(
                     node=anchor_node,
                     message=(
                         f"Tile '{missing_name}' (app/generated/{missing_name}/"
-                        f"manifest.json) starts '{targets[missing_name]}', but no "
+                        f"manifest.json) starts '{':'.join(targets[missing_name])}', but no "
                         "App registered under that name defines that @entrypoint "
                         f"(code defines: {code_list}). Point the tile's "
                         "workflowType in contract/app.pkl at an existing entry "

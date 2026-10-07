@@ -142,8 +142,12 @@ RULES: tuple[RuleDefinition, ...] = (
             " a **breaking wire change** (the Temporal workflow type and"
             " ``?entrypoint=`` value both change; coordinate with callers).\n"
             "\n"
-            "2. For each contract name not matched in code, add or rename an"
-            ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method.\n'
+            "2. For each tile not matched in code: if it should start an existing"
+            ' entry point, set ``workflowType = "<app>:<entrypoint>"`` on that tile in'
+            " ``contract/app.pkl`` rather than renaming the entry point (several tiles"
+            " may share one workflow); if its ``workflowType`` names an entry point"
+            " that does not exist, fix the ``workflowType`` or add that"
+            " ``@entrypoint`` on the App method.\n"
             "\n"
             "3. If the *code* name is the intended one and the contract is wrong, update"
             ' the ``entrypoints { new Entrypoint { name = "..." } }`` block in'

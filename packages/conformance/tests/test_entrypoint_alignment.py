@@ -1269,3 +1269,109 @@ def test_p016_multi_tile_routed_to_a_missing_entrypoint_names_its_target(
     (tile_finding,) = [f for f in findings if "Tile 'dataflow'" in f.message]
     assert "'lineage:something-else'" in tile_finding.message
     assert 'Add @entrypoint(name="dataflow")' not in tile_finding.message
+
+
+def test_p016_multi_tile_name_match_does_not_skip_its_route(tmp_path: Path) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+                @entrypoint
+                async def crawl(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"crawl": _own_node("lineage:something-else")})
+    findings = [
+        f for f in scan_all(_write_py(tmp_path, py), tmp_path) if f.rule_id == "P016"
+    ]
+    assert len(findings) == 2
+    assert any("Tile 'crawl'" in f.message for f in findings)
+
+
+def test_p016_multi_tile_route_not_disproved_when_owner_name_is_dynamic(
+    tmp_path: Path,
+) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            APP_NAME = "lineage"
+            class LineageApp(App):
+                name = APP_NAME
+                @entrypoint
+                async def extract_and_push(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("lineage:extract-and-push")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tile_route_pinned_on_a_template_based_app(tmp_path: Path) -> None:
+    py = {
+        "app/power_bi.py": dedent("""\
+            from application_sdk.app import entrypoint
+            from application_sdk.templates import BaseMetadataExtractor
+            class PowerBIApp(BaseMetadataExtractor):
+                name = "power-bi-app"
+                @entrypoint
+                async def extract(self, input: Input) -> Output: ...
+                @entrypoint
+                async def miner(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(
+        tmp_path,
+        {
+            "crawler": _own_node("power-bi-app:extract"),
+            "miner": _own_node("power-bi-app:miner"),
+        },
+    )
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tile_route_owner_found_for_a_nested_method(tmp_path: Path) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            import os
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+                if os.environ.get("X") is None:
+                    @entrypoint
+                    async def extract_and_push(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("other:extract-and-push")})
+    findings = [
+        f for f in scan_all(_write_py(tmp_path, py), tmp_path) if f.rule_id == "P016"
+    ]
+    assert len(findings) == 2
+
+
+def test_p016_multi_tile_route_not_disproved_by_a_mixin_class_name(
+    tmp_path: Path,
+) -> None:
+    py = {
+        "app/miner.py": dedent("""\
+            from application_sdk.app import entrypoint
+            class MinerMixin:
+                @entrypoint
+                async def miner(self, input: Input) -> Output: ...
+        """),
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            from app.miner import MinerMixin
+            class MssqlApp(MinerMixin, App):
+                name = "mssql"
+                @entrypoint(name="crawler")
+                async def crawl(self, input: Input) -> Output: ...
+        """),
+    }
+    _write_routed_tiles(
+        tmp_path,
+        {"crawler": _own_node("mssql:crawler"), "miner": _own_node("mssql:miner")},
+    )
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
