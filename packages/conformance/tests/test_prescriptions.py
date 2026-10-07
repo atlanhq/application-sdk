@@ -3509,6 +3509,149 @@ def test_p013_unrelated_same_named_input_elsewhere_still_fires(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
+_PLAIN_X = "from pydantic import BaseModel\nclass X(BaseModel):\n    pass\n"
+_INPUT_X = "from x import Input\nclass X(Input):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "tests/app/gen.py": _INPUT_X,
+            },
+            id="same-path-suffix-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": (
+                    "def _f():\n"
+                    "    from x import Input\n"
+                    "    class X(Input):\n"
+                    "        pass\n"
+                ),
+            },
+            id="function-local-same-named-class",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "src/app/gen.py": _INPUT_X,
+            },
+            id="ambiguous-module",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\n"
+                    "class X(_G):\n"
+                    "    pass\n"
+                    "from app.other import X as _G\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "app/other.py": _INPUT_X,
+            },
+            id="base-name-rebound-after-the-class",
+        ),
+        pytest.param(
+            {
+                "app/y/w.py": (
+                    "from ....gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/y/gen.py": _PLAIN_X,
+                "app/gen.py": _INPUT_X,
+            },
+            id="relative-import-above-the-scan-root",
+        ),
+    ],
+)
+def test_p013_same_named_base_never_resolves_through_another_module(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    """Only the one top-level class in the exact module the base is bound to
+    once counts; anything else keeps main's finding."""
+    first = next(iter(files))
+    package = first.rsplit("/", 1)[0].replace("/", ".")
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {package}.w import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "module"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/y/__init__.py": "",
+                "app/y/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            "app.y.w",
+            id="level-2-relative-import",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen/__init__.py": _INPUT_X,
+            },
+            "app.w",
+            id="package-init-module",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/app/gen.py": _INPUT_X,
+            },
+            "app.w",
+            id="src-layout",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_across_module_layouts(
+    tmp_path: Path, files: dict[str, str], module: str, reverse_order: bool
+) -> None:
+    """The same-named base resolves for relative, package and src layouts."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {module} import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 @pytest.mark.parametrize("reverse_order", [False, True])
 def test_p014_same_named_walk_does_not_poison_the_shared_cache(
     tmp_path: Path, reverse_order: bool

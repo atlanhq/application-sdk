@@ -285,34 +285,61 @@ def collect_import_aliases(tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
-def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str:
+def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str | None:
     if node.level == 0:
-        return node.module or ""
+        return node.module or None
     package = rel_file.replace("\\", "/").split("/")[:-1]
-    if node.level > 1:
-        package = package[: len(package) - (node.level - 1)]
-    return ".".join([*package, *([node.module] if node.module else [])])
+    if node.level - 1 > len(package):
+        return None
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])]) or None
+
+
+def _single_bindings(tree: ast.AST) -> set[str]:
+    counts: dict[str, int] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names = [node.id]
+        elif isinstance(node, ast.alias):
+            names = [node.asname or node.name.split(".")[0]]
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names = [node.name]
+        else:
+            continue
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+    return {name for name, count in counts.items() if count == 1}
 
 
 def _import_modules(
     tree: ast.AST, rel_file: str
 ) -> tuple[dict[str, str], dict[str, str]]:
-    """Per-file ``{local: module}`` for imported names and for imported modules."""
+    """Per-file ``{local: module}`` for imported names and for imported modules.
+
+    Only module-level imports of names the file binds exactly once count.
+    """
     name_modules: dict[str, str] = {}
     module_bindings: dict[str, str] = {}
     if not isinstance(tree, ast.Module):
         return name_modules, module_bindings
+    single = _single_bindings(tree)
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             module = _absolute_module(node, rel_file)
+            if module is None:
+                continue
             for alias in node.names:
                 local = alias.asname or alias.name
+                if local not in single:
+                    continue
                 name_modules[local] = module
                 module_bindings[local] = (
                     f"{module}.{alias.name}" if module else alias.name
                 )
         elif isinstance(node, ast.Import):
             for alias in node.names:
+                if (alias.asname or alias.name.split(".")[0]) not in single:
+                    continue
                 if alias.asname:
                     module_bindings[alias.asname] = alias.name
                 else:
@@ -339,9 +366,11 @@ def _base_module(
 
 
 def _defines_module(rec: ClassRecord, module: str) -> bool:
+    if rec.node.col_offset != 0:
+        return False
     path = rec.file.replace("\\", "/").removesuffix(".py").removesuffix("/__init__")
     dotted = path.replace("/", ".")
-    return dotted == module or dotted.endswith("." + module)
+    return dotted in (module, f"src.{module}")
 
 
 def collect_classes(
@@ -437,22 +466,25 @@ def _shadowed_base_reaches(
     known_ancestors: frozenset[str],
     by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
 ) -> bool:
-    """Whether the record *rec*'s base *base_name* is imported from reaches *target*.
+    """Whether the one top-level class *base_name* in the module *rec* imports it
+    from reaches *target*.
 
-    Walks with private copies of *cache* and *visiting*, so nothing it learns
-    leaks into the shared memo.
+    Walks with a private copy of *cache*, so nothing it learns leaks into the
+    shared memo.
     """
     module = rec.base_modules.get(base_name)
     if module is None:
         return False
+    candidates = [
+        other
+        for other in (by_name_all or {}).get(base_name, ())
+        if _defines_module(other, module)
+    ]
+    if len(candidates) != 1:
+        return False
     cache = dict(cache)
-    visiting = set(visiting)
-    for other in (by_name_all or {}).get(base_name, ()):
-        if other is rec or not _defines_module(other, module):
-            continue
+    for other in candidates:
         for base in other.bases:
-            if base == other.name:
-                continue
             if (
                 resolve_ancestor(
                     base,
