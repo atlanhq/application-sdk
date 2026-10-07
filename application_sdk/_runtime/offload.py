@@ -38,7 +38,8 @@ from application_sdk._runtime.progress import (
     current_progress_tracker,
     declared_hold_active,
 )
-from application_sdk.errors import InvalidInputValueError
+from application_sdk.constants import APPLICATION_NAME
+from application_sdk.errors import InvalidInputValueError, ResourceExhaustedError
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
@@ -354,6 +355,296 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
         tracker.exit_hold(hold)
 
 
+# ---------------------------------------------------------------------------
+# Per-app containment of the blocking pool (FND-2973)
+# ---------------------------------------------------------------------------
+#
+# ``_BLOCKING_EXECUTOR`` is one pool per process. A timeout frees the *caller*
+# of a ``run_in_thread`` call but cannot stop its thread, so a driver call hung
+# on a dead host keeps its slot until the driver returns on its own. With one
+# app per pod that damage stays inside the app that caused it; once handlers
+# from many apps share one pod, one app's hung probes can take every slot and
+# queue every other app's offloads behind them.
+#
+# Two pieces contain it:
+#
+# * **A per-app cap**, opt-in through :data:`OFFLOAD_MAX_THREADS_PER_APP_ENV`.
+#   A call that would take an app past its cap fails at once with a retryable
+#   ``ResourceExhaustedError`` instead of queueing, so a misbehaving app
+#   degrades only itself. Unset (the default), nothing changes: calls queue
+#   exactly as before. A default cap would turn today's queueing into failures
+#   for any fan-out wider than the cap, and the pool width it would be derived
+#   from is not a reliable number — ``os.cpu_count()`` reports the node's
+#   cores, not the pod's CPU limit.
+# * **A per-app stranded count**: calls whose caller stopped waiting while the
+#   thread kept running. Exported as the ``offload.stranded_threads`` gauge,
+#   labelled by app only, and logged once per strand with the callable's name.
+#
+# A slot is held from submit until the *thread* finishes — released in the
+# executor future's done callback, never when the awaiting coroutine returns.
+# Releasing on the caller's side would let a hung thread hand back its quota
+# while it still holds its pool slot, which is the one thing the cap exists to
+# prevent. The done callback also fires for a queued call cancelled before it
+# started, so that case does not leak a slot either.
+
+#: Env var capping how many ``run_in_thread`` calls one app may have in flight
+#: (running or queued) at once. Unset or empty means no cap.
+OFFLOAD_MAX_THREADS_PER_APP_ENV = "ATLAN_OFFLOAD_MAX_THREADS_PER_APP"
+
+#: The app a ``run_in_thread`` call is charged to. Bound by the handler layer
+#: (``bind_handler_context``) for each handler invocation, which is the unit a
+#: shared pod multiplexes; otherwise the process's own ``APPLICATION_NAME``.
+_OFFLOAD_OWNER: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "_OFFLOAD_OWNER", default=None
+)
+
+#: Owner used when neither a binding nor ``APPLICATION_NAME`` names the app.
+_UNKNOWN_OWNER = "<unknown>"
+
+#: Cap values already reported as invalid, so a bad setting warns once.
+_REPORTED_BAD_CAPS: set[str] = set()
+
+
+@contextlib.contextmanager
+def offload_owner(app_name: str) -> Iterator[None]:
+    """Charge every ``run_in_thread`` call made in this block to *app_name*.
+
+    The binding is a ContextVar, so it is per task and is inherited by tasks
+    created inside the block. An empty *app_name* leaves the fallback in place.
+    """
+    token = _OFFLOAD_OWNER.set(app_name or None)
+    try:
+        yield
+    finally:
+        _OFFLOAD_OWNER.reset(token)
+
+
+def _current_offload_owner() -> str:
+    """The app the current ``run_in_thread`` call is charged to."""
+    bound = _OFFLOAD_OWNER.get()
+    if bound:
+        return bound
+    return APPLICATION_NAME or _UNKNOWN_OWNER
+
+
+def _per_app_cap() -> int | None:
+    """The configured per-app cap, or ``None`` when no cap applies.
+
+    Read on every call so a deployment can change it without a code path that
+    caches a stale value. An unparseable or non-positive value is logged once
+    and ignored rather than raised: raising here would fail every offload in
+    the process over a configuration typo.
+    """
+    raw = os.environ.get(OFFLOAD_MAX_THREADS_PER_APP_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        cap = int(raw)
+    except ValueError:
+        cap = 0
+    if cap >= 1:
+        return cap
+    if raw not in _REPORTED_BAD_CAPS:
+        _REPORTED_BAD_CAPS.add(raw)
+        logger.warning(
+            "Ignoring %s=%r: expected a positive integer; offloads are not capped "
+            "per app",
+            OFFLOAD_MAX_THREADS_PER_APP_ENV,
+            raw,
+        )
+    return None
+
+
+class _OffloadSlot:
+    """One ``run_in_thread`` call's claim on its app's share of the pool."""
+
+    __slots__ = ("owner", "label", "stranded_at", "finished")
+
+    def __init__(self, owner: str, label: str) -> None:
+        self.owner = owner
+        self.label = label
+        self.stranded_at: float | None = None
+        self.finished = False
+
+
+class _AppOffloadLedger:
+    """Per-app in-flight and stranded counts for the blocking pool. Thread-safe.
+
+    Mutated from the event loop (claim, strand) and from pool threads (the
+    executor future's done callback), hence a ``threading.Lock`` rather than
+    anything asyncio-side.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._in_flight: dict[str, int] = {}
+        self._stranded: dict[str, int] = {}
+
+    def claim(self, owner: str, label: str, cap: int | None) -> _OffloadSlot | None:
+        """Take a slot for *owner*; ``None`` if that would exceed *cap*."""
+        with self._lock:
+            held = self._in_flight.get(owner, 0)
+            if cap is not None and held >= cap:
+                return None
+            self._in_flight[owner] = held + 1
+        return _OffloadSlot(owner, label)
+
+    def strand(self, slot: _OffloadSlot) -> int | None:
+        """Record that *slot*'s caller stopped waiting while its thread runs on.
+
+        Returns the owner's stranded count after this one, or ``None`` if the
+        thread had already finished (nothing is stranded).
+        """
+        with self._lock:
+            if slot.finished or slot.stranded_at is not None:
+                return None
+            slot.stranded_at = time.monotonic()
+            count = self._stranded.get(slot.owner, 0) + 1
+            self._stranded[slot.owner] = count
+            return count
+
+    def release(self, slot: _OffloadSlot) -> float | None:
+        """Give *slot* back once its thread is done.
+
+        Returns how long the thread ran after being stranded, or ``None`` if it
+        was never stranded.
+        """
+        with self._lock:
+            if slot.finished:
+                return None
+            slot.finished = True
+            self._in_flight[slot.owner] = self._in_flight.get(slot.owner, 1) - 1
+            if self._in_flight[slot.owner] <= 0:
+                del self._in_flight[slot.owner]
+            if slot.stranded_at is None:
+                return None
+            self._stranded[slot.owner] = self._stranded.get(slot.owner, 1) - 1
+            if self._stranded[slot.owner] <= 0:
+                del self._stranded[slot.owner]
+            return time.monotonic() - slot.stranded_at
+
+    def in_flight(self, owner: str) -> int:
+        with self._lock:
+            return self._in_flight.get(owner, 0)
+
+    def stranded(self) -> dict[str, int]:
+        """A snapshot of every app's stranded count, omitting apps at zero."""
+        with self._lock:
+            return dict(self._stranded)
+
+
+_LEDGER = _AppOffloadLedger()
+
+#: Lazily-created OTel instruments, keyed by name.
+_INSTRUMENTS: dict[str, Any] = {}
+_INSTRUMENTS_LOCK = threading.Lock()
+
+
+def _observe_stranded(_options: Any) -> Iterator[Any]:
+    from opentelemetry.metrics import (  # noqa: PLC0415 — only reached from the OTel collection callback
+        Observation,
+    )
+
+    for owner, count in _LEDGER.stranded().items():
+        yield Observation(count, {"app.name": owner})
+
+
+def _ensure_stranded_gauge() -> None:
+    """Register the ``offload.stranded_threads`` gauge, once, on the first strand.
+
+    Observable rather than pushed: the count only matters while it is non-zero,
+    and a callback reads the ledger at collection time instead of every strand
+    and release writing a sample. Never raises — telemetry must not turn a
+    cancellation into a different failure.
+    """
+    if "stranded" in _INSTRUMENTS:
+        return
+    with _INSTRUMENTS_LOCK:
+        if "stranded" in _INSTRUMENTS:
+            return
+        try:
+            from opentelemetry import (  # noqa: PLC0415 — cold path: only reached on the first strand
+                metrics as _otel_metrics,
+            )
+
+            _INSTRUMENTS["stranded"] = _otel_metrics.get_meter(
+                "application_sdk.runtime"
+            ).create_observable_gauge(
+                "offload.stranded_threads",
+                callbacks=[_observe_stranded],
+                unit="1",
+                description=(
+                    "run_in_thread calls whose caller stopped waiting (timeout or "
+                    "cancellation) while the thread is still running and holding a "
+                    "blocking-pool slot. Labelled by app; a sustained non-zero value "
+                    "names the app whose blocking calls ignore their own deadlines."
+                ),
+            )
+        except Exception:
+            _INSTRUMENTS["stranded"] = None
+            logger.debug("Could not register offload.stranded_threads", exc_info=True)
+
+
+def _on_offload_done(slot: _OffloadSlot) -> None:
+    """Executor done callback: release *slot*, reporting a stranded thread's end."""
+    stranded_for = _LEDGER.release(slot)
+    if stranded_for is not None:
+        logger.info(
+            "Stranded offloaded call %s for app %s finished %.1fs after its caller "
+            "stopped waiting; its blocking-pool slot is free again",
+            slot.label,
+            slot.owner,
+            stranded_for,
+        )
+
+
+def _abandon(slot: _OffloadSlot, future: "concurrent.futures.Future[Any]") -> None:
+    """The caller of *future* stopped waiting: cancel it if queued, else record a strand."""
+    if future.cancel():
+        # Still queued: it will never start, and the done callback has already
+        # given the slot back.
+        return
+    if future.done():
+        return
+    count = _LEDGER.strand(slot)
+    if count is None:
+        return
+    _ensure_stranded_gauge()
+    logger.warning(
+        "Offloaded call %s for app %s outlived its caller; the thread keeps a "
+        "blocking-pool slot until the call returns on its own (%d stranded for "
+        "this app). Give the blocking call a driver-level timeout so it returns "
+        "when its caller gives up",
+        slot.label,
+        slot.owner,
+        count,
+    )
+
+
+def _claim_slot(label: str) -> _OffloadSlot:
+    """Claim a slot for the current app, or raise if that app is at its cap."""
+    owner = _current_offload_owner()
+    cap = _per_app_cap()
+    slot = _LEDGER.claim(owner, label, cap)
+    if slot is not None:
+        return slot
+    stranded = _LEDGER.stranded().get(owner, 0)
+    raise ResourceExhaustedError(
+        message=(
+            f"App {owner!r} already has {cap} blocking calls in flight "
+            f"({stranded} stranded past their caller); refusing {label} rather "
+            "than queueing it behind them"
+        ),
+        resource="offload_threads",
+        limit=str(cap),
+        observed=str(_LEDGER.in_flight(owner)),
+        suggested_action=(
+            "Give this app's blocking calls driver-level timeouts so a hung call "
+            f"returns its slot, or raise {OFFLOAD_MAX_THREADS_PER_APP_ENV}."
+        ),
+    )
+
+
 async def run_in_thread(
     func: Callable[..., T],
     *args: Any,
@@ -410,6 +701,18 @@ async def run_in_thread(
       isolated from the caller (copy semantics).
     - Threads run on a dedicated ``sdk-blocking-*`` pool, separate from
       Temporal's activity pool, to avoid deadlocking the worker.
+    - Each call is charged to an app: the handler invocation's app when one is
+      bound (see :func:`offload_owner`), else the process's
+      ``APPLICATION_NAME``. When ``ATLAN_OFFLOAD_MAX_THREADS_PER_APP`` is set,
+      a call that would take its app past that many calls in flight raises a
+      retryable ``ResourceExhaustedError`` at once instead of queueing. Unset,
+      calls queue as they always have. A call counts against its app until its
+      **thread** finishes, not until its caller stops waiting.
+    - A call whose caller stops waiting (timeout, cancellation) while its
+      thread runs on is *stranded*: logged at WARNING with the callable's name
+      and counted per app on the ``offload.stranded_threads`` gauge until the
+      thread returns. A call still queued when its caller stops waiting is
+      cancelled and never starts.
     - The offload is automatically wrapped in an **unbounded** progress hold
       (ADR-0018), so the stall watchdog never accuses a legitimately long
       blocking call of stalling. Nothing to do at the call site, and nothing
@@ -477,14 +780,26 @@ async def run_in_thread(
     if scopes:
         call = _tracked_offload(call, scopes, label)
     cancel_handle = _bound_handle(func)
+    # Claimed before the hold opens: an app at its cap fails here at once, with
+    # nothing to unwind (FND-2973).
+    slot = _claim_slot(label)
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
-        if cancel_handle is None:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
         try:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            future = _BLOCKING_EXECUTOR.submit(call)
+        except BaseException:
+            # Never submitted (pool shut down at interpreter exit): no thread
+            # will ever release the slot, so release it here.
+            _LEDGER.release(slot)
+            raise
+        # Released when the *thread* is done — see the containment notes above.
+        future.add_done_callback(lambda _done: _on_offload_done(slot))
+        try:
+            return await asyncio.wrap_future(future, loop=loop)
         except asyncio.CancelledError:
-            # Non-blocking: the action is handed to the cancel pool.
-            cancel_handle.request()
+            if cancel_handle is not None:
+                # Non-blocking: the action is handed to the cancel pool.
+                cancel_handle.request()
+            _abandon(slot, future)
             raise
 
 

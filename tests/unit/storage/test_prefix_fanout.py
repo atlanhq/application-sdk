@@ -229,8 +229,13 @@ class TestDrainGivesUpWithoutProgress:
             release.set()
 
         assert elapsed < _SAFETY_RELEASE / 2, f"drain held the failure {elapsed:.2f}s"
-        assert warning.call_count == 1
-        assert "wedged" in warning.call_args.args[-1], "stuck call not named"
+        # The wedged call is also reported as stranded (FND-2973) when its
+        # caller is cancelled; only the drain's own give-up line is asserted here.
+        drain_reports = [
+            c for c in warning.call_args_list if "Stopped waiting" in c.args[0]
+        ]
+        assert len(drain_reports) == 1
+        assert "wedged" in drain_reports[0].args[-1], "stuck call not named"
 
     async def test_a_wedged_thread_does_not_swallow_the_cancellation(self) -> None:
         release = threading.Event()
