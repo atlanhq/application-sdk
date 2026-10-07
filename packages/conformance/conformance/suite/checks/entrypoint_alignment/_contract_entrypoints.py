@@ -100,6 +100,34 @@ class ContractEntrypointScan:
     multi-mode tree itself.
     """
 
+    tile_targets: frozenset[tuple[str, str]] = field(default_factory=frozenset)
+    """``(tile name, target wire name)`` pairs in ``multi`` mode: the wire name
+    from the ``"<app>:<wire>"`` ``workflow_type`` of each tile manifest's own
+    ``extract`` node. A tile is a Marketplace card; its target is the entry point
+    it starts, so several tiles may share one (the multi-mode route/card split).
+    Only the tile's own node counts — a node elsewhere in its DAG names another
+    step or app. Empty outside ``multi`` mode and for a tile whose own node has
+    no colon-qualified ``workflow_type``.
+    """
+
+
+def _tile_target(manifest_path: Path) -> str | None:
+    """The wire name a multi-mode tile's own node starts, or ``None``."""
+    data = load_manifest_document(manifest_path)
+    dag = data.get("dag") if data is not None else None
+    own_node = dag.get(_OWN_NODE_ID) if isinstance(dag, dict) else None
+    if not isinstance(own_node, dict):
+        return None
+    workflow_type = own_node.get("workflow_type")
+    if not isinstance(workflow_type, str) or not workflow_type:
+        inputs = own_node.get("inputs")
+        workflow_type = (
+            inputs.get("workflow_type") if isinstance(inputs, dict) else None
+        )
+    if not isinstance(workflow_type, str) or ":" not in workflow_type:
+        return None
+    return workflow_type.split(":", 1)[1] or None
+
 
 @dataclass(frozen=True)
 class LegacyAliasDeclaration:
@@ -283,7 +311,16 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
             ep_names.add(child.name)
 
     if ep_names:
-        return ContractEntrypointScan(names=frozenset(ep_names), mode="multi")
+        tile_targets = {
+            (tile, target)
+            for tile in ep_names
+            if (target := _tile_target(generated / tile / "manifest.json")) is not None
+        }
+        return ContractEntrypointScan(
+            names=frozenset(ep_names),
+            mode="multi",
+            tile_targets=frozenset(tile_targets),
+        )
 
     # Single-EP: a manifest.json at the root of app/generated/
     single_manifest = generated / "manifest.json"

@@ -231,13 +231,21 @@ def check_p016(
         return findings
 
     # ── Multi-entry-point mode: exact set equality ────────────────────────────
+    # Widened by tile routes (route/card split): a tile whose own node starts
+    # "<app>:<wire>" is aligned with the @entrypoint <wire>. Several Marketplace
+    # tiles may start one workflow, and renaming that entry point to a tile name
+    # would move its workflow type.
     code_names = code.name_set()
     contract_names = contract.names
     contract_list = ", ".join(sorted(contract_names))
+    routed_entrypoints = {target for _, target in contract.tile_targets}
+    routed_tiles = {
+        tile for tile, target in contract.tile_targets if target in code_names
+    }
 
     # Code-only names: in @entrypoint code but absent from app/generated/
     for ep in code.entrypoints:
-        if ep.name in contract_names:
+        if ep.name in contract_names or ep.name in routed_entrypoints:
             continue
         findings.append(
             make_finding(
@@ -248,7 +256,9 @@ def check_p016(
                     f"Entry point '{ep.name}' is defined in code but not in the "
                     f"contract (contract defines: {contract_list}). "
                     f'Pin the name with @entrypoint(name="<contract-name>") to '
-                    "match the contract, or update contract/app.pkl and re-run pkl eval. "
+                    "match the contract, route a tile to it (workflowType = "
+                    f'"<app>:{ep.name}" on the tile in contract/app.pkl), '
+                    "or update contract/app.pkl and re-run pkl eval. "
                     "Note: renaming is a breaking wire change "
                     "(workflow_type and ?entrypoint= value both change)."
                 ),
@@ -261,7 +271,7 @@ def check_p016(
     anchor_file, anchor_node = _best_anchor(code)
     anchor_directives = directives_by_file.get(anchor_file, _empty_directives())
 
-    for missing_name in sorted(contract_names - code_names):
+    for missing_name in sorted(contract_names - code_names - routed_tiles):
         findings.append(
             make_finding(
                 filename=anchor_file,
