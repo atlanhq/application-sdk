@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.41.0
-source-sha:    085ce7da75ace8ffa7ba6d51b6857b328a9e5bcb
-source-date:   2026-10-06T18:24:11+01:00
+sdk-version:   3.42.1
+source-sha:    b113653d6d45beb1804b5c4ba984953c2698881d
+source-date:   2026-10-07T22:35:00+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -36,7 +36,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
 | `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 406 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
 
@@ -6639,6 +6639,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `AssetBatchScope`
+
+- **Import:** `from application_sdk.validation import AssetBatchScope`
+- **Signature:** `class AssetBatchScope(upload_kind: typing.Literal['upload', 'upload_refs'], parts_validated: int, parts_not_local: int)`
+- **Summary:** How one validated hand-off was assembled — context the report cannot know.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `AssetValidationFailure`
 
 - **Import:** `from application_sdk.validation import AssetValidationFailure`
@@ -6794,6 +6801,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Import:** `from application_sdk.validation import asset_validation_matrix_json`
 - **Signature:** `asset_validation_matrix_json(report: AssetValidationReport, *, max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS)`
 - **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `asset_validation_summary_json`
+
+- **Import:** `from application_sdk.validation import asset_validation_summary_json`
+- **Signature:** `asset_validation_summary_json(report: AssetValidationReport, *, max_rows: int = ASSET_VALIDATION_SUMMARY_MAX_ROWS)`
+- **Summary:** Complete per-(kind, type, detail) failure counts for the outcome event.
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `boundary_contract_types`

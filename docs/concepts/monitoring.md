@@ -457,9 +457,63 @@ attributes are allowlisted and reach OTLP:
 | `assets_orphaned` | referential-integrity (orphan) failures |
 | `assets_undeserializable` | records that could not be decoded |
 | `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
+| `asset_validation_summary` | JSON array of complete counts per `{kind, type_name, detail}` over the whole batch (see below) |
+| `assets_referential_check` | whether the orphan pass ran: `ran`, `not_requested` (an incomplete fan-in turned it off) or `skipped_unavailable` (no spill store). `assets_orphaned = 0` means "none found" only when this is `ran` |
+| `assets_upload_kind` | `upload` (one path) or `upload_refs` (every declared part of a fan-in, validated as one batch) |
+| `assets_parts_validated` | local paths validated together |
+| `assets_parts_not_local` | declared transformed parts not on this pod; non-zero turns the orphan pass off |
 
 Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
-flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
+flag-rate rather than only seeing failures.
+
+The matrix is a **sample** (capped per axis); `asset_validation_summary` is the **aggregate**. Each
+row is `{"kind", "type_name", "detail", "count"}`:
+
+| `kind` | `detail` | `count` |
+|--------|----------|---------|
+| `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
+| `undeserializable` | `decode:<reason>` — `malformed_json`, `schema_mismatch:<field path>` (e.g. `schema_mismatch:columnCount`), or the exception class; `type_name` is probed from the raw record | records |
+| `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type | distinct missing targets, plus `references` |
+| `truncated` | empty | summed count of rows past the cap (100), plus `references` summed over the orphan groups among them |
+
+Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
+breakdown by app, tenant, type and rule. Two things make it return correct numbers:
+
+- Bound `Timestamp` and prefix-filter `ServiceName` first. `Body` is not indexed, and an unbounded
+  fleet scan of `service_logs` does not return.
+- Re-aggregate in an outer query. A single `GROUP BY` over `service_logs` has been observed to
+  return the same key on several rows with partial counts; the outer `sum` merges them. Distinct
+  workflow runs go through `uniqExactState` / `uniqExactMerge` so a run split across partial rows
+  is still counted once.
+
+`uploads` counts outcome events (one per validated upload, so a run with several uploads counts
+several times); `runs` counts distinct `workflow_run_id`s.
+
+```sql
+SELECT app, tenant, kind, type_name, detail,
+       sum(n) AS n, sum(uploads) AS uploads, uniqExactMerge(runs_state) AS runs
+FROM (
+  SELECT LogAttributes['app_name'] AS app,
+         TenantName AS tenant,
+         JSONExtractString(row, 'kind') AS kind,
+         JSONExtractString(row, 'type_name') AS type_name,
+         JSONExtractString(row, 'detail') AS detail,
+         sum(JSONExtractUInt(row, 'count')) AS n,
+         count() AS uploads,
+         uniqExactState(LogAttributes['workflow_run_id']) AS runs_state
+  FROM otel_logs.service_logs
+  ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
+  WHERE Timestamp >= now() - INTERVAL 1 DAY
+    AND ServiceName LIKE 'atlan-%'
+    AND Body = 'Transformed-asset validation outcome'
+    AND LogAttributes['outcome'] = 'flagged'
+  GROUP BY app, tenant, kind, type_name, detail
+)
+GROUP BY app, tenant, kind, type_name, detail
+ORDER BY n DESC
+```
+
+Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
 Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
@@ -586,7 +640,9 @@ ORDER BY n DESC
 ### Artifact-validation posture event
 
 `"Artifact validation posture"` fires **once per registered app at worker build** — soft apps and
-switched-off deployments included. It carries `app_name` and `artifact_validation_mode`
+switched-off deployments included. It carries `app_name`, `asset_validation_on_upload`
+(`on`/`off` — whether `App.upload()` runs the transformed-asset check on this deployment, so an
+app with no asset outcome rows can be told apart from one with that check off) and `artifact_validation_mode`
 (`hard`/`soft`/`off`, where `off` means `ATLAN_VALIDATE_ARTIFACTS` is down for that deployment).
 
 It exists because the outcome events cannot supply a denominator. An app whose tasks hand off no

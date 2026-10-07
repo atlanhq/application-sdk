@@ -44,6 +44,7 @@ from application_sdk.observability.logger_adaptor import (
     ARTIFACT_CLASSIFICATION_KEY,
     ARTIFACT_ENFORCEMENT_KEY,
     ARTIFACT_MODE_KEY,
+    ASSET_VALIDATION_ON_UPLOAD_KEY,
 )
 from application_sdk.validation import interceptor as interceptor_module
 from application_sdk.validation.artifacts import (
@@ -849,6 +850,20 @@ class TestPostureEvent:
         assert call.args[0] == ARTIFACT_VALIDATION_POSTURE_EVENT
         assert call.kwargs["app_name"] == "myapp"
         assert call.kwargs[ARTIFACT_MODE_KEY] == expected
+
+    @pytest.mark.parametrize(("switch", "expected"), [(True, "on"), (False, "off")])
+    def test_carries_the_asset_validation_switch(
+        self, switch: bool, expected: str
+    ) -> None:
+        """Without it, an app emitting no transformed-asset outcome rows cannot be
+        told apart from one whose ``ATLAN_VALIDATE_ASSETS_ON_UPLOAD`` is off."""
+        with (
+            patch("application_sdk.constants.VALIDATE_ASSETS_ON_UPLOAD", switch),
+            patch.object(interceptor_module, "logger") as logger,
+        ):
+            log_artifact_validation_posture("myapp", enforce=False, enabled=True)
+        assert logger.info.call_args.kwargs[ASSET_VALIDATION_ON_UPLOAD_KEY] == expected
+        assert ASSET_VALIDATION_ON_UPLOAD_KEY in _KNOWN_EXTRA_KEYS
 
     def test_emitted_for_soft_apps_too(self) -> None:
         """A hard-only row gives no denominator: an app whose tasks hand off no
