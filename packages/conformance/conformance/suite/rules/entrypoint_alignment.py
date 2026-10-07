@@ -140,7 +140,10 @@ RULES: tuple[RuleDefinition, ...] = (
             ' {"<app>:<old-name>": "<tile>"}`` on the ``App`` class, and the same'
             " pair in ``legacyWorkflowTypes`` on every entrypoint contract in"
             " ``contract/app.pkl`` (K015 holds the two in agreement). An alias may"
-            " stay for as long as callers still dispatch the old type.\n"
+            " stay for as long as callers still dispatch the old type. The alias"
+            " covers Temporal workflow-type dispatch only, not the ``/start``"
+            " selector: ``?entrypoint=`` resolves entry-point names, so a caller"
+            " selecting ``?entrypoint=<old-name>`` must switch to the tile name.\n"
             "\n"
             "2. For each contract name not matched in code, add an"
             ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method,'

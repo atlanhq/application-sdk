@@ -252,7 +252,10 @@ def check_p016(
                     "dispatching with an alias: legacy_workflow_types = "
                     f'{{"<app>:{ep.name}": "<tile>"}} on the App class, plus the same '
                     "pair in legacyWorkflowTypes on every entrypoint contract in "
-                    "contract/app.pkl (K015 checks they agree). Otherwise add a tile "
+                    "contract/app.pkl (K015 checks they agree). The alias covers "
+                    "Temporal workflow-type dispatch only: callers selecting "
+                    f"?entrypoint={ep.name} on /start must switch to the tile name. "
+                    "Otherwise add a tile "
                     "for it in contract/app.pkl and re-run pkl eval, or remove it."
                 ),
                 directives=directives_by_file.get(ep.filename, _empty_directives()),
@@ -279,7 +282,10 @@ def check_p016(
                     f"to '{missing_name}' and declare its old workflow type as an "
                     "alias in legacy_workflow_types (App class) and "
                     "legacyWorkflowTypes (contract/app.pkl) so existing runs keep "
-                    "dispatching. Otherwise remove the tile from contract/app.pkl "
+                    "dispatching; callers selecting the old name with ?entrypoint= "
+                    f"on /start must switch to '{missing_name}', since the alias "
+                    "does not cover that selector. Otherwise remove the tile from "
+                    "contract/app.pkl "
                     "and re-run pkl eval."
                 ),
                 directives=anchor_directives,
