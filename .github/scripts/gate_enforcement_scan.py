@@ -669,6 +669,22 @@ def fetch_tests_workflow_last_modified(
 ) -> Optional[str]:
     """When ``.github/workflows/tests.yaml`` last changed, or ``None``.
 
+    The date half of `fetch_tests_workflow_change`, for callers that only need
+    the cutoff.
+    """
+    return fetch_tests_workflow_change(repo, run=run)[0]
+
+
+def fetch_tests_workflow_change(
+    repo: str, run: RunFn = _run_gh
+) -> tuple[Optional[str], Optional[str]]:
+    """``(date, sha)`` of the last change to ``.github/workflows/tests.yaml``.
+
+    Both are ``None`` when the path has never existed. ``sha`` is also ``None``
+    when the listing did not carry one; it only feeds the introducing-PR
+    exemption (`fetch_pulls_for_commit`), so a missing sha leaves the plain
+    cutoff in force.
+
     The cutoff for `select_arrival_samples`: pull requests whose head commit is
     older than this ran against different CI wiring and say nothing about the
     wiring in place now (FND-1973).
@@ -686,7 +702,7 @@ def fetch_tests_workflow_last_modified(
                 "api",
                 f"repos/{repo}/commits?path={TESTS_WORKFLOW_PATH}&per_page=1",
                 "--jq",
-                "{d: .[0].commit.committer.date}",
+                "{d: .[0].commit.committer.date, s: .[0].sha}",
             ]
         )
     )
@@ -694,13 +710,39 @@ def fetch_tests_workflow_last_modified(
         raise GhError(f"unexpected tests workflow history payload for {repo}")
     last = payload.get("d")
     if last is None:
-        return None
+        return None, None
     if not isinstance(last, str):
         raise GhError(
             f"malformed tests workflow history for {repo}: expected a string "
             f"date, got {type(last).__name__}"
         )
-    return last
+    sha = payload.get("s")
+    if sha is not None and not isinstance(sha, str):
+        raise GhError(
+            f"malformed tests workflow history for {repo}: expected a string "
+            f"sha, got {type(sha).__name__}"
+        )
+    return last, sha
+
+
+def fetch_pulls_for_commit(repo: str, sha: str, run: RunFn = _run_gh) -> frozenset:
+    """Numbers of the pull requests that merged ``sha`` into the repo.
+
+    Used for the commit that last changed tests.yaml. That pull request ran the
+    new workflow on its own head, so it *is* evidence about the current wiring,
+    yet its head commit predates its own merge and the plain cutoff discards it.
+    A fleet resync changes tests.yaml in every repo at once, so without this
+    exemption every repo with no later pull request reads `no-data` — and is
+    reported not baselined — until something else is opened (FND-3480).
+    """
+    payload = _load_json(
+        run(["api", f"repos/{repo}/commits/{sha}/pulls", "--jq", "[.[].number]"])
+    )
+    if not isinstance(payload, list) or not all(
+        isinstance(n, int) and not isinstance(n, bool) for n in payload
+    ):
+        raise GhError(f"unexpected pulls-for-commit payload for {repo}@{sha}")
+    return frozenset(payload)
 
 
 # `states: [OPEN, MERGED]` is load-bearing (FND-1947). Without it a CLOSED-
@@ -1064,6 +1106,7 @@ def select_arrival_samples(
     stale_before: Optional[str],
     sample_size: int,
     repo: str = "",
+    exempt: frozenset = frozenset(),
 ) -> list:
     """The first ``sample_size`` samples whose head commit is current enough.
 
@@ -1078,9 +1121,11 @@ def select_arrival_samples(
     Note the direction of the residual error. Dropping every sample leaves the
     repo on arrival `no-data`, i.e. "no pull request has run since the workflow
     last changed" — the honest answer, and strictly better than the false
-    `never-arriving` those same samples would otherwise produce. It does mean a
-    repo that changes tests.yaml and then merges nothing reports `no-data` until
-    its next pull request.
+    `never-arriving` those same samples would otherwise produce.
+
+    ``exempt`` holds the pull requests that introduced the current tests.yaml
+    (see `fetch_pulls_for_commit`). They ran that workflow, so they are never
+    stale, and they keep a repo that merged nothing since off `no-data`.
 
     ``stale_before`` is ``None`` when the cutoff could not be read (no such
     file — the repo produces the context from a differently-named workflow — or
@@ -1101,7 +1146,7 @@ def select_arrival_samples(
         if len(selected) >= sample_size:
             break
         committed_date = sample.get("committedDate")
-        if cutoff is not None and committed_date:
+        if cutoff is not None and committed_date and sample.get("number") not in exempt:
             committed = _parse_timestamp(
                 committed_date, f"head commit date for PR #{sample.get('number')}"
             )
@@ -1289,6 +1334,7 @@ def fetch_arrival_samples(
     required_context: str,
     run: RunFn = _run_gh,
     stale_before: Optional[str] = None,
+    exempt: frozenset = frozenset(),
 ) -> list:
     owner, _, name = repo.partition("/")
     # Over-fetched, then narrowed to `sample_size` survivors below, so a draft
@@ -1335,6 +1381,7 @@ def fetch_arrival_samples(
         stale_before,
         sample_size,
         repo,
+        exempt,
     ):
         try:
             samples.append(
@@ -1535,8 +1582,10 @@ def scan_repo(
             print(f"::warning::{repo}: {exc}", file=sys.stderr)
         if sample_size > 0:
             stale_before: Optional[str] = None
+            change_sha: Optional[str] = None
+            exempt: frozenset = frozenset()
             try:
-                stale_before = fetch_tests_workflow_last_modified(repo, run=run)
+                stale_before, change_sha = fetch_tests_workflow_change(repo, run=run)
             except GhError as exc:
                 # Guarded like every other corroborating read: an unreadable
                 # cutoff disables the staleness filter for this repo and nothing
@@ -1547,6 +1596,17 @@ def scan_repo(
                     f"sampling without a staleness cutoff: {exc}",
                     file=sys.stderr,
                 )
+            if change_sha:
+                try:
+                    exempt = fetch_pulls_for_commit(repo, change_sha, run=run)
+                except GhError as exc:
+                    # Losing the exemption leaves the plain cutoff in force —
+                    # the pre-FND-3480 behaviour, never a looser filter.
+                    print(
+                        f"::warning::{repo}: pull request for the last tests "
+                        f"workflow change unreadable, no exemption: {exc}",
+                        file=sys.stderr,
+                    )
             try:
                 samples = fetch_arrival_samples(
                     repo,
@@ -1555,6 +1615,7 @@ def scan_repo(
                     required_context,
                     run=run,
                     stale_before=stale_before,
+                    exempt=exempt,
                 )
             except GhError as exc:
                 print(
