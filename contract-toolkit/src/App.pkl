@@ -3791,6 +3791,8 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
+    fmtSubsField(pyName, "list[str]", "default_factory=list", k)
   else if (u is Widgets.Radio)
     let (radio = u as Widgets.Radio)
     let (vals = radio.possibleValues.keys.toList())

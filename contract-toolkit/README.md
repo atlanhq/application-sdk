@@ -538,6 +538,9 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 `default` by hand on a multi-select is rejected. See `docs/reference.md` and the
 [`full`](examples/full/) example.
 
+`TagsInput` takes an optional `placeholderText`, shown while no tags are entered.
+It renders as `ui.placeholder`; unset, no `placeholder` key is emitted.
+
 ### Connection & Credential
 
 | Class | Widget | Python Type |
