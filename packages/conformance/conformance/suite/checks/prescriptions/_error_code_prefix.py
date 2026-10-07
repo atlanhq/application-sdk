@@ -357,6 +357,22 @@ def resolve_leaf_prefix(
     return result
 
 
+def is_same_name_base(
+    base: str, rec: ClassRecord, by_name: Mapping[str, ClassRecord]
+) -> bool:
+    """Whether *base* names *rec* itself rather than a distinct ancestor.
+
+    True for ``from other import X as _X`` + ``class X(_X)`` (the base de-aliases
+    to the class's own name) and for a module rebinding that points the base
+    name back at the class (``Base = Sub`` where ``class Sub(Base)``). Python
+    resolved the base when the class was created, so either way it is a class
+    the bare-name registry cannot hold, and the chain is unresolvable. Compared
+    against ``rec.name``, not the lookup key, so it holds when the class was
+    reached through a module alias.
+    """
+    return base == rec.name or by_name.get(base) is rec
+
+
 def resolve_ancestor(
     name: str,
     target: str,
@@ -404,7 +420,7 @@ def resolve_ancestor(
     result: bool = False
     same_name_base = False
     for base in rec.bases:
-        if base == rec.name:
+        if is_same_name_base(base, rec, by_name):
             # A base that de-aliases to the class's own name is an import of a
             # SAME-NAMED class from another module — Python forbids literal
             # self-inheritance, so this is always

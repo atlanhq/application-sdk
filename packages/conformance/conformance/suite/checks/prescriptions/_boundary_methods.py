@@ -43,7 +43,7 @@ from ._decorator_provenance import (
     is_entrypoint_decorator,
     is_task_decorator,
 )
-from ._error_code_prefix import ClassRecord
+from ._error_code_prefix import ClassRecord, is_same_name_base
 
 BoundaryKind = Literal["entrypoint", "task", "implicit_run"]
 
@@ -153,7 +153,8 @@ def reaches_app_family(
 ) -> bool | None:
     """Resolve whether the in-repo class *name* reaches an ``App``-family base.
 
-    Same ``True``/``False``/``None`` contract, memoisation and cycle handling as
+    Same ``True``/``False``/``None`` contract, memoisation, cycle handling and
+    same-name-base ``None`` (also through a module alias) as
     ``resolve_ancestor(name, "App", ...)``, with one extra stop: a base that the
     class's own module imported from the SDK ``App`` family is ``True``.
 
@@ -179,7 +180,7 @@ def reaches_app_family(
         if base in rec.sdk_app_bases:
             result = True
             break
-        if base == rec.name:
+        if is_same_name_base(base, rec, by_name):
             same_name_base = True
             continue
         reached = reaches_app_family(
@@ -244,7 +245,7 @@ def _linearize(
         for base in rec.bases:
             if base in rec.sdk_app_bases:
                 parents.append(("sdk", base))
-            elif base == rec.name:
+            elif is_same_name_base(base, rec, by_name):
                 return None
             else:
                 parents.append(("repo", base))

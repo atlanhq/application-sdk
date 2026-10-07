@@ -9,11 +9,21 @@ negatives are guarded.
 
 from __future__ import annotations
 
+import ast
 import json
 from pathlib import Path
 
 import pytest
+from conformance.suite.checks._ast_common import (
+    collect_module_alias_targets,
+    register_alias_records,
+)
 from conformance.suite.checks.prescriptions import main, scan_all, scan_text
+from conformance.suite.checks.prescriptions._boundary_methods import reaches_app_family
+from conformance.suite.checks.prescriptions._error_code_prefix import (
+    collect_classes,
+    collect_import_aliases,
+)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
@@ -3229,43 +3239,6 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
-def test_p013_silent_when_a_module_alias_names_the_same_named_subclass(
-    tmp_path: Path,
-) -> None:
-    """The toolkit shape behind a domain alias: ``Domain = AppInputContract``.
-
-    P013/P014 follow the module-level rebinding to the ``AppInputContract``
-    record, whose base de-aliases to that record's own name. The chain is just as
-    unresolvable as when the annotation names the class directly, so the alias
-    must not turn it into a proven non-Input.
-    """
-    files = {
-        "contracts.py": (
-            "from generated import AppInputContract as _GeneratedAppInputContract\n"
-            "class AppInputContract(_GeneratedAppInputContract):\n"
-            "    include_filter: str = ''\n"
-            "DomainInput = AppInputContract\n"
-        ),
-        "generated.py": (
-            "from application_sdk.contracts import Input\n"
-            "class AppInputContract(Input):\n"
-            "    connection_id: str = ''\n"
-        ),
-        "connector.py": (
-            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
-            "from contracts import DomainInput\n"
-            "class AppOutput(Output):\n"
-            "    rows: int = 0\n"
-            "class MyApp(App):\n"
-            "    async def run(self, input: DomainInput) -> AppOutput:\n"
-            "        return AppOutput()\n"
-        ),
-    }
-    assert list(files)[:2] == ["contracts.py", "generated.py"]
-    findings = _scan_files(tmp_path, files)
-    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
-
-
 _ALIASED_SAME_NAME_CONTRACTS = (
     "from pydantic import BaseModel\n"
     "from generated import AppInputContract as _GeneratedInput\n"
@@ -3280,6 +3253,10 @@ _ALIASED_SAME_NAME_CONTRACTS = (
     "DomainOutput = AppOutputContract\n"
     "ReExportedInput = DomainInput\n"
     "UnrelatedInput = NotAContract\n"
+    "from application_sdk.templates.contracts.sql_metadata import ExtractionInput\n"
+    "class RebindingInput(ExtractionInput):\n"
+    "    marker: str = ''\n"
+    "ExtractionInput = RebindingInput\n"
 )
 
 _ALIASED_SAME_NAME_GENERATED = (
@@ -3295,9 +3272,19 @@ _ALIASED_SAME_NAME_GENERATED = (
     ("method", "expected"),
     [
         pytest.param(
+            "    async def run(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p013-input-and-output-aliases",
+        ),
+        pytest.param(
             "    async def run(self, input: AppInputContract) -> DomainOutput:\n",
             [],
             id="p013-output-alias",
+        ),
+        pytest.param(
+            "    async def run(self, input: ExtractionInput) -> DomainOutput:\n",
+            [],
+            id="p013-module-rebinds-an-sdk-name-to-its-subclass",
         ),
         pytest.param(
             "    @task\n"
@@ -3327,13 +3314,29 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
         "generated.py": _ALIASED_SAME_NAME_GENERATED,
         "connector.py": (
             _APP_IMPORTS + "from contracts import AppInputContract, DomainInput, "
-            "DomainOutput, ReExportedInput, UnrelatedInput\n"
+            "DomainOutput, ExtractionInput, ReExportedInput, UnrelatedInput\n"
             "class MyApp(App):\n" + method + "        return DomainOutput()\n"
         ),
     }
-    assert list(files)[:2] == ["contracts.py", "generated.py"]
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_reaches_app_family_is_unknown_through_an_alias_of_a_same_named_subclass() -> (
+    None
+):
+    """``Alias = Base`` over ``class Base(_Base)`` stays unknown, not "no"."""
+    src = (
+        "from generated import Base as _Base\n"
+        "class Base(_Base):\n"
+        "    pass\n"
+        "Alias = Base\n"
+    )
+    tree = ast.parse(src)
+    aliases = collect_import_aliases(tree)
+    by_name = {rec.name: rec for rec in collect_classes(tree, "contracts.py", aliases)}
+    register_alias_records(by_name, collect_module_alias_targets(tree, aliases))
+    assert reaches_app_family("Alias", by_name, {}, set()) is None
 
 
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
