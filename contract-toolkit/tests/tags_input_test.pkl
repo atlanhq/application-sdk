@@ -1,0 +1,25 @@
+// Tests for TagsInput.placeholderText, emitted as the widget's `ui.placeholder`.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/full/app.pkl" as fullApp
+import "../src/App.pkl" as App
+
+local fullConfig = new json.Parser { useMapping = true }.parse(
+  fullApp.output.files["app/generated/full-featured.json"].text
+)["config"]["properties"]
+
+local tagsUi = fullConfig["tag_keys"]["ui"]
+
+facts {
+  ["TagsInput placeholder renders into the generated configmap ui block"] {
+    tagsUi["widget"] == "select"
+    tagsUi["mode"] == "tags"
+    tagsUi["placeholder"] == "OwningTeam"
+  }
+
+  ["TagsInput without placeholderText leaves ui.placeholder null"] {
+    new App.TagsInput { title = "x" }.ui.placeholder == null
+  }
+}

@@ -912,10 +912,17 @@ class TagsInput extends UIElement {
 
   hidden openByDefault: Boolean = false
 
+  /// Example value shown in the field while no tags are entered. Renders as
+  /// `ui.placeholder`; unset (the default) emits no `placeholder` key, so
+  /// existing output does not change. It is display text only and is never
+  /// submitted as a tag.
+  hidden placeholderText: String?
+
   fixed ui {
     widget = "select"
     mode = "tags"
     `open` = openByDefault
+    placeholder = placeholderText
   }
 }
 
