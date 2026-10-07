@@ -164,20 +164,20 @@ class TestProjects:
             "packages/conformance",
         ]
 
-    def test_the_conformance_project_exempts_the_sdk_and_pyatlan(self):
-        """Not interchangeable with the root's exempt set, and not shrinkable.
-
-        packages/conformance resolves atlan-application-sdk from PyPI, and the SDK
-        requires pyatlan>=10. Exempting the SDK without pyatlan does not fail — a
-        bounded resolve that cannot reach pyatlan 10 quietly backtracks to an
-        older SDK instead, which is how this went unnoticed the first time.
-        """
-        by_dir = {p.directory: set(p.exempt) for p in orchestrator.PROJECTS}
-        assert by_dir["packages/conformance"] == {"atlan-application-sdk", "pyatlan"}
+    def test_the_conformance_project_holds_the_sdk_and_exempts_pyatlan(self):
+        """packages/conformance resolves atlan-application-sdk from PyPI. The
+        lock refresh must not move it (FND-3481): the atlan framework
+        dependencies lane owns it, and both lanes rewriting the same entries is
+        what left one PR in conflict whichever merged first."""
+        exempt = {p.directory: set(p.exempt) for p in orchestrator.PROJECTS}
+        hold = {p.directory: set(p.hold) for p in orchestrator.PROJECTS}
+        assert hold["packages/conformance"] == {"atlan-application-sdk"}
+        assert exempt["packages/conformance"] == {"pyatlan"}
         # The root project consumes neither of its own packages from PyPI:
         # atlan-application-sdk IS this project, and the conformance package is
         # path-sourced via [tool.uv.sources].
-        assert by_dir["."] == {"pyatlan"}
+        assert exempt["."] == {"pyatlan"}
+        assert hold["."] == set()
 
 
 class TestBoundProject:
@@ -200,6 +200,8 @@ class TestBoundProject:
             )
             exempt = [argv[i + 1] for i, a in enumerate(argv) if a == "--exempt"]
             assert exempt == list(project.exempt)
+            hold = [argv[i + 1] for i, a in enumerate(argv) if a == "--hold"]
+            assert hold == list(project.hold)
 
 
 class TestBoundNpm:

@@ -643,8 +643,23 @@ and all declared in `renovate-config/default.json`:
 | command | lane | what it does |
 |---|---|---|
 | `renovate-pkl-sync` | `app-contract-toolkit` | re-resolves the Pkl lock and regenerates contract artifacts |
-| `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block |
-| `renovate-contract-ledger` | `lockFileMaintenance`, conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
+| `renovate-uv-lock-bounded` | `lockFileMaintenance` | re-resolves `uv.lock` under the org §5 release-age bound, then strips uv's `[options]` block; `--hold` keeps the first-party packages, and every transitive the framework lane would move, at the base branch's version (FND-3481) |
+| `renovate-contract-ledger` | conformance package | regenerates `contract_schema.lock.json` at the conformance version the branch locked |
+
+The lanes are disjoint by design (FND-3481). "update atlan framework
+dependencies" is the only lane that moves `atlan-application-sdk`,
+`atlan-application-sdk-conformance`, `app-contract-toolkit` and their generated
+outputs. Lock maintenance moves only third-party packages, and it also holds back
+the transitives a first-party release drags along, so normally the two PRs never
+edit the same lines whichever merges first. Two cases can still overlap: the
+replay that finds those transitives fails, or a held transitive moves anyway
+because its hold is an upload-time ceiling, not a pin. The driver reports both,
+and the backstop below rebases whatever conflicts. A held first-party package
+that moves is refused outright (`hold-moved`). They stay separate PRs on purpose: a third-party
+bump that breaks an app must not hold up a first-party release.
+`.github/workflows/renovate-rebase-conflicted.yaml` is the backstop. Every 15
+minutes it dispatches a scoped `renovate.yaml` run for any fleet repo whose
+Renovate PR still conflicts.
 
 Three rules apply to any command added here.
 
