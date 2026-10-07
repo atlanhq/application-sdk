@@ -3253,10 +3253,6 @@ _ALIASED_SAME_NAME_CONTRACTS = (
     "DomainOutput = AppOutputContract\n"
     "ReExportedInput = DomainInput\n"
     "UnrelatedInput = NotAContract\n"
-    "from application_sdk.templates.contracts.sql_metadata import ExtractionInput\n"
-    "class RebindingInput(ExtractionInput):\n"
-    "    marker: str = ''\n"
-    "ExtractionInput = RebindingInput\n"
 )
 
 _ALIASED_SAME_NAME_GENERATED = (
@@ -3282,11 +3278,6 @@ _ALIASED_SAME_NAME_GENERATED = (
             id="p013-output-alias",
         ),
         pytest.param(
-            "    async def run(self, input: ExtractionInput) -> DomainOutput:\n",
-            [],
-            id="p013-module-rebinds-an-sdk-name-to-its-subclass",
-        ),
-        pytest.param(
             "    @task\n"
             "    async def fetch(self, input: DomainInput) -> DomainOutput:\n",
             [],
@@ -3308,13 +3299,17 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
     tmp_path: Path, method: str, expected: list[str]
 ) -> None:
     """Aliases of same-named subclasses stay unresolvable on every boundary shape;
-    an alias of a class that never reaches Input is still a violation."""
+    an alias of a class that never reaches Input is still a violation.
+
+    Fixture order matters: contracts.py must be scanned before generated.py
+    (first-wins registry); the other order passes on main.
+    """
     files = {
         "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
         "generated.py": _ALIASED_SAME_NAME_GENERATED,
         "connector.py": (
             _APP_IMPORTS + "from contracts import AppInputContract, DomainInput, "
-            "DomainOutput, ExtractionInput, ReExportedInput, UnrelatedInput\n"
+            "DomainOutput, ReExportedInput, UnrelatedInput\n"
             "class MyApp(App):\n" + method + "        return DomainOutput()\n"
         ),
     }
@@ -3324,6 +3319,31 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
     assert [f.rule_id for f in findings] == expected
     if expected:
         assert "'UnrelatedInput'" in findings[0].message
+
+
+def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
+    """``input: Thing`` where another file binds ``Thing = Foo`` over
+    ``class Foo(Thing)``: the base names the lookup key, so it stays
+    unresolvable, as on main."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n"
+            "class Foo(Thing):\n"
+            "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from rebind import Thing\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Thing) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
 def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_class(

@@ -357,15 +357,16 @@ def resolve_leaf_prefix(
     return result
 
 
-def is_same_name_base(base: str, rec: ClassRecord) -> bool:
-    """Whether *base* de-aliases to *rec*'s own class name.
+def is_same_name_base(base: str, rec: ClassRecord, name: str) -> bool:
+    """Whether *base* names the class being walked rather than a distinct ancestor.
 
     That is ``from other import X as _X`` + ``class X(_X)``: an import of a
     same-named class the bare-name registry cannot hold, so the chain is
-    unresolvable. Compared against ``rec.name``, not the lookup key, so it holds
-    when the class was reached through a module alias.
+    unresolvable. *name* is the lookup key, which differs from ``rec.name`` when
+    the class was reached through a module alias; matching either keeps every
+    non-alias result unchanged and only ever adds the unresolvable outcome.
     """
-    return base == rec.name
+    return base in (rec.name, name)
 
 
 def resolve_ancestor(
@@ -394,7 +395,7 @@ def resolve_ancestor(
         *name* is not in the scanned universe (unknown / third-party /
         generated — assumed OK to avoid false positives), or its class (the
         record *name* resolves to, through any module alias) subclasses a
-        same-named import whose chain does not prove *target*.
+        same-named import and no other base proves *target*.
     """
     if name == target or name in known_targets:
         return True
@@ -415,7 +416,7 @@ def resolve_ancestor(
     result: bool = False
     same_name_base = False
     for base in rec.bases:
-        if is_same_name_base(base, rec):
+        if is_same_name_base(base, rec, name):
             # A base that de-aliases to the class's own name is an import of a
             # SAME-NAMED class from another module — Python forbids literal
             # self-inheritance, so this is always
