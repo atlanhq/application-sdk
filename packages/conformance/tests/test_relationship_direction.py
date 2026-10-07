@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import textwrap
 
-import pytest
 from conformance.suite.checks.prescriptions import scan_text as p_scan
 from conformance.suite.checks.prescriptions._relationship_directions import (
     DATA_PATH,
@@ -36,8 +35,9 @@ def _unsuppressed(src: str) -> list[Finding]:
 
 
 def test_committed_table_matches_pinned_pyatlan() -> None:
-    pytest.importorskip("pyatlan_v9")
-
+    # No importorskip: the [test] extra installs the SDK, which depends on
+    # pyatlan, so a missing pyatlan_v9 must fail here rather than let a stale
+    # table pass unnoticed.
     assert DATA_PATH.read_text(encoding="utf-8") == serialize(
         build_relationship_data()
     ), (
@@ -138,6 +138,16 @@ def test_fires_on_creator_keyword() -> None:
 
         def map_table(cols: list) -> Table:
             return Table.creator(name="t", schema_qualified_name="s", columns=cols)
+        """
+    )
+
+
+def test_fires_inside_lambda() -> None:
+    assert _unsuppressed(
+        """
+        from pyatlan_v9.model.assets import Table
+
+        build = lambda cols: Table(columns=cols)
         """
     )
 
@@ -261,6 +271,70 @@ def test_silent_on_none() -> None:
 
         t = Table(qualified_name="q", columns=None)
         t.columns = None
+        """
+    )
+
+
+def test_silent_on_empty_list() -> None:
+    assert not _p055(
+        """
+        from pyatlan_v9.model.assets import Table
+
+        t = Table(qualified_name="q", columns=[])
+        t.columns = []
+        t.columns = list()
+        t.columns.extend([])
+        """
+    )
+
+
+def test_silent_when_module_alias_is_shadowed_by_parameter() -> None:
+    assert not _p055(
+        """
+        import pyatlan_v9.model.assets as assets
+
+        def build(assets, cols):
+            return assets.Table(columns=cols)
+        """
+    )
+
+
+def test_silent_when_module_alias_is_reassigned() -> None:
+    assert not _p055(
+        """
+        import pyatlan_v9.model.assets as assets
+        import other_models
+
+        assets = other_models
+        t = assets.Table(columns=cols)
+        """
+    )
+
+
+def test_silent_when_enclosing_function_shadows_class_name() -> None:
+    assert not _p055(
+        """
+        from pyatlan_v9.model.assets import Table
+
+        def outer(Table):
+            def inner(cols):
+                return Table(columns=cols)
+            return inner
+        """
+    )
+
+
+def test_class_body_binding_does_not_shadow_methods() -> None:
+    """A class attribute named like an import is not visible inside methods."""
+    assert _unsuppressed(
+        """
+        from pyatlan_v9.model.assets import Table
+
+        class Mapper:
+            Table = None
+
+            def build(self, cols):
+                return Table(columns=cols)
         """
     )
 

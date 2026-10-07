@@ -26,13 +26,17 @@ helper), the site is still flagged if the value itself names the "N" type —
 — that pairs with ``a`` as a list end, and no pyatlan_v9 type carries a list
 ``a`` that is not a 1-to-N list end.  Anything else is left alone, so an
 unresolved receiver is a missed finding rather than a false one.  Assigning
-``None`` is not flagged: it leaves the end unset.
+``None`` or an empty list is not flagged: it names no children.
+
+Names resolve lexically: a pyatlan_v9 import name (``Table``, a module alias
+``A``) that a scope or an enclosing function rebinds — a parameter, an
+assignment, another import — is not treated as pyatlan_v9 there.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -89,6 +93,15 @@ class _Resolver:
         self._classes = classes
         self._modules = modules
 
+    def without(self, shadowed: frozenset[str]) -> _Resolver:
+        """This resolver with the names a scope rebinds removed."""
+        if not shadowed & (self._classes.keys() | self._modules):
+            return self
+        return _Resolver(
+            {k: v for k, v in self._classes.items() if k not in shadowed},
+            self._modules - shadowed,
+        )
+
     def class_ref(self, node: ast.expr | None) -> str | None:
         """``Y`` for a bare ``Y`` / ``A.Y`` naming an imported pyatlan_v9 class."""
         if isinstance(node, ast.Name):
@@ -132,36 +145,88 @@ class _Resolver:
         return found
 
 
-def _iter_scope(body: list[ast.stmt]) -> Iterator[ast.AST]:
-    """Yield nodes executing in this scope — nested defs/classes excluded."""
-    stack: list[ast.AST] = [n for n in body if not isinstance(n, _NESTED_SCOPES)]
+_Body = Sequence[ast.AST]
+
+
+def _iter_scope(body: _Body) -> Iterator[ast.AST]:
+    """Yield nodes executing in this scope.
+
+    A nested def, lambda or class is yielded itself (it binds a name or is a
+    value here) but not descended into: its body is a scope of its own.
+    """
+    stack: list[ast.AST] = list(body)
     while stack:
         node = stack.pop()
         yield node
-        stack.extend(
-            child
-            for child in ast.iter_child_nodes(node)
-            if not isinstance(child, _NESTED_SCOPES)
+        if not isinstance(node, _NESTED_SCOPES):
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _params(args: ast.arguments) -> list[ast.arg]:
+    return [
+        *args.posonlyargs,
+        *args.args,
+        *([args.vararg] if args.vararg else []),
+        *args.kwonlyargs,
+        *([args.kwarg] if args.kwarg else []),
+    ]
+
+
+def _is_pyatlan_import(node: ast.Import | ast.ImportFrom, alias: ast.alias) -> bool:
+    """Whether this import alias is one :func:`_collect_bindings` records."""
+    if isinstance(node, ast.ImportFrom):
+        return _is_assets_module(node.module) or (
+            node.module == "pyatlan_v9.model" and alias.name == "assets"
         )
+    return alias.name == _ASSETS_MODULE and alias.asname is not None
 
 
-def _scopes(tree: ast.Module) -> Iterator[tuple[list[ast.stmt], list[ast.arg]]]:
-    """Every scope's body with its parameters: the module, then each function."""
-    yield tree.body, []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
-            params = [
-                *node.args.posonlyargs,
-                *node.args.args,
-                *node.args.kwonlyargs,
-            ]
-            yield node.body, params
-        elif isinstance(node, ast.ClassDef):
-            yield node.body, []
+def _rebound_names(body: _Body, params: list[ast.arg]) -> frozenset[str]:
+    """Names this scope binds by anything other than a pyatlan_v9 import."""
+    names = {param.arg for param in params}
+    for node in _iter_scope(body):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store | ast.Del):
+            names.add(node.id)
+        elif isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            for alias in node.names:
+                if not _is_pyatlan_import(node, alias):
+                    names.add(alias.asname or alias.name.split(".")[0])
+    return frozenset(names)
+
+
+def _scopes(
+    tree: ast.Module,
+) -> Iterator[tuple[_Body, list[ast.arg], frozenset[str]]]:
+    """Every scope's body, its parameters and the names rebound where it runs.
+
+    The module, then each function, lambda and class body.  A function sees
+    the names its enclosing functions rebind; a class body's names do not reach
+    the methods inside it.
+    """
+
+    def walk(
+        body: _Body, params: list[ast.arg], outer: frozenset[str], is_class: bool
+    ) -> Iterator[tuple[_Body, list[ast.arg], frozenset[str]]]:
+        rebound = outer | _rebound_names(body, params)
+        yield body, params, rebound
+        inherited = outer if is_class else rebound
+        for node in _iter_scope(body):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+                yield from walk(node.body, _params(node.args), inherited, False)
+            elif isinstance(node, ast.Lambda):
+                yield from walk([node.body], _params(node.args), inherited, False)
+            elif isinstance(node, ast.ClassDef):
+                yield from walk(node.body, [], inherited, True)
+
+    yield from walk(tree.body, [], frozenset(), False)
 
 
 def _local_types(
-    body: list[ast.stmt], params: list[ast.arg], resolver: _Resolver
+    body: _Body, params: list[ast.arg], resolver: _Resolver
 ) -> dict[str, str]:
     """Names bound to a single known asset type in this scope.
 
@@ -199,8 +264,19 @@ def _local_types(
     return resolved
 
 
-def _is_none(node: ast.expr | None) -> bool:
-    return isinstance(node, ast.Constant) and node.value is None
+def _names_nothing(node: ast.expr | None) -> bool:
+    """``None``, ``[]``, ``()`` or ``list()`` — a value that names no children."""
+    if isinstance(node, ast.Constant):
+        return node.value is None
+    if isinstance(node, ast.List | ast.Tuple):
+        return not node.elts
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"list", "tuple"}
+        and not node.args
+        and not node.keywords
+    )
 
 
 def _message(owner: str | None, field: str, ends: list[SetEnd]) -> str:
@@ -298,7 +374,7 @@ class _P055:
         value: ast.expr | None,
         local_types: dict[str, str],
     ) -> None:
-        if value is None or _is_none(value):
+        if value is None or _names_nothing(value):
             return
         owner = local_types.get(receiver.id) if isinstance(receiver, ast.Name) else None
         if owner is not None:
@@ -310,8 +386,11 @@ class _P055:
         if resolved is not None:
             self._emit(site, resolved[0], field, resolved[1])
 
-    def scan_scope(self, body: list[ast.stmt], params: list[ast.arg]) -> None:
-        local_types = _local_types(body, params, self._resolver)
+    def scan_scope(
+        self, body: _Body, params: list[ast.arg], resolver: _Resolver
+    ) -> None:
+        self._resolver = resolver
+        local_types = _local_types(body, params, resolver)
         for node in _iter_scope(body):
             if isinstance(node, ast.Call):
                 self._check_call(node, local_types)
@@ -330,7 +409,11 @@ class _P055:
         if owner is not None:
             fields = self._table.get(owner, {})
             for kw in node.keywords:
-                if kw.arg is not None and kw.arg in fields and not _is_none(kw.value):
+                if (
+                    kw.arg is not None
+                    and kw.arg in fields
+                    and not _names_nothing(kw.value)
+                ):
                     self._emit(node, owner, kw.arg, [fields[kw.arg]])
             return
         func = node.func
@@ -356,7 +439,8 @@ def check_p055(
     classes, modules = _collect_bindings(tree)
     if not classes and not modules:
         return []
-    checker = _P055(filename, directives, _Resolver(classes, modules))
-    for body, params in _scopes(tree):
-        checker.scan_scope(body, params)
+    resolver = _Resolver(classes, modules)
+    checker = _P055(filename, directives, resolver)
+    for body, params, rebound in _scopes(tree):
+        checker.scan_scope(body, params, resolver.without(rebound))
     return checker.findings
