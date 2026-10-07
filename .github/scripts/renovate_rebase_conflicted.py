@@ -20,10 +20,14 @@ overlap nobody has thought of. It turns "up to four hours" into "one tick".
 What it does
 ------------
 1. One paginated GraphQL search for open PRs authored by the fleet App
-   (``app/atlan-app-fleet``) whose ``mergeable`` is ``CONFLICTING``. Filtering
-   on that author is the allowlist: only repos the self-hosted runner already
-   serves can be dispatched, so a PR elsewhere in the org can never widen the
-   runner's scope.
+   (``app/atlan-app-fleet``) whose ``mergeable`` is ``CONFLICTING``.
+   App authorship alone is NOT the allowlist: ``renovate.yaml``'s ``repos``
+   input feeds its matrix directly, bypassing the discovery filter, and a repo
+   that has left the fleet can still carry an old fleet-App PR. So each
+   candidate is then checked against the same membership rule the runner's
+   discovery applies (``discover_org_consumers``: the ``atlan-*-app`` name and
+   a ``renovate.json`` that extends the shared preset) — one read per
+   conflicted repo, paid only when something is conflicted.
 2. If any ``renovate.yaml`` run is queued or in progress, it does nothing — a
    live sweep reaches these repos anyway, and an earlier dispatch from this
    backstop is still working on them. Skipping is what keeps this from piling
@@ -49,6 +53,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from collections.abc import Callable
@@ -56,6 +61,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import discover_org_consumers as discover  # noqa: E402
 import renovate_fleet_scan as scan  # noqa: E402
 
 FLEET_AUTHOR = "app/atlan-app-fleet"
@@ -71,6 +77,38 @@ repository { nameWithOwner }
 
 Runner = Callable[..., subprocess.CompletedProcess]
 Fetch = Callable[[str, str, str], list[dict]]
+IsMember = Callable[[str], bool]
+
+_FLEET_NAME = re.compile(discover.DEFAULT_NAME_PATTERN)
+
+
+def fleet_member(repo: str, run_gh: discover.RunFn) -> bool:
+    """The runner's own discovery rule, applied to one repo.
+
+    Raises (via ``discover.DiscoveryError``) when the config cannot be read for
+    any reason but a 404: an unanswerable check must stop the dispatch, not
+    quietly admit or drop the repo.
+    """
+    if not _FLEET_NAME.match(repo.split("/", 1)[-1]):
+        return False
+    return discover.extends_preset(repo, discover.PRESET_MARKER, run=run_gh)
+
+
+def gh_as(token: str) -> discover.RunFn:
+    """A ``discover`` gh runner authenticated as ``token`` (the fleet App, which
+    can read every fleet repo's renovate.json; this repo's GITHUB_TOKEN cannot)."""
+
+    def run_gh(args: list) -> tuple:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env={**os.environ, "GH_TOKEN": token},
+        )
+        return result.returncode, result.stdout, result.stderr
+
+    return run_gh
 
 
 def search_query(org: str) -> str:
@@ -138,9 +176,14 @@ def run(
     dry_run: bool,
     fetch: Fetch,
     runner: Runner,
+    is_member: IsMember,
 ) -> list[str]:
     """Returns the repos dispatched (empty when there was nothing to do)."""
-    targets = conflicted_repos(fetch(fleet_token, search_query(org), _FIELDS))
+    conflicted = conflicted_repos(fetch(fleet_token, search_query(org), _FIELDS))
+    targets = [repo for repo in conflicted if is_member(repo)]
+    outside = sorted(set(conflicted) - set(targets))
+    if outside:
+        print(f"Not in the Renovate fleet, skipped: {', '.join(outside)}")
     if not targets:
         print("No conflicted fleet Renovate PRs.")
         return []
@@ -179,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
             token, query, fields, page_size=100
         ),
         runner=subprocess.run,
+        is_member=lambda repo: fleet_member(repo, gh_as(fleet_token)),
     )
     return 0
 

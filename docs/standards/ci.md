@@ -648,10 +648,14 @@ and all declared in `renovate-config/default.json`:
 
 The lanes are disjoint by design (FND-3481). "update atlan framework
 dependencies" is the only lane that moves `atlan-application-sdk`,
-`atlan-application-sdk-conformance`, `app-contract-toolkit`, their generated
-outputs, or the transitives a first-party release drags along. Lock maintenance
-moves only the remaining third-party packages, so the two PRs never edit the same
-lines whichever merges first. They stay separate PRs on purpose: a third-party
+`atlan-application-sdk-conformance`, `app-contract-toolkit` and their generated
+outputs. Lock maintenance moves only third-party packages, and it also holds back
+the transitives a first-party release drags along, so normally the two PRs never
+edit the same lines whichever merges first. Two cases can still overlap: the
+replay that finds those transitives fails, or a held transitive moves anyway
+because its hold is an upload-time ceiling, not a pin. The driver reports both,
+and the backstop below rebases whatever conflicts. A held first-party package
+that moves is refused outright (`hold-moved`). They stay separate PRs on purpose: a third-party
 bump that breaks an app must not hold up a first-party release.
 `.github/workflows/renovate-rebase-conflicted.yaml` is the backstop. Every 15
 minutes it dispatches a scoped `renovate.yaml` run for any fleet repo whose

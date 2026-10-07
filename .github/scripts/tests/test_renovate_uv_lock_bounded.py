@@ -722,6 +722,90 @@ class TestMain:
         after = bounded.lock_versions((project / "uv.lock").read_text())
         assert after["opentelemetry-api"] == "1.44.0"
 
+    def test_a_transitive_the_replay_removes_is_held(self, monkeypatch, tmp_path):
+        """lens F-5f8348: the framework PR deletes rocksdict's block, so this lane
+        must not edit it either."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped(
+            {
+                "atlan-application-sdk": ("3.41.0", old),
+                "rocksdict": ("0.3.28", old),
+            }
+        )
+        project = self._project(tmp_path, committed)
+        seen: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            seen.append(command)
+            if "--upgrade-package" in command:
+                body = {"atlan-application-sdk": ("3.42.1", old)}
+            else:
+                body = {
+                    "atlan-application-sdk": ("3.41.0", old),
+                    "rocksdict": ("0.3.28", old),
+                }
+            (Path(cwd) / "uv.lock").write_text(self._stamped(body))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        # Exit 1 is the window-empty hold (nothing third-party moved); what
+        # matters here is the flag on the bounded resolve.
+        bounded.main(argv + ["--hold", "atlan-application-sdk"])
+        assert "rocksdict=2026-01-01T00:00:01Z" in seen[1]
+
+    def test_a_named_hold_that_moves_anyway_is_refused(self, monkeypatch, tmp_path):
+        """lens F-009ad8: the hold is a ceiling, not a pin. If uv still moves a
+        named hold, this lane must not ship that first-party bump."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped({"atlan-application-sdk": ("3.41.5", old)})
+        project = self._project(tmp_path, committed)
+
+        def fake_run(command, cwd):
+            version = "3.42.1" if "--upgrade-package" in command else "3.42.0"
+            (Path(cwd) / "uv.lock").write_text(
+                self._stamped({"atlan-application-sdk": (version, old)})
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 1
+        on_disk = (project / "uv.lock").read_text()
+        assert bounded.lock_versions(on_disk) == {"atlan-application-sdk": "3.41.5"}
+        assert bounded.REFUSAL_HOLD_MOVED in on_disk
+
+    def test_a_transitive_hold_that_moves_is_reported_not_refused(
+        self, monkeypatch, tmp_path, capsys
+    ):
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped(
+            {
+                "atlan-application-sdk": ("3.41.0", old),
+                "fastapi": ("0.142.0", old),
+            }
+        )
+        project = self._project(tmp_path, committed)
+
+        def fake_run(command, cwd):
+            if "--upgrade-package" in command:
+                body = {
+                    "atlan-application-sdk": ("3.42.0", old),
+                    "fastapi": ("0.142.2", old),
+                }
+            else:
+                body = {
+                    "atlan-application-sdk": ("3.41.0", old),
+                    "fastapi": ("0.142.1", old),
+                }
+            (Path(cwd) / "uv.lock").write_text(self._stamped(body))
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 0
+        assert "Transitive hold did not keep" in capsys.readouterr().out
+
     def test_a_failed_replay_still_holds_the_named_packages(
         self, monkeypatch, tmp_path
     ):

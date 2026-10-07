@@ -45,7 +45,12 @@ class FakeGh:
         return [c for c in self.calls if c[1:3] == ["workflow", "run"]]
 
 
-def run(prs: list[dict], gh: FakeGh, dry_run: bool = False) -> list[str]:
+def run(
+    prs: list[dict],
+    gh: FakeGh,
+    dry_run: bool = False,
+    members: set[str] | None = None,
+) -> list[str]:
     seen: list[str] = []
 
     def fetch(token, query, fields):
@@ -59,6 +64,7 @@ def run(prs: list[dict], gh: FakeGh, dry_run: bool = False) -> list[str]:
         dry_run=dry_run,
         fetch=fetch,
         runner=gh,
+        is_member=lambda repo: members is None or repo in members,
     )
     assert seen == ["org:atlanhq is:pr is:open author:app/atlan-app-fleet"]
     return result
@@ -118,10 +124,61 @@ class TestRun:
         assert run([pr("atlanhq/a-app")], gh, dry_run=True) == []
         assert gh.dispatches == []
 
+    def test_repos_outside_the_fleet_are_never_dispatched(self):
+        """lens A1: renovate.yaml's `repos` input bypasses discovery, so the
+        backstop has to apply the membership rule itself."""
+        gh = FakeGh()
+        prs = [pr("atlanhq/a-app"), pr("atlanhq/left-the-fleet-app")]
+        assert run(prs, gh, members={"atlanhq/a-app"}) == ["atlanhq/a-app"]
+        field = gh.dispatches[0][gh.dispatches[0].index("-f") + 1]
+        assert json.loads(field.removeprefix("repos=")) == ["atlanhq/a-app"]
+
+    def test_no_member_targets_makes_no_dispatch(self):
+        gh = FakeGh()
+        assert run([pr("atlanhq/a-app")], gh, members=set()) == []
+        assert gh.calls == []
+
     def test_a_failed_gh_call_fails_the_run(self):
         # Fail loud: a backstop that silently stops dispatching is not one.
         with pytest.raises(RuntimeError):
             run([pr("atlanhq/a-app")], FakeGh(fail=True))
+
+
+class TestFleetMember:
+    PRESET = (
+        '{"extends": ["github>atlanhq/application-sdk//renovate-config/default.json"]}'
+    )
+
+    def gh(self, code: int, out: str = "", err: str = ""):
+        calls: list[list] = []
+
+        def run_gh(args):
+            calls.append(args)
+            return code, out, err
+
+        return run_gh, calls
+
+    def test_named_app_extending_the_preset_is_a_member(self):
+        run_gh, _ = self.gh(0, self.PRESET)
+        assert backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
+
+    def test_a_non_fleet_name_is_rejected_without_an_api_call(self):
+        run_gh, calls = self.gh(0, self.PRESET)
+        assert not backstop.fleet_member("atlanhq/some-service", run_gh)
+        assert calls == []
+
+    def test_a_config_without_the_preset_is_rejected(self):
+        run_gh, _ = self.gh(0, '{"extends": ["config:recommended"]}')
+        assert not backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
+
+    def test_no_renovate_json_is_rejected(self):
+        run_gh, _ = self.gh(1, err="gh: Not Found (HTTP 404)")
+        assert not backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
+
+    def test_an_unreadable_config_stops_the_run(self):
+        run_gh, _ = self.gh(1, err="HTTP 502")
+        with pytest.raises(backstop.discover.DiscoveryError):
+            backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
 
 
 def test_main_requires_both_tokens(monkeypatch):

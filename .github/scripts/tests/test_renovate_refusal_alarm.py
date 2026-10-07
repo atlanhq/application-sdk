@@ -210,7 +210,7 @@ def test_every_reason_the_driver_can_write_is_known_to_the_reader() -> None:
     }
     # Guard the collection itself: a rename of the REFUSAL_* prefix would empty
     # the set and make every assertion below vacuously true.
-    assert len(writable) == 5, f"unexpected refusal constants: {sorted(writable)}"
+    assert len(writable) == 6, f"unexpected refusal constants: {sorted(writable)}"
     standing = writable - classify.SELF_HEALING_REFUSALS
 
     assert standing == {
@@ -218,4 +218,5 @@ def test_every_reason_the_driver_can_write_is_known_to_the_reader() -> None:
         "unsatisfiable-floor",
         "floor-admitted-still-failed",
         "rollback",
+        "hold-moved",
     }

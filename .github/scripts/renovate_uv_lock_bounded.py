@@ -126,9 +126,9 @@ except ImportError:  # pragma: no cover - packaging is effectively universal
 # can tell them apart — and only one of them heals on its own. `WINDOW_EMPTY`
 # means the bound admitted nothing on this pass while Renovate's unbounded
 # resolve moved; the next pass that sees a package cross the window resolves
-# green with no intervention. The other four are standing faults (a broken
-# interpreter, an unsatisfiable floor, a yanked pin) that no amount of waiting
-# fixes.
+# green with no intervention. The other five are standing faults (a broken
+# interpreter, an unsatisfiable floor, a yanked pin, a held first-party package
+# the ceiling could not keep in place) that no amount of waiting fixes.
 #
 # The distinction is what lets the fleet reap the self-healing case on sight
 # while leaving a real wedge red for a human. Reaping on a clock instead —
@@ -145,6 +145,7 @@ REFUSAL_NO_PACKAGING = "no-packaging"
 REFUSAL_UNSATISFIABLE_FLOOR = "unsatisfiable-floor"
 REFUSAL_FLOOR_ADMITTED_STILL_FAILED = "floor-admitted-still-failed"
 REFUSAL_ROLLBACK = "rollback"
+REFUSAL_HOLD_MOVED = "hold-moved"
 
 # The one reason a machine may clear without a human. Kept as a set of one
 # rather than an equality check so adding a second self-healing path is a
@@ -584,8 +585,10 @@ def framework_lane_moves(
 
     So replay what that lane does — ``uv lock --upgrade-package`` for each held
     package, starting from the base branch's lock — and report what changed.
-    Holding that set too makes the two lanes' diffs disjoint. Packages the
-    replay ADDS need no hold: this lane has no reason to add them.
+    Holding that set too makes the two lanes' diffs disjoint. A package the
+    replay REMOVES counts as moved: the framework PR deletes its block, so this
+    lane must not edit it. Packages the replay ADDS need no hold: this lane has
+    no reason to add them.
 
     Returns None when the replay cannot run. That costs only the disjointness,
     never the bound — the caller holds the named packages alone and says so —
@@ -616,8 +619,28 @@ def framework_lane_moves(
     return {
         name
         for name, version in before.items()
-        if name not in held and after.get(name) not in (None, version)
+        if name not in held and after.get(name) != version
     }
+
+
+def moved_holds(
+    holds: list[str], before: dict[str, str], after: dict[str, str]
+) -> dict[str, tuple[str, str]]:
+    """Held packages the bounded resolve moved anyway.
+
+    A hold is a timestamp ceiling, not a pin — uv has no flag that pins one
+    package while upgrading the rest. The ceiling admits every release uploaded
+    at or before the locked version's newest file, so an older-numbered line
+    published later (a backport) can sit under it with a higher version beside
+    it. Rare, but the hold is a contract, so it is checked rather than assumed.
+    """
+    found: dict[str, tuple[str, str]] = {}
+    for name in holds:
+        key = normalise(name)
+        old, new = before.get(key), after.get(key)
+        if old is not None and old != new:
+            found[key] = (old, new or "removed")
+    return found
 
 
 def baseline_lock_text(cwd: Path, ref: str = "HEAD") -> str | None:
@@ -897,6 +920,27 @@ def main(argv: list[str] | None = None) -> int:
 
     after = lock_versions(lock_path.read_text())
 
+    # A named hold that moved would ship a first-party bump from this lane —
+    # without the framework lane's ledger and contract regeneration — so it is
+    # refused. A transitive hold that moved only costs disjointness, which the
+    # conflicted-PR rebase backstop repairs, so it is reported, not refused.
+    escaped = moved_holds(list(args.hold), before, after)
+    if escaped:
+        detail = ", ".join(
+            f"{n} {old} -> {new}" for n, (old, new) in sorted(escaped.items())
+        )
+        withhold(lock_path, baseline, args.window, reason=REFUSAL_HOLD_MOVED)
+        print(
+            f"Held first-party package(s) moved despite the hold: {detail}. The "
+            "hold is a release-time ceiling, and another release of the same "
+            "package sits under it — typically a backport uploaded after a newer "
+            "line. The atlan framework dependencies lane owns this package, so "
+            "this lane refuses rather than ship the move.",
+            file=sys.stderr,
+        )
+        return 1
+    leaked = moved_holds(sorted(transitive), before, after)
+
     regressed = rollbacks(before, after)
     if regressed:
         detail = ", ".join(
@@ -975,6 +1019,14 @@ def main(argv: list[str] | None = None) -> int:
         f"them published at least `{args.window}` ago",
         "- `[options]` stripped from `uv.lock` so `uv sync --locked` still validates",
     ]
+    if leaked:
+        lines.append(
+            "- **Transitive hold did not keep** (this PR may overlap the framework "
+            "lane's; the conflicted-PR backstop rebases it): "
+            + ", ".join(
+                f"{n} {old} -> {new}" for n, (old, new) in sorted(leaked.items())
+            )
+        )
     if admitted_early:
         lines.append(
             f"- **Admitted inside the window** because the repo floors them: "
