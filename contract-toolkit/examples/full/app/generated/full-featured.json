@@ -153,6 +153,20 @@
           "Materialised view"
         ]
       },
+      "tag_keys": {
+        "type": "array",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Tag keys",
+          "hidden": false,
+          "help": "Source tag keys to sync; leave empty to sync none.",
+          "placeholder": "OwningTeam",
+          "grid": 4,
+          "mode": "tags",
+          "open": false
+        }
+      },
       "lineage_depth": {
         "type": "number",
         "required": false,
@@ -305,6 +319,7 @@
           "load-to-atlan",
           "log_level",
           "asset_types",
+          "tag_keys",
           "lineage_depth",
           "table_prefix",
           "custom_attributes",
