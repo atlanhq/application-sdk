@@ -272,6 +272,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "these mark a deliberate no-traceback boundary where exc_info=True\n"
             "would serialize the raw exception past the sanitizer and can leak\n"
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
+            "\n\n**Fixing it well**\n\n"
+            "* An except block that catches an expected outcome rather than a failure (an empty result, a missing optional row, nothing to process) is not a warning: log it at ``logger.info`` or ``logger.debug``, which this rule does not inspect, and add no ``exc_info``, since a stack trace would make a normal run look like a crash. Remove any suppression the site carries. Keep the call inside the except block: setting a flag there and logging the same warning after the block only hides it from the rule. A handler that catches something that went wrong keeps its level and gains the trace.\n\n"
+            "* Everywhere else, ``exc_info=True`` on the existing log call is the fix.\n\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
         remediation_reference=RemediationReference(
