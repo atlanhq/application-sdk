@@ -25,7 +25,7 @@ class FullFeaturedMustacheSubstitutions(SQLMustacheSubstitutions):
         default_factory=lambda: ["Table", "View"],
         alias="{{asset_types}}",
     )
-    tag_keys: str = Field(default="", alias="{{tag_keys}}")
+    tag_keys: list[str] = Field(default_factory=list, alias="{{tag_keys}}")
     lineage_depth: int = Field(default=3, alias="{{lineage_depth}}")
     table_prefix: str = Field(default="", alias="{{table_prefix}}")
     custom_attributes: str = Field(default="", alias="{{custom_attributes}}")
