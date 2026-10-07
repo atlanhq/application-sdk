@@ -1,8 +1,4 @@
 // Tests for TagsInput.placeholderText, emitted as the widget's `ui.placeholder`.
-//
-// The frontend `select` widget reads `ui.placeholder` in every mode, including
-// `tags`, so an empty tags field can show an example value. Because `ui` is
-// fixed, an app cannot set the placeholder itself; the toolkit must expose it.
 
 amends "pkl:test"
 
@@ -21,10 +17,6 @@ facts {
     tagsUi["widget"] == "select"
     tagsUi["mode"] == "tags"
     tagsUi["placeholder"] == "OwningTeam"
-  }
-
-  ["TagsInput placeholderText maps to ui.placeholder"] {
-    new App.TagsInput { title = "x"; placeholderText = "OwningTeam" }.ui.placeholder == "OwningTeam"
   }
 
   ["TagsInput without placeholderText leaves ui.placeholder null"] {
