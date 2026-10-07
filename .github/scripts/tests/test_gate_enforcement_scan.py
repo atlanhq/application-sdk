@@ -1679,9 +1679,10 @@ def test_the_pr_that_changed_the_workflow_is_evidence_about_it():
     repo with no later PR read `no-data` — not baselined — after each fleet
     resync. Older PRs stay excluded: only the introducing PR is exempt."""
     record = scan_repo(
-        REPO, GATE, sample_size=5, run=_resync_run(
-            pulls_for_change=lambda: json.dumps([[{"number": 241}]])
-        ),
+        REPO,
+        GATE,
+        sample_size=5,
+        run=_resync_run(pulls_for_change=lambda: json.dumps([[{"number": 241}]])),
     )
     assert record["arrival"]["status"] == ARRIVAL_REPORTING
     assert record["arrival"]["prsSampled"] == 1
