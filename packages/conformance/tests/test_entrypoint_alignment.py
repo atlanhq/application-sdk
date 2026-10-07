@@ -1208,3 +1208,64 @@ def test_p016_multi_tile_route_comes_from_its_own_node_only(tmp_path: Path) -> N
     _write_routed_tiles(tmp_path, {"dataflow": dag})
     findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
     assert len(_p016_ids(findings)) == 2
+
+
+def test_p016_multi_tile_own_node_naming_another_app_still_drifts(
+    tmp_path: Path,
+) -> None:
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("other-app:extract-and-push")})
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert len(_p016_ids(findings)) == 2
+
+
+def test_p016_multi_tile_route_read_from_top_level_workflow_type(
+    tmp_path: Path,
+) -> None:
+    dag = {"extract": {"workflow_type": "lineage:extract-and-push"}}
+    _write_routed_tiles(tmp_path, {"dataflow": dag})
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tile_route_is_pinned_to_the_named_app(tmp_path: Path) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+                @entrypoint
+                async def crawl(self, input: Input) -> Output: ...
+            class OtherApp(App):
+                name = "other"
+                @entrypoint
+                async def extract_and_push(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(
+        tmp_path,
+        {
+            "crawl": _own_node("lineage:crawl"),
+            "dataflow": _own_node("lineage:extract-and-push"),
+        },
+    )
+    findings = [
+        f for f in scan_all(_write_py(tmp_path, py), tmp_path) if f.rule_id == "P016"
+    ]
+    messages = " ".join(f.message for f in findings)
+    assert len(findings) == 2
+    assert "'extract-and-push' is defined in code" in messages
+    assert "Tile 'dataflow'" in messages
+
+
+def test_p016_multi_tile_routed_to_a_missing_entrypoint_names_its_target(
+    tmp_path: Path,
+) -> None:
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("lineage:something-else")})
+    findings = [
+        f
+        for f in scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+        if f.rule_id == "P016"
+    ]
+    (tile_finding,) = [f for f in findings if "Tile 'dataflow'" in f.message]
+    assert "'lineage:something-else'" in tile_finding.message
+    assert 'Add @entrypoint(name="dataflow")' not in tile_finding.message

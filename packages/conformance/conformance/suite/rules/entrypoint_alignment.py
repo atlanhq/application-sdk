@@ -97,7 +97,8 @@ RULES: tuple[RuleDefinition, ...] = (
             " equal the set of subdir names, except where a subdir (a Marketplace"
             " tile) routes to an entry point: a tile whose manifest's own ``extract``"
             ' node has ``workflow_type`` ``"<app>:<wire>"`` is aligned with the'
-            " ``@entrypoint`` ``<wire>``, so several tiles may start one workflow"
+            " ``@entrypoint`` ``<wire>`` on the App registered as ``<app>``, so"
+            " several tiles may start one workflow"
             " (the route/card split). Renaming that entry point to a tile name would"
             " move its workflow type.\n"
             "\n"

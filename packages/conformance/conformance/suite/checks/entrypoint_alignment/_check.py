@@ -13,7 +13,9 @@ Let ``contract`` = subdir names under ``app/generated/`` that contain a
 
 * **absent** → no-op.
 * **single** → require ``len(code) <= 1`` (name unconstrained).
-* **multi** → require ``code == contract`` (exact set equality).
+* **multi** → require ``code == contract``, where a tile whose own node
+  starts ``"<app>:<wire>"`` stands for ``@entrypoint <wire>`` on the App
+  registered as ``<app>`` (route/card split).
 
 In all modes, unresolvable ``name=`` values produce an additional finding.
 """
@@ -93,6 +95,17 @@ def _best_anchor(
         ep = code.entrypoints[0]
         return ep.filename, ep.node
     return "app", _synthetic_node()
+
+
+def _entrypoint_owners(code: CodeEntrypointScan) -> dict[int, str | None]:
+    """Map each ``@entrypoint`` decorator node to its App's registered name."""
+    owners: dict[int, str | None] = {}
+    for app in code.app_classes:
+        for stmt in app.node.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                for deco in stmt.decorator_list:
+                    owners[id(deco)] = app.app_name
+    return owners
 
 
 def check_p016(
@@ -230,22 +243,26 @@ def check_p016(
             )
         return findings
 
-    # ── Multi-entry-point mode: set equality, widened by tile routes ────────────────────────────
-    # Route/card split: a tile whose own node starts
-    # "<app>:<wire>" is aligned with the @entrypoint <wire>. Several Marketplace
-    # tiles may start one workflow, and renaming that entry point to a tile name
-    # would move its workflow type.
+    # ── Multi-entry-point mode: set equality or tile route ───────────────────
     code_names = code.name_set()
     contract_names = contract.names
     contract_list = ", ".join(sorted(contract_names))
-    routed_entrypoints = {target for _, target in contract.tile_targets}
-    routed_tiles = {
-        tile for tile, target in contract.tile_targets if target in code_names
+    owners = _entrypoint_owners(code)
+    owned = {(owners.get(id(ep.node)), ep.name) for ep in code.entrypoints}
+    resolved = {
+        (tile, app, wire)
+        for tile, app, wire in contract.tile_targets
+        if (app, wire) in owned
     }
+    routed_entrypoints = {(app, wire) for _, app, wire in resolved}
+    routed_tiles = {tile for tile, _, _ in resolved}
+    targets = {tile: f"{app}:{wire}" for tile, app, wire in contract.tile_targets}
 
     # Code-only names: in @entrypoint code but absent from app/generated/
     for ep in code.entrypoints:
-        if ep.name in contract_names or ep.name in routed_entrypoints:
+        if ep.name in contract_names:
+            continue
+        if (owners.get(id(ep.node)), ep.name) in routed_entrypoints:
             continue
         findings.append(
             make_finding(
@@ -272,6 +289,24 @@ def check_p016(
     anchor_directives = directives_by_file.get(anchor_file, _empty_directives())
 
     for missing_name in sorted(contract_names - code_names - routed_tiles):
+        if missing_name in targets:
+            findings.append(
+                make_finding(
+                    filename=anchor_file,
+                    rule_id=_RULE_ID,
+                    node=anchor_node,
+                    message=(
+                        f"Tile '{missing_name}' (app/generated/{missing_name}/"
+                        f"manifest.json) starts '{targets[missing_name]}', but no "
+                        "App registered under that name defines that @entrypoint "
+                        f"(code defines: {code_list}). Point the tile's "
+                        "workflowType in contract/app.pkl at an existing entry "
+                        "point and re-run pkl eval, or add the entry point it names."
+                    ),
+                    directives=anchor_directives,
+                )
+            )
+            continue
         findings.append(
             make_finding(
                 filename=anchor_file,

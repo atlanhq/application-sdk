@@ -100,33 +100,37 @@ class ContractEntrypointScan:
     multi-mode tree itself.
     """
 
-    tile_targets: frozenset[tuple[str, str]] = field(default_factory=frozenset)
-    """``(tile name, target wire name)`` pairs in ``multi`` mode: the wire name
-    from the ``"<app>:<wire>"`` ``workflow_type`` of each tile manifest's own
-    ``extract`` node. A tile is a Marketplace card; its target is the entry point
-    it starts, so several tiles may share one (the multi-mode route/card split).
-    Only the tile's own node counts — a node elsewhere in its DAG names another
-    step or app. Empty outside ``multi`` mode and for a tile whose own node has
-    no colon-qualified ``workflow_type``.
+    tile_targets: frozenset[tuple[str, str, str]] = field(default_factory=frozenset)
+    """``(tile name, app name, wire name)`` in ``multi`` mode, from the
+    ``"<app>:<wire>"`` ``workflow_type`` of each tile manifest's own ``extract``
+    node. A tile is a Marketplace card and its target is the workflow it starts,
+    so several tiles may share one entry point (the multi-mode route/card
+    split). Only the tile's own node counts; the ``<app>`` half is kept so the
+    check can pin the target to the App that registers under that name. Empty
+    outside ``multi`` mode and for a tile whose own node has no colon-qualified
+    ``workflow_type``.
     """
 
 
-def _tile_target(manifest_path: Path) -> str | None:
-    """The wire name a multi-mode tile's own node starts, or ``None``."""
+def node_workflow_type(node: dict[str, Any]) -> str | None:
+    """A DAG node's ``workflow_type``, at the top level or under ``inputs``."""
+    wt = node.get("workflow_type")
+    if not isinstance(wt, str) or not wt:
+        inputs = node.get("inputs")
+        wt = inputs.get("workflow_type") if isinstance(inputs, dict) else None
+    return wt if isinstance(wt, str) and wt else None
+
+
+def _tile_target(manifest_path: Path) -> tuple[str, str] | None:
+    """The ``(app, wire)`` a multi-mode tile's own node starts, or ``None``."""
     data = load_manifest_document(manifest_path)
     dag = data.get("dag") if data is not None else None
     own_node = dag.get(_OWN_NODE_ID) if isinstance(dag, dict) else None
-    if not isinstance(own_node, dict):
+    workflow_type = node_workflow_type(own_node) if isinstance(own_node, dict) else None
+    if workflow_type is None or ":" not in workflow_type:
         return None
-    workflow_type = own_node.get("workflow_type")
-    if not isinstance(workflow_type, str) or not workflow_type:
-        inputs = own_node.get("inputs")
-        workflow_type = (
-            inputs.get("workflow_type") if isinstance(inputs, dict) else None
-        )
-    if not isinstance(workflow_type, str) or ":" not in workflow_type:
-        return None
-    return workflow_type.split(":", 1)[1] or None
+    app, wire = workflow_type.split(":", 1)
+    return (app, wire) if app and wire else None
 
 
 @dataclass(frozen=True)
@@ -233,13 +237,6 @@ def _routes_from_dag(
         app_name = source.get("app_name")
         return app_name if isinstance(app_name, str) and app_name else None
 
-    def _node_workflow_type(node: dict[str, Any]) -> str | None:
-        wt = node.get("workflow_type")
-        if not isinstance(wt, str) or not wt:
-            inputs = node.get("inputs")
-            wt = inputs.get("workflow_type") if isinstance(inputs, dict) else None
-        return wt if isinstance(wt, str) and wt else None
-
     def _walk(node: Any) -> None:
         if isinstance(node, dict):
             wt = node.get("workflow_type")
@@ -272,7 +269,7 @@ def _routes_from_dag(
         if isinstance(own_node, dict):
             own_identity = _node_app_name(own_node)
             if own_identity is None:
-                own_wt = _node_workflow_type(own_node)
+                own_wt = node_workflow_type(own_node)
                 if own_wt is not None and ":" in own_wt:
                     own_identity = own_wt.split(":", 1)[0] or None
     if own_identity is None and len(prefixes) == 1:
@@ -312,7 +309,7 @@ def scan_contract(root: Path) -> ContractEntrypointScan:
 
     if ep_names:
         tile_targets = {
-            (tile, target)
+            (tile, *target)
             for tile in ep_names
             if (target := _tile_target(generated / tile / "manifest.json")) is not None
         }
