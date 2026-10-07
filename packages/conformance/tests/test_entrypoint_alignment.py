@@ -1137,3 +1137,74 @@ def test_p016_ignores_a_non_literal_alias_declaration(tmp_path: Path) -> None:
     )
     findings = scan_all(paths, tmp_path)
     assert _p016_ids(findings) == []
+
+
+# ---------------------------------------------------------------------------
+# Multi-EP mode — route/card split: a tile routed to a code entry point
+# ---------------------------------------------------------------------------
+
+
+def _write_routed_tiles(tmp_path: Path, tiles: dict[str, dict]) -> None:
+    """Write one tile subdir per entry, with the given ``dag`` as its manifest."""
+    import json
+
+    for tile, dag in tiles.items():
+        tile_dir = tmp_path / "app" / "generated" / tile
+        tile_dir.mkdir(parents=True)
+        (tile_dir / "manifest.json").write_text(json.dumps({"dag": dag}))
+
+
+def _own_node(workflow_type: str, app_name: str | None = None) -> dict:
+    inputs: dict = {"workflow_type": workflow_type}
+    if app_name is not None:
+        inputs["app_name"] = app_name
+    return {"extract": {"activity_name": "execute_workflow", "inputs": inputs}}
+
+
+_ONE_ENTRYPOINT = {
+    "app/app.py": dedent("""\
+        from application_sdk.app import App, entrypoint
+        class LineageApp(App):
+            name = "lineage"
+            @entrypoint
+            async def extract_and_push(self, input: Input) -> Output: ...
+    """)
+}
+
+
+def test_p016_multi_tile_routed_to_entrypoint_is_aligned(tmp_path: Path) -> None:
+    _write_routed_tiles(
+        tmp_path,
+        {"dataflow": _own_node("lineage:extract-and-push", "lineage-dataflow")},
+    )
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tiles_sharing_one_entrypoint_are_aligned(tmp_path: Path) -> None:
+    _write_routed_tiles(
+        tmp_path,
+        {
+            "dataflow": _own_node("lineage:extract-and-push"),
+            "data-fusion": _own_node("lineage:extract-and-push"),
+            "vertex-ai": _own_node("lineage:extract-and-push"),
+        },
+    )
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tile_routed_elsewhere_still_drifts(tmp_path: Path) -> None:
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("lineage:something-else")})
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert len(_p016_ids(findings)) == 2
+
+
+def test_p016_multi_tile_route_comes_from_its_own_node_only(tmp_path: Path) -> None:
+    dag = {
+        **_own_node("lineage:something-else"),
+        "publish": {"inputs": {"workflow_type": "other-app:extract-and-push"}},
+    }
+    _write_routed_tiles(tmp_path, {"dataflow": dag})
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert len(_p016_ids(findings)) == 2
