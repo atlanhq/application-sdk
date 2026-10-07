@@ -2783,7 +2783,7 @@ jobs:
       # verdict is the gate line appended below rather than anything in it.
       - name: Download connector e2e results
         if: needs.e2e.result != 'skipped'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Trailing `*` as well as the middle one: a leg whose first upload
@@ -2968,7 +2968,7 @@ jobs:
       # integration is absent when it had no suite / was skipped — the CLI then
       # scores an empty (zero) integration tier, which correctly counts against.
       - name: Download unit evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Glob + merge-multiple rather than the bare name: the tier's retry
@@ -2979,7 +2979,7 @@ jobs:
           path: unit-evidence
 
       - name: Download integration evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Glob + merge-multiple, for the same reason as the unit tier above.
@@ -3002,7 +3002,7 @@ jobs:
       # applicable", never as "e2e scored zero".
       - name: Download e2e evidence (one artifact per leg)
         if: needs.e2e.result != 'skipped'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Trailing `*` as well as the middle one: a leg whose first upload
@@ -3104,7 +3104,7 @@ jobs:
         id: upload-scorecard
         if: hashFiles('results/test-readiness.json') != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-readiness-scorecard
           path: results/test-readiness.json
@@ -3126,7 +3126,7 @@ jobs:
       - name: Upload scorecard (retry)
         if: steps.upload-scorecard.outcome == 'failure'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # A DISTINCT name, never the first attempt's: a FinalizeArtifact
           # failure leaves an unfinalized record holding that name for the whole
