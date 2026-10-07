@@ -381,7 +381,9 @@ def resolve_ancestor(
         external base simply fails to confirm the target.
     ``None``
         *name* is not in the scanned universe (unknown / third-party /
-        generated — assumed OK to avoid false positives).
+        generated — assumed OK to avoid false positives), or its class (the
+        record *name* resolves to, through any module alias) subclasses a
+        same-named import whose chain does not prove *target*.
     """
     if name == target or name in known_targets:
         return True

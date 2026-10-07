@@ -179,7 +179,7 @@ def reaches_app_family(
         if base in rec.sdk_app_bases:
             result = True
             break
-        if base == name:
+        if base == rec.name:
             same_name_base = True
             continue
         reached = reaches_app_family(
@@ -244,7 +244,7 @@ def _linearize(
         for base in rec.bases:
             if base in rec.sdk_app_bases:
                 parents.append(("sdk", base))
-            elif base == name:
+            elif base == rec.name:
                 return None
             else:
                 parents.append(("repo", base))

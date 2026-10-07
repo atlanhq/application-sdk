@@ -3261,8 +3261,79 @@ def test_p013_silent_when_a_module_alias_names_the_same_named_subclass(
             "        return AppOutput()\n"
         ),
     }
+    assert list(files)[:2] == ["contracts.py", "generated.py"]
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+_ALIASED_SAME_NAME_CONTRACTS = (
+    "from pydantic import BaseModel\n"
+    "from generated import AppInputContract as _GeneratedInput\n"
+    "from generated import AppOutputContract as _GeneratedOutput\n"
+    "class AppInputContract(_GeneratedInput):\n"
+    "    include_filter: str = ''\n"
+    "class AppOutputContract(_GeneratedOutput):\n"
+    "    rows: int = 0\n"
+    "class NotAContract(BaseModel):\n"
+    "    value: str = ''\n"
+    "DomainInput = AppInputContract\n"
+    "DomainOutput = AppOutputContract\n"
+    "ReExportedInput = DomainInput\n"
+    "UnrelatedInput = NotAContract\n"
+)
+
+_ALIASED_SAME_NAME_GENERATED = (
+    "from application_sdk.contracts import Input, Output\n"
+    "class AppInputContract(Input):\n"
+    "    connection_id: str = ''\n"
+    "class AppOutputContract(Output):\n"
+    "    total: int = 0\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        pytest.param(
+            "    async def run(self, input: AppInputContract) -> DomainOutput:\n",
+            [],
+            id="p013-output-alias",
+        ),
+        pytest.param(
+            "    @task\n"
+            "    async def fetch(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p014-task-aliases",
+        ),
+        pytest.param(
+            "    async def run(self, input: ReExportedInput) -> DomainOutput:\n",
+            [],
+            id="p013-alias-of-alias",
+        ),
+        pytest.param(
+            "    async def run(self, input: UnrelatedInput) -> DomainOutput:\n",
+            ["P013"],
+            id="p013-alias-of-unrelated-class-still-fires",
+        ),
+    ],
+)
+def test_aliased_same_named_contracts_across_boundary_shapes(
+    tmp_path: Path, method: str, expected: list[str]
+) -> None:
+    """Aliases of same-named subclasses stay unresolvable on every boundary shape;
+    an alias of a class that never reaches Input is still a violation."""
+    files = {
+        "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
+        "generated.py": _ALIASED_SAME_NAME_GENERATED,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import AppInputContract, DomainInput, "
+            "DomainOutput, ReExportedInput, UnrelatedInput\n"
+            "class MyApp(App):\n" + method + "        return DomainOutput()\n"
+        ),
+    }
+    assert list(files)[:2] == ["contracts.py", "generated.py"]
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
 
 
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
