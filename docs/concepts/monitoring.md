@@ -473,11 +473,12 @@ row is `{"kind", "type_name", "detail", "count"}`:
 | `truncated` | empty | summed count of rows past the cap (100) |
 
 Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
-breakdown by app, tenant, type and rule:
+breakdown by app, tenant, type and rule — bound `Timestamp` and prefix-filter `ServiceName` first,
+because `Body` is not indexed and an unbounded fleet scan of `service_logs` does not return:
 
 ```sql
 SELECT LogAttributes['app_name'] AS app,
-       ResourceAttributes['k8s.domain.name'] AS tenant,
+       TenantName AS tenant,
        JSONExtractString(row, 'kind') AS kind,
        JSONExtractString(row, 'type_name') AS type_name,
        JSONExtractString(row, 'detail') AS detail,
@@ -485,7 +486,9 @@ SELECT LogAttributes['app_name'] AS app,
        count() AS runs
 FROM otel_logs.service_logs
 ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
-WHERE Body = 'Transformed-asset validation outcome'
+WHERE Timestamp >= now() - INTERVAL 1 DAY
+  AND ServiceName LIKE 'atlan-%'
+  AND Body = 'Transformed-asset validation outcome'
   AND LogAttributes['outcome'] = 'flagged'
 GROUP BY app, tenant, kind, type_name, detail
 ORDER BY n DESC
