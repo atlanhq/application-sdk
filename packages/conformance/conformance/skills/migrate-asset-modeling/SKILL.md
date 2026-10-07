@@ -8,7 +8,8 @@ description: >
   to_nested_dict / to_atlas_format / .dict() (P052, O002), asset mappers
   with a return annotation (O003), and asset models imported from
   pyatlan_v9.model.assets instead of the legacy pyatlan.model.assets
-  (O004). The skill inventories every site, decides per site whether a
+  (O004), and 1-to-N links written from the child's single reference rather
+  than the parent's list (P055). The skill inventories every site, decides per site whether a
   creator owns the grammar (rewrite), no creator owns it (centralise into
   one module plus a justified ignore), or the change would alter asset
   identity or wire shape (owner decision), then applies the agreed changes
@@ -30,7 +31,7 @@ optional_triggers:
   - "pyatlan_v9 migration"
   - "to_nested_bytes replacement"
 owner: connector-platform-team
-last_updated: "2026-10-05"
+last_updated: "2026-10-07"
 staleness_days: 90
 inputs:
   - app_root: "auto-detected — the directory containing app/ and pyproject.toml"
@@ -38,18 +39,19 @@ outputs:
   - app code with qualifiedNames taken from pyatlan_v9 creators, or centralised in one qualified-names module with a justified ignore per helper
   - app code that serializes every entity with entity_bytes(asset, envelope=...)
   - asset mappers with return annotations; asset imports from pyatlan_v9.model.assets
+  - asset mappers that link each child to its parent from the child side (1-to-N relationships)
   - pyproject.toml and uv.lock (SDK raised to >= 3.39.0 only when creators are adopted and the lock is below it)
   - updated tests, including a qualifiedName parity test over a recorded fixture
 ---
 
-# Migrate asset modeling (P028, P052, O002, O003, O004)
+# Migrate asset modeling (P028, P052, P055, O002, O003, O004)
 
 ## Conformance rules this skill clears
 
-P028, P052, O002, O003, O004. These rules name this skill as their
+P028, P052, P055, O002, O003, O004. These rules name this skill as their
 `remediation_reference`, and `/remediate` hands their findings here. When the
 skill is done, run
-`atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004` and
+`atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004` and
 confirm none of these rule ids is still reported.
 
 ## Why this matters
@@ -68,11 +70,12 @@ so the skill proves parity before it finishes.
 |---|---|---|
 | P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the qualifiedName comes from `X.creator(...).qualified_name` or `Process.generate_qualified_name(...)`, or the site carries a justified ignore |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
+| P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
 | O003 | a function with no return annotation that returns a directly constructed asset `X(...)` | the function has a return annotation |
 | O004 | an import of `pyatlan.model.assets` | the import is `pyatlan_v9.model.assets` |
 
-Scope: P028 and the O-rules scan every non-test Python file (`main.py` and
+Scope: P028, P055 and the O-rules scan every non-test Python file (`main.py` and
 `scripts/` too); P052 scans `app/` only. A suppression directive must be on
 the finding's line or on a comment-only line directly above it.
 
@@ -116,6 +119,13 @@ def bi_process_qn(connection_qn: str, question_id: Any) -> str:
     return f"{connection_qn}/questions_dashboards/{question_id}"
 ```
 
+1-to-N link from the child side — the parent's list stays unset
+(`atlan-metabase-app` `app/asset_mapper.py`):
+
+```python
+asset.metabase_collection = RelatedMetabaseCollection(qualified_name=collection_qn)
+```
+
 Process identity — `Process.generate_qualified_name(..., process_id=...)`
 returns `f"{connection_qualified_name}/{process_id}"`.
 
@@ -149,7 +159,7 @@ add them (`atlan-metabase-app` `serialize_entity`); never fall back to
      strings from creators does not need the raise.
    - Below 3.20.0: stop, and run `migrate-off-daft` first.
 2. Record the baseline: run
-   `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004 --exit-zero --output "$TMPDIR/before.sarif"`
+   `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004 --exit-zero --output "$TMPDIR/before.sarif"`
    and the test suite. Record the tests that already fail; they do not block
    this skill, and they must not get worse.
 3. Capture the app's current output for parity. Run the offline (recorded
@@ -239,10 +249,17 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    different `lastSyncRunAt` values. `entity_bytes` returns bytes: the sink must accept bytes (JSONL).
    A `.dict()` on a model that is not an asset is a false positive: ignore it
    with that reason.
+5. **P055** — remove the list from the parent and set the single reference
+   the finding names on each child instead (`activity.fabric_process =
+   RelatedProcess(qualified_name=process_qn)`). The child's mapper must know
+   its parent's qualifiedName; derive it from the child's source record, not
+   from the parent asset. If a child is emitted only through the parent's
+   list (no mapper of its own), that is an owner decision: the app has to
+   start emitting the child.
 
 ## Step 3 — Prove it
 
-1. `atlan-application-sdk-conformance detect --rule P028,P052,O002,O003,O004 --exit-zero --output <file>`
+1. `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004 --exit-zero --output <file>`
    — no finding left except the agreed ignores and the owner-decision sites
    (expected, unsuppressed). The checker does not see the hand-built helpers
    from Step 1 (for example a `_qn(*parts)` join): grep their call sites and
@@ -256,7 +273,11 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    entity. Every value must be present before and after, with the same count.
    Ignore volatile fields such as `lastSyncRunAt`. On the `entity_bytes`
    path, `connectionName` added and placeholder guids removed are expected;
-   anything else is a defect unless the developer accepts it.
+   anything else is a defect unless the developer accepts it. P055 fixes
+   move references by design: each parent loses its list of child
+   references and each child gains one reference to its parent. Compare
+   those as the set of `(parent, child)` pairs, which must be equal before
+   and after.
 4. Pin the parity in the repo: commit the before-snapshot as JSON next to the
    recorded fixture, assert `Counter` equality against it in the offline
    test, and change one grammar on purpose to confirm the test fails, then

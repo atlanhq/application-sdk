@@ -55,6 +55,9 @@ Currently implemented:
   ``app/generated/``) serializes a pyatlan asset itself (``to_nested_bytes`` /
   ``to_nested_dict`` / ``pyatlan_v9`` ``to_atlas_format``) instead of through
   the SDK's ``entity_bytes`` seam.  Per-file.
+* ``P055`` OneToManyLinkFromParent — a pyatlan_v9 mapper populates the list end
+  of a 1-to-N relationship (``Table.columns``) instead of the single end on the
+  child (``Column.table``).  Per-file.
 
 Inline suppression
 ------------------
@@ -106,6 +109,7 @@ from ._framework_transfer import check_p008
 from ._getattr_contract_field import check_p026
 from ._prefix_transfer import check_p044
 from ._qualified_name import check_p028
+from ._relationship_direction import check_p055
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
 from ._unbounded_fields import UnboundedContractFieldsChecker
@@ -118,7 +122,7 @@ __all__ = ["SERIES", "discover", "main", "scan_all", "scan_path", "scan_text"]
 def scan_text(text: str, file: str) -> list[Finding]:
     """Scan a single Python source *text* for per-file findings.
 
-    Runs P001, P002, P008–P012, P015, P026, P028, P044 and P052 — every rule that needs only
+    Runs P001, P002, P008–P012, P015, P026, P028, P044, P052 and P055 — every rule that needs only
     a single file's AST.  P003, P013, P014 and P027 need cross-file context; use
     :func:`scan_all` for full-suite runs.  Kept for symmetry with the per-file
     ``scan_path`` runner contract.
@@ -151,6 +155,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
     findings_p028 = check_p028(tree, file, directives)
     findings_p044 = check_p044(tree, file, directives)
     findings_p052 = check_p052(tree, file, directives)
+    findings_p055 = check_p055(tree, file, directives)
 
     return (
         p001._findings
@@ -165,11 +170,12 @@ def scan_text(text: str, file: str) -> list[Finding]:
         + findings_p028
         + findings_p044
         + findings_p052
+        + findings_p055
     )
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044 + P052).
+    """Scan a single Python file (P001 + P002 + P008–P012 + P015 + P026 + P028 + P044 + P052 + P055).
 
     P003, P013, P014 and P027 require :func:`scan_all` for cross-file resolution.
     """
@@ -188,7 +194,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     """Multi-pass scan over *paths*, emitting all P-series findings.
 
     Pass 1 — parse every file once, run the per-file rules (P001, P002,
-    P008–P012, P015, P026, P028, P044, P052), collect every ``ClassDef`` into a name-keyed
+    P008–P012, P015, P026, P028, P044, P052, P055), collect every ``ClassDef`` into a name-keyed
     registry along with its base names and any literal ``code`` declaration.
     Store each parsed tree for the P013/P014 and P027 cross-file passes.
 
@@ -256,7 +262,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         p002_checker.visit(tree)
         findings.extend(p002_checker._findings)
 
-        # P008–P012, P015, P026, P028, P044, P052 (per-file)
+        # P008–P012, P015, P026, P028, P044, P052, P055 (per-file)
         findings.extend(check_p008(tree, rel_str, directives))
         findings.extend(check_p009(tree, rel_str, directives))
         findings.extend(check_p010(tree, rel_str, directives))
@@ -267,6 +273,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         findings.extend(check_p028(tree, rel_str, directives))
         findings.extend(check_p044(tree, rel_str, directives))
         findings.extend(check_p052(tree, rel_str, directives))
+        findings.extend(check_p055(tree, rel_str, directives))
 
         # Class registry for P003 and P013/P014 — de-alias base names so aliased
         # imports of leaf/base classes don't hide the real ancestry.

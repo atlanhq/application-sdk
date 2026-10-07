@@ -739,4 +739,75 @@ RULES: tuple[RuleDefinition, ...] = (
             target="migrate-asset-modeling",
         ),
     ),
+    RuleDefinition(
+        id="P055",
+        canonical_reference=(
+            "atlan-metabase-app app/asset_mapper.py — the dashboard and question "
+            "mappers link each child to its collection from the child side "
+            "(`asset.metabase_collection = RelatedMetabaseCollection(...)`) and "
+            "never populate `MetabaseCollection.metabase_dashboards` / "
+            "`metabase_questions`."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P055] <reason>` is correct "
+            "only where the list end is set on an asset that is never published "
+            "ahead of its children — e.g. a value built for a comparison or a "
+            "test double. The reason must name why publish ordering cannot apply. "
+            "A directive on a mapper that writes the asset to transformed output "
+            "is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="OneToManyLinkFromParent",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.44.0",
+        rationale=(
+            "Publish orders entities by type and sends the '1' side of a 1-to-N "
+            "relationship first, relying on each child to reference its parent. "
+            "A parent that lists its children instead names entities that do not "
+            "exist yet, so Atlas returns ATLAS-404-00-00A and the run fails until "
+            "a later run, after the children were created. Nothing at runtime "
+            "stops a new connector from writing the link this way, so it recurs "
+            "app by app; catching it in the mapper is the earliest point."
+        ),
+        short_description=(
+            "Mapper populates the list end of a 1-to-N relationship instead of "
+            "the child's single reference"
+        ),
+        full_description=(
+            "In a module importing ``pyatlan_v9.model.assets``, the mapper sets\n"
+            "the list end of a 1-to-N relationship — the parent's\n"
+            "``Process.fabric_activities`` or ``Table.columns`` — instead of the\n"
+            "single end on each child (``FabricActivity.fabric_process``,\n"
+            "``Column.table``):\n"
+            "\n"
+            "* ``X(..., a=...)`` or ``X.creator(..., a=...)``;\n"
+            "* ``x.a = ...``, ``x.a += ...`` or ``x.a.append(...)`` /\n"
+            "  ``.extend(...)`` / ``.insert(...)``, where ``x`` is bound in the same\n"
+            "  scope to ``X(...)`` / ``X.creator(...)`` or annotated ``X``;\n"
+            "* the same assignment or append on a receiver of unknown type, when\n"
+            "  the value names the child type (``[RelatedColumn(...)]``,\n"
+            "  ``Column.ref_by_qualified_name(...)``) and that pairs with ``a``.\n"
+            "\n"
+            "The list ends come from a table generated off the pinned pyatlan_v9\n"
+            "models (``gen-relationship-directions``): an end whose single-valued\n"
+            "inverse is on the child type.  Many-to-many ends such as\n"
+            "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
+            "flagged.  Raw-dict mappers are out of scope — move them to\n"
+            "``pyatlan_v9`` first (O004).\n"
+            "\n"
+            "Fix: drop the list from the parent and set the single reference on\n"
+            "each child, e.g. ``activity.fabric_process =\n"
+            "RelatedProcess(qualified_name=process_qn)``.  Publish then sends the\n"
+            "parent first and each child references a parent that already exists.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
 )
