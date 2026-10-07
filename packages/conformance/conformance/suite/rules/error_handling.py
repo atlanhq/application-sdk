@@ -42,9 +42,13 @@ RULES: tuple[RuleDefinition, ...] = (
         full_description=(
             "A bare ``except: pass`` catches KeyboardInterrupt, SystemExit, and\n"
             "GeneratorExit and discards them with no trace.  This is the hardest class\n"
-            "of bugs to debug.  Replace with a typed catch that at minimum logs the\n"
-            "error with ``exc_info=True``.  Never acceptable — even cleanup paths\n"
-            "should log at DEBUG.\n"
+            "of bugs to debug.  Replace with a typed catch that records the failure.\n"
+            "Use ``exc_info=True`` only when the exception and traceback are known\n"
+            "safe to expose.  For data-bearing casts or conversions whose exception\n"
+            "text or traceback can contain source-cell values, log only the exception\n"
+            "class and safe column/source/target-type context; do not log exception\n"
+            "text, source values, or the traceback.  Never acceptable — even cleanup\n"
+            "paths should log at DEBUG.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
         remediation_reference=RemediationReference(
@@ -57,7 +61,10 @@ RULES: tuple[RuleDefinition, ...] = (
         canonical_reference=(
             "atlan-metabase-app app/api_types.py — `_to_millis` catches ValueError around "
             "timestamp parsing and logs the offending value with exc_info=True before "
-            "returning None. Naming the exception type does not excuse an empty body."
+            "returning None. This is specific to that known timestamp parse, not a "
+            "blanket instruction for data-bearing casts whose exception text or "
+            "traceback may contain source-cell values. Naming the exception type does "
+            "not excuse an empty body."
         ),
         terminal_state=(
             "Control flow must not change — the swallow is existing, deliberate "
@@ -85,10 +92,17 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description="Typed 'except SomeError: pass' discards exception silently",
         full_description=(
-            "A typed catch that still discards silently loses the stack trace entirely.\n"
-            "Acceptable only for truly trivial best-effort operations where failure is\n"
-            "100% expected AND the surrounding code handles the missing result, AND\n"
-            "there is a comment explaining the reasoning.\n"
+            "A typed catch that still discards silently loses failure evidence.\n"
+            "Replace ``pass`` with an observable diagnostic while preserving control\n"
+            "flow.  For data-bearing casts or conversions (e.g. Arrow/pandas), the\n"
+            "exception text or traceback may contain arbitrary source-cell values:\n"
+            "log only the exception class and safe column/source/target-type context.\n"
+            "Do not log the exception object or text, source values, or a traceback/\n"
+            "``exc_info``.  Use ``exc_info=True`` only when the exception and\n"
+            "traceback are known safe to expose.  Acceptable only for truly trivial\n"
+            "best-effort operations where failure is 100% expected AND the\n"
+            "surrounding code handles the missing result, AND there is a comment\n"
+            "explaining the reasoning.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
         remediation_reference=RemediationReference(

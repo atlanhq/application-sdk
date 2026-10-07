@@ -151,11 +151,31 @@ outcome mirroring the error-handling shape in the reference app named by
 `finding.canonical_reference`:
 
 - **E002 TypedExceptPass** — the `except SomeError: pass` swallows the
-  exception silently.  Propose replacing `pass` with a log call:
-  `logger.warning("Ignoring %s: %s", type(e).__name__, e, exc_info=True)`,
-  where `e` is the except clause variable (or `exc` if bare).  If the
-  surrounding context suggests a best-effort probe (e.g. feature detection at
-  import time), note this in the residue as a suppression candidate.
+  exception silently.  Replace `pass` with an observable diagnostic while
+  preserving control flow. First inspect what the operation may place in its
+  exception text or traceback. For casts/conversions over arbitrary source data
+  (e.g. Arrow or pandas), do not log the exception object or text (`e`, `str(e)`,
+  or an exception value passed as `%s`) and do not use `exc_info=True`: either
+  can expose source-cell values. Log only the exception class and safe structural
+  context (such as a non-sensitive column name and source/target types), without
+  cell values or a traceback, for example:
+
+  ```python
+  logger.warning(
+      "Could not cast column %s from %s to %s (%s)",
+      column_name,
+      source_type,
+      target_type,
+      type(e).__name__,
+  )
+  ```
+
+  For other operations whose exception text and traceback are known safe to
+  expose, log the exception with `exc_info=True`. The Metabase timestamp parse
+  in `app/api_types.py` is specific to that known timestamp input, not a blanket
+  pattern for data-bearing casts. If the surrounding context suggests a
+  best-effort probe (e.g. feature detection at import time), note this in the
+  residue as a suppression candidate.
 
 - **E001 BareExceptPass** — same treatment as E002 but bare `except:`.
   Propose adding a typed `Exception` clause and a log call.
