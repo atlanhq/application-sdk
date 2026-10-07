@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**49 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -71,6 +71,7 @@ reassigned.
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
 | [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | — | 0.43.0 |
+| [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 
 ---
 
@@ -2798,5 +2799,54 @@ in `finally`.
 calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception
 on the `with` line (the finding anchors there, not on the `run_in_executor` call) with
 `# conformance: ignore[P054] <reason>`.
+
+---
+
+## P055 — `OneToManyLinkFromParent` {#p055}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.44.0
+
+> Mapper populates the list end of a 1-to-N relationship instead of the child's single reference
+
+**Rationale:** Publish orders entities by type and sends the '1' side of a 1-to-N relationship first,
+relying on each child to reference its parent. A parent that lists its children instead
+names entities that do not exist yet, so Atlas returns ATLAS-404-00-00A and the run
+fails until a later run, after the children were created. Nothing at runtime stops a new
+connector from writing the link this way, so it recurs app by app; catching it in the
+mapper is the earliest point.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — the dashboard and question mappers link each
+  child to its collection from the child side (`asset.metabase_collection =
+  RelatedMetabaseCollection(...)`) and never populate
+  `MetabaseCollection.metabase_dashboards` / `metabase_questions`.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Already correct when:** A justified inline `# conformance: ignore[P055] <reason>` is correct only where the list
+  end is set on an asset that is never published ahead of its children — e.g. a value
+  built for a comparison or a test double. The reason must name why publish ordering
+  cannot apply. A directive on a mapper that writes the asset to transformed output is
+  unremediated.
+
+In a module importing `pyatlan_v9.model.assets`, the mapper sets the list end of a
+1-to-N relationship — the parent's `Process.fabric_activities` or `Table.columns` —
+instead of the single end on each child (`FabricActivity.fabric_process`,
+`Column.table`):
+
+* `X(..., a=...)` or `X.creator(..., a=...)`; * `x.a = ...`, `x.a += ...` or
+`x.a.append(...)` /   `.extend(...)` / `.insert(...)`, where `x` is bound in the same
+scope to `X(...)` / `X.creator(...)` or annotated `X`; * the same assignment or append
+on a receiver of unknown type, when   the value names the child type
+(`[RelatedColumn(...)]`,   `Column.ref_by_qualified_name(...)`) and that pairs with `a`.
+
+The list ends come from a table generated off the pinned pyatlan_v9 models
+(`gen-relationship-directions`): an end whose single-valued inverse is on the child
+type.  Many-to-many ends such as `Process.inputs` are not in it, and assigning `None` is
+not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first
+(O004).
+
+Fix: drop the list from the parent and set the single reference on each child, e.g.
+`activity.fabric_process = RelatedProcess(qualified_name=process_qn)`.  Publish then
+sends the parent first and each child references a parent that already exists.
 
 ---
