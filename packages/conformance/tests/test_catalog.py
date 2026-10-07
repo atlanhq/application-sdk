@@ -368,6 +368,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # P053: local credential routing — only apps route their own inputs'
     # credential channels; the SDK is the router (route_credentials) and defines
     # CredentialValue by definition (FND-2949).
+    # P055: inline record batches across a task/activity boundary — the SDK's
+    # own framework contracts are the seam that carries FileReferences, not a
+    # producer of record batches (FND-3409).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -490,6 +493,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P051",
         "P052",
         "P053",
+        "P055",
         "C002",
         "D001",
         "D002",
@@ -775,6 +779,8 @@ def test_catalog_p_series_present() -> None:
     route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
     P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
     whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
+    P055 is InlineRecordBatchAcrossBoundary — a batch of records crossing a
+    task/activity boundary inline instead of as a FileReference (FND-3409).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -829,6 +835,7 @@ def test_catalog_p_series_present() -> None:
         "P052",
         "P053",
         "P054",
+        "P055",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
