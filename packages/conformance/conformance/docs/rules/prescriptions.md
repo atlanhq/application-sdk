@@ -82,11 +82,13 @@ reassigned.
 
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
 Unbounded fields can silently grow past it in production, failing the workflow with a
-cryptic size error instead of a type error at import time. A justified inline
-suppression keeps every opt-out visible in review and auditable in SARIF. Customer
-impact: payload size scales with the customer's data, so the app that passed every test
-fails only in the tenant with the largest source system — the customer's crawl dies
-mid-run with a serialization error nothing in their configuration explains.
+cryptic size error instead of a type error at import time. Typing every field
+payload-safely and removing the opt-out restores that import-time check; an opt-out that
+genuinely cannot be removed carries a justified inline suppression, which keeps it
+visible in review and auditable in SARIF. Customer impact: payload size scales with the
+customer's data, so the app that passed every test fails only in the tenant with the
+largest source system — the customer's crawl dies mid-run with a serialization error
+nothing in their configuration explains.
 
 ### What correct looks like
 
