@@ -230,8 +230,8 @@ def check_p016(
             )
         return findings
 
-    # ── Multi-entry-point mode: exact set equality ────────────────────────────
-    # Widened by tile routes (route/card split): a tile whose own node starts
+    # ── Multi-entry-point mode: set equality, widened by tile routes ────────────────────────────
+    # Route/card split: a tile whose own node starts
     # "<app>:<wire>" is aligned with the @entrypoint <wire>. Several Marketplace
     # tiles may start one workflow, and renaming that entry point to a tile name
     # would move its workflow type.
