@@ -391,6 +391,36 @@ class TestBuildUvCommand:
         assert "--exclude-newer" in command
         assert "--exclude-newer-package" not in command
 
+    def test_a_hold_wins_over_an_exemption_and_a_ceiling(self):
+        # FND-3481: a held package belongs to another lane. Exactly one flag per
+        # name, so precedence never depends on how uv treats a repeated name.
+        held = "2026-01-01T00:00:01Z"
+        command = bounded.build_uv_command(
+            "P3D",
+            ["atlan-application-sdk", "pyatlan"],
+            {"atlan-application-sdk": "2026-09-30T00:00:00Z"},
+            {"atlan-application-sdk": held},
+        )
+        flags = [
+            command[i + 1]
+            for i, a in enumerate(command)
+            if a == "--exclude-newer-package"
+        ]
+        assert flags == ["pyatlan=P0D", f"atlan-application-sdk={held}"]
+
+
+class TestHoldCeilings:
+    def test_holds_at_the_locked_upload_whatever_its_age(self):
+        # Far older than any window: a retention ceiling would emit nothing for
+        # this, which would let the package move. A hold must still pin it.
+        old = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+        assert bounded.hold_ceilings(
+            {"atlan-application-sdk": old}, ["Atlan_Application_SDK"]
+        ) == {"atlan-application-sdk": "2020-01-01T00:00:01Z"}
+
+    def test_a_held_name_the_baseline_does_not_lock_gets_no_flag(self):
+        assert bounded.hold_ceilings({}, ["atlan-application-sdk"]) == {}
+
 
 class TestMain:
     """The orchestration, with uv stubbed. What matters here is that no path
@@ -583,6 +613,176 @@ class TestMain:
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
         assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
         assert any(a.startswith("boto3=2") for a in seen[0]), seen[0]
+
+    def _stamped(self, versions: dict[str, tuple[str, str]]) -> str:
+        body = "version = 1\n"
+        for name, (version, uploaded) in versions.items():
+            body += (
+                f'\n[[package]]\nname = "{name}"\nversion = "{version}"\n'
+                'source = { registry = "https://pypi.org/simple" }\n'
+                f'sdist = {{ url = "https://x/{name}.tar.gz", '
+                f'upload-time = "{uploaded}" }}\n'
+            )
+        return body
+
+    def test_held_package_stays_put_while_third_party_advances(
+        self, monkeypatch, tmp_path
+    ):
+        """The FND-3481 property end to end: Renovate's unbounded pass moved both
+        the SDK and boto3; the bounded resolve is asked to hold the SDK at the
+        base branch's upload and ships boto3 alone."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped(
+            {"atlan-application-sdk": ("3.41.0", old), "boto3": ("1.0.0", old)}
+        )
+        project = self._project(tmp_path, committed)
+        (project / "uv.lock").write_text(
+            self._stamped(
+                {
+                    "atlan-application-sdk": ("3.42.1", old),
+                    "boto3": ("1.1.0", old),
+                }
+            )
+        )
+        bounded_lock = self._stamped(
+            {"atlan-application-sdk": ("3.41.0", old), "boto3": ("1.1.0", old)}
+        )
+        seen: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            seen.append(command)
+            if "--upgrade-package" in command:
+                # The framework lane's replay: it moves the SDK and nothing else.
+                (Path(cwd) / "uv.lock").write_text(
+                    self._stamped(
+                        {
+                            "atlan-application-sdk": ("3.42.1", old),
+                            "boto3": ("1.0.0", old),
+                        }
+                    )
+                )
+            else:
+                (Path(cwd) / "uv.lock").write_text(bounded_lock)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        argv += ["--hold", "atlan-application-sdk", "--exempt", "pyatlan"]
+        assert bounded.main(argv) == 0
+        assert seen[0] == ["uv", "lock", "--upgrade-package", "atlan-application-sdk"]
+        assert "atlan-application-sdk=2026-01-01T00:00:01Z" in seen[1]
+        assert not any(a == "atlan-application-sdk=P0D" for a in seen[1])
+        assert not any(a.startswith("boto3=") for a in seen[1])
+        after = bounded.lock_versions((project / "uv.lock").read_text())
+        assert after == {"atlan-application-sdk": "3.41.0", "boto3": "1.1.0"}
+
+    def test_transitives_the_framework_lane_moves_are_held_too(
+        self, monkeypatch, tmp_path
+    ):
+        """The SDK release raises its floor on opentelemetry-api, so the
+        framework PR moves it. This lane must leave it at the base branch's
+        version, or both PRs edit the same block of uv.lock."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped(
+            {
+                "atlan-application-sdk": ("3.41.0", old),
+                "boto3": ("1.0.0", old),
+                "opentelemetry-api": ("1.44.0", old),
+            }
+        )
+        project = self._project(tmp_path, committed)
+        seen: list[list[str]] = []
+
+        def fake_run(command, cwd):
+            seen.append(command)
+            replayed = "--upgrade-package" in command
+            (Path(cwd) / "uv.lock").write_text(
+                self._stamped(
+                    {
+                        "atlan-application-sdk": (
+                            "3.42.0" if replayed else "3.41.0",
+                            old,
+                        ),
+                        "boto3": ("1.0.0" if replayed else "1.1.0", old),
+                        "opentelemetry-api": (
+                            "1.45.1" if replayed else "1.44.0",
+                            old,
+                        ),
+                    }
+                )
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 0
+        assert "opentelemetry-api=2026-01-01T00:00:01Z" in seen[1]
+        assert not any(a.startswith("boto3=") for a in seen[1])
+        # The replay must not leak into the tree the bounded resolve starts from.
+        after = bounded.lock_versions((project / "uv.lock").read_text())
+        assert after["opentelemetry-api"] == "1.44.0"
+
+    def test_a_failed_replay_still_holds_the_named_packages(
+        self, monkeypatch, tmp_path
+    ):
+        """Replay failure costs disjointness, never the bound: the run goes on
+        holding just the named packages."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped(
+            {"atlan-application-sdk": ("3.41.0", old), "boto3": ("1.0.0", old)}
+        )
+        project = self._project(tmp_path, committed)
+        renovate_copy = self._stamped(
+            {"atlan-application-sdk": ("3.42.1", old), "boto3": ("1.1.0", old)}
+        )
+        (project / "uv.lock").write_text(renovate_copy)
+        seen: list[tuple[list[str], str]] = []
+
+        def fake_run(command, cwd):
+            seen.append((command, (Path(cwd) / "uv.lock").read_text()))
+            if "--upgrade-package" in command:
+                return subprocess.CompletedProcess(command, 1, "", "boom")
+            (Path(cwd) / "uv.lock").write_text(
+                self._stamped(
+                    {
+                        "atlan-application-sdk": ("3.41.0", old),
+                        "boto3": ("1.1.0", old),
+                    }
+                )
+            )
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 0
+        bounded_command, tree_before_bound = seen[1]
+        assert "atlan-application-sdk=2026-01-01T00:00:01Z" in bounded_command
+        assert tree_before_bound == renovate_copy, "replay must restore the tree"
+
+    def test_only_a_held_package_moving_is_withheld_not_shipped(
+        self, monkeypatch, tmp_path
+    ):
+        """If the hold leaves the tree matching HEAD, Renovate commits its own
+        unbounded artifact — the SDK bump this lane must never carry. So a run
+        where nothing but a held package moved must refuse, as the
+        self-healing window-empty case: it clears once the framework PR merges."""
+        old = "2026-01-01T00:00:00Z"
+        committed = self._stamped({"atlan-application-sdk": ("3.41.0", old)})
+        project = self._project(tmp_path, committed)
+        (project / "uv.lock").write_text(
+            self._stamped({"atlan-application-sdk": ("3.42.1", old)})
+        )
+
+        def fake_run(command, cwd):
+            (Path(cwd) / "uv.lock").write_text(committed)
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(project)]
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 1
+        on_disk = (project / "uv.lock").read_text()
+        assert bounded.lock_versions(on_disk) == {"atlan-application-sdk": "3.41.0"}
+        assert bounded.REFUSAL_WINDOW_EMPTY in on_disk
 
     def test_unresolvable_head_fails_closed(self, tmp_path):
         # Not a git repo: we cannot tell what was previously adopted, and

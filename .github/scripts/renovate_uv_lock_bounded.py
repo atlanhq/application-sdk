@@ -488,6 +488,26 @@ def _version_key(version: str) -> "Version | None":
         return None
 
 
+def hold_ceilings(
+    upload_times: dict[str, dt.datetime], holds: list[str]
+) -> dict[str, str]:
+    """Ceilings that keep each held package exactly where the baseline has it.
+
+    Unlike a retention ceiling this applies whatever the locked version's age:
+    a held package is not delayed by the window, it is owned by another lane and
+    must not move here at all (FND-3481). A held name the baseline does not lock
+    gets no flag — there is nothing to hold, and a package the repo does not
+    resolve cannot appear in this lane's diff.
+    """
+    ceilings: dict[str, str] = {}
+    for name in holds:
+        uploaded = upload_times.get(normalise(name))
+        if uploaded is not None:
+            admit = (uploaded + dt.timedelta(seconds=1)).astimezone(dt.timezone.utc)
+            ceilings[normalise(name)] = admit.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ceilings
+
+
 def rollbacks(
     before: dict[str, str], after: dict[str, str], packages: list[str] | None = None
 ) -> dict[str, tuple[str, str]]:
@@ -519,26 +539,85 @@ def rollbacks(
 
 
 def build_uv_command(
-    window: str, exempt: list[str], ceilings: dict[str, str] | None = None
+    window: str,
+    exempt: list[str],
+    ceilings: dict[str, str] | None = None,
+    holds: dict[str, str] | None = None,
 ) -> list[str]:
     """The bounded resolve, plus one ceiling flag per package that needs one.
 
-    Exemptions come last so they win over a retention ceiling for the same
-    package: a first-party package must be free to move forward, not merely be
-    held where it is.
+    Exemptions win over a retention ceiling for the same package: an exempt
+    package must be free to move forward, not merely be held where it is. Holds
+    win over both — a held package belongs to another lane, so neither the
+    window nor an exemption may move it here. Each package gets exactly one
+    flag, so precedence never rests on how uv treats a repeated name.
     """
+    holds = holds or {}
     command = ["uv", "lock", "--upgrade", "--exclude-newer", window]
     exempt_normalised = {normalise(name) for name in exempt}
     for name, admit in sorted((ceilings or {}).items()):
-        if name not in exempt_normalised:
+        if name not in exempt_normalised and name not in holds:
             command += ["--exclude-newer-package", f"{name}={admit}"]
     for name in exempt:
-        command += ["--exclude-newer-package", f"{name}=P0D"]
+        if normalise(name) not in holds:
+            command += ["--exclude-newer-package", f"{name}=P0D"]
+    for name, admit in sorted(holds.items()):
+        command += ["--exclude-newer-package", f"{name}={admit}"]
     return command
 
 
 def run_uv_lock(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+
+
+def framework_lane_moves(
+    lock_path: Path, baseline: str, holds: list[str]
+) -> set[str] | None:
+    """Every baseline package the framework lane's own resolve would move.
+
+    Holding the first-party packages alone is not enough (FND-3481): an SDK
+    release routinely raises floors on its own dependencies, so the framework
+    PR moves those transitives too, and if this lane moves the same package to
+    a different version the two PRs still conflict on that block of uv.lock.
+    Measured on the 3.42.0 release: every framework PR in the fleet also moved
+    17 opentelemetry packages, fastapi and uvloop.
+
+    So replay what that lane does — ``uv lock --upgrade-package`` for each held
+    package, starting from the base branch's lock — and report what changed.
+    Holding that set too makes the two lanes' diffs disjoint. Packages the
+    replay ADDS need no hold: this lane has no reason to add them.
+
+    Returns None when the replay cannot run. That costs only the disjointness,
+    never the bound — the caller holds the named packages alone and says so —
+    and a conflict it lets through is repaired by the conflicted-PR rebase
+    backstop, so failing the whole lane on it would trade a minor fault for a
+    major one. The working tree is restored before returning either way.
+    """
+    renovate_text = lock_path.read_text()
+    command = ["uv", "lock"]
+    for name in holds:
+        command += ["--upgrade-package", name]
+    try:
+        lock_path.write_text(baseline)
+        result = run_uv_lock(command, lock_path.parent)
+        replayed = lock_path.read_text()
+    finally:
+        lock_path.write_text(renovate_text)
+    if result.returncode != 0:
+        print(
+            "Could not replay the framework lane's resolve, so only the named "
+            "packages are held and this PR may still overlap it on transitive "
+            "dependencies:\n" + result.stderr,
+            file=sys.stderr,
+        )
+        return None
+    before, after = lock_versions(baseline), lock_versions(replayed)
+    held = {normalise(name) for name in holds}
+    return {
+        name
+        for name, version in before.items()
+        if name not in held and after.get(name) not in (None, version)
+    }
 
 
 def baseline_lock_text(cwd: Path, ref: str = "HEAD") -> str | None:
@@ -648,6 +727,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Package admitted regardless of age. Repeatable. First-party packages "
         "plus anything in their dependency closure that must move with them.",
     )
+    parser.add_argument(
+        "--hold",
+        action="append",
+        default=[],
+        help="Package kept at exactly the version the baseline locks, whatever "
+        "its age. Repeatable. Wins over --exempt. For packages another Renovate "
+        "lane owns (the first-party framework dependencies, FND-3481), so this "
+        "lane's diff never overlaps that lane's and the two PRs cannot conflict "
+        "on uv.lock whichever merges first.",
+    )
     parser.add_argument("--project-dir", default=".")
     parser.add_argument(
         "--caller-owns-commit",
@@ -704,6 +793,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     exempt = list(args.exempt)
+    held = {normalise(name) for name in args.hold}
 
     # Baseline = the lock as COMMITTED at --baseline-ref, never the working tree.
     # See baseline_lock_text for why that distinction is load-bearing, and why
@@ -741,14 +831,24 @@ def main(argv: list[str] | None = None) -> int:
 
     before = lock_versions(baseline)
     cutoff = dt.datetime.now(dt.timezone.utc) - window
-    ceilings = retention_ceilings(lock_upload_times(baseline), cutoff)
+    upload_times = lock_upload_times(baseline)
+    ceilings = retention_ceilings(upload_times, cutoff)
 
     # What Renovate resolved unbounded, and has already captured as the artifact
     # it will commit if this command leaves the tree looking untouched. Read it
     # now: the bounded resolve below overwrites it.
     renovate_versions = lock_versions(lock_path.read_text())
 
-    result = run_uv_lock(build_uv_command(args.window, exempt, ceilings), project_dir)
+    transitive: set[str] = set()
+    if args.hold and baseline:
+        replay = framework_lane_moves(lock_path, baseline, list(args.hold))
+        transitive = replay or set()
+    held |= transitive
+    holds = hold_ceilings(upload_times, [*args.hold, *sorted(transitive)])
+
+    result = run_uv_lock(
+        build_uv_command(args.window, exempt, ceilings, holds), project_dir
+    )
     admitted_early: list[str] = []
 
     if result.returncode != 0:
@@ -776,7 +876,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         result = run_uv_lock(
-            build_uv_command(args.window, exempt + admitted_early, ceilings),
+            build_uv_command(args.window, exempt + admitted_early, ceilings, holds),
             project_dir,
         )
         if result.returncode != 0:
@@ -824,6 +924,7 @@ def main(argv: list[str] | None = None) -> int:
     if after == before and renovate_versions != before:
         moved = ", ".join(
             f"{name} {before.get(name, 'absent')} -> {version}"
+            + (" (held: arrives via its own lane)" if name in held else "")
             for name, version in sorted(renovate_versions.items())
             if before.get(name) != version
         )
@@ -846,7 +947,9 @@ def main(argv: list[str] | None = None) -> int:
                 "that passes every check while carrying releases minutes old — "
                 "so the lock is left deliberately un-installable instead and "
                 "this run fails. Nothing needs fixing in the repo: the window "
-                f"will admit these versions once they are `{args.window}` old.",
+                f"will admit these versions once they are `{args.window}` old, "
+                "and a held package stops showing up here once its own lane's "
+                "PR merges and the base branch locks it.",
                 file=sys.stderr,
             )
             return 1
@@ -859,8 +962,12 @@ def main(argv: list[str] | None = None) -> int:
     added = sorted(name for name in after if name not in before)
     lines = [
         f"**Release-age bound applied:** `{args.window}` "
-        f"(exempt: {', '.join(exempt) or 'none'})",
+        f"(exempt: {', '.join(exempt) or 'none'}; "
+        f"held: {', '.join(args.hold) or 'none'})",
         "",
+        f"- {len(transitive)} transitive package(s) held at the base branch's "
+        "version because the framework lane moves them"
+        + (f": {', '.join(sorted(transitive))}" if transitive else ""),
         f"- {len(ceilings)} package(s) pinned at their current version: the release "
         "they are on is itself inside the window, and the bound must never roll a "
         "dependency backwards",
