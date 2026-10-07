@@ -3229,6 +3229,642 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
+_ALIASED_SAME_NAME_CONTRACTS = (
+    "from pydantic import BaseModel\n"
+    "from generated import AppInputContract as _GeneratedInput\n"
+    "from generated import AppOutputContract as _GeneratedOutput\n"
+    "class AppInputContract(_GeneratedInput):\n"
+    "    include_filter: str = ''\n"
+    "class AppOutputContract(_GeneratedOutput):\n"
+    "    rows: int = 0\n"
+    "class NotAContract(BaseModel):\n"
+    "    value: str = ''\n"
+    "DomainInput = AppInputContract\n"
+    "DomainOutput = AppOutputContract\n"
+    "ReExportedInput = DomainInput\n"
+    "UnrelatedInput = NotAContract\n"
+)
+
+_ALIASED_SAME_NAME_GENERATED = (
+    "from application_sdk.contracts import Input, Output\n"
+    "class AppInputContract(Input):\n"
+    "    connection_id: str = ''\n"
+    "class AppOutputContract(Output):\n"
+    "    total: int = 0\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        pytest.param(
+            "    async def run(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p013-input-and-output-aliases",
+        ),
+        pytest.param(
+            "    async def run(self, input: AppInputContract) -> DomainOutput:\n",
+            [],
+            id="p013-output-alias",
+        ),
+        pytest.param(
+            "    @task\n"
+            "    async def fetch(self, input: DomainInput) -> DomainOutput:\n",
+            [],
+            id="p014-task-aliases",
+        ),
+        pytest.param(
+            "    async def run(self, input: ReExportedInput) -> DomainOutput:\n",
+            [],
+            id="p013-alias-of-alias",
+        ),
+        pytest.param(
+            "    async def run(self, input: UnrelatedInput) -> AppOutputContract:\n",
+            ["P013"],
+            id="p013-alias-of-unrelated-class-still-fires",
+        ),
+    ],
+)
+@pytest.mark.parametrize("generated_first", [False, True])
+def test_aliased_same_named_contracts_across_boundary_shapes(
+    tmp_path: Path, method: str, expected: list[str], generated_first: bool
+) -> None:
+    """Aliases of a class that subclasses a same-named contract resolve through
+    that contract on every boundary shape and in both scan orders; an alias of a
+    class that never reaches Input is still a violation."""
+    files = {
+        "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
+        "generated.py": _ALIASED_SAME_NAME_GENERATED,
+    }
+    if generated_first:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _APP_IMPORTS + "from contracts import AppInputContract, AppOutputContract, "
+            "DomainInput, DomainOutput, ReExportedInput, UnrelatedInput\n"
+            "class MyApp(App):\n" + method + "        return DomainOutput()\n"
+        ),
+    }
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == expected
+    if expected:
+        assert "'UnrelatedInput'" in findings[0].message
+
+
+def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
+    """``input: Thing`` where another file binds ``Thing = Foo`` over
+    ``class Foo(Thing)``: the base names the lookup key, so it stays
+    unresolvable, as on main."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from rebind import Thing\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Thing) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_class(
+    tmp_path: Path,
+) -> None:
+    """``Thing = Foo`` elsewhere must not turn ``class Foo(Thing)`` unresolvable."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import Foo\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Foo) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == ["P013"]
+    assert "'Foo'" in findings[0].message
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "contracts.py": (
+                    "from generated import AppInputContract as _G\n"
+                    "class AppInputContract(_G):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = AppInputContract\n"
+                ),
+                "generated.py": (
+                    "from pydantic import BaseModel\n"
+                    "class AppInputContract(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="plain-basemodel-generated-base",
+        ),
+        pytest.param(
+            {
+                "contracts.py": (
+                    "import plain\n"
+                    "class Thing(plain.Thing):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = Thing\n"
+                ),
+                "plain.py": (
+                    "from pydantic import BaseModel\n"
+                    "class Thing(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="attribute-base",
+        ),
+    ],
+)
+def test_p013_fires_on_alias_over_a_same_named_non_contract_base(
+    tmp_path: Path, files: dict[str, str], reverse_order: bool
+) -> None:
+    """The type never reaches Input, so P013 fires in both scan orders."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import DomainInput\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: DomainInput) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_NO_SDK_CONTRACTS_APP = (
+    "from application_sdk.app import App, entrypoint, task\n"
+    "from x import Output\n"
+    "class O(Output):\n"
+    "    pass\n"
+)
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/generated.py": (
+                    "from x import Input\nclass C(Input):\n    a: str = ''\n"
+                ),
+                "app/contracts.py": (
+                    "from .generated import C as _C\n"
+                    "class C(_C):\n"
+                    "    b: str = ''\n"
+                    "Domain = C\n"
+                ),
+            },
+            [],
+            id="relative-import-of-same-named-input",
+        ),
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "gen.py": "from x import Input\nclass C(Input):\n    pass\n",
+                "app/contracts.py": (
+                    "import gen\nclass C(gen.C):\n    pass\nDomain = C\n"
+                ),
+            },
+            [],
+            id="attribute-base-of-same-named-input",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_by_import_provenance(
+    tmp_path: Path,
+    files: dict[str, str],
+    expected: list[str],
+    reverse_order: bool,
+) -> None:
+    """A same-named base resolves through the class in the module it is imported
+    from, never through a same-named class elsewhere."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_unrelated_same_named_input_elsewhere_still_fires(
+    tmp_path: Path,
+) -> None:
+    """A third-party same-named base is not resolved through an in-repo class of
+    that name in another module."""
+    files = {
+        "app/__init__.py": "",
+        "app/contracts.py": (
+            "from thirdparty import C as _C\nclass C(_C):\n    pass\nDomain = C\n"
+        ),
+        "app/other.py": "from x import Input\nclass C(Input):\n    pass\n",
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.contracts import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_PLAIN_X = "from pydantic import BaseModel\nclass X(BaseModel):\n    pass\n"
+_INPUT_X = "from x import Input\nclass X(Input):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "tests/app/gen.py": _INPUT_X,
+            },
+            id="same-path-suffix-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": (
+                    "def _f():\n"
+                    "    from x import Input\n"
+                    "    class X(Input):\n"
+                    "        pass\n"
+                ),
+            },
+            id="function-local-same-named-class",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "src/app/gen.py": _INPUT_X,
+            },
+            id="ambiguous-module",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\n"
+                    "class X(_G):\n"
+                    "    pass\n"
+                    "from app.other import X as _G\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _PLAIN_X,
+                "app/other.py": _INPUT_X,
+            },
+            id="base-name-rebound-after-the-class",
+        ),
+        pytest.param(
+            {
+                "app/y/w.py": (
+                    "from ....gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/y/gen.py": _PLAIN_X,
+                "app/gen.py": _INPUT_X,
+            },
+            id="relative-import-above-the-scan-root",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X + "class Plain:\n    pass\nX = Plain\n",
+            },
+            id="candidate-module-rebinds-the-name",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as Base\n"
+                    "from app.helpers import *\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+                "app/helpers.py": "class Base:\n    pass\n",
+            },
+            id="star-import-rebinds-the-base",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "import app.gen as g\n"
+                    "g = None\n"
+                    "class X(g.X):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            id="module-binding-rebound",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "gen.py": _INPUT_X,
+            },
+            id="relative-import-beyond-top-level-package",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from ..m import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/m.py": _INPUT_X,
+            },
+            id="relative-import-into-src-dir",
+        ),
+    ],
+)
+def test_p013_same_named_base_never_resolves_through_another_module(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    """Only the one top-level class in the exact module the base is bound to
+    once counts; anything else keeps main's finding."""
+    first = next(iter(files))
+    package = first.rsplit("/", 1)[0].replace("/", ".")
+    files = {
+        **files,
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {package}.w import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "module"),
+    [
+        pytest.param(
+            {
+                "app/__init__.py": "",
+                "app/y/__init__.py": "",
+                "app/y/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            "app.y.w",
+            id="level-2-relative-import",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen/__init__.py": _INPUT_X,
+            },
+            "app.w",
+            id="package-init-module",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/app/gen.py": _INPUT_X,
+            },
+            "app.w",
+            id="src-layout",
+        ),
+    ],
+)
+def test_p013_same_named_base_resolves_across_module_layouts(
+    tmp_path: Path, files: dict[str, str], module: str, reverse_order: bool
+) -> None:
+    """The same-named base resolves for relative, package and src layouts."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + f"from {module} import Domain\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Domain) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
+def _subclass_entrypoint(files: dict[str, str], reverse_order: bool) -> dict[str, str]:
+    """*files* plus an entrypoint typed as ``app.w.Sub``, a subclass of ``app.w.X``."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    return files | {
+        "app/connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from app.w import Sub\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Sub) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+
+
+_WRAPPER_SUB = "class X(_G):\n    pass\nclass Sub(X):\n    pass\n"
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("w", "expected"),
+    [
+        pytest.param(
+            "from app.gen import X as _G\ndef _reset():\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="function-local-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nclass Holder:\n    _G = None\n"
+            + _WRAPPER_SUB,
+            [],
+            id="class-body-store",
+        ),
+        pytest.param(
+            "from app.gen import X as _G\nf = lambda _G: _G\n" + _WRAPPER_SUB,
+            [],
+            id="lambda-parameter",
+        ),
+    ],
+)
+def test_p013_nested_scope_store_keeps_base_provenance(
+    tmp_path: Path, w: str, expected: list[str], reverse_order: bool
+) -> None:
+    """Only module-scope bindings make a base import ambiguous; a store in a
+    nested scope does not."""
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, reverse_order)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+def test_p013_global_store_in_nested_scope_rebinds_the_base(
+    tmp_path: Path,
+) -> None:
+    """A ``global`` store rebinds the module name, so the base has no provenance.
+
+    Forward order only: with ``gen.py`` scanned first, the first-wins registry
+    resolves ``Sub`` through ``gen.X`` before provenance is consulted.
+    """
+    w = (
+        "from app.gen import X as _G\n"
+        "def _reset():\n"
+        "    global _G\n"
+        "    _G = None\n" + _WRAPPER_SUB
+    )
+    files = _subclass_entrypoint({"app/w.py": w, "app/gen.py": _INPUT_X}, False)
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
+
+
+_W_OVER_GEN = "from app.gen import X as _G\n" + _WRAPPER_SUB
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+@pytest.mark.parametrize(
+    ("files", "expected"),
+    [
+        pytest.param(
+            {
+                "app/earlier.py": "from x import Input\nclass Base(Input):\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "class Base:\n    pass\n",
+            },
+            ["P013"],
+            id="unrelated-same-named-contract-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": "from app.base_mod import Base\nclass X(Base):\n    pass\n",
+                "app/base_mod.py": "from x import Input\nclass Base(Input):\n    pass\n",
+            },
+            [],
+            id="imported-contract-shadowed-elsewhere",
+        ),
+        pytest.param(
+            {
+                "app/earlier.py": "class Base:\n    pass\n",
+                "app/w.py": _W_OVER_GEN,
+                "app/gen.py": (
+                    "from x import Input\n"
+                    "class Base(Input):\n"
+                    "    pass\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                ),
+            },
+            [],
+            id="same-file-contract-shadowed-elsewhere",
+        ),
+    ],
+)
+def test_p013_same_named_walk_follows_provenance_below_the_base(
+    tmp_path: Path, files: dict[str, str], expected: list[str], reverse_order: bool
+) -> None:
+    """Below the selected same-named base, each parent resolves to the class its
+    import names, never to the first-wins record of that bare name."""
+    findings = _scan_files(tmp_path, _subclass_entrypoint(files, reverse_order))
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_p014_same_named_walk_does_not_poison_the_shared_cache(
+    tmp_path: Path, reverse_order: bool
+) -> None:
+    """The walk into the same-named base must not cache a cycle-cut result for a
+    class a later boundary looks up."""
+    files = {
+        "d.py": "from x import Input\nclass A(Input):\n    pass\n",
+        "c.py": "from d import A\nclass X(A):\n    pass\n",
+        "b.py": "from c import X\nclass A(X):\n    pass\n",
+        "mix.py": "from x import Input\nclass Mixin(Input):\n    pass\n",
+        "a.py": (
+            "from b import A as _A\n"
+            "from mix import Mixin\n"
+            "class A(_A, Mixin):\n"
+            "    pass\n"
+        ),
+    }
+    if reverse_order:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
+        "connector.py": (
+            _NO_SDK_CONTRACTS_APP + "from a import A\n"
+            "from c import X\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: A) -> O:\n"
+            "        return O()\n"
+            "    @task\n"
+            "    async def f(self, input: X) -> O:\n"
+            "        return O()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
     """The self-name escape hatch must not leak: an ordinary resolvable class
     that does not reach Input is still a violation."""
