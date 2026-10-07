@@ -9,21 +9,11 @@ negatives are guarded.
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
 import pytest
-from conformance.suite.checks._ast_common import (
-    collect_module_alias_targets,
-    register_alias_records,
-)
 from conformance.suite.checks.prescriptions import main, scan_all, scan_text
-from conformance.suite.checks.prescriptions._boundary_methods import reaches_app_family
-from conformance.suite.checks.prescriptions._error_code_prefix import (
-    collect_classes,
-    collect_import_aliases,
-)
 from conformance.suite.rules import get_rule
 from conformance.suite.schema import SarifReport, derive_disposition, validate_sarif
 from conformance.suite.schema.disposition import Disposition, EnforcementTier
@@ -3295,18 +3285,21 @@ _ALIASED_SAME_NAME_GENERATED = (
         ),
     ],
 )
+@pytest.mark.parametrize("generated_first", [False, True])
 def test_aliased_same_named_contracts_across_boundary_shapes(
-    tmp_path: Path, method: str, expected: list[str]
+    tmp_path: Path, method: str, expected: list[str], generated_first: bool
 ) -> None:
-    """Aliases of same-named subclasses stay unresolvable on every boundary shape;
-    an alias of a class that never reaches Input is still a violation.
-
-    Fixture order matters: contracts.py must be scanned before generated.py
-    (first-wins registry); the other order passes on main.
-    """
+    """Aliases of a class that subclasses a same-named contract resolve through
+    that contract on every boundary shape and in both scan orders; an alias of a
+    class that never reaches Input is still a violation."""
     files = {
         "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
         "generated.py": _ALIASED_SAME_NAME_GENERATED,
+    }
+    if generated_first:
+        files = dict(reversed(files.items()))
+    files = {
+        **files,
         "connector.py": (
             _APP_IMPORTS + "from contracts import AppInputContract, AppOutputContract, "
             "DomainInput, DomainOutput, ReExportedInput, UnrelatedInput\n"
@@ -3327,9 +3320,7 @@ def test_p013_silent_on_the_rebinding_alias_itself(tmp_path: Path) -> None:
     unresolvable, as on main."""
     files = {
         "contracts.py": (
-            "from thirdparty import Thing\n"
-            "class Foo(Thing):\n"
-            "    x: str = ''\n"
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
         ),
         "rebind.py": "from contracts import Foo\nThing = Foo\n",
         "connector.py": (
@@ -3372,11 +3363,7 @@ def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_cla
     assert "'Foo'" in findings[0].message
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known limit: the first-wins registry cannot tell a same-named base "
-    "from the class, so the chain reads as unresolvable (follow-up: by_name_all).",
-)
+@pytest.mark.parametrize("reverse_order", [False, True])
 @pytest.mark.parametrize(
     "files",
     [
@@ -3414,10 +3401,12 @@ def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_cla
         ),
     ],
 )
-def test_p013_known_limit_alias_over_a_same_named_non_contract_base(
-    tmp_path: Path, files: dict[str, str]
+def test_p013_fires_on_alias_over_a_same_named_non_contract_base(
+    tmp_path: Path, files: dict[str, str], reverse_order: bool
 ) -> None:
-    """The type never reaches Input, so P013 should fire; it does not yet."""
+    """The type never reaches Input, so P013 fires in both scan orders."""
+    if reverse_order:
+        files = dict(reversed(files.items()))
     files = {
         **files,
         "connector.py": (
@@ -3432,23 +3421,6 @@ def test_p013_known_limit_alias_over_a_same_named_non_contract_base(
     }
     findings = _scan_files(tmp_path, files)
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
-
-
-def test_reaches_app_family_is_unknown_through_an_alias_of_a_same_named_subclass() -> (
-    None
-):
-    """``Alias = Base`` over ``class Base(_Base)`` stays unknown, not "no"."""
-    src = (
-        "from generated import Base as _Base\n"
-        "class Base(_Base):\n"
-        "    pass\n"
-        "Alias = Base\n"
-    )
-    tree = ast.parse(src)
-    aliases = collect_import_aliases(tree)
-    by_name = {rec.name: rec for rec in collect_classes(tree, "contracts.py", aliases)}
-    register_alias_records(by_name, collect_module_alias_targets(tree, aliases))
-    assert reaches_app_family("Alias", by_name, {}, set()) is None
 
 
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:

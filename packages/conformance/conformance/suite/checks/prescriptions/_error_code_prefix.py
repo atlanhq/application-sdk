@@ -9,7 +9,7 @@ are also caught.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from conformance.suite.checks._ast_common import (
@@ -357,18 +357,39 @@ def resolve_leaf_prefix(
     return result
 
 
-def is_same_name_base(base: str, rec: ClassRecord, name: str) -> bool:
-    """Whether *base*'s bare name is the walked class's own name or lookup key.
-
-    Usually ``from other import X as _X`` + ``class X(_X)``, but an attribute
-    base (``class X(mod.X)``) or a rebinding matches too: the first-wins
-    bare-name registry cannot tell the base from the class, so the chain is
-    treated as unresolvable. *name* is the lookup key, which differs from
-    ``rec.name`` when the class was reached through a module alias; matching
-    either keeps main's result for every non-alias lookup and only ever adds the
-    unresolvable outcome.
-    """
-    return base in (rec.name, name)
+def _shadowed_base_reaches(
+    base_name: str,
+    rec: ClassRecord,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+    known_targets: frozenset[str],
+    known_ancestors: frozenset[str],
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+) -> bool:
+    """Whether a record named *base_name*, other than *rec*, reaches *target*."""
+    for other in (by_name_all or {}).get(base_name, ()):
+        if other is rec:
+            continue
+        for base in other.bases:
+            if base == other.name:
+                continue
+            if (
+                resolve_ancestor(
+                    base,
+                    target,
+                    by_name,
+                    cache,
+                    visiting,
+                    known_targets,
+                    known_ancestors,
+                    by_name_all,
+                )
+                is True
+            ):
+                return True
+    return False
 
 
 def resolve_ancestor(
@@ -379,6 +400,7 @@ def resolve_ancestor(
     visiting: set[str],
     known_targets: frozenset[str] = frozenset(),
     known_ancestors: frozenset[str] = frozenset(),
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None = None,
 ) -> bool | None:
     """Transitively resolve *name*'s base chain looking for *target*.
 
@@ -395,9 +417,12 @@ def resolve_ancestor(
         external base simply fails to confirm the target.
     ``None``
         *name* is not in the scanned universe (unknown / third-party /
-        generated — assumed OK to avoid false positives), or its class (the
-        record *name* resolves to, through any module alias) subclasses a
-        same-named import and no other base proves *target*.
+        generated — assumed OK to avoid false positives).
+
+    *by_name_all* holds every record per bare name. When a class subclasses a
+    same-named class from another module, the other records of that name are
+    walked too, and any one that reaches *target* makes the result ``True``.
+    It can only turn ``None``/``False`` into ``True``, never the reverse.
     """
     if name == target or name in known_targets:
         return True
@@ -418,16 +443,37 @@ def resolve_ancestor(
     result: bool = False
     same_name_base = False
     for base in rec.bases:
-        if is_same_name_base(base, rec, name):
-            # A base whose bare name is the class's own (usually
-            # ``from other import X as _X`` + ``class X(_X)``, or ``mod.X``) is a
-            # SAME-NAMED class from another module. The registry is keyed on the
-            # bare name and cannot hold both, so the chain is unresolvable
-            # rather than definitively negative.
+        if base == name:
+            # A base that de-aliases to the class's own name is an import of a
+            # SAME-NAMED class from another module — Python forbids literal
+            # self-inheritance, so this is always
+            # ``from other import X as _X`` + ``class X(_X)``. The registry is
+            # keyed on the bare name and cannot hold both, so the chain is
+            # genuinely unresolvable rather than definitively negative.
+            if _shadowed_base_reaches(
+                base,
+                rec,
+                target,
+                by_name,
+                cache,
+                visiting,
+                known_targets,
+                known_ancestors,
+                by_name_all,
+            ):
+                result = True
+                break
             same_name_base = True
             continue
         sub = resolve_ancestor(
-            base, target, by_name, cache, visiting, known_targets, known_ancestors
+            base,
+            target,
+            by_name,
+            cache,
+            visiting,
+            known_targets,
+            known_ancestors,
+            by_name_all,
         )
         if sub is True:
             result = True
