@@ -72,6 +72,8 @@ class ClassRecord:
     """Entries of :attr:`bases` mapped to the dotted module the defining module
     imports them from (``from m import X``, ``import m`` + ``m.X``), relative
     imports resolved against the defining file."""
+    rebound: bool = False
+    """Whether the defining module binds :attr:`name` more than once."""
 
 
 # The ONE method that, when overridden, takes the emitted code out of ``code``'s
@@ -289,7 +291,9 @@ def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str | None:
     if node.level == 0:
         return node.module or None
     package = rel_file.replace("\\", "/").split("/")[:-1]
-    if node.level - 1 > len(package):
+    if package[:1] == ["src"]:
+        package = package[1:]
+    if node.level > len(package):
         return None
     package = package[: len(package) - (node.level - 1)]
     return ".".join([*package, *([node.module] if node.module else [])]) or None
@@ -298,6 +302,10 @@ def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str | None:
 def _single_bindings(tree: ast.AST) -> set[str]:
     counts: dict[str, int] = {}
     for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" for alias in node.names
+        ):
+            return set()
         if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
             names = [node.id]
         elif isinstance(node, ast.alias):
@@ -312,7 +320,7 @@ def _single_bindings(tree: ast.AST) -> set[str]:
 
 
 def _import_modules(
-    tree: ast.AST, rel_file: str
+    tree: ast.AST, rel_file: str, single: set[str]
 ) -> tuple[dict[str, str], dict[str, str]]:
     """Per-file ``{local: module}`` for imported names and for imported modules.
 
@@ -322,7 +330,6 @@ def _import_modules(
     module_bindings: dict[str, str] = {}
     if not isinstance(tree, ast.Module):
         return name_modules, module_bindings
-    single = _single_bindings(tree)
     for node in ast.iter_child_nodes(tree):
         if isinstance(node, ast.ImportFrom):
             module = _absolute_module(node, rel_file)
@@ -366,7 +373,7 @@ def _base_module(
 
 
 def _defines_module(rec: ClassRecord, module: str) -> bool:
-    if rec.node.col_offset != 0:
+    if rec.node.col_offset != 0 or rec.rebound:
         return False
     path = rec.file.replace("\\", "/").removesuffix(".py").removesuffix("/__init__")
     dotted = path.replace("/", ".")
@@ -384,7 +391,8 @@ def collect_classes(
     records: list[ClassRecord] = []
     sdk_bindings = sdk_app_base_bindings(tree)
     foreign_roots = non_sdk_import_roots(tree)
-    name_modules, module_bindings = _import_modules(tree, rel_file)
+    single = _single_bindings(tree)
+    name_modules, module_bindings = _import_modules(tree, rel_file, single)
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
@@ -417,6 +425,7 @@ def collect_classes(
                 sdk_app_bases=frozenset(sdk_app_bases),
                 non_sdk_bases=non_sdk_bases,
                 base_modules=base_modules,
+                rebound=node.name not in single,
             )
         )
     return records
@@ -482,7 +491,8 @@ def _shadowed_base_reaches(
     ]
     if len(candidates) != 1:
         return False
-    cache = dict(cache)
+    if not known_targets:
+        cache = dict(cache)
     for other in candidates:
         for base in other.bases:
             if (

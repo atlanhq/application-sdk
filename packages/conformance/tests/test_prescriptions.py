@@ -3573,6 +3573,60 @@ _INPUT_X = "from x import Input\nclass X(Input):\n    pass\n"
             },
             id="relative-import-above-the-scan-root",
         ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "app/gen.py": _INPUT_X + "class Plain:\n    pass\nX = Plain\n",
+            },
+            id="candidate-module-rebinds-the-name",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from app.gen import X as Base\n"
+                    "from app.helpers import *\n"
+                    "class X(Base):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+                "app/helpers.py": "class Base:\n    pass\n",
+            },
+            id="star-import-rebinds-the-base",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "import app.gen as g\n"
+                    "g = None\n"
+                    "class X(g.X):\n"
+                    "    pass\n"
+                    "Domain = X\n"
+                ),
+                "app/gen.py": _INPUT_X,
+            },
+            id="module-binding-rebound",
+        ),
+        pytest.param(
+            {
+                "app/w.py": (
+                    "from ..gen import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "gen.py": _INPUT_X,
+            },
+            id="relative-import-beyond-top-level-package",
+        ),
+        pytest.param(
+            {
+                "src/app/w.py": (
+                    "from ..m import X as _G\nclass X(_G):\n    pass\nDomain = X\n"
+                ),
+                "src/m.py": _INPUT_X,
+            },
+            id="relative-import-into-src-dir",
+        ),
     ],
 )
 def test_p013_same_named_base_never_resolves_through_another_module(
