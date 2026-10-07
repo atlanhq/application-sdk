@@ -2041,8 +2041,8 @@ changes for the settings an app sets.
 | `enabled` | `ui.disabled` | `false` disables the field. |
 | `byocDisabled` | `ui.BYOCdisabled` | `true` disables the field only in BYOC mode. |
 | `allowClear` | `ui.allowClear` | Shows a button that clears every tag; clearing submits `[]`. |
-| `maxTagCount` | `ui.maxTagCount` | Collapses tags past this count into `+N`; `"responsive"` fits the width. Display only. |
-| `maxTagTextLength` | `ui.maxTagTextLength` | Truncates each chip's text. Display only. |
+| `maxTagCount` | `ui.maxTagCount` | Collapses tags past this count into `+N`; `"responsive"` fits the width. A number must be at least 1. Display only. |
+| `maxTagTextLength` | `ui.maxTagTextLength` | Truncates each chip's text. Must be at least 1. Display only. |
 | `openByDefault` | `ui.open` | Opens the dropdown. |
 
 Not supported yet: default tags and suggested values. Both need a frontend
