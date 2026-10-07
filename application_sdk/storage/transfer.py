@@ -61,7 +61,11 @@ from application_sdk.storage.batch import list_data_keys, list_data_objects, lis
 # live in ``storage.integrity``, which ``ops`` calls on every transfer. This
 # module holds no copy of them: a second implementation of the digest protocol
 # is how the reader and the writer drift apart.
-from application_sdk.storage.integrity import read_expected_digest, sha256_file
+from application_sdk.storage.integrity import (
+    is_sidecar_key,
+    read_expected_digest,
+    sha256_file,
+)
 
 _logger = get_logger(__name__)
 
@@ -646,6 +650,12 @@ async def upload(
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, src)
+        # A local ``<file>.sha256`` is a materialize cache key, not data
+        # (persist_file_reference writes one beside every file it uploads).
+        # Uploading it would land on the store-side sidecar key of its own data
+        # file; with skip_if_exists the data file's dedup check can then read
+        # that sidecar, match, and skip the data upload entirely.
+        files = [fp for fp in files if not is_sidecar_key(fp.name)]
         local_rels = {str(fp.relative_to(src)).replace(os.sep, "/") for fp in files}
 
         # (source_key, target_key) pairs for files present in the source store

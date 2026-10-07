@@ -148,6 +148,60 @@ class TestUploadDirectory:
             await upload(str(tmp_path), "errtest", store=store)
 
 
+class TestUploadDirectoryLocalSidecars:
+    """A directory that was persisted or materialized carries local
+    ``<file>.sha256`` sidecars. They are cache keys, not data, and must not be
+    uploaded: one landing first on its data file's store-side sidecar key would
+    let that data file's ``skip_if_exists`` check match and skip the data."""
+
+    @staticmethod
+    def _with_local_sidecar(directory: Path, name: str, data: bytes) -> None:
+        (directory / name).write_bytes(data)
+        (directory / f"{name}.sha256").write_text(_hash_bytes(data), encoding="utf-8")
+
+    async def test_local_sidecars_are_not_counted_or_uploaded(
+        self, store, tmp_path
+    ) -> None:
+        self._with_local_sidecar(tmp_path, "0.json", b'{"a": 1}')
+        self._with_local_sidecar(tmp_path, "1.json", b'{"b": 2}')
+
+        out = await upload(str(tmp_path), "handoff", store=store, skip_if_exists=True)
+
+        assert out.ref.file_count == 2
+        dest = tmp_path / "dest"
+        dl = await download("handoff/", str(dest), store=store)
+        assert dl.ref.file_count == 2
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert (dest / "1.json").read_bytes() == b'{"b": 2}'
+
+    async def test_data_is_uploaded_when_its_local_sidecar_lists_first(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        # Pin the order the race needs: sidecar first, one upload at a time.
+        self._with_local_sidecar(tmp_path, "0.json", b'{"a": 1}')
+        from application_sdk.storage import transfer as transfer_mod
+
+        monkeypatch.setattr(
+            transfer_mod,
+            "safe_list_directory",
+            lambda path: [path / "0.json.sha256", path / "0.json"],
+        )
+
+        out = await upload(
+            str(tmp_path),
+            "handoff",
+            store=store,
+            skip_if_exists=True,
+            max_concurrency=1,
+        )
+
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert out.ref.file_count == 1
+        assert out.reason == "uploaded"
+
+
 class TestUploadRaiseOnEmpty:
     """BLDX-1255: opt-in fail-loud when upload finds zero files.
 
