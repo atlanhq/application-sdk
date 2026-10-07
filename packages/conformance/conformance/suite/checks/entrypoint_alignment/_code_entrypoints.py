@@ -325,7 +325,7 @@ def scan_file_for_entrypoints(
         return  # No SDK imports in this file — skip entirely.
 
     owners: dict[int, str | None] = {}
-    for cls in ast.walk(tree):
+    for cls in ast.walk(tree) if ep_aliases else ():
         if isinstance(cls, ast.ClassDef):
             cls_name = _owner_name(cls, app_aliases)
             for inner in ast.walk(cls):

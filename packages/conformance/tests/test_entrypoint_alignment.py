@@ -1271,7 +1271,9 @@ def test_p016_multi_tile_routed_to_a_missing_entrypoint_names_its_target(
     assert 'Add @entrypoint(name="dataflow")' not in tile_finding.message
 
 
-def test_p016_multi_tile_name_match_does_not_skip_its_route(tmp_path: Path) -> None:
+def test_p016_multi_tile_name_match_still_passes_when_its_route_differs(
+    tmp_path: Path,
+) -> None:
     py = {
         "app/app.py": dedent("""\
             from application_sdk.app import App, entrypoint
@@ -1281,12 +1283,9 @@ def test_p016_multi_tile_name_match_does_not_skip_its_route(tmp_path: Path) -> N
                 async def crawl(self, input: Input) -> Output: ...
         """)
     }
-    _write_routed_tiles(tmp_path, {"crawl": _own_node("lineage:something-else")})
-    findings = [
-        f for f in scan_all(_write_py(tmp_path, py), tmp_path) if f.rule_id == "P016"
-    ]
-    assert len(findings) == 2
-    assert any("Tile 'crawl'" in f.message for f in findings)
+    _write_routed_tiles(tmp_path, {"crawl": _own_node("renamed-app:crawl")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
 
 
 def test_p016_multi_tile_route_not_disproved_when_owner_name_is_dynamic(
@@ -1375,3 +1374,52 @@ def test_p016_multi_tile_route_not_disproved_by_a_mixin_class_name(
     )
     findings = scan_all(_write_py(tmp_path, py), tmp_path)
     assert _p016_ids(findings) == []
+
+
+def test_p016_multi_tile_on_an_inherited_base_entrypoint_still_matches_by_name(
+    tmp_path: Path,
+) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class CommonApp(App):
+                @entrypoint
+                async def extract(self, input: Input) -> Output: ...
+            class SnowflakeApp(CommonApp):
+                name = "snowflake"
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"extract": _own_node("snowflake:extract")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
+
+
+_ROUTE_FIXTURES = [
+    {"dataflow": _own_node("lineage:extract-and-push")},
+    {"dataflow": _own_node("lineage:something-else")},
+    {"dataflow": _own_node("other-app:extract-and-push")},
+    {"extract-and-push": _own_node("other-app:nothing")},
+    {"dataflow": {"extract": {"workflow_type": "lineage:extract-and-push"}}},
+    {"dataflow": _own_node("lineage:extract-and-push"), "vertex-ai": {"extract": {}}},
+]
+
+
+@pytest.mark.parametrize("tiles", _ROUTE_FIXTURES)
+def test_p016_multi_routes_only_ever_accept(tmp_path: Path, tiles: dict) -> None:
+    """Every finding names something exact-name equality already flags."""
+    import re
+
+    _write_routed_tiles(tmp_path, tiles)
+    findings = [
+        f
+        for f in scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+        if f.rule_id == "P016"
+    ]
+    code_names = {"extract-and-push"}
+    flagged_by_exact_names = (code_names - tiles.keys()) | (tiles.keys() - code_names)
+    for finding in findings:
+        name = re.match(r"(?:Entry point|Tile) '([^']+)'", finding.message)
+        assert name is not None, finding.message
+        assert name.group(1) in flagged_by_exact_names, finding.message
+        if finding.message.startswith("Tile "):
+            assert "Add @entrypoint(name=" not in finding.message

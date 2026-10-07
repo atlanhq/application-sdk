@@ -13,11 +13,11 @@ Let ``contract`` = subdir names under ``app/generated/`` that contain a
 
 * **absent** → no-op.
 * **single** → require ``len(code) <= 1`` (name unconstrained).
-* **multi** → a tile whose own node starts ``"<app>:<wire>"`` must reach
-  ``@entrypoint <wire>`` on the class registered as ``<app>`` (route/card
-  split; an owner whose name is not statically knowable cannot disprove it);
-  any other tile must equal an ``@entrypoint`` name, and every ``@entrypoint``
-  must be reached by a tile.
+* **multi** → require ``code == contract``, additionally accepting a tile
+  whose own node starts ``"<app>:<wire>"`` when ``@entrypoint <wire>`` exists on
+  the class registered as ``<app>`` or on a class whose name is not statically
+  knowable (route/card split). Routes only ever accept: anything exact-name
+  equality accepts is still accepted.
 
 In all modes, unresolvable ``name=`` values produce an additional finding.
 """
@@ -239,7 +239,6 @@ def check_p016(
     contract_names = contract.names
     contract_list = ", ".join(sorted(contract_names))
     targets = {tile: (app, wire) for tile, app, wire in contract.tile_targets}
-    named_tiles = contract_names - targets.keys()
     reached: set[tuple[str | None, str]] = set()
     routed_tiles: set[str] = set()
     for tile, (app, wire) in targets.items():
@@ -254,7 +253,7 @@ def check_p016(
 
     # Code-only names: in @entrypoint code but absent from app/generated/
     for ep in code.entrypoints:
-        if ep.name in named_tiles or (ep.owner_app, ep.name) in reached:
+        if ep.name in contract_names or (ep.owner_app, ep.name) in reached:
             continue
         findings.append(
             make_finding(
@@ -266,8 +265,9 @@ def check_p016(
                     f"contract (contract defines: {contract_list}). "
                     f'Pin the name with @entrypoint(name="<contract-name>") to '
                     "match the contract, route a tile to it (workflowType = "
-                    f'"{ep.owner_app or "<app>"}:{ep.name}" on the tile in '
-                    "contract/app.pkl), or update contract/app.pkl and re-run pkl eval. "
+                    f'"<app>:{ep.name}" on the tile in contract/app.pkl, with <app> '
+                    "the App's registered name), or update contract/app.pkl and "
+                    "re-run pkl eval. "
                     "Note: renaming is a breaking wire change "
                     "(workflow_type and ?entrypoint= value both change)."
                 ),
@@ -280,9 +280,7 @@ def check_p016(
     anchor_file, anchor_node = _best_anchor(code)
     anchor_directives = directives_by_file.get(anchor_file, _empty_directives())
 
-    for missing_name in sorted(
-        (named_tiles - code_names) | (targets.keys() - routed_tiles)
-    ):
+    for missing_name in sorted(contract_names - code_names - routed_tiles):
         if missing_name in targets:
             findings.append(
                 make_finding(
