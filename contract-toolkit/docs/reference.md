@@ -2028,7 +2028,7 @@ the [`full`](../examples/full/) example.
 |---|---|---|---|
 | `Radio` | `radio` | `str` | `possibleValues` (required), `default` (required) |
 | `DropDown` | `select` | `str` or `list[str]` | `possibleValues`, `multiSelect`, `default` |
-| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags. `placeholderText` (renders `ui.placeholder`, display only, omitted when unset), `openByDefault` |
+| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags. `placeholderText` (renders `ui.placeholder`, display only, omitted when unset), `tokenSeparators` (renders `ui.tokenSeparators`; splits typed or pasted text into tags; parts are not trimmed, so use `{ ", "; "," }` for comma lists; omitted when unset), `openByDefault` |
 | `BooleanInput` | `boolean` | `bool` | `defaultSelection` |
 
 #### Connection & Credential

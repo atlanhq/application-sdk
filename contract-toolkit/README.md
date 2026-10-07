@@ -540,6 +540,9 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 
 `TagsInput` takes an optional `placeholderText`, shown while no tags are entered.
 It renders as `ui.placeholder`; unset, no `placeholder` key is emitted.
+`tokenSeparators { ", "; "," }` splits typed or pasted text into separate tags
+(`ui.tokenSeparators`). The frontend does not trim the parts, so list `", "`
+before `","` for comma lists.
 
 ### Connection & Credential
 

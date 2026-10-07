@@ -1,4 +1,4 @@
-// Tests for TagsInput.placeholderText, emitted as the widget's `ui.placeholder`.
+// Tests for TagsInput.placeholderText and tokenSeparators, emitted into the widget's `ui`.
 
 amends "pkl:test"
 
@@ -13,13 +13,23 @@ local fullConfig = new json.Parser { useMapping = true }.parse(
 local tagsUi = fullConfig["tag_keys"]["ui"]
 
 facts {
-  ["TagsInput placeholder renders into the generated configmap ui block"] {
+  ["TagsInput placeholder and separators render into the generated configmap ui block"] {
     tagsUi["widget"] == "select"
     tagsUi["mode"] == "tags"
     tagsUi["placeholder"] == "OwningTeam"
+    tagsUi["tokenSeparators"].toList() == List(", ", ",")
   }
 
   ["TagsInput without placeholderText leaves ui.placeholder null"] {
     new App.TagsInput { title = "x" }.ui.placeholder == null
+  }
+
+  ["TagsInput without tokenSeparators leaves ui.tokenSeparators null"] {
+    new App.TagsInput { title = "x" }.ui.tokenSeparators == null
+  }
+
+  // An empty separator would split every character into its own chip.
+  ["TagsInput rejects an empty token separator"] {
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; tokenSeparators { "" } }.ui.tokenSeparators) != null
   }
 }

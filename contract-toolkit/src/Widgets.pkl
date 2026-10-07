@@ -332,6 +332,9 @@ class Widget {
   /// Mode of the widget.
   mode: String?
 
+  /// Strings that split typed or pasted text into separate tags (`TagsInput`).
+  tokenSeparators: List<String>?
+
   /// TBC
   start: Int?
 
@@ -918,11 +921,22 @@ class TagsInput extends UIElement {
   /// submitted as a tag.
   hidden placeholderText: String?
 
+  /// Strings that split typed or pasted text into separate tags, so pasting
+  /// `A, B, C` gives three tags. Renders as `ui.tokenSeparators`; unset (the
+  /// default) emits no key, so existing output does not change.
+  ///
+  /// The frontend does not trim the parts: with `{ "," }` that paste gives
+  /// `A`, ` B`, ` C`. Use `{ ", "; "," }` to split on a comma with or without a
+  /// following space. An empty separator is rejected, as it would split every
+  /// character into its own tag.
+  hidden tokenSeparators: Listing<String(!isEmpty)>?
+
   fixed ui {
     widget = "select"
     mode = "tags"
     `open` = openByDefault
     placeholder = placeholderText
+    tokenSeparators = outer.tokenSeparators?.toList()
   }
 }
 
