@@ -1,9 +1,13 @@
 # Update Fleet Dashboards — standalone scheduled workflow.
 #
-# Publishes the security, conformance and test-readiness dashboards on
-# Kryptonite (k.atlan.dev/{security,conformance,test-readiness}-dashboard/)
-# for the whole connector fleet from one central job. connector-pulse mirrors
-# all three.
+# Publishes the conformance and test-readiness dashboards on Kryptonite
+# (k.atlan.dev/{conformance,test-readiness}-dashboard/) for the whole connector
+# fleet from one central job. connector-pulse mirrors both.
+#
+# The security dashboard is no longer published (FND-3462): connector-pulse
+# takes vulnerabilities from Endor, and nothing else is known to read it.
+# k.atlan.dev/security-dashboard/ stays frozen at its last publish; nothing
+# here deletes it.
 #
 # CENTRAL PULL, NOT PER-REPO PUSH (FND-3337). These dashboards used to be
 # written by update-dashboard.yaml, called from a shim bootstrap installed in
@@ -17,9 +21,9 @@
 #
 # Every 3 hours, not hourly. The reads run against the atlan-app-fleet
 # installation's hourly REST budget, which the Renovate sweep and dashboard
-# also spend. Collecting one repo costs roughly 20-30 calls (three artifact
-# lookups, one download per Conformance series, a few file reads), so ~80
-# repos is ~2,000 calls a run. Every 3 hours keeps that well under the budget.
+# also spend. Collecting one repo costs roughly 20-30 calls (artifact lookups
+# and one download per Conformance series), so ~80 repos is ~2,000 calls a
+# run. Every 3 hours keeps that well under the budget.
 # :40 past keeps clear of the 0 */4 Renovate sweep and the :20 Renovate
 # dashboard.
 #
@@ -28,7 +32,7 @@
 # interval; there is no manual refresh.
 #
 # A repo with no live artifact keeps its last published row (artifacts expire
-# after 7 days). The row's own scanned_at / collectedAt is the age of the data,
+# after 7 days). The row's own collectedAt / history date is the age of the data,
 # not the time of collection, so a stale row shows its age. See
 # fleet_dashboards_collect.py.
 #
@@ -67,8 +71,8 @@ jobs:
           persist-credentials: false
 
       # Org-wide, no `repositories:` list. The job reads every fleet repo's
-      # Actions artifacts and a few files, which the per-repo shim did with
-      # each repo's own GITHUB_TOKEN.
+      # Actions artifacts, which the per-repo shim did with each repo's own
+      # GITHUB_TOKEN.
       - name: Mint fleet App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
@@ -99,7 +103,6 @@ jobs:
           set -euo pipefail
           python3 .github/scripts/fleet_dashboards_collect.py \
             --repos "$REPOS" \
-            --base-allowlist .security/base-allowlist.json \
             --out-dir dashboards-out
 
       - name: Setup AWS Credentials
@@ -111,17 +114,6 @@ jobs:
       # One publish per dashboard, each gated on having something to publish.
       # publish_fleet_dashboard.py refuses an empty directory, and a dashboard
       # with no live artifact anywhere is routine on a quiet day.
-      - name: Deploy to Kryptonite (security)
-        if: hashFiles('dashboards-out/security-dashboard/repos/*.json') != ''
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/publish_fleet_dashboard.py \
-            --dir dashboards-out/security-dashboard \
-            --prefix security-dashboard \
-            --partial-scan
-          aws s3 cp .security/dashboard/index.html \
-            s3://kryptonite-store/security-dashboard/index.html
-
       - name: Deploy to Kryptonite (conformance)
         if: hashFiles('dashboards-out/conformance-dashboard/repos/*.json') != ''
         run: |

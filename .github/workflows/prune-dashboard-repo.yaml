@@ -18,7 +18,7 @@
 # The sweeps exist because a manifest is rebuilt by LISTING the bucket, which has
 # no deletion path — so a repo that does not belong keeps being enumerated
 # forever. publish_fleet_dashboard.py now omits departed repos on full-fleet
-# runs. The security / conformance / test-readiness publisher
+# runs. The conformance / test-readiness publisher
 # (update-fleet-dashboards.yaml) skips a quiet repo rather than treating it as
 # departed, so it cannot either. FND-960, FND-3337.
 #
