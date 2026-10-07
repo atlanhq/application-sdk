@@ -806,6 +806,9 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
   fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
   logged as a WARNING body, but only for flagged runs.
+- Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
+  **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_name`),
+  so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.
 
 Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
 or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.

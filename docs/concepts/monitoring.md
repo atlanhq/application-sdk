@@ -457,9 +457,39 @@ attributes are allowlisted and reach OTLP:
 | `assets_orphaned` | referential-integrity (orphan) failures |
 | `assets_undeserializable` | records that could not be decoded |
 | `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
+| `asset_validation_summary` | JSON array of complete counts per `{kind, type_name, detail}` over the whole batch (see below) |
 
 Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
-flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
+flag-rate rather than only seeing failures.
+
+The matrix is a **sample** (capped per axis); `asset_validation_summary` is the **aggregate**. Each
+row is `{"kind", "type_name", "detail", "count"}`:
+
+| `kind` | `detail` | `count` |
+|--------|----------|---------|
+| `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
+| `undeserializable` | `decode` | records |
+| `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type | distinct missing targets, plus `references` |
+| `truncated` | empty | summed count of rows past the cap (100) |
+
+Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
+breakdown by app, tenant, type and rule:
+
+```sql
+SELECT LogAttributes['app_name'] AS app,
+       ResourceAttributes['k8s.domain.name'] AS tenant,
+       JSONExtractString(row, 'kind') AS kind,
+       JSONExtractString(row, 'type_name') AS type_name,
+       JSONExtractString(row, 'detail') AS detail,
+       sum(JSONExtractUInt(row, 'count')) AS n,
+       count() AS runs
+FROM otel_logs.service_logs
+ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
+WHERE Body = 'Transformed-asset validation outcome'
+  AND LogAttributes['outcome'] = 'flagged'
+GROUP BY app, tenant, kind, type_name, detail
+ORDER BY n DESC
+``` Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
 Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's

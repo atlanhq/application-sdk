@@ -197,8 +197,9 @@ async def _warn_on_invalid_transformed_assets(
     holds transformed asset output, every record is validated against the
     pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass). On
     **every** upload a structured :data:`ASSET_VALIDATION_EVENT` is emitted with
-    the per-axis counts and a compact per-failure ``asset_validation_matrix`` JSON
-    attribute, all allowlisted for OTLP so they reach ClickHouse and join to the
+    the per-axis counts, a compact per-failure ``asset_validation_matrix`` JSON
+    attribute (a bounded sample) and an ``asset_validation_summary`` JSON attribute
+    (complete per-type, per-rule counts), all allowlisted for OTLP so they reach ClickHouse and join to the
     workflow outcome by Temporal run id (mirrors the preflight gate's outcome
     event). A ``clean`` outcome is emitted too, so there is a denominator to rank
     flag-rate against. A human-readable WARNING with the full ``format_report()``
@@ -354,12 +355,15 @@ async def _warn_on_invalid_transformed_assets(
     try:
         assets = report.assets
         flagged = not assets.ok
-        _task_logger.info(
-            ASSET_VALIDATION_EVENT,
-            **asset_validation_event_fields(
-                assets, app_name=app_name, max_items=_VALIDATION_MATRIX_MAX_ROWS
-            ),
+        # The summary walks every failure (a broken batch can carry millions), so
+        # the projection is built off the event loop to keep heartbeats flowing.
+        fields = await run_in_thread(
+            asset_validation_event_fields,
+            assets,
+            app_name=app_name,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
         )
+        _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
         if flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "

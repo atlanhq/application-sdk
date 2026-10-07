@@ -26,12 +26,14 @@ from __future__ import annotations
 import json
 
 import pytest
+from pyatlan_v9.model.assets import Column
 
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import (
     _KNOWN_EXTRA_KEYS,
     ASSET_VALIDATION_MATRIX_KEY,
+    ASSET_VALIDATION_SUMMARY_KEY,
 )
 from application_sdk.validation.assets import (
     ASSET_VALIDATION_MATRIX_ERROR_MAXLEN,
@@ -40,6 +42,8 @@ from application_sdk.validation.assets import (
     ReferentialFailure,
     asset_validation_event_fields,
     asset_validation_matrix_json,
+    asset_validation_summary_json,
+    validate_asset,
 )
 
 APP = "test-app"
@@ -93,7 +97,8 @@ def test_the_full_attribute_map_is_byte_identical_for_a_known_batch() -> None:
 
     One invalid record, one undeserializable record, one orphan, over a batch of
     four. The literal below is frozen from what the **pre-wrapper** emitter produced
-    for this input, so a diff here is a change to a shipped surface.
+    for this input, so a diff here is a change to a shipped surface. The one
+    deliberate change since is additive: ``asset_validation_summary`` (FND-3495).
 
     This is the before-vs-after anchor for the whole fold-in. Its sibling in
     ``test_asset_cell.py`` pins that the wrapper path equals the direct path, which
@@ -132,6 +137,14 @@ def test_the_full_attribute_map_is_byte_identical_for_a_known_batch() -> None:
             '"qualified_name":"default/snow/123/DB/SCHEMA/T_MISSING_2",'
             '"relationship":"table","reference_count":1,'
             '"file":"entities.json","line":2}]'
+        ),
+        "asset_validation_summary": (
+            '[{"kind":"invalid","type_name":"Table",'
+            '"detail":"required:qualified_name","count":1},'
+            '{"kind":"orphan","type_name":"Table","detail":"table","count":1,'
+            '"references":1},'
+            '{"kind":"undeserializable","type_name":"Table","detail":"decode",'
+            '"count":1}]'
         ),
     }
 
@@ -257,3 +270,181 @@ def test_the_matrix_cap_is_honoured_per_axis(max_items: int) -> None:
     fields = asset_validation_event_fields(report, app_name=APP, max_items=max_items)
 
     assert len(json.loads(fields[ASSET_VALIDATION_MATRIX_KEY])) == 2 * max_items
+
+
+# ---------------------------------------------------------------------------
+# The complete per-rule summary (FND-3495)
+# ---------------------------------------------------------------------------
+
+
+def _summary(report: AssetValidationReport, **kwargs: int) -> list[dict[str, object]]:
+    return json.loads(asset_validation_summary_json(report, **kwargs))
+
+
+def _real_column_errors(qualified_name: str) -> list[str]:
+    """The errors a real pyatlan_v9 ``Column.validate()`` produces, captured through
+    the SDK's own ``validate_asset`` — so the parser is tested against the bundle
+    pyatlan actually raises, not a hand-written imitation of it."""
+    errors = validate_asset(Column(name="C1", qualified_name=qualified_name))
+    assert errors, "fixture must fail validation"
+    return errors
+
+
+def test_a_real_pyatlan_bundle_is_split_into_per_field_rules() -> None:
+    """pyatlan_v9 raises one ``ValueError`` holding every message. The summary must
+    see each check separately, keyed by field — that is the whole point of it."""
+    errors = _real_column_errors("not-a-valid-column-qn")
+    report = AssetValidationReport(
+        total=1,
+        failures=[
+            AssetValidationFailure(
+                file="f.json",
+                line=1,
+                type_name="Column",
+                qualified_name="not-a-valid-column-qn",
+                errors=errors,
+            )
+        ],
+    )
+
+    details = {row["detail"] for row in _summary(report)}
+
+    assert "pattern:qualified_name" in details
+    assert "required_for_creation:schema_qualified_name" in details
+    assert (
+        "one_of_required_for_creation:table|table_partition|view|materialised_view"
+        in details
+    )
+    assert "other" not in details
+
+
+def test_the_summary_never_carries_record_values() -> None:
+    """The pattern message embeds the offending qualifiedName; the rule key must not,
+    or the summary would be unbounded in cardinality and carry record data."""
+    qn = "default/snow/123/SECRETISH_VALUE"
+    report = AssetValidationReport(
+        total=1,
+        failures=[
+            AssetValidationFailure(
+                file="f.json",
+                line=1,
+                type_name="Column",
+                qualified_name=qn,
+                errors=_real_column_errors(qn),
+            )
+        ],
+    )
+
+    assert "SECRETISH_VALUE" not in asset_validation_summary_json(report)
+
+
+def test_counts_cover_the_whole_batch_not_the_matrix_sample() -> None:
+    """The matrix stops at the per-axis cap; the summary must count every failure,
+    which is the gap it closes."""
+    n = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS * 4
+    errors = _real_column_errors("bad")
+    report = AssetValidationReport(
+        total=n,
+        failures=[
+            AssetValidationFailure(
+                file="f.json",
+                line=i,
+                type_name="Column",
+                qualified_name="bad",
+                errors=errors,
+            )
+            for i in range(n)
+        ],
+    )
+
+    by_detail = {row["detail"]: row["count"] for row in _summary(report)}
+
+    assert by_detail["pattern:qualified_name"] == n
+
+
+def test_an_asset_counts_once_per_rule_and_unknown_text_is_other() -> None:
+    report = AssetValidationReport(
+        total=2,
+        failures=[
+            AssetValidationFailure(
+                file="f.json",
+                line=1,
+                type_name="Table",
+                qualified_name="a",
+                errors=["name is required", "name is required", "boom"],
+            ),
+            AssetValidationFailure(
+                file="f.json",
+                line=2,
+                type_name="Table",
+                qualified_name="b",
+                errors=[],
+            ),
+        ],
+    )
+
+    assert _summary(report) == [
+        {"kind": "invalid", "type_name": "Table", "detail": "other", "count": 2},
+        {
+            "kind": "invalid",
+            "type_name": "Table",
+            "detail": "required:name",
+            "count": 1,
+        },
+    ]
+
+
+def test_orphans_count_missing_targets_and_sum_their_references() -> None:
+    def orphan(i: int, refs: int) -> ReferentialFailure:
+        return ReferentialFailure(
+            missing_type_name="Table",
+            missing_qualified_name=f"T{i}",
+            reference_count=refs,
+            file="f.json",
+            line=i,
+            type_name="Column",
+            qualified_name=f"T{i}/C",
+            relationship="table",
+        )
+
+    report = AssetValidationReport(total=5, orphans=[orphan(1, 3), orphan(2, 2)])
+
+    assert _summary(report) == [
+        {
+            "kind": "orphan",
+            "type_name": "Table",
+            "detail": "table",
+            "count": 2,
+            "references": 5,
+        },
+    ]
+
+
+def test_rows_past_the_cap_fold_into_one_truncated_row_that_keeps_the_total() -> None:
+    report = AssetValidationReport(
+        total=6,
+        failures=[
+            AssetValidationFailure(
+                file="f.json",
+                line=i,
+                type_name=f"Type{i}",
+                qualified_name="q",
+                errors=["name is required"],
+            )
+            for i in range(6)
+        ],
+    )
+
+    rows = _summary(report, max_rows=2)
+
+    assert len(rows) == 3
+    assert rows[-1] == {"kind": "truncated", "type_name": "", "detail": "", "count": 4}
+    assert sum(row["count"] for row in rows) == 6
+
+
+def test_a_clean_batch_emits_an_empty_summary() -> None:
+    fields = asset_validation_event_fields(
+        AssetValidationReport(total=3, passed=3), app_name=APP
+    )
+
+    assert fields[ASSET_VALIDATION_SUMMARY_KEY] == "[]"
