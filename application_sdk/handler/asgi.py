@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Literal
 from fastapi import FastAPI
 
 from application_sdk._logging import get_logger
-from application_sdk._runtime.offload import blocking_executor
+from application_sdk._runtime.offload import blocking_executor, offload_owner
 from application_sdk.common.task_queue import derive_task_queue
 from application_sdk.handler.base import Handler
 from application_sdk.handler.metadata_routes import (
@@ -173,14 +173,25 @@ def _package_generated_dir(app_package: str) -> Path | None:
 
 
 class _AppBlockingExecutor:
-    """ASGI middleware: ``run_in_thread`` in this app's requests uses its pool."""
+    """ASGI middleware: ``run_in_thread`` in this app's requests uses its pool.
 
-    def __init__(self, app: ASGIApp, executor: concurrent.futures.Executor) -> None:
+    Every request is also charged to ``app_name`` for the per-app offload cap and
+    the stranded-thread count, including the metadata, config and file routes,
+    which run outside a handler context.
+    """
+
+    def __init__(
+        self,
+        app: ASGIApp,
+        executor: concurrent.futures.Executor,
+        app_name: str,
+    ) -> None:
         self.app = app
         self.executor = executor
+        self.app_name = app_name
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        with blocking_executor(self.executor):
+        with blocking_executor(self.executor), offload_owner(self.app_name):
             await self.app(scope, receive, send)
 
 
@@ -210,7 +221,7 @@ def build_asgi_app(
         max_workers=blocking_threads, thread_name_prefix=f"api-{app_name}-"
     )
     app.state.blocking_executor = executor
-    app.add_middleware(_AppBlockingExecutor, executor=executor)
+    app.add_middleware(_AppBlockingExecutor, executor=executor, app_name=app_name)
 
     @app.get("/health")
     async def health() -> dict[str, str]:
