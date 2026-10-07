@@ -473,26 +473,36 @@ row is `{"kind", "type_name", "detail", "count"}`:
 | `truncated` | empty | summed count of rows past the cap (100) |
 
 Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
-breakdown by app, tenant, type and rule — bound `Timestamp` and prefix-filter `ServiceName` first,
-because `Body` is not indexed and an unbounded fleet scan of `service_logs` does not return:
+breakdown by app, tenant, type and rule. Two things make it return correct numbers:
+
+- Bound `Timestamp` and prefix-filter `ServiceName` first. `Body` is not indexed, and an unbounded
+  fleet scan of `service_logs` does not return.
+- Re-aggregate in an outer query. A single `GROUP BY` over `service_logs` has been observed to
+  return the same key on several rows with partial counts; the outer `sum` merges them.
 
 ```sql
-SELECT LogAttributes['app_name'] AS app,
-       TenantName AS tenant,
-       JSONExtractString(row, 'kind') AS kind,
-       JSONExtractString(row, 'type_name') AS type_name,
-       JSONExtractString(row, 'detail') AS detail,
-       sum(JSONExtractUInt(row, 'count')) AS n,
-       count() AS runs
-FROM otel_logs.service_logs
-ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
-WHERE Timestamp >= now() - INTERVAL 1 DAY
-  AND ServiceName LIKE 'atlan-%'
-  AND Body = 'Transformed-asset validation outcome'
-  AND LogAttributes['outcome'] = 'flagged'
+SELECT app, tenant, kind, type_name, detail, sum(n) AS n, sum(runs) AS runs
+FROM (
+  SELECT LogAttributes['app_name'] AS app,
+         TenantName AS tenant,
+         JSONExtractString(row, 'kind') AS kind,
+         JSONExtractString(row, 'type_name') AS type_name,
+         JSONExtractString(row, 'detail') AS detail,
+         sum(JSONExtractUInt(row, 'count')) AS n,
+         count() AS runs
+  FROM otel_logs.service_logs
+  ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
+  WHERE Timestamp >= now() - INTERVAL 1 DAY
+    AND ServiceName LIKE 'atlan-%'
+    AND Body = 'Transformed-asset validation outcome'
+    AND LogAttributes['outcome'] = 'flagged'
+  GROUP BY app, tenant, kind, type_name, detail
+)
 GROUP BY app, tenant, kind, type_name, detail
 ORDER BY n DESC
-``` Uploads with nothing to validate (validation disabled, or
+```
+
+Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
 Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
