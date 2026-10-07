@@ -538,7 +538,7 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 `default` by hand on a multi-select is rejected. See `docs/reference.md` and the
 [`full`](examples/full/) example.
 
-`TagsInput` takes optional `placeholderText`, `tokenSeparators`, `enabled`,
+`TagsInput` takes optional `placeholderText`, `tokenSeparators`, `enabled`, `byocDisabled`,
 `allowClear`, `maxTagCount` and `maxTagTextLength`; each renders into `ui` only
 when set. `tokenSeparators { ", "; "," }` splits a pasted comma list into tags
 (the frontend does not trim the parts). See `docs/reference.md` for each

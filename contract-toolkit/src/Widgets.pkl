@@ -941,9 +941,13 @@ class TagsInput extends UIElement {
   /// character into its own tag.
   hidden tokenSeparators: Listing<String(!isEmpty)>?
 
-  /// Set to `false` to render the field read-only (`ui.disabled = true`).
+  /// Set to `false` to disable the field (`ui.disabled = true`).
   /// Unset (the default) emits no `disabled` key.
   hidden enabled: Boolean?
+
+  /// Set to `true` to disable the field only in BYOC mode
+  /// (`ui.BYOCdisabled`). Unset (the default) emits no key.
+  hidden byocDisabled: Boolean?
 
   /// Shows a button that clears every tag; clearing submits `[]`. Renders as
   /// `ui.allowClear`; unset (the default) emits no key.
@@ -967,6 +971,7 @@ class TagsInput extends UIElement {
     placeholder = placeholderText
     tokenSeparators = outer.tokenSeparators?.toList()
     disabled = if (enabled != null) !enabled else null
+    BYOCdisabled = byocDisabled
     allowClear = outer.allowClear
     maxTagCount = outer.maxTagCount
     maxTagTextLength = outer.maxTagTextLength

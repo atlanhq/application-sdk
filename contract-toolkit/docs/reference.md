@@ -2038,7 +2038,8 @@ changes for the settings an app sets.
 |---|---|---|
 | `placeholderText` | `ui.placeholder` | Example text shown while no tags are entered. Never submitted. |
 | `tokenSeparators` | `ui.tokenSeparators` | Splits typed or pasted text into tags. Parts are not trimmed, so use `{ ", "; "," }` for comma lists. Empty separators are rejected. |
-| `enabled` | `ui.disabled` | `false` renders the field read-only. |
+| `enabled` | `ui.disabled` | `false` disables the field. |
+| `byocDisabled` | `ui.BYOCdisabled` | `true` disables the field only in BYOC mode. |
 | `allowClear` | `ui.allowClear` | Shows a button that clears every tag; clearing submits `[]`. |
 | `maxTagCount` | `ui.maxTagCount` | Collapses tags past this count into `+N`; `"responsive"` fits the width. Display only. |
 | `maxTagTextLength` | `ui.maxTagTextLength` | Truncates each chip's text. Display only. |

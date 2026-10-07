@@ -28,6 +28,7 @@ facts {
     plainUi.placeholder == null
     plainUi.tokenSeparators == null
     plainUi.disabled == null
+    plainUi.BYOCdisabled == null
     plainUi.allowClear == null
     plainUi.maxTagCount == null
     plainUi.maxTagTextLength == null
@@ -35,6 +36,10 @@ facts {
 
   ["TagsInput enabled = false renders ui.disabled"] {
     new App.TagsInput { title = "x"; enabled = false }.ui.disabled == true
+  }
+
+  ["TagsInput byocDisabled renders ui.BYOCdisabled"] {
+    new App.TagsInput { title = "x"; byocDisabled = true }.ui.BYOCdisabled == true
   }
 
   ["TagsInput maxTagCount takes a number and maxTagTextLength truncates chips"] {
