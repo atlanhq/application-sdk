@@ -211,6 +211,10 @@ class GhError(RuntimeError):
 
 _STATUS_RE = re.compile(r"HTTP (\d{3})")
 
+# Per `gh` call. Same ceiling as fleet_dashboards_collect.py: far above any
+# healthy call, including a paged listing, and well inside the 45-minute job.
+GH_CALL_TIMEOUT_SECONDS = 300
+
 
 def _run_gh(args: list) -> str:
     """Run `gh` and return stdout; raise GhError with gh's stderr on failure.
@@ -218,8 +222,22 @@ def _run_gh(args: list) -> str:
     The single seam the tests stub, mirroring detect_merge_queue.py and
     discover_org_consumers.py — but raising where those return "", because here
     "no data" and "an error" must not produce the same record.
+
+    Bounded like fleet_dashboards_collect.py: a stalled call raises GhError, so
+    each read takes its own guarded fallback instead of hanging the sweep until
+    the job timeout kills it with nothing published.
     """
-    result = subprocess.run(["gh", *args], capture_output=True, text=True)
+    try:
+        result = subprocess.run(
+            ["gh", *args],
+            capture_output=True,
+            text=True,
+            timeout=GH_CALL_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise GhError(
+            f"gh {' '.join(args[:2])} timed out after {GH_CALL_TIMEOUT_SECONDS}s"
+        ) from exc
     if result.returncode != 0:
         stderr = (result.stderr or "").strip()
         match = _STATUS_RE.search(stderr)
@@ -735,14 +753,19 @@ def fetch_pulls_for_commit(repo: str, sha: str, run: RunFn = _run_gh) -> frozens
     exemption every repo with no later pull request reads `no-data` — and is
     reported not baselined — until something else is opened (FND-3480).
     """
+    # Paginated like the rulesets listing: the default page holds 30, and an
+    # introducing PR on a later page would silently lose its exemption.
     payload = _load_json(
-        run(["api", f"repos/{repo}/commits/{sha}/pulls", "--jq", "[.[].number]"])
+        run(["api", f"repos/{repo}/commits/{sha}/pulls", "--paginate", "--slurp"])
     )
-    if not isinstance(payload, list) or not all(
-        isinstance(n, int) and not isinstance(n, bool) for n in payload
-    ):
+    if payload is None:
+        return frozenset()
+    if not isinstance(payload, list) or not all(isinstance(p, dict) for p in payload):
         raise GhError(f"unexpected pulls-for-commit payload for {repo}@{sha}")
-    return frozenset(payload)
+    numbers = [p.get("number") for p in payload]
+    if not all(isinstance(n, int) and not isinstance(n, bool) for n in numbers):
+        raise GhError(f"unexpected pulls-for-commit payload for {repo}@{sha}")
+    return frozenset(numbers)
 
 
 # `states: [OPEN, MERGED]` is load-bearing (FND-1947). Without it a CLOSED-

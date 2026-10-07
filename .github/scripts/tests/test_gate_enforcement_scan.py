@@ -13,6 +13,7 @@ to stop a false green cannot itself manufacture one out of an auth error.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import gate_enforcement_scan  # noqa: E402
 from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_INTERMITTENT,
     ARRIVAL_NEVER,
@@ -1677,7 +1679,9 @@ def test_the_pr_that_changed_the_workflow_is_evidence_about_it():
     repo with no later PR read `no-data` — not baselined — after each fleet
     resync. Older PRs stay excluded: only the introducing PR is exempt."""
     record = scan_repo(
-        REPO, GATE, sample_size=5, run=_resync_run(pulls_for_change=lambda: "[241]")
+        REPO, GATE, sample_size=5, run=_resync_run(
+            pulls_for_change=lambda: json.dumps([[{"number": 241}]])
+        ),
     )
     assert record["arrival"]["status"] == ARRIVAL_REPORTING
     assert record["arrival"]["prsSampled"] == 1
@@ -1701,6 +1705,33 @@ def test_an_unreadable_introducing_pr_keeps_the_plain_cutoff():
 def test_a_malformed_pulls_for_commit_payload_raises():
     with pytest.raises(GhError, match="pulls-for-commit"):
         fetch_pulls_for_commit(REPO, "sha", run=lambda args: json.dumps({"n": 1}))
+
+
+def test_the_introducing_pr_on_a_later_page_is_still_exempt():
+    """The listing defaults to 30 per page; an introducing PR on page two must
+    not silently lose its exemption."""
+    sent: list = []
+
+    def run(args: list) -> str:
+        sent.append(args)
+        page_one = [{"number": n} for n in range(1, 31)]
+        return json.dumps([page_one, [{"number": 241}]])
+
+    assert 241 in fetch_pulls_for_commit(REPO, "sha", run=run)
+    assert "--paginate" in sent[0] and "--slurp" in sent[0]
+
+
+def test_a_stalled_gh_call_raises_rather_than_hanging(monkeypatch):
+    """Unbounded, a stalled `gh` never raises, so no guarded fallback fires and
+    the sweep hangs until the job timeout kills it with nothing published."""
+
+    def stall(*args, **kwargs):
+        assert kwargs.get("timeout") == gate_enforcement_scan.GH_CALL_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(gate_enforcement_scan.subprocess, "run", stall)
+    with pytest.raises(GhError, match="timed out"):
+        gate_enforcement_scan._run_gh(["api", "repos/x"])
 
 
 def test_an_unparseable_timestamp_raises_rather_than_skipping_the_filter():
