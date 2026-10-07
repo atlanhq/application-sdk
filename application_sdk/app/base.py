@@ -299,6 +299,7 @@ async def _warn_on_invalid_transformed_assets(
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         AssetArtifactReport,
+        AssetBatchScope,
         ModelSource,
         asset_validation_event_fields,
         validate_artifact,
@@ -362,6 +363,13 @@ async def _warn_on_invalid_transformed_assets(
             assets,
             app_name=app_name,
             max_items=_VALIDATION_MATRIX_MAX_ROWS,
+            scope=AssetBatchScope(
+                # One path is ``upload``; a list is every declared part of an
+                # ``upload_refs`` fan-in (see the docstring).
+                upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
+                parts_validated=len(targets),
+                parts_not_local=len(remote),
+            ),
         )
         _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
         if flagged:

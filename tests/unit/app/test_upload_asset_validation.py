@@ -289,6 +289,10 @@ class TestWarnOnInvalidTransformedAssets:
             assert ev["outcome"] == "clean"
             assert ev["assets_total"] == 4
             assert ev["assets_orphaned"] == 0
+            assert ev["assets_upload_kind"] == "upload_refs"
+            assert ev["assets_parts_validated"] == 4
+            assert ev["assets_parts_not_local"] == 0
+            assert ev["assets_referential_check"] == "ran"
 
     async def test_a_part_not_on_this_pod_skips_only_the_orphan_pass(
         self, tmp_path: Path
@@ -307,6 +311,8 @@ class TestWarnOnInvalidTransformedAssets:
             ev = _outcome_event(logger)
             assert ev["assets_invalid"] == 1
             assert ev["assets_orphaned"] == 0
+            assert ev["assets_parts_not_local"] == 1
+            assert ev["assets_referential_check"] == "not_requested"
 
     async def test_a_fully_remote_fan_in_warns_instead_of_going_silent(
         self,

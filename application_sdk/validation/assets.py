@@ -102,6 +102,10 @@ class AssetValidationFailure:
     deserialize_error: bool = False
     """True when the record could not be decoded at all (counted in
     ``undeserializable``), as opposed to a decoded asset that failed ``.validate()``."""
+    decode_reason: str = ""
+    """Value-free class of a decode failure — ``malformed_json``,
+    ``schema_mismatch:<path>`` or the exception class name. Empty unless
+    ``deserialize_error``."""
 
 
 @dataclass(frozen=True)
@@ -131,6 +135,13 @@ class ReferentialFailure:
     """The relationship attribute the reference came through (e.g. ``table``)."""
 
 
+REFERENTIAL_CHECK_RAN: Final = "ran"
+REFERENTIAL_CHECK_NOT_REQUESTED: Final = "not_requested"
+REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE: Final = "skipped_unavailable"
+#: A report not produced by the walk (e.g. built by hand) cannot say.
+REFERENTIAL_CHECK_UNKNOWN: Final = "unknown"
+
+
 @dataclass
 class AssetValidationReport:
     """Aggregate outcome of validating a batch of transformed assets."""
@@ -145,6 +156,10 @@ class AssetValidationReport:
     """Per-asset validation failures (includes deserialize failures)."""
     orphans: list[ReferentialFailure] = field(default_factory=list)
     """Referential-integrity failures from the second pass."""
+    referential_check: str = REFERENTIAL_CHECK_UNKNOWN
+    """Whether the orphan pass ran: ``ran``, ``not_requested`` (the caller turned
+    it off, e.g. an incomplete fan-in batch) or ``skipped_unavailable`` (no spill
+    store). Zero orphans means "none found" only when this is ``ran``."""
 
     @property
     def ok(self) -> bool:
@@ -335,6 +350,44 @@ def _deserialize(raw: bytes) -> Asset:
     return from_atlas_json(raw)
 
 
+class _TypeNameProbe(msgspec.Struct):
+    """Reads only ``typeName`` — every other key is skipped, not decoded."""
+
+    typeName: str = ""
+
+
+_TYPE_NAME_PROBE = msgspec.json.Decoder(_TypeNameProbe)
+_VALIDATION_ERROR_PATH = re.compile(r" - at `\$([^`]*)`\Z")
+_PATH_INDEX = re.compile(r"\[\d+\]")
+
+
+def _probe_type_name(raw: bytes) -> str:
+    """Best-effort ``typeName`` of a record the full decode rejected, so a decode
+    failure still attributes to an asset type. ``""`` when even that is unreadable."""
+    try:
+        return _TYPE_NAME_PROBE.decode(raw).typeName
+    except (msgspec.DecodeError, msgspec.ValidationError):
+        return ""  # conformance: ignore[E007] the full decode failure is already recorded; "" is the documented "type unknown" value
+
+
+def _decode_reason(exc: BaseException) -> str:
+    """Classify a decode failure without its record values.
+
+    msgspec's ``ValidationError`` names the offending path (``... - at
+    `$.columnCount```); list indexes collapse to ``[]`` so the key is per field,
+    not per element.
+    """
+    if isinstance(exc, msgspec.ValidationError):
+        match = _VALIDATION_ERROR_PATH.search(str(exc))
+        if match is None:
+            return "schema_mismatch"
+        path = _PATH_INDEX.sub("[]", match.group(1)).lstrip(".")
+        return f"schema_mismatch:{path}" if path else "schema_mismatch"
+    if isinstance(exc, msgspec.DecodeError):
+        return "malformed_json"
+    return type(exc).__name__
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -419,6 +472,12 @@ def validate_transformed_dir(
                 referenced.close()
                 referenced = None
             raise
+    if referential:
+        report.referential_check = REFERENTIAL_CHECK_RAN
+    elif check_referential_integrity:
+        report.referential_check = REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE
+    else:
+        report.referential_check = REFERENTIAL_CHECK_NOT_REQUESTED
     if check_referential_integrity and not referential:
         logger.warning(
             "rocksdict unavailable — skipping referential-integrity (orphan) "
@@ -436,10 +495,11 @@ def validate_transformed_dir(
                     AssetValidationFailure(
                         file=file_path,
                         line=line_no,
-                        type_name="",
+                        type_name=_probe_type_name(raw),
                         qualified_name="",
                         errors=[f"could not deserialize as an Atlan asset: {exc}"],
                         deserialize_error=True,
+                        decode_reason=_decode_reason(exc),
                     )
                 )
                 continue
@@ -853,7 +913,8 @@ def asset_validation_summary_json(
       (``other`` for a message outside pyatlan_v9's known shapes); ``count`` is the
       number of assets that broke that rule. An asset breaking several rules counts
       once in each, so these counts can sum past ``assets_invalid``.
-    * ``kind="undeserializable"`` — ``detail="decode"``; ``count`` is records.
+    * ``kind="undeserializable"`` — ``detail`` is ``decode:<reason>`` (see
+      :attr:`AssetValidationFailure.decode_reason`); ``count`` is records.
     * ``kind="orphan"`` — ``type_name`` is the *missing* target's type and
       ``detail`` the relationship it was referenced through; ``count`` is distinct
       missing targets and ``references`` the references to them.
@@ -867,7 +928,8 @@ def asset_validation_summary_json(
     references: collections.Counter[tuple[str, str, str]] = collections.Counter()
     for failure in report.failures:
         if failure.deserialize_error:
-            counts["undeserializable", failure.type_name, "decode"] += 1
+            reason = failure.decode_reason or "unknown"
+            counts["undeserializable", failure.type_name, f"decode:{reason}"] += 1
             continue
         rules = {rule for error in failure.errors for rule in _validation_rules(error)}
         for rule in rules or (_RULE_OTHER,):
@@ -901,11 +963,30 @@ def asset_validation_summary_json(
     return orjson.dumps(rows).decode()
 
 
+@dataclass(frozen=True)
+class AssetBatchScope:
+    """How one validated hand-off was assembled — context the report cannot know.
+
+    Without it an orphan count cannot be read: the same number means something
+    different for one ``upload`` of a single file, and for an ``upload_refs`` fan-in
+    whose parts were validated together.
+    """
+
+    upload_kind: typing.Literal["upload", "upload_refs"]
+    """Which framework task delivered the batch."""
+    parts_validated: int
+    """Local paths validated together as one batch."""
+    parts_not_local: int
+    """Declared transformed parts absent from this pod (streamed from the store),
+    which turn the orphan pass off — see ``assets_referential_check``."""
+
+
 def asset_validation_event_fields(
     report: AssetValidationReport,
     *,
     app_name: str,
     max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    scope: AssetBatchScope | None = None,
 ) -> dict[str, str | int]:
     """Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
 
@@ -937,6 +1018,9 @@ def asset_validation_event_fields(
             :attr:`AssetArtifactReport.assets`.
         app_name: Emitting app, carried as the already-allowlisted ``app_name``.
         max_items: Row cap per axis for the matrix; shared with ``format_report``.
+        scope: How the batch was assembled. The upload hook always passes it;
+            without it the three ``assets_upload_kind`` / ``assets_parts_*`` keys
+            are omitted rather than guessed.
 
     Returns:
         Keyword arguments for the ``ASSET_VALIDATION_EVENT`` log call.
@@ -953,4 +1037,14 @@ def asset_validation_event_fields(
             report, max_items=max_items
         ),
         ASSET_VALIDATION_SUMMARY_KEY: asset_validation_summary_json(report),
+        "assets_referential_check": report.referential_check,
+        **(
+            {}
+            if scope is None
+            else {
+                "assets_upload_kind": scope.upload_kind,
+                "assets_parts_validated": scope.parts_validated,
+                "assets_parts_not_local": scope.parts_not_local,
+            }
+        ),
     }
