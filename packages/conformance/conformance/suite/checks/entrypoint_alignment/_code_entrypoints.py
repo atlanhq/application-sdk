@@ -246,9 +246,10 @@ class EntrypointLocation:
     """The ``@entrypoint`` decorator node — anchored here so ``# conformance: ignore``
     on the line directly above the decorator suppresses the finding correctly."""
     owner_app: str | None = None
-    """The registered name of the class that defines this method (literal
-    ``name = "..."`` or the kebab-cased class name), or ``None`` when that name is
-    not statically knowable or the method sits outside any class."""
+    """The name the enclosing class registers under (see :func:`_owner_name`):
+    a direct ``App`` subclass's literal ``name`` or kebab-cased class name, or
+    another class's literal ``name``. ``None`` when that is not statically
+    knowable or the method sits outside any class."""
 
 
 @dataclass

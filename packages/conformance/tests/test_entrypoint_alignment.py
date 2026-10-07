@@ -1288,7 +1288,7 @@ def test_p016_multi_tile_name_match_still_passes_when_its_route_differs(
     assert _p016_ids(findings) == []
 
 
-def test_p016_multi_tile_route_not_disproved_when_owner_name_is_dynamic(
+def test_p016_multi_tile_route_with_a_dynamic_owner_falls_back_to_names(
     tmp_path: Path,
 ) -> None:
     py = {
@@ -1303,7 +1303,7 @@ def test_p016_multi_tile_route_not_disproved_when_owner_name_is_dynamic(
     }
     _write_routed_tiles(tmp_path, {"dataflow": _own_node("lineage:extract-and-push")})
     findings = scan_all(_write_py(tmp_path, py), tmp_path)
-    assert _p016_ids(findings) == []
+    assert len(_p016_ids(findings)) == 2
 
 
 def test_p016_multi_tile_route_pinned_on_a_template_based_app(tmp_path: Path) -> None:
@@ -1342,14 +1342,12 @@ def test_p016_multi_tile_route_owner_found_for_a_nested_method(tmp_path: Path) -
                     async def extract_and_push(self, input: Input) -> Output: ...
         """)
     }
-    _write_routed_tiles(tmp_path, {"dataflow": _own_node("other:extract-and-push")})
-    findings = [
-        f for f in scan_all(_write_py(tmp_path, py), tmp_path) if f.rule_id == "P016"
-    ]
-    assert len(findings) == 2
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("lineage:extract-and-push")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert _p016_ids(findings) == []
 
 
-def test_p016_multi_tile_route_not_disproved_by_a_mixin_class_name(
+def test_p016_multi_tile_on_a_mixin_entrypoint_still_matches_by_name(
     tmp_path: Path,
 ) -> None:
     py = {
@@ -1394,32 +1392,189 @@ def test_p016_multi_tile_on_an_inherited_base_entrypoint_still_matches_by_name(
     assert _p016_ids(findings) == []
 
 
-_ROUTE_FIXTURES = [
-    {"dataflow": _own_node("lineage:extract-and-push")},
-    {"dataflow": _own_node("lineage:something-else")},
-    {"dataflow": _own_node("other-app:extract-and-push")},
-    {"extract-and-push": _own_node("other-app:nothing")},
-    {"dataflow": {"extract": {"workflow_type": "lineage:extract-and-push"}}},
-    {"dataflow": _own_node("lineage:extract-and-push"), "vertex-ai": {"extract": {}}},
-]
+def test_p016_multi_module_level_entrypoint_does_not_accept_a_foreign_route(
+    tmp_path: Path,
+) -> None:
+    py = {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+            @entrypoint
+            async def extract_and_push(input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"dataflow": _own_node("other-app:extract-and-push")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert len(_p016_ids(findings)) == 2
 
 
-@pytest.mark.parametrize("tiles", _ROUTE_FIXTURES)
-def test_p016_multi_routes_only_ever_accept(tmp_path: Path, tiles: dict) -> None:
-    """Every finding names something exact-name equality already flags."""
-    import re
-
-    _write_routed_tiles(tmp_path, tiles)
+def test_p016_multi_messages_offer_routing_before_renaming(tmp_path: Path) -> None:
+    _write_routed_tiles(tmp_path, {"dataflow": {"extract": {}}})
     findings = [
         f
         for f in scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
         if f.rule_id == "P016"
     ]
-    code_names = {"extract-and-push"}
-    flagged_by_exact_names = (code_names - tiles.keys()) | (tiles.keys() - code_names)
-    for finding in findings:
-        name = re.match(r"(?:Entry point|Tile) '([^']+)'", finding.message)
-        assert name is not None, finding.message
-        assert name.group(1) in flagged_by_exact_names, finding.message
-        if finding.message.startswith("Tile "):
+    (code_only,) = [f for f in findings if "is defined in code" in f.message]
+    (tile_only,) = [f for f in findings if "is defined in the contract" in f.message]
+    assert code_only.message.index("Route the tile") < code_only.message.index(
+        "@entrypoint(name="
+    )
+    assert 'workflowType = "<app>:<entry-point>"' in tile_only.message
+
+
+def test_p016_multi_tile_without_an_own_node_has_no_route(tmp_path: Path) -> None:
+    dag = {"publish": {"inputs": {"workflow_type": "lineage:extract-and-push"}}}
+    _write_routed_tiles(tmp_path, {"dataflow": dag})
+    findings = scan_all(_write_py(tmp_path, _ONE_ENTRYPOINT), tmp_path)
+    assert len(_p016_ids(findings)) == 2
+
+
+def test_p016_multi_route_to_a_mixin_class_name_is_not_accepted(tmp_path: Path) -> None:
+    py = {
+        "app/miner.py": dedent("""\
+            from application_sdk.app import entrypoint
+            class MinerMixin:
+                @entrypoint
+                async def run_miner(self, input: Input) -> Output: ...
+        """)
+    }
+    _write_routed_tiles(tmp_path, {"miner": _own_node("miner-mixin:run-miner")})
+    findings = scan_all(_write_py(tmp_path, py), tmp_path)
+    assert len(_p016_ids(findings)) == 2
+
+
+# ---------------------------------------------------------------------------
+# Routes only ever accept: every finding is one exact-name equality (the rule on
+# main) also makes, of the same kind, on the same scan.
+# ---------------------------------------------------------------------------
+
+
+def _main_multi_findings(code, contract) -> list[tuple[str, str]]:
+    """Frozen copy of main's multi-mode P016: exact set equality."""
+    found = [
+        ("code", ep.name) for ep in code.entrypoints if ep.name not in contract.names
+    ]
+    found += [("contract", name) for name in sorted(contract.names - code.name_set())]
+    return found
+
+
+def _finding_kind_and_name(message: str) -> tuple[str, str]:
+    import re
+
+    tile = re.match(r"Tile '([^']+)'", message)
+    if tile:
+        return "contract", tile.group(1)
+    entry = re.match(
+        r"Entry point '([^']+)' is defined in (code|the contract)", message
+    )
+    assert entry is not None, message
+    return ("code" if entry.group(2) == "code" else "contract"), entry.group(1)
+
+
+_CODE_SHAPES = {
+    "one-app": _ONE_ENTRYPOINT,
+    "inherited-base": {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class CommonApp(App):
+                @entrypoint
+                async def extract(self, input: Input) -> Output: ...
+            class SnowflakeApp(CommonApp):
+                name = "snowflake"
+        """)
+    },
+    "two-apps": {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+                @entrypoint
+                async def crawl(self, input: Input) -> Output: ...
+            class OtherApp(App):
+                name = "other"
+                @entrypoint
+                async def extract_and_push(self, input: Input) -> Output: ...
+        """)
+    },
+    "mixin": {
+        "app/miner.py": dedent("""\
+            from application_sdk.app import entrypoint
+            class MinerMixin:
+                @entrypoint
+                async def miner(self, input: Input) -> Output: ...
+        """),
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class MssqlApp(App):
+                name = "mssql"
+                @entrypoint(name="crawler")
+                async def crawl(self, input: Input) -> Output: ...
+        """),
+    },
+    "module-level": {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class LineageApp(App):
+                name = "lineage"
+            @entrypoint
+            async def extract_and_push(input: Input) -> Output: ...
+        """)
+    },
+    "dynamic-owner": {
+        "app/app.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            APP_NAME = "lineage"
+            class LineageApp(App):
+                name = APP_NAME
+                @entrypoint
+                async def extract_and_push(self, input: Input) -> Output: ...
+        """)
+    },
+}
+
+_TILE_SETS = {
+    "routed": {"dataflow": _own_node("lineage:extract-and-push")},
+    "routed-elsewhere": {"dataflow": _own_node("lineage:something-else")},
+    "foreign-prefix": {"dataflow": _own_node("other:extract-and-push")},
+    "subclass-route": {"extract": _own_node("snowflake:extract")},
+    "mixin-route": {
+        "crawler": _own_node("mssql:crawler"),
+        "miner": _own_node("mssql:miner"),
+    },
+    "shared-target": {
+        "dataflow": _own_node("lineage:extract-and-push"),
+        "vertex-ai": _own_node("lineage:extract-and-push"),
+    },
+    "unrouted": {"dataflow": {"extract": {}}, "extract-and-push": {"extract": {}}},
+}
+
+
+@pytest.mark.parametrize("tiles_key", sorted(_TILE_SETS))
+@pytest.mark.parametrize("code_key", sorted(_CODE_SHAPES))
+def test_p016_multi_routes_only_ever_accept(
+    tmp_path: Path, code_key: str, tiles_key: str
+) -> None:
+    from collections import Counter
+
+    from conformance.suite.checks.entrypoint_alignment._code_entrypoints import (
+        scan_paths_for_entrypoints,
+    )
+    from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
+        scan_contract,
+    )
+
+    _write_routed_tiles(tmp_path, _TILE_SETS[tiles_key])
+    paths = _write_py(tmp_path, _CODE_SHAPES[code_key])
+    code, _ = scan_paths_for_entrypoints(paths, tmp_path)
+    main_findings = Counter(_main_multi_findings(code, scan_contract(tmp_path)))
+    new_findings = Counter(
+        _finding_kind_and_name(f.message)
+        for f in scan_all(paths, tmp_path)
+        if f.rule_id == "P016"
+    )
+    assert not new_findings - main_findings, (new_findings, main_findings)
+    for finding in scan_all(paths, tmp_path):
+        if finding.rule_id == "P016" and finding.message.startswith("Tile "):
             assert "Add @entrypoint(name=" not in finding.message

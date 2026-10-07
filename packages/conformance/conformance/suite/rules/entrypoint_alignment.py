@@ -99,8 +99,9 @@ RULES: tuple[RuleDefinition, ...] = (
             ' node has ``workflow_type`` ``"<app>:<wire>"`` is aligned with the'
             " ``@entrypoint`` ``<wire>`` on the App registered as ``<app>``, so"
             " several tiles may start one workflow"
-            " (the route/card split). Renaming that entry point to a tile name would"
-            " move its workflow type.\n"
+            " (the route/card split). When the App's name cannot be read"
+            " statically, the exact names decide. Renaming that entry point to a"
+            " tile name would move its workflow type.\n"
             "\n"
             "* **Single-entry-point apps** (root ``app/generated/manifest.json``, no"
             " subdirs): every code ``@entrypoint`` must be declared as a DAG route —"
@@ -136,11 +137,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "The contract ``app/generated/`` tree is the authoritative source; align"
             " code to it as the default fix:\n"
             "\n"
-            "1. For each ``@entrypoint`` name in *code* that is not in the contract,"
-            ' pin it: ``@entrypoint(name="<contract-name>")``.  Confirm the pairing'
-            " (code name → contract name) intentionally — renaming an entry point is"
-            " a **breaking wire change** (the Temporal workflow type and"
-            " ``?entrypoint=`` value both change; coordinate with callers).\n"
+            "1. For each ``@entrypoint`` in *code* that no tile starts, route the tile"
+            ' that should start it: ``workflowType = "<app>:<entrypoint>"`` on that'
+            " tile in ``contract/app.pkl`` (several tiles may share one entry point)."
+            ' Pin the entry point with ``@entrypoint(name="...")`` only when its own'
+            " name is wrong — renaming an entry point is a **breaking wire change**"
+            " (the Temporal workflow type and ``?entrypoint=`` value both change;"
+            " coordinate with callers).\n"
             "\n"
             "2. For each tile not matched in code: if it should start an existing"
             ' entry point, set ``workflowType = "<app>:<entrypoint>"`` on that tile in'
@@ -149,9 +152,10 @@ RULES: tuple[RuleDefinition, ...] = (
             " that does not exist, fix the ``workflowType`` or add that"
             " ``@entrypoint`` on the App method.\n"
             "\n"
-            "3. If the *code* name is the intended one and the contract is wrong, update"
-            ' the ``entrypoints { new Entrypoint { name = "..." } }`` block in'
-            " ``contract/app.pkl`` and re-run ``pkl eval`` so the"
+            '3. Renaming a tile (the ``entrypoints { new Entrypoint { name = "..." } }``'
+            " block) changes its Marketplace identity, so prefer routing (steps 1–2)."
+            " When a rename is intended, update ``contract/app.pkl`` and re-run"
+            " ``pkl eval`` so the"
             " ``app/generated/<name>/`` dir and ``workflow_type`` follow — never"
             " hand-edit ``app/generated/`` (C002 catches stale generated artifacts).\n"
             "\n"

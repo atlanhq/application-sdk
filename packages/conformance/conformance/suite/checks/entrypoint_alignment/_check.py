@@ -15,9 +15,8 @@ Let ``contract`` = subdir names under ``app/generated/`` that contain a
 * **single** → require ``len(code) <= 1`` (name unconstrained).
 * **multi** → require ``code == contract``, additionally accepting a tile
   whose own node starts ``"<app>:<wire>"`` when ``@entrypoint <wire>`` exists on
-  the class registered as ``<app>`` or on a class whose name is not statically
-  knowable (route/card split). Routes only ever accept: anything exact-name
-  equality accepts is still accepted.
+  a class statically registered as ``<app>`` (route/card split). Routes only
+  ever accept: anything exact-name equality accepts is still accepted.
 
 In all modes, unresolvable ``name=`` values produce an additional finding.
 """
@@ -243,9 +242,7 @@ def check_p016(
     routed_tiles: set[str] = set()
     for tile, (app, wire) in targets.items():
         matches = [
-            ep
-            for ep in code.entrypoints
-            if ep.name == wire and ep.owner_app in (app, None)
+            ep for ep in code.entrypoints if ep.name == wire and ep.owner_app == app
         ]
         if matches:
             routed_tiles.add(tile)
@@ -261,15 +258,15 @@ def check_p016(
                 rule_id=_RULE_ID,
                 node=ep.node,
                 message=(
-                    f"Entry point '{ep.name}' is defined in code but not in the "
-                    f"contract (contract defines: {contract_list}). "
-                    f'Pin the name with @entrypoint(name="<contract-name>") to '
-                    "match the contract, route a tile to it (workflowType = "
-                    f'"<app>:{ep.name}" on the tile in contract/app.pkl, with <app> '
-                    "the App's registered name), or update contract/app.pkl and "
-                    "re-run pkl eval. "
-                    "Note: renaming is a breaking wire change "
-                    "(workflow_type and ?entrypoint= value both change)."
+                    f"Entry point '{ep.name}' is defined in code but no tile in the "
+                    "contract matches it, by name or by a workflowType this check "
+                    f"can confirm (contract defines: {contract_list}). "
+                    "Route the tile that should start it: set workflowType = "
+                    f'"<app>:{ep.name}" on that tile in contract/app.pkl (<app> is '
+                    "the App's registered name) and re-run pkl eval. Rename the "
+                    f'entry point with @entrypoint(name="...") only if its own name '
+                    "is wrong: that is a breaking wire change (workflow_type and "
+                    "?entrypoint= value both change)."
                 ),
                 directives=directives_by_file.get(ep.filename, _empty_directives()),
             )
@@ -289,11 +286,11 @@ def check_p016(
                     node=anchor_node,
                     message=(
                         f"Tile '{missing_name}' (app/generated/{missing_name}/"
-                        f"manifest.json) starts '{':'.join(targets[missing_name])}', but no "
-                        "App registered under that name defines that @entrypoint "
-                        f"(code defines: {code_list}). Point the tile's "
-                        "workflowType in contract/app.pkl at an existing entry "
-                        "point and re-run pkl eval, or add the entry point it names."
+                        f"manifest.json) starts '{':'.join(targets[missing_name])}', and "
+                        "this check found no such @entrypoint on a class registered "
+                        f"under that name (code defines: {code_list}). Check that the "
+                        "tile's workflowType in contract/app.pkl names the App and entry "
+                        "point it should start, then re-run pkl eval."
                     ),
                     directives=anchor_directives,
                 )
@@ -307,9 +304,11 @@ def check_p016(
                 message=(
                     f"Entry point '{missing_name}' is defined in the contract "
                     f"(app/generated/{missing_name}/manifest.json) but not in code "
-                    f"(code defines: {code_list}). "
-                    f'Add @entrypoint(name="{missing_name}") to your App subclass, '
-                    "or remove it from contract/app.pkl and re-run pkl eval."
+                    f"(code defines: {code_list}). If this tile should start an "
+                    'existing entry point, set workflowType = "<app>:<entry-point>" '
+                    "on it in contract/app.pkl and re-run pkl eval; otherwise add "
+                    f'@entrypoint(name="{missing_name}") to your App subclass, or '
+                    "remove the tile."
                 ),
                 directives=anchor_directives,
             )
