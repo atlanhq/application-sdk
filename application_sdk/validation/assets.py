@@ -921,7 +921,8 @@ def asset_validation_summary_json(
 
     Rows are ordered by ``count`` descending (ties by key, so output is stable).
     Past ``max_rows`` the rest fold into one ``kind="truncated"`` row carrying their
-    summed ``count``. Like the matrix, this is not internally guarded; the emitting
+    summed ``count`` and the summed ``references`` of any orphan groups among them,
+    so both totals survive the cap. Like the matrix, this is not internally guarded; the emitting
     hook's ``try/except`` owns that.
     """
     counts: collections.Counter[tuple[str, str, str]] = collections.Counter()
@@ -958,6 +959,11 @@ def asset_validation_summary_json(
                 "type_name": "",
                 "detail": "",
                 "count": sum(count for _, count in dropped),
+                # Orphan groups past the cap still carry references; without this
+                # the batch's reference total would be under-reported.
+                "references": sum(
+                    references[key] for key, _ in dropped if key[0] == "orphan"
+                ),
             }
         )
     return orjson.dumps(rows).decode()

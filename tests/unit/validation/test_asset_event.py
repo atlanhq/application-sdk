@@ -453,8 +453,51 @@ def test_rows_past_the_cap_fold_into_one_truncated_row_that_keeps_the_total() ->
     rows = _summary(report, max_rows=2)
 
     assert len(rows) == 3
-    assert rows[-1] == {"kind": "truncated", "type_name": "", "detail": "", "count": 4}
+    assert rows[-1] == {
+        "kind": "truncated",
+        "type_name": "",
+        "detail": "",
+        "count": 4,
+        "references": 0,
+    }
     assert sum(row["count"] for row in rows) == 6
+
+
+def test_truncation_keeps_the_reference_total_of_dropped_orphan_groups() -> None:
+    """Two invalid groups outrank one orphan group; with ``max_rows=2`` the orphan
+    group is dropped, and its five references must still reach the truncated row."""
+
+    def invalid(i: int) -> AssetValidationFailure:
+        return AssetValidationFailure(
+            file="f.json",
+            line=i,
+            type_name="Table",
+            qualified_name="q",
+            errors=["name is required", "qualified_name is required"],
+        )
+
+    report = AssetValidationReport(
+        total=7,
+        failures=[invalid(i) for i in range(2)],
+        orphans=[
+            ReferentialFailure(
+                missing_type_name="Schema",
+                missing_qualified_name="S1",
+                reference_count=5,
+                file="f.json",
+                line=9,
+                type_name="Table",
+                qualified_name="S1/T",
+                relationship="atlan_schema",
+            )
+        ],
+    )
+
+    rows = _summary(report, max_rows=2)
+
+    assert [row["kind"] for row in rows] == ["invalid", "invalid", "truncated"]
+    assert rows[-1]["count"] == 1
+    assert rows[-1]["references"] == 5
 
 
 def test_a_clean_batch_emits_an_empty_summary() -> None:

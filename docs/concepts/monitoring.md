@@ -474,7 +474,7 @@ row is `{"kind", "type_name", "detail", "count"}`:
 | `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
 | `undeserializable` | `decode:<reason>` — `malformed_json`, `schema_mismatch:<field path>` (e.g. `schema_mismatch:columnCount`), or the exception class; `type_name` is probed from the raw record | records |
 | `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type | distinct missing targets, plus `references` |
-| `truncated` | empty | summed count of rows past the cap (100) |
+| `truncated` | empty | summed count of rows past the cap (100), plus `references` summed over the orphan groups among them |
 
 Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
 breakdown by app, tenant, type and rule. Two things make it return correct numbers:
@@ -482,10 +482,16 @@ breakdown by app, tenant, type and rule. Two things make it return correct numbe
 - Bound `Timestamp` and prefix-filter `ServiceName` first. `Body` is not indexed, and an unbounded
   fleet scan of `service_logs` does not return.
 - Re-aggregate in an outer query. A single `GROUP BY` over `service_logs` has been observed to
-  return the same key on several rows with partial counts; the outer `sum` merges them.
+  return the same key on several rows with partial counts; the outer `sum` merges them. Distinct
+  workflow runs go through `uniqExactState` / `uniqExactMerge` so a run split across partial rows
+  is still counted once.
+
+`uploads` counts outcome events (one per validated upload, so a run with several uploads counts
+several times); `runs` counts distinct `workflow_run_id`s.
 
 ```sql
-SELECT app, tenant, kind, type_name, detail, sum(n) AS n, sum(runs) AS runs
+SELECT app, tenant, kind, type_name, detail,
+       sum(n) AS n, sum(uploads) AS uploads, uniqExactMerge(runs_state) AS runs
 FROM (
   SELECT LogAttributes['app_name'] AS app,
          TenantName AS tenant,
@@ -493,7 +499,8 @@ FROM (
          JSONExtractString(row, 'type_name') AS type_name,
          JSONExtractString(row, 'detail') AS detail,
          sum(JSONExtractUInt(row, 'count')) AS n,
-         count() AS runs
+         count() AS uploads,
+         uniqExactState(LogAttributes['workflow_run_id']) AS runs_state
   FROM otel_logs.service_logs
   ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
   WHERE Timestamp >= now() - INTERVAL 1 DAY

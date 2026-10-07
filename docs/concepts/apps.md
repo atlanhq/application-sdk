@@ -807,7 +807,7 @@ auto-stamped and each row joins to the workflow outcome by run id:
   fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
   logged as a WARNING body, but only for flagged runs.
 - Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
-  **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_name`),
+  **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_qualified_name`),
   so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.
 - Batch context rides alongside: `assets_upload_kind`, `assets_parts_validated`,
   `assets_parts_not_local` and `assets_referential_check`, so an orphan count can be read against
