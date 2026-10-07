@@ -130,20 +130,29 @@ RULES: tuple[RuleDefinition, ...] = (
             "The contract ``app/generated/`` tree is the authoritative source; align"
             " code to it as the default fix:\n"
             "\n"
-            "1. For each ``@entrypoint`` name in *code* that is not in the contract,"
-            ' pin it: ``@entrypoint(name="<contract-name>")``.  Confirm the pairing'
-            " (code name → contract name) intentionally — renaming an entry point is"
-            " a **breaking wire change** (the Temporal workflow type and"
-            " ``?entrypoint=`` value both change; coordinate with callers).\n"
+            "1. For each ``@entrypoint`` name in *code* that backs a tile with a"
+            " different name, rename the entry point to the tile name:"
+            ' ``@entrypoint(name="<tile>")``. The tile name and the entry-point name'
+            " are one identity — a tile cannot start a differently named entry"
+            " point. Renaming changes the entry point's canonical Temporal workflow"
+            " type, so keep the old type dispatching with an inbound-only alias,"
+            " declared twice: ``legacy_workflow_types ="
+            ' {"<app>:<old-name>": "<tile>"}`` on the ``App`` class, and the same'
+            " pair in ``legacyWorkflowTypes`` on every entrypoint contract in"
+            " ``contract/app.pkl`` (K015 holds the two in agreement). An alias may"
+            " stay for as long as callers still dispatch the old type.\n"
             "\n"
-            "2. For each contract name not matched in code, add or rename an"
-            ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method.\n'
+            "2. For each contract name not matched in code, add an"
+            ' ``@entrypoint(name="<missing-name>")`` on the corresponding App method,'
+            " or rename the entry point that already backs that tile as in step 1.\n"
             "\n"
             "3. If the *code* name is the intended one and the contract is wrong, update"
             ' the ``entrypoints { new Entrypoint { name = "..." } }`` block in'
             " ``contract/app.pkl`` and re-run ``pkl eval`` so the"
             " ``app/generated/<name>/`` dir and ``workflow_type`` follow — never"
-            " hand-edit ``app/generated/`` (C002 catches stale generated artifacts).\n"
+            " hand-edit ``app/generated/`` (C002 catches stale generated artifacts)."
+            " On a released app, prefer step 1: a tile's name is its Marketplace"
+            " card and configmap identity, and no alias covers renaming it.\n"
             "\n"
             "4. For a single-entry-point app that now has multiple ``@entrypoint``s,"
             " either add named ``Entrypoint`` blocks in ``contract/app.pkl`` or"

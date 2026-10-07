@@ -230,6 +230,46 @@ def test_p016_oracle_drift_finding_is_blocking(tmp_path: Path) -> None:
     assert rule.tier == EnforcementTier.BLOCK
 
 
+def test_p016_multi_ep_drift_advises_rename_with_alias(tmp_path: Path) -> None:
+    """A tile backed by a differently named entry point is drift, and the advice
+    is to rename the entry point to the tile name behind a legacy alias — not to
+    keep two names for one thing."""
+    py = {
+        "app/bi.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class BiApp(App):
+                @entrypoint(name="extract")
+                async def extract(self, input: Input) -> Output: ...
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler"])
+    messages = [f.message for f in findings if f.rule_id == "P016"]
+    assert len(messages) == 2
+    code_only = next(m for m in messages if "defined in code" in m)
+    contract_only = next(m for m in messages if "not in code" in m)
+    assert '"<app>:extract": "<tile>"' in code_only
+    assert "legacyWorkflowTypes" in code_only
+    assert "legacy_workflow_types" in contract_only
+    assert "legacyWorkflowTypes" in contract_only
+
+
+def test_p016_multi_ep_renamed_behind_alias_is_aligned(tmp_path: Path) -> None:
+    """The fix the advice names: entry point renamed to the tile name, old
+    workflow type kept as an alias → no findings."""
+    py = {
+        "app/bi.py": dedent("""\
+            from application_sdk.app import App, entrypoint
+            class BiApp(App):
+                name = "bi-app"
+                legacy_workflow_types = {"bi-app:extract": "crawler"}
+                @entrypoint(name="crawler")
+                async def extract(self, input: Input) -> Output: ...
+        """)
+    }
+    findings = _run(tmp_path, py, ["crawler"])
+    assert _p016_ids(findings) == []
+
+
 # ---------------------------------------------------------------------------
 # Multi-EP mode — partial drift
 # ---------------------------------------------------------------------------
