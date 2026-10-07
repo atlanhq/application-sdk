@@ -3289,7 +3289,7 @@ _ALIASED_SAME_NAME_GENERATED = (
             id="p013-alias-of-alias",
         ),
         pytest.param(
-            "    async def run(self, input: UnrelatedInput) -> DomainOutput:\n",
+            "    async def run(self, input: UnrelatedInput) -> AppOutputContract:\n",
             ["P013"],
             id="p013-alias-of-unrelated-class-still-fires",
         ),
@@ -3308,8 +3308,8 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
         "contracts.py": _ALIASED_SAME_NAME_CONTRACTS,
         "generated.py": _ALIASED_SAME_NAME_GENERATED,
         "connector.py": (
-            _APP_IMPORTS + "from contracts import AppInputContract, DomainInput, "
-            "DomainOutput, ReExportedInput, UnrelatedInput\n"
+            _APP_IMPORTS + "from contracts import AppInputContract, AppOutputContract, "
+            "DomainInput, DomainOutput, ReExportedInput, UnrelatedInput\n"
             "class MyApp(App):\n" + method + "        return DomainOutput()\n"
         ),
     }
@@ -3370,6 +3370,68 @@ def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_cla
     ]
     assert [f.rule_id for f in findings] == ["P013"]
     assert "'Foo'" in findings[0].message
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Known limit: the first-wins registry cannot tell a same-named base "
+    "from the class, so the chain reads as unresolvable (follow-up: by_name_all).",
+)
+@pytest.mark.parametrize(
+    "files",
+    [
+        pytest.param(
+            {
+                "contracts.py": (
+                    "from generated import AppInputContract as _G\n"
+                    "class AppInputContract(_G):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = AppInputContract\n"
+                ),
+                "generated.py": (
+                    "from pydantic import BaseModel\n"
+                    "class AppInputContract(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="plain-basemodel-generated-base",
+        ),
+        pytest.param(
+            {
+                "contracts.py": (
+                    "import plain\n"
+                    "class Thing(plain.Thing):\n"
+                    "    x: str = ''\n"
+                    "DomainInput = Thing\n"
+                ),
+                "plain.py": (
+                    "from pydantic import BaseModel\n"
+                    "class Thing(BaseModel):\n"
+                    "    a: str = ''\n"
+                ),
+            },
+            id="attribute-base",
+        ),
+    ],
+)
+def test_p013_known_limit_alias_over_a_same_named_non_contract_base(
+    tmp_path: Path, files: dict[str, str]
+) -> None:
+    """The type never reaches Input, so P013 should fire; it does not yet."""
+    files = {
+        **files,
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import DomainInput\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: DomainInput) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == ["P013"]
 
 
 def test_reaches_app_family_is_unknown_through_an_alias_of_a_same_named_subclass() -> (

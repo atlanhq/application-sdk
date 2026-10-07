@@ -358,13 +358,15 @@ def resolve_leaf_prefix(
 
 
 def is_same_name_base(base: str, rec: ClassRecord, name: str) -> bool:
-    """Whether *base* names the class being walked rather than a distinct ancestor.
+    """Whether *base*'s bare name is the walked class's own name or lookup key.
 
-    That is ``from other import X as _X`` + ``class X(_X)``: an import of a
-    same-named class the bare-name registry cannot hold, so the chain is
-    unresolvable. *name* is the lookup key, which differs from ``rec.name`` when
-    the class was reached through a module alias; matching either keeps every
-    non-alias result unchanged and only ever adds the unresolvable outcome.
+    Usually ``from other import X as _X`` + ``class X(_X)``, but an attribute
+    base (``class X(mod.X)``) or a rebinding matches too: the first-wins
+    bare-name registry cannot tell the base from the class, so the chain is
+    treated as unresolvable. *name* is the lookup key, which differs from
+    ``rec.name`` when the class was reached through a module alias; matching
+    either keeps main's result for every non-alias lookup and only ever adds the
+    unresolvable outcome.
     """
     return base in (rec.name, name)
 
@@ -417,12 +419,11 @@ def resolve_ancestor(
     same_name_base = False
     for base in rec.bases:
         if is_same_name_base(base, rec, name):
-            # A base that de-aliases to the class's own name is an import of a
-            # SAME-NAMED class from another module — Python forbids literal
-            # self-inheritance, so this is always
-            # ``from other import X as _X`` + ``class X(_X)``. The registry is
-            # keyed on the bare name and cannot hold both, so the chain is
-            # genuinely unresolvable rather than definitively negative.
+            # A base whose bare name is the class's own (usually
+            # ``from other import X as _X`` + ``class X(_X)``, or ``mod.X``) is a
+            # SAME-NAMED class from another module. The registry is keyed on the
+            # bare name and cannot hold both, so the chain is unresolvable
+            # rather than definitively negative.
             same_name_base = True
             continue
         sub = resolve_ancestor(
