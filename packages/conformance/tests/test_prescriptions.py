@@ -3229,6 +3229,42 @@ def test_p013_silent_when_a_class_shadows_its_own_generated_base(
     assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
 
 
+def test_p013_silent_when_a_module_alias_names_the_same_named_subclass(
+    tmp_path: Path,
+) -> None:
+    """The toolkit shape behind a domain alias: ``Domain = AppInputContract``.
+
+    P013/P014 follow the module-level rebinding to the ``AppInputContract``
+    record, whose base de-aliases to that record's own name. The chain is just as
+    unresolvable as when the annotation names the class directly, so the alias
+    must not turn it into a proven non-Input.
+    """
+    files = {
+        "contracts.py": (
+            "from generated import AppInputContract as _GeneratedAppInputContract\n"
+            "class AppInputContract(_GeneratedAppInputContract):\n"
+            "    include_filter: str = ''\n"
+            "DomainInput = AppInputContract\n"
+        ),
+        "generated.py": (
+            "from application_sdk.contracts import Input\n"
+            "class AppInputContract(Input):\n"
+            "    connection_id: str = ''\n"
+        ),
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import DomainInput\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: DomainInput) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = _scan_files(tmp_path, files)
+    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == []
+
+
 def test_p013_still_fires_on_a_resolvable_unrelated_base(tmp_path: Path) -> None:
     """The self-name escape hatch must not leak: an ordinary resolvable class
     that does not reach Input is still a violation."""
