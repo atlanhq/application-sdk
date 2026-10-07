@@ -2,6 +2,22 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.44.0] - 2026-10-07
+
+### Features
+
+- add P055 OneToManyLinkFromParent rule (FND-3490) (#4225) ([764fa3a](https://github.com/atlanhq/application-sdk/commit/764fa3a))
+
+### Bug fixes
+
+- correct P001's fix guidance (1 repo) (#4224) ([05a45e2](https://github.com/atlanhq/application-sdk/commit/05a45e2))
+- P016 advises renaming to the tile name behind a legacy alias (#4228) ([6cfb108](https://github.com/atlanhq/application-sdk/commit/6cfb108))
+- P013/P014 resolve aliases over same-named contracts via by_name_all [FND-3461] (#4209) ([4df59d3](https://github.com/atlanhq/application-sdk/commit/4df59d3))
+
+### Other changes
+
+- chore(contract-toolkit): release v0.30.0 (#4218) ([1f16973](https://github.com/atlanhq/application-sdk/commit/1f16973))
+
 ## [0.43.1] - 2026-10-07
 
 ### Bug fixes
