@@ -3318,8 +3318,38 @@ def test_aliased_same_named_contracts_across_boundary_shapes(
             "class MyApp(App):\n" + method + "        return DomainOutput()\n"
         ),
     }
-    findings = _scan_files(tmp_path, files)
-    assert [f.rule_id for f in findings if f.rule_id in ("P013", "P014")] == expected
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == expected
+    if expected:
+        assert "'UnrelatedInput'" in findings[0].message
+
+
+def test_p013_still_fires_when_another_file_rebinds_the_external_base_to_the_class(
+    tmp_path: Path,
+) -> None:
+    """``Thing = Foo`` elsewhere must not turn ``class Foo(Thing)`` unresolvable."""
+    files = {
+        "contracts.py": (
+            "from thirdparty import Thing\n" "class Foo(Thing):\n" "    x: str = ''\n"
+        ),
+        "rebind.py": "from contracts import Foo\nThing = Foo\n",
+        "connector.py": (
+            _APP_IMPORTS + "from application_sdk.contracts import Output\n"
+            "from contracts import Foo\n"
+            "class AppOutput(Output):\n"
+            "    rows: int = 0\n"
+            "class MyApp(App):\n"
+            "    async def run(self, input: Foo) -> AppOutput:\n"
+            "        return AppOutput()\n"
+        ),
+    }
+    findings = [
+        f for f in _scan_files(tmp_path, files) if f.rule_id in ("P013", "P014")
+    ]
+    assert [f.rule_id for f in findings] == ["P013"]
+    assert "'Foo'" in findings[0].message
 
 
 def test_reaches_app_family_is_unknown_through_an_alias_of_a_same_named_subclass() -> (
