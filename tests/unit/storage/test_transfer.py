@@ -135,12 +135,10 @@ class TestUploadDirectory:
 
         _original = transfer_mod._upload_one
 
-        async def _failing_upload_one(st, local_file, store_key, *, skip_if_exists):
+        async def _failing_upload_one(st, local_file, store_key, **kwargs):
             if "fail.txt" in str(local_file):
                 raise RuntimeError("simulated upload failure")
-            return await _original(
-                st, local_file, store_key, skip_if_exists=skip_if_exists
-            )
+            return await _original(st, local_file, store_key, **kwargs)
 
         monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
 
@@ -200,6 +198,109 @@ class TestUploadDirectoryLocalSidecars:
         assert (dest / "0.json").read_bytes() == b'{"a": 1}'
         assert out.ref.file_count == 1
         assert out.reason == "uploaded"
+
+
+class TestUploadSkipIfExistsNeedsData:
+    """``skip_if_exists`` must not trust a sidecar whose data object is missing.
+
+    A store written by 3.42.x can hold ``0.json.sha256`` (the correct digest)
+    without ``0.json``. A matching sidecar alone would skip the data upload on
+    every retry, so the store is never repaired."""
+
+    @staticmethod
+    async def _stale_sidecar(store, local: Path, key: str) -> None:
+        """Upload *local* to *key*, then delete the data object, keeping its sidecar."""
+        from application_sdk.storage.ops import delete, exists
+
+        await upload(str(local), key, store=store)
+        await delete(key, store, normalize=False)
+        assert not await exists(key, store, normalize=False)
+        assert await exists(f"{key}.sha256", store, normalize=False)
+
+    async def test_directory_upload_repairs_data_behind_a_stale_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "0.json").write_bytes(b'{"a": 1}')
+        (src / "1.json").write_bytes(b'{"b": 2}')
+        await upload(str(src), "handoff", store=store)
+        await self._stale_sidecar(store, src / "0.json", "handoff/0.json")
+
+        out = await upload(str(src), "handoff", store=store, skip_if_exists=True)
+
+        assert out.reason == "uploaded"
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert (dest / "1.json").read_bytes() == b'{"b": 2}'
+
+    async def test_single_file_upload_repairs_data_behind_a_stale_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        f = tmp_path / "0.json"
+        f.write_bytes(b'{"a": 1}')
+        await self._stale_sidecar(store, f, "handoff/0.json")
+
+        out = await upload(str(f), "handoff/0.json", store=store, skip_if_exists=True)
+
+        assert out.reason == "uploaded"
+        dest = tmp_path / "dest.json"
+        await download("handoff/0.json", str(dest), store=store)
+        assert dest.read_bytes() == b'{"a": 1}'
+
+    async def test_directory_skip_makes_no_per_file_probes(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        # The target LIST answers data and sidecar presence for every file, so
+        # an idempotent re-upload issues no HEAD per file.
+        for i in range(5):
+            (tmp_path / f"{i}.json").write_bytes(b"x" * i)
+        await upload(str(tmp_path), "handoff", store=store)
+
+        from application_sdk.storage import ops
+
+        probes: list[str] = []
+        real_exists = ops.exists
+
+        async def _counting_exists(key, *args, **kwargs):
+            probes.append(key)
+            return await real_exists(key, *args, **kwargs)
+
+        monkeypatch.setattr(ops, "exists", _counting_exists)
+
+        out = await upload(str(tmp_path), "handoff", store=store, skip_if_exists=True)
+
+        assert out.reason == "skipped:hash_match"
+        assert probes == []
+
+    async def test_unlistable_target_falls_back_to_per_file_checks(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "0.json").write_bytes(b'{"a": 1}')
+        (src / "1.json").write_bytes(b'{"b": 2}')
+        await upload(str(src), "handoff", store=store)
+        await self._stale_sidecar(store, src / "0.json", "handoff/0.json")
+
+        from application_sdk.storage import transfer as transfer_mod
+        from application_sdk.storage.errors import StorageError
+
+        async def _denied(*args, **kwargs):
+            raise StorageError("list denied")
+
+        monkeypatch.setattr(transfer_mod, "list_data_objects", _denied)
+
+        out = await upload(str(src), "handoff", store=store, skip_if_exists=True)
+
+        # 0.json is repaired; 1.json still skips on its matching sidecar.
+        assert out.reason == "uploaded"
+        assert out.synced is True
+        monkeypatch.undo()  # download lists the prefix too
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
 
 
 class TestUploadRaiseOnEmpty:

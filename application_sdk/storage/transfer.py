@@ -9,9 +9,10 @@ Every uploaded object gets a tiny sidecar ``{key}.sha256`` stored alongside it
 in the object store — written by ``ops.upload_file`` itself, so it exists for
 every upload path in the SDK and not just this one (FND-306).  On subsequent
 uploads (``skip_if_exists=True``) the local file hash is compared against the
-sidecar; the upload is skipped when they match.  The same sidecar is what the
-transfer primitives verify downloads against, so a truncated artifact is caught
-here rather than in a downstream parser; see ``storage.integrity``.
+sidecar; the upload is skipped when they match and the data object is
+present (a sidecar alone does not prove the data landed).  The same sidecar is
+what the transfer primitives verify downloads against, so a truncated artifact
+is caught here rather than in a downstream parser; see ``storage.integrity``.
 
 Cross-store deduplication (SDR deployments)
 -------------------------------------------
@@ -55,7 +56,12 @@ from application_sdk.observability.logger_adaptor import get_logger
 # on ``storage.ops`` / ``storage.integrity`` and never on ``transfer``, so
 # ``transfer → batch`` is unconditionally acyclic — the import is safe
 # regardless of module load order.
-from application_sdk.storage.batch import list_data_keys, list_data_objects, list_keys
+from application_sdk.storage.batch import (
+    DataObject,
+    list_data_keys,
+    list_data_objects,
+    list_keys,
+)
 
 # Sidecar naming, digest computation and the read/write of ``{key}.sha256`` all
 # live in ``storage.integrity``, which ``ops`` calls on every transfer. This
@@ -83,21 +89,39 @@ async def _upload_one(
     store_key: str,
     *,
     skip_if_exists: bool,
+    data_present: bool | None = None,
+    sidecar_present: bool | None = None,
 ) -> tuple[bool, str]:
     """Upload a single file.  Returns ``(transferred, reason)``.
 
     The ``{key}.sha256`` sidecar is written by ``upload_file`` itself, after it
     has validated that what landed in the store is what was sent — so it is not
     written here (FND-306).
+
+    A matching sidecar only skips the upload when the data object itself is
+    also in the store. A sidecar can outlive or precede its data (a local
+    sidecar uploaded as data in 3.42.x, a deleted data object), and trusting
+    it alone would skip a file the store does not hold.
+
+    *data_present* and *sidecar_present* carry what a prior listing of the
+    target already established, so a directory upload pays no per-file probe.
+    ``None`` means unknown: the sidecar is probed before it is read, and the
+    data object only once the digests match.
     """
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        exists,
         upload_file,
     )
 
-    if skip_if_exists:
+    # data_present=False: nothing to dedup against, so skip the local hash too.
+    if skip_if_exists and data_present is not False:
         local_digest = await sha256_file(local_file)
-        remote_digest = await read_expected_digest(store, store_key)
-        if remote_digest == local_digest:
+        remote_digest = await read_expected_digest(
+            store, store_key, sidecar_present=sidecar_present
+        )
+        if remote_digest == local_digest and (
+            data_present or await exists(store_key, store, normalize=False)
+        ):
             # A skip is still one file resolved. Directory uploads that skip
             # thousands of hash-matching files on an idempotent retry are doing
             # real work (a digest and a sidecar GET each) and must not read as
@@ -479,6 +503,36 @@ async def _list_source_data_keys(
     return source_dir_prefix, keys
 
 
+async def _list_target_objects(
+    prefix: str, store: ObjectStore
+) -> dict[str, DataObject] | None:
+    """List the data objects already under an upload's target *prefix*.
+
+    One LIST answers, for every file of a ``skip_if_exists`` directory upload,
+    both whether its data object is in the store and whether its sidecar is —
+    instead of a sidecar HEAD per file, plus a data HEAD per matching file.
+
+    Returns ``None`` when the target cannot be listed (e.g. a policy that grants
+    put/get but not list), so the caller falls back to per-file probes rather
+    than failing an upload that never needed a LIST before.
+    """
+    from application_sdk.storage.errors import StorageError  # noqa: PLC0415
+
+    try:
+        objects = await list_data_objects(
+            prefix.rstrip("/") + "/", store, normalize=False
+        )
+    except StorageError:
+        _logger.warning(
+            "Could not list upload target prefix '%s' — falling back to "
+            "per-file existence checks for skip_if_exists",
+            prefix,
+            exc_info=True,
+        )
+        return None
+    return {obj.key: obj for obj in objects}
+
+
 async def upload(
     local_path: str,
     storage_path: str | None = None,
@@ -538,7 +592,8 @@ async def upload(
             over *storage_subdir* and *_app_prefix* when set.
         storage_subdir: Subdirectory name appended to the auto-generated run prefix.
             Ignored when *storage_path* is set.
-        skip_if_exists: Skip files whose local SHA-256 matches the stored sidecar.
+        skip_if_exists: Skip files whose local SHA-256 matches the stored sidecar
+            and whose data object is present in the store.
         raise_on_empty: When ``True``, raise ``StorageEmptyUploadError`` if
             *local_path* is a directory that contains zero files. Opt-in
             fail-loud for connectors where empty output indicates a bug
@@ -702,10 +757,28 @@ async def upload(
             for fp in files
         ]
 
+        # One LIST of the target replaces the per-file sidecar HEAD and lets the
+        # dedup check confirm each data object exists. An empty prefix would
+        # list the whole store, so that case keeps the per-file probes.
+        target_objects: dict[str, DataObject] | None = None
+        if skip_if_exists and files and prefix:
+            target_objects = await _list_target_objects(prefix, resolved)
+
         async def _bounded_upload(file_path: Path, fkey: str) -> bool:
+            data_present: bool | None = None
+            sidecar_present: bool | None = None
+            if target_objects is not None:
+                obj = target_objects.get(fkey)
+                data_present = obj is not None
+                sidecar_present = obj.has_sidecar if obj is not None else False
             async with sem:
                 ok, _ = await _upload_one(
-                    resolved, file_path, fkey, skip_if_exists=skip_if_exists
+                    resolved,
+                    file_path,
+                    fkey,
+                    skip_if_exists=skip_if_exists,
+                    data_present=data_present,
+                    sidecar_present=sidecar_present,
                 )
                 return ok
 
