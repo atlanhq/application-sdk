@@ -27,15 +27,25 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
-**Why suggest-only, not auto-applied (not an oversight):** P001
-`UnboundedContractFields` is suppress-only, and its only fix that clears the
-detector is adding `Annotated[..., MaxItems(N)]` or an inline suppression.
-`MaxItems` is a **declarative marker — not runtime-enforced** — so (a)
-`recheck-narrowest` is satisfied by *any* bound, including an absurd one, and
-(b) the orthogonal test gate is structurally blind: no behaviour changes with
-the bound, so no test can catch a hollow fix.  Per design §6.1, a rule whose
+**Why suggest-only, not auto-applied (not an oversight):** P001 has real
+non-suppression fixes. Make every declared field payload-safe: replace `Any`
+with a concrete type in the same outer shape (use `FilterMap` from
+`application_sdk.templates.contracts` for filter maps), bound a collection
+with `MaxItems` only when its element/value type is already payload-safe, and
+remove `allow_unbounded_fields=True`. Drop an app-level override or retire a
+dead field where those alternatives apply. Keep an opt-out with a justified
+inline suppression only as a last resort after those alternatives fail.
+
+`MaxItems` is a **declarative marker — not runtime-enforced**. Adding it alone
+neither makes `Any` acceptable nor clears an active opt-out finding. For a
+payload-safe collection, (a) `recheck-narrowest` is satisfied by *any* bound,
+including an absurd one, and (b) the orthogonal test gate is structurally blind
+to whether the chosen bound is adequate: runtime behaviour does not change with
+the bound, so no test can catch a hollow limit. Replacing a field's type also
+changes the payload shapes the contract accepts, which must be reviewed against
+actual producers and consumers as detailed below. Per design §6.1, a rule whose
 gaming move no gate can catch must **not** be auto-applied — that would
-normalise exactly the gaming the gate exists to prevent.  The safe form is
+normalise exactly the gaming the gate exists to prevent. The safe form is
 **propose, don't apply**: the model drafts a concrete diff, a human is the gate.
 When a gate that validates the bound exists (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check), this area can graduate to the full

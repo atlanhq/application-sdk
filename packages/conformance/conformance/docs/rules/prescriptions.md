@@ -110,11 +110,14 @@ mid-run with a serialization error nothing in their configuration explains.
   one. Narrowing in place is free only where _retype_is_compatible allows it: an
   inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
   SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
-  MaxItems clears P001 AND B005 but the class then raises PayloadSafetyError at import:
-  Any is refused unconditionally. Note also that an app-level OVERRIDE of a base-class
-  field is often what introduces the Any — the SDK's own ExtractionInput already models
-  its filters payload-safely — and dropping an override is not a retype of your contract
-  at all.
+  MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
+  inverse finding still reports the Any-typed field and class creation raises
+  PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
+  refused unconditionally. MaxItems bounds a collection only when its element/value type
+  is already payload-safe. Note also that an app-level OVERRIDE of a base-class field is
+  often what introduces the Any — the SDK's own ExtractionInput already models its
+  filters payload-safely — and dropping an override is not a retype of your contract at
+  all.
 - **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site is the
   fix ONLY once narrowing in source, dropping an app-level override, and retiring the
   field as sunset have each been tried and shown to fail — with the refusal quoted. It
@@ -129,9 +132,10 @@ declaration site (`# conformance: ignore[P001] <reason>`), so the carve-out is r
 and stays visible.
 
 Suppressed declarations are still emitted to the SARIF report (counted in their own
-category), so every opt-out is reported every single time. This rule is `BLOCK`
-(suppress-only): an unsuppressed declaration fails the conformance gate — the only
-sanctioned use is the justified inline suppression above — see BLDX-1428.
+category), so every opt-out is reported every single time. This rule is `BLOCK`: an
+unsuppressed active opt-out fails the conformance gate. Remove the opt-out once every
+declared field is payload-safe; only an unavoidable remaining opt-out requires the
+justified inline suppression above — see BLDX-1428.
 
 **The inverse is also a finding.** A contract that declares an `Any`-typed field and
 does NOT set `allow_unbounded_fields` raises `PayloadSafetyError` at class-definition
