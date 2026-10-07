@@ -240,7 +240,7 @@ wheels = [
 
 [[package]]
 name = "atlan-application-sdk"
-version = "3.42.0"
+version = "3.42.1"
 source = { editable = "." }
 default-groups = ["dev", "test"]
 dependencies = [
