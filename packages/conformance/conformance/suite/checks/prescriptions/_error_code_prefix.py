@@ -402,7 +402,7 @@ def resolve_ancestor(
     result: bool = False
     same_name_base = False
     for base in rec.bases:
-        if base == name:
+        if base == rec.name:
             # A base that de-aliases to the class's own name is an import of a
             # SAME-NAMED class from another module — Python forbids literal
             # self-inheritance, so this is always
