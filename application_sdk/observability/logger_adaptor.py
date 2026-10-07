@@ -108,6 +108,10 @@ ASSET_VALIDATION_MATRIX_KEY = "asset_validation_matrix"
 # rule) count over the whole batch, also one JSON string, so a dashboard can rank
 # which asset types fail which checks across the fleet without the sample cap.
 ASSET_VALIDATION_SUMMARY_KEY = "asset_validation_summary"
+# On the boot-time "Artifact validation posture" row: whether this deployment runs
+# the transformed-asset check at all ("on"/"off"). With it, an app that emits no
+# asset outcome rows can be told apart from one whose validation is switched off.
+ASSET_VALIDATION_ON_UPLOAD_KEY = "asset_validation_on_upload"
 
 # Generic artifact-validation outcome-event keys (ADR-0020), shared with the
 # emitter (``application_sdk.validation.artifacts``) so a rename is a single edit
@@ -240,6 +244,12 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "assets_invalid",
         "assets_orphaned",
         "assets_undeserializable",
+        "assets_referential_check",
+        "assets_upload_kind",
+        "assets_parts_validated",
+        "assets_parts_not_local",
+        # ── Artifact validation posture row: transformed-asset switch ────
+        ASSET_VALIDATION_ON_UPLOAD_KEY,
         # ── Generic artifact validation outcome event (ADR-0020) ─────────
         ARTIFACT_VALIDATION_MATRIX_KEY,
         ARTIFACT_FORMAT_KEY,

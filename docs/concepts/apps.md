@@ -809,6 +809,9 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
   **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_name`),
   so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.
+- Batch context rides alongside: `assets_upload_kind`, `assets_parts_validated`,
+  `assets_parts_not_local` and `assets_referential_check`, so an orphan count can be read against
+  how the hand-off was assembled and whether the orphan pass ran at all.
 
 Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
 or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.

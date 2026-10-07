@@ -24,6 +24,8 @@ is in ``test_assets.py`` (the walk) and ``test_ndjson_validator.py`` (the dispat
 from __future__ import annotations
 
 import json
+from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from pyatlan_v9.model.assets import Column
@@ -37,6 +39,7 @@ from application_sdk.observability.logger_adaptor import (
 )
 from application_sdk.validation.assets import (
     ASSET_VALIDATION_MATRIX_ERROR_MAXLEN,
+    AssetBatchScope,
     AssetValidationFailure,
     AssetValidationReport,
     ReferentialFailure,
@@ -44,6 +47,7 @@ from application_sdk.validation.assets import (
     asset_validation_matrix_json,
     asset_validation_summary_json,
     validate_asset,
+    validate_transformed_dir,
 )
 
 APP = "test-app"
@@ -98,7 +102,9 @@ def test_the_full_attribute_map_is_byte_identical_for_a_known_batch() -> None:
     One invalid record, one undeserializable record, one orphan, over a batch of
     four. The literal below is frozen from what the **pre-wrapper** emitter produced
     for this input, so a diff here is a change to a shipped surface. The one
-    deliberate change since is additive: ``asset_validation_summary`` (FND-3495).
+    deliberate changes since are additive: ``asset_validation_summary`` and
+    ``assets_referential_check`` (FND-3495). A hand-built report has no
+    ``decode_reason`` and did not come from the walk, hence the two ``unknown``s.
 
     This is the before-vs-after anchor for the whole fold-in. Its sibling in
     ``test_asset_cell.py`` pins that the wrapper path equals the direct path, which
@@ -143,9 +149,10 @@ def test_the_full_attribute_map_is_byte_identical_for_a_known_batch() -> None:
             '"detail":"required:qualified_name","count":1},'
             '{"kind":"orphan","type_name":"Table","detail":"table","count":1,'
             '"references":1},'
-            '{"kind":"undeserializable","type_name":"Table","detail":"decode",'
-            '"count":1}]'
+            '{"kind":"undeserializable","type_name":"Table",'
+            '"detail":"decode:unknown","count":1}]'
         ),
+        "assets_referential_check": "unknown",
     }
 
 
@@ -178,7 +185,15 @@ def test_every_emitted_key_is_allowlisted_for_otlp() -> None:
     while every key stays in ``_KNOWN_EXTRA_KEYS``. A key absent from it is dropped
     by ``_build_extra_dict`` and silently never reaches the exporter, so asserting
     the returned dict alone would pass while the row arrived empty."""
-    emitted = set(asset_validation_event_fields(AssetValidationReport(), app_name=APP))
+    emitted = set(
+        asset_validation_event_fields(
+            AssetValidationReport(),
+            app_name=APP,
+            scope=AssetBatchScope(
+                upload_kind="upload", parts_validated=1, parts_not_local=0
+            ),
+        )
+    )
 
     assert not emitted - _KNOWN_EXTRA_KEYS
 
@@ -448,3 +463,87 @@ def test_a_clean_batch_emits_an_empty_summary() -> None:
     )
 
     assert fields[ASSET_VALIDATION_SUMMARY_KEY] == "[]"
+
+
+# ---------------------------------------------------------------------------
+# Batch context and decode reasons (FND-3495)
+# ---------------------------------------------------------------------------
+
+
+def _write_ndjson(base: Path, lines: list[bytes]) -> Path:
+    target = base / "transformed" / "Mixed"
+    target.mkdir(parents=True)
+    (target / "entities.json").write_bytes(b"\n".join(lines) + b"\n")
+    return base / "transformed"
+
+
+def test_the_batch_scope_is_carried_verbatim() -> None:
+    fields = asset_validation_event_fields(
+        AssetValidationReport(),
+        app_name=APP,
+        scope=AssetBatchScope(
+            upload_kind="upload_refs", parts_validated=3, parts_not_local=1
+        ),
+    )
+
+    assert fields["assets_upload_kind"] == "upload_refs"
+    assert fields["assets_parts_validated"] == 3
+    assert fields["assets_parts_not_local"] == 1
+
+
+def test_without_a_scope_the_scope_keys_are_omitted_not_guessed() -> None:
+    fields = asset_validation_event_fields(AssetValidationReport(), app_name=APP)
+
+    assert not {"assets_upload_kind", "assets_parts_validated"} & set(fields)
+
+
+def test_decode_failures_keep_their_type_and_a_value_free_reason(
+    tmp_path: Path,
+) -> None:
+    """Through the real walk: a record the full decode rejects still attributes to
+    its ``typeName``, and the reason names the failing field, not its value."""
+    path = _write_ndjson(
+        tmp_path,
+        [
+            b"{not json",
+            b'{"typeName":"Table","attributes":{"name":"t","columnCount":"many"}}',
+            b'{"typeName":"Table","attributes":{"name":"t","columnCount":"lots"}}',
+        ],
+    )
+
+    report = validate_transformed_dir(path)
+    rows = {(r["type_name"], r["detail"]): r["count"] for r in _summary(report)}
+
+    assert rows == {
+        ("Table", "decode:schema_mismatch:columnCount"): 2,
+        ("", "decode:malformed_json"): 1,
+    }
+    assert "many" not in asset_validation_summary_json(report)
+
+
+@pytest.mark.parametrize(
+    ("check_referential_integrity", "expected"),
+    [(True, "ran"), (False, "not_requested")],
+)
+def test_the_walk_records_whether_the_orphan_pass_ran(
+    tmp_path: Path, check_referential_integrity: bool, expected: str
+) -> None:
+    """Zero orphans means "none found" only when the pass ran; the row says which."""
+    path = _write_ndjson(tmp_path, [b'{"typeName":"Table","attributes":{}}'])
+
+    report = validate_transformed_dir(
+        path, check_referential_integrity=check_referential_integrity
+    )
+
+    assert report.referential_check == expected
+
+
+def test_a_missing_spill_store_is_reported_as_skipped(tmp_path: Path) -> None:
+    path = _write_ndjson(tmp_path, [b'{"typeName":"Table","attributes":{}}'])
+
+    with patch(
+        "application_sdk.validation.assets.SpillableDict", side_effect=ImportError
+    ):
+        report = validate_transformed_dir(path)
+
+    assert report.referential_check == "skipped_unavailable"
