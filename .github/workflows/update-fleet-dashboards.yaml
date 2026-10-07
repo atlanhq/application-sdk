@@ -1,13 +1,14 @@
 # Update Fleet Dashboards — standalone scheduled workflow.
 #
-# Publishes the conformance and test-readiness dashboards on Kryptonite
-# (k.atlan.dev/{conformance,test-readiness}-dashboard/) for the whole connector
-# fleet from one central job. connector-pulse mirrors both.
+# Publishes the test-readiness dashboard on Kryptonite
+# (k.atlan.dev/test-readiness-dashboard/) for the whole connector fleet from
+# one central job. connector-pulse mirrors it.
 #
-# The security dashboard is no longer published (FND-3462): connector-pulse
-# takes vulnerabilities from Endor, and nothing else is known to read it.
-# k.atlan.dev/security-dashboard/ stays frozen at its last publish; nothing
-# here deletes it.
+# The security and conformance dashboards are no longer published (FND-3462).
+# connector-pulse takes vulnerabilities from Endor and reads conformance from
+# the agent-sdk fleet scan ledger, and nothing else is known to read either.
+# k.atlan.dev/{security,conformance}-dashboard/ stay frozen at their last
+# publish; nothing here deletes them.
 #
 # CENTRAL PULL, NOT PER-REPO PUSH (FND-3337). These dashboards used to be
 # written by update-dashboard.yaml, called from a shim bootstrap installed in
@@ -21,9 +22,9 @@
 #
 # Every 3 hours, not hourly. The reads run against the atlan-app-fleet
 # installation's hourly REST budget, which the Renovate sweep and dashboard
-# also spend. Collecting one repo costs roughly 20-30 calls (artifact lookups
-# and one download per Conformance series), so ~80 repos is ~2,000 calls a
-# run. Every 3 hours keeps that well under the budget.
+# also spend. Collecting one repo costs a handful of calls (the default branch,
+# the scorecard artifact lookups and one download), so ~80 repos is a few
+# hundred calls a run, well under the budget.
 # :40 past keeps clear of the 0 */4 Renovate sweep and the :20 Renovate
 # dashboard.
 #
@@ -32,7 +33,7 @@
 # interval; there is no manual refresh.
 #
 # A repo with no live artifact keeps its last published row (artifacts expire
-# after 7 days). The row's own collectedAt / history date is the age of the data,
+# after 7 days). The row's own history date is the age of the data,
 # not the time of collection, so a stale row shows its age. See
 # fleet_dashboards_collect.py.
 #
@@ -111,18 +112,9 @@ jobs:
           aws-region: ap-south-1
           role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
 
-      # One publish per dashboard, each gated on having something to publish.
-      # publish_fleet_dashboard.py refuses an empty directory, and a dashboard
-      # with no live artifact anywhere is routine on a quiet day.
-      - name: Deploy to Kryptonite (conformance)
-        if: hashFiles('dashboards-out/conformance-dashboard/repos/*.json') != ''
-        run: |
-          set -euo pipefail
-          python3 .github/scripts/publish_fleet_dashboard.py \
-            --dir dashboards-out/conformance-dashboard \
-            --prefix conformance-dashboard \
-            --partial-scan
-
+      # Gated on having something to publish. publish_fleet_dashboard.py
+      # refuses an empty directory, and no live artifact anywhere is routine
+      # on a quiet day.
       - name: Deploy to Kryptonite (test-readiness)
         if: hashFiles('dashboards-out/test-readiness-dashboard/repos/*.json') != ''
         run: |

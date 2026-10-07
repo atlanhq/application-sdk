@@ -93,8 +93,8 @@ jobs:
       # rejected — it 404s on a repo with no analyses yet, which is exactly a
       # newly-licensed repo, so the check would lock itself off permanently.
       #
-      # Nothing downstream depends on this upload: connector-pulse ingests the
-      # k.atlan.dev mirror published by `update-fleet-dashboards.yaml`, not the Security
+      # Nothing downstream depends on this upload: connector-pulse reads
+      # conformance from the agent-sdk fleet scan ledger, not the Security
       # tab, so a skipped leg costs no fleet visibility.
       #
       # The decision itself is a tested Python script, not inlined shell:

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect the conformance and test-readiness dashboard docs for the fleet.
+"""Collect the test-readiness dashboard docs for the fleet.
 
 The pull half of ``update-fleet-dashboards.yaml``. That scheduled job replaced
 the per-repo ``update-dashboard.yml`` shim bootstrap used to install in every
@@ -12,15 +12,14 @@ already use.
 
 For every repo it reads the newest LIVE artifact on the default branch:
 
-* the Conformance run's ``conformance-<series>-sarif`` artifacts, found and
-  downloaded by ``fetch_conformance_sarif.py``, which is reused unchanged ->
-  ``conformance-dashboard``
 * ``test-readiness-scorecard`` (or ``-retry``) -> ``test-readiness-dashboard``
 
-The security dashboard (Trivy scan results -> ``security-dashboard``) is no
-longer collected (FND-3462). Its one known reader, connector-pulse, takes
-vulnerabilities from Endor instead, so the mirror is left frozen at its last
-publish.
+The security and conformance dashboards are no longer collected (FND-3462).
+connector-pulse, their one known reader, takes vulnerabilities from Endor and
+reads conformance from the agent-sdk fleet scan ledger, so both mirrors are
+left frozen at their last publish. The conformance pull went through
+``fetch_conformance_sarif.discover()``, whose run picker could publish an
+older run over a newer row; the agent-sdk scan has no run picker.
 
 It writes one tree per dashboard prefix in the layout
 ``publish_fleet_dashboard.py`` uploads::
@@ -28,10 +27,10 @@ It writes one tree per dashboard prefix in the layout
     <out>/<prefix>/repos/<slug>.json
     <out>/<prefix>/history_<slug>.jsonl
 
-The document shapes are the ones the reusable's inline Python produced, since
-connector-pulse ingests them unchanged. The one deliberate difference is
-timestamps. ``collectedAt`` and the history ``date`` now come
-from the source run, not from the moment of collection. A central pull reads
+The document shape is the one the reusable's inline step produced, since
+connector-pulse ingests it unchanged. The one deliberate difference is
+timestamps. The history ``date`` now comes from the source run, not from the
+moment of collection. A central pull reads
 the same artifact again on every tick until a newer run replaces it, so a
 collection-time stamp would make a week-old scan look fresh. Stamping by
 source keeps a re-read idempotent: the per-date history merge sees the same
@@ -61,7 +60,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import os
 import subprocess
@@ -72,11 +70,10 @@ from typing import Any, Callable, Optional
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-import fetch_conformance_sarif as fcs  # noqa: E402
 from scorecard_history_entry import history_entry as scorecard_history  # noqa: E402
 
-# (args) -> (returncode, stdout). Same seam as fetch_conformance_sarif.run_gh,
-# so one fake drives both in the tests.
+# (args) -> (returncode, stdout). The one seam every gh read goes through, so
+# the tests drive the collector with a single fake.
 GhFn = Callable[[list], tuple]
 
 # One gh call's ceiling. The fleet is collected sequentially, so a stalled
@@ -90,7 +87,7 @@ ARTIFACT_PAGE_SIZE = 100
 
 
 def run_gh_bounded(args: list[str]) -> tuple[int, str]:
-    """``fetch_conformance_sarif.run_gh`` with a per-call timeout.
+    """Run ``gh`` with a per-call timeout.
 
     A stalled call returns a failure, so that repo's dashboard is marked
     ``error`` and the fleet scan moves on.
@@ -113,9 +110,8 @@ def run_gh_bounded(args: list[str]) -> tuple[int, str]:
     return proc.returncode, proc.stdout
 
 
-CONFORMANCE_PREFIX = "conformance-dashboard"
 TEST_READINESS_PREFIX = "test-readiness-dashboard"
-PREFIXES = (CONFORMANCE_PREFIX, TEST_READINESS_PREFIX)
+PREFIXES = (TEST_READINESS_PREFIX,)
 
 # Plain name first, then the upload retry's name. A retried upload cannot
 # reuse the first attempt's name (a failed FinalizeArtifact holds it for the
@@ -219,146 +215,6 @@ def download_artifact(repo: str, artifact: dict[str, Any], dest: Path, gh: GhFn)
         )
 
 
-def run_created_at(repo: str, run_id: int, gh: GhFn) -> tuple[str, str, str]:
-    """``(head_sha, head_branch, created_at)`` of a confirmed run.
-
-    ``fetch_conformance_sarif.head_ref`` gives the first two. The dashboard
-    also needs the run's own time, so this reads all three in the same one
-    call instead of making a second.
-    """
-    rc, out = gh(
-        [
-            "run",
-            "view",
-            str(run_id),
-            "--repo",
-            repo,
-            "--json",
-            "headSha,headBranch,createdAt",
-        ]
-    )
-    if rc != 0:
-        raise CollectError(f"gh run view failed for run {run_id} of {repo}")
-    try:
-        payload = json.loads(out or "{}")
-    except json.JSONDecodeError as exc:
-        raise CollectError(f"unparseable run view for run {run_id}") from exc
-    sha = payload.get("headSha") or ""
-    branch = payload.get("headBranch") or ""
-    created = payload.get("createdAt") or ""
-    if not (sha and branch and created):
-        raise CollectError(f"run {run_id} of {repo} has blank provenance")
-    return sha, branch, created
-
-
-# ---------------------------------------------------------------------------
-# Document builders: pure, ported from update-dashboard.yaml's inline Python
-# ---------------------------------------------------------------------------
-
-
-def conformance_doc(
-    repo: str,
-    sarif_docs: list[dict[str, Any]],
-    commit: str,
-    branch: str,
-    collected_at: str,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    """``(repo doc, history entry)`` for the conformance dashboard."""
-    tool_versions: set = set()
-    profile_version = "v1"
-    rule_catalog: dict[str, Any] = {}
-    summary = {"failing": 0, "warning": 0, "suppressing": 0}
-    by_rule: dict[str, Any] = {}
-    excluded_paths: set = set()
-    suppressions: list[dict[str, str]] = []
-
-    for sarif in sarif_docs:
-        for run in sarif.get("runs", []) or []:
-            driver = (run.get("tool") or {}).get("driver") or {}
-            if driver.get("version"):
-                tool_versions.add(driver["version"])
-
-            # Rule metadata is carried so connector-pulse never re-fetches it.
-            for rule in driver.get("rules", []) or []:
-                rid = rule.get("id")
-                if not rid or rid in rule_catalog:
-                    continue
-                props = rule.get("properties") or {}
-                rule_catalog[rid] = {
-                    "name": rule.get("name", ""),
-                    "tier": props.get("atlan/tier", ""),
-                    "category": props.get("atlan/category", ""),
-                    "series": props.get("atlan/series", ""),
-                    "since": props.get("atlan/since", ""),
-                    "helpUri": rule.get("helpUri", ""),
-                    "shortDescription": (rule.get("shortDescription") or {}).get(
-                        "text", ""
-                    ),
-                    "fullDescription": (rule.get("fullDescription") or {}).get(
-                        "text", ""
-                    ),
-                    "rationale": props.get("atlan/rationale", ""),
-                }
-
-            run_props = run.get("properties") or {}
-            run_sum = run_props.get("atlan/summary") or {}
-            for key in summary:
-                summary[key] += run_sum.get(key, 0)
-            excluded_paths.update(run_props.get("atlan/excludedPaths", []) or [])
-            if run_props.get("atlan/profileVersion"):
-                profile_version = run_props["atlan/profileVersion"]
-
-            for result in run.get("results", []) or []:
-                rule_id = result.get("ruleId", "")
-                if not rule_id or result.get("kind") == "pass":
-                    continue
-                supps = result.get("suppressions") or []
-                entry = by_rule.setdefault(rule_id, {"failing": 0, "suppressing": 0})
-                if supps:
-                    entry["suppressing"] += 1
-                    for s in supps:
-                        just = (s.get("justification") or "").strip()
-                        if just:
-                            suppressions.append(
-                                {"ruleId": rule_id, "justification": just}
-                            )
-                else:
-                    entry["failing"] += 1
-
-    # One toolVersion when every series agrees. Disagreement (a partial
-    # publish, artifacts from two runs) is surfaced so connector-pulse can
-    # flag it.
-    if len(tool_versions) == 1:
-        tool_version = next(iter(tool_versions))
-    elif tool_versions:
-        tool_version = "skew:" + ",".join(sorted(tool_versions))
-    else:
-        tool_version = "unknown"
-
-    doc = {
-        "repo": repo,
-        "collectedAt": collected_at,
-        "commit": commit,
-        "branch": branch,
-        "toolVersion": tool_version,
-        "profileVersion": profile_version,
-        "summary": summary,
-        "byRule": by_rule,
-        "excludedPaths": sorted(excluded_paths),
-        "suppressions": suppressions,
-        "ruleCatalog": rule_catalog,
-    }
-    history = {
-        "date": _iso_date(collected_at),
-        "repo": repo,
-        "toolVersion": tool_version,
-        "failing": summary["failing"],
-        "warning": summary["warning"],
-        "suppressing": summary["suppressing"],
-    }
-    return doc, history
-
-
 # ---------------------------------------------------------------------------
 # Per-repo collection
 # ---------------------------------------------------------------------------
@@ -369,43 +225,6 @@ def _write(out_dir: Path, prefix: str, repo: str, doc: Any, history: dict) -> No
     (root / "repos").mkdir(parents=True, exist_ok=True)
     (root / "repos" / f"{slug(repo)}.json").write_text(json.dumps(doc, indent=2))
     (root / f"history_{slug(repo)}.jsonl").write_text(json.dumps(history) + "\n")
-
-
-def collect_conformance(
-    repo: str, branch: str, out_dir: Path, work: Path, gh: GhFn
-) -> bool:
-    run_id, series, discovery_error = fcs.discover(
-        repo, "conformance.yaml", branch, 20, gh=gh
-    )
-    if discovery_error:
-        raise CollectError(f"conformance SARIF discovery failed for {repo}")
-    if run_id is None:
-        print(f"{repo}: no Conformance run with live SARIF, keeping the stored row")
-        return False
-    dest = work / "sarif"
-    got = fcs.download(repo, run_id, series, str(dest), gh=gh)
-    if not got:
-        raise CollectError(f"no SARIF series retrievable from run {run_id} of {repo}")
-    sha, head_branch, created = run_created_at(repo, run_id, gh)
-
-    sarif_docs: list[dict[str, Any]] = []
-    for path in sorted(glob.glob(str(dest / "*.sarif"))):
-        try:
-            sarif_docs.append(json.loads(Path(path).read_text()))
-        except json.JSONDecodeError as exc:
-            print(f"::warning::{repo}: skipping unparseable {path}: {exc}")
-    # A corrupt artifact is not evidence of zero findings: publishing the
-    # zero-count doc would overwrite the stored row with a false "clean".
-    if not sarif_docs:
-        raise CollectError(f"no parseable SARIF in run {run_id} of {repo}")
-
-    doc, history = conformance_doc(repo, sarif_docs, sha, head_branch, created)
-    _write(out_dir, CONFORMANCE_PREFIX, repo, doc, history)
-    print(
-        f"{repo}: conformance {len(got)}/{len(series)} series, "
-        f"{doc['summary']['failing']} failing, tool {doc['toolVersion']}"
-    )
-    return True
 
 
 def collect_test_readiness(
@@ -432,13 +251,12 @@ def collect_repo(repo: str, out_dir: Path, gh: GhFn) -> dict[str, str]:
     """Collect every dashboard for ``repo``.
 
     Returns ``{prefix: "published" | "skipped" | "error"}``. Each dashboard is
-    collected independently, so a broken scorecard does not cost the repo its
-    conformance row.
+    collected independently, so one broken dashboard does not cost the repo
+    any other.
     """
     branch = default_branch(repo, gh)
     outcome: dict[str, str] = {}
     collectors = {
-        CONFORMANCE_PREFIX: lambda w: collect_conformance(repo, branch, out_dir, w, gh),
         TEST_READINESS_PREFIX: lambda w: collect_test_readiness(
             repo, branch, out_dir, w, gh
         ),
@@ -498,8 +316,8 @@ def main(argv: Optional[list] = None, gh: GhFn = run_gh_bounded) -> int:
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary_path:
         with open(summary_path, "a") as fh:
-            fh.write("| Repo | Conformance | Test readiness |\n")
-            fh.write("| --- | --- | --- |\n")
+            fh.write("| Repo | Test readiness |\n")
+            fh.write("| --- | --- |\n")
             for repo, outcome in sorted(results.items()):
                 cells = " | ".join(outcome[p] for p in PREFIXES)
                 fh.write(f"| {repo} | {cells} |\n")
