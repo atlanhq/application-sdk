@@ -171,6 +171,22 @@ class TestFleetMember:
         run_gh, _ = self.gh(0, '{"extends": ["config:recommended"]}')
         assert not backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
 
+    @pytest.mark.parametrize(
+        "config",
+        [
+            # lens F-e4234a: another owner's copy of the same path.
+            '{"extends": ["github>other-owner/application-sdk//renovate-config/default.json"]}',
+            # The path mentioned somewhere other than `extends`.
+            '{"description": "was github>atlanhq/application-sdk//renovate-config/default.json"}',
+            '{"extends": "github>atlanhq/application-sdk//renovate-config/default.json"}',
+            "not json github>atlanhq/application-sdk//renovate-config/default.json",
+            '["github>atlanhq/application-sdk//renovate-config/default.json"]',
+        ],
+    )
+    def test_the_preset_must_be_an_exact_extends_entry(self, config):
+        run_gh, _ = self.gh(0, config)
+        assert not backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)
+
     def test_no_renovate_json_is_rejected(self):
         run_gh, _ = self.gh(1, err="gh: Not Found (HTTP 404)")
         assert not backstop.fleet_member("atlanhq/atlan-foo-app", run_gh)

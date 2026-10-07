@@ -492,13 +492,19 @@ def _version_key(version: str) -> "Version | None":
 def hold_ceilings(
     upload_times: dict[str, dt.datetime], holds: list[str]
 ) -> dict[str, str]:
-    """Ceilings that keep each held package exactly where the baseline has it.
+    """Upload-time ceilings that hold each package where the baseline has it.
 
     Unlike a retention ceiling this applies whatever the locked version's age:
     a held package is not delayed by the window, it is owned by another lane and
     must not move here at all (FND-3481). A held name the baseline does not lock
     gets no flag — there is nothing to hold, and a package the repo does not
     resolve cannot appear in this lane's diff.
+
+    A ceiling is not a pin, and uv has no flag that pins one package while
+    upgrading the rest. It admits every release uploaded at or before the locked
+    version's newest file, so a higher version uploaded earlier (the locked one
+    being a later backport) can still be chosen. ``moved_holds`` below checks
+    the resolve's result for exactly that, and ``main`` refuses on it.
     """
     ceilings: dict[str, str] = {}
     for name in holds:
@@ -507,6 +513,21 @@ def hold_ceilings(
             admit = (uploaded + dt.timedelta(seconds=1)).astimezone(dt.timezone.utc)
             ceilings[normalise(name)] = admit.strftime("%Y-%m-%dT%H:%M:%SZ")
     return ceilings
+
+
+def moved_holds(
+    holds: list[str], before: dict[str, str], after: dict[str, str]
+) -> dict[str, tuple[str, str]]:
+    """Held packages the bounded resolve moved anyway — the gap a ceiling
+    leaves (see ``hold_ceilings``). The hold is a contract, so it is checked
+    rather than assumed."""
+    found: dict[str, tuple[str, str]] = {}
+    for name in holds:
+        key = normalise(name)
+        old, new = before.get(key), after.get(key)
+        if old is not None and old != new:
+            found[key] = (old, new or "removed")
+    return found
 
 
 def rollbacks(
@@ -621,26 +642,6 @@ def framework_lane_moves(
         for name, version in before.items()
         if name not in held and after.get(name) != version
     }
-
-
-def moved_holds(
-    holds: list[str], before: dict[str, str], after: dict[str, str]
-) -> dict[str, tuple[str, str]]:
-    """Held packages the bounded resolve moved anyway.
-
-    A hold is a timestamp ceiling, not a pin — uv has no flag that pins one
-    package while upgrading the rest. The ceiling admits every release uploaded
-    at or before the locked version's newest file, so an older-numbered line
-    published later (a backport) can sit under it with a higher version beside
-    it. Rare, but the hold is a contract, so it is checked rather than assumed.
-    """
-    found: dict[str, tuple[str, str]] = {}
-    for name in holds:
-        key = normalise(name)
-        old, new = before.get(key), after.get(key)
-        if old is not None and old != new:
-            found[key] = (old, new or "removed")
-    return found
 
 
 def baseline_lock_text(cwd: Path, ref: str = "HEAD") -> str | None:

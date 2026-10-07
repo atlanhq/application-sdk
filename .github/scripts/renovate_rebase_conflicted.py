@@ -24,10 +24,10 @@ What it does
    App authorship alone is NOT the allowlist: ``renovate.yaml``'s ``repos``
    input feeds its matrix directly, bypassing the discovery filter, and a repo
    that has left the fleet can still carry an old fleet-App PR. So each
-   candidate is then checked against the same membership rule the runner's
-   discovery applies (``discover_org_consumers``: the ``atlan-*-app`` name and
-   a ``renovate.json`` that extends the shared preset) — one read per
-   conflicted repo, paid only when something is conflicted.
+   candidate is then checked for fleet membership (``fleet_member``: the
+   ``atlan-*-app`` name, and the shared preset as an exact ``extends`` entry —
+   stricter than discovery's substring test, see ``FLEET_PRESET``) — one read
+   per conflicted repo, paid only when something is conflicted.
 2. If any ``renovate.yaml`` run is queued or in progress, it does nothing — a
    live sweep reaches these repos anyway, and an earlier dispatch from this
    backstop is still working on them. Skipping is what keeps this from piling
@@ -81,17 +81,34 @@ IsMember = Callable[[str], bool]
 
 _FLEET_NAME = re.compile(discover.DEFAULT_NAME_PATTERN)
 
+# The exact `extends` entry every fleet repo carries — all 83 on 2026-10-07, no
+# variants. Matched as a whole list element, not as a substring of the file:
+# `discover.extends_preset`'s substring test would also admit
+# `github>other-owner/application-sdk//renovate-config/default.json`, or the
+# path quoted in a description, and this list decides who a dispatch reaches.
+FLEET_PRESET = f"github>atlanhq/{discover.PRESET_MARKER}"
+
 
 def fleet_member(repo: str, run_gh: discover.RunFn) -> bool:
-    """The runner's own discovery rule, applied to one repo.
+    """The fleet-membership rule, applied to one repo: an ``atlan-*-app`` name,
+    and a renovate.json whose top-level ``extends`` lists ``FLEET_PRESET``.
 
     Raises (via ``discover.DiscoveryError``) when the config cannot be read for
     any reason but a 404: an unanswerable check must stop the dispatch, not
-    quietly admit or drop the repo.
+    quietly admit or drop the repo. A config that is not a JSON object is not a
+    member — Renovate itself would reject it, so there is nothing to rebase.
     """
     if not _FLEET_NAME.match(repo.split("/", 1)[-1]):
         return False
-    return discover.extends_preset(repo, discover.PRESET_MARKER, run=run_gh)
+    text = discover.read_renovate_config(repo, run=run_gh)
+    if text is None:
+        return False
+    try:
+        config = json.loads(text)
+    except json.JSONDecodeError:
+        return False
+    extends = config.get("extends") if isinstance(config, dict) else None
+    return isinstance(extends, list) and FLEET_PRESET in extends
 
 
 def gh_as(token: str) -> discover.RunFn:
