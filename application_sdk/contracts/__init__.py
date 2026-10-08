@@ -48,6 +48,7 @@ from application_sdk.contracts.types import (
     MaxItems,
     StorageTier,
     StoreTarget,
+    TreeSelection,
     asset_artifact_fields,
     asset_artifact_marker,
 )
@@ -77,6 +78,7 @@ __all__ = [
     "SerializableEnum",
     "StorageTier",
     "StoreTarget",
+    "TreeSelection",
     "UploadInput",
     "UploadOutput",
     "UploadRefsInput",

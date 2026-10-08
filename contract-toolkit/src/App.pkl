@@ -3452,7 +3452,11 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
       "\(k): str = \"\""
     else if (u is Widgets.ConditionalInput)
       (let (ci = u as Widgets.ConditionalInput)
-        if (ci.outputValueType == "object")
+        // A non-apitree base with treeSelection is refused by
+        // _treeSelectionWidgetCheck, which also covers fields not emitted here.
+        if (ci.treeSelection && ci.baseWidgetType == "apitree")
+          getPyDefaultFactoryField(k, "TreeSelection", "dict")
+        else if (ci.outputValueType == "object")
           getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
         else
           "\(k): str = \"\(escapePyStr(if (ci.default != null) ci.default!!.toString() else ""))\"")
@@ -3461,6 +3465,8 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
       // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
       // leaf values (e.g. booleans) to str during model construction.
       getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
+      getPyDefaultFactoryField(k, "TreeSelection", "dict")
     else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
       getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
     else
@@ -3664,6 +3670,9 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     }
     when (uiFieldLines.contains("MaxItems(")) {
       "MaxItems"
+    }
+    when (uiFieldLines.contains(": TreeSelection")) {
+      "TreeSelection"
     }
   }).toList()
   local firstPartyImportLines: String =
@@ -4837,6 +4846,21 @@ local credentialConflictNames: List<String> =
 // files) and a single-entrypoint contract with no uiConfig (manifest.json is emitted
 // only `when (uiConfig != null)`). `local`, not `hidden`, so an amending contract cannot
 // assign the guard away and generate silently.
+// treeSelection types a field as the SDK's TreeSelection, which only fits an
+// apitree value. Checked over every uiConfig property, not inside field
+// generation, so a field excluded from _input.py (includeInInput = false) is
+// refused too rather than silently accepting a setting that means nothing.
+local _treeSelectionWidgetCheck: Any =
+  let (bad = (uiConfig?.properties ?? Map())
+    .filter((_, u) -> u is Widgets.ConditionalInput
+      && (u as Widgets.ConditionalInput).treeSelection
+      && (u as Widgets.ConditionalInput).baseWidgetType != "apitree")
+    .map((k, u) -> Pair(k, "'\(k)' (baseWidgetType = \"\((u as Widgets.ConditionalInput).baseWidgetType)\")"))
+    .values.toList())
+  if (bad.isEmpty) null
+  else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
+    + "treeSelection applies only to baseWidgetType = \"apitree\".")
+
 local _legacyWorkflowTypesPlacementCheck: Any =
   if (legacyWorkflowTypes.isEmpty)
     null
@@ -4887,6 +4911,7 @@ output =
   // never be evaluated and would vanish without a word.
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
   let (_bundleInputNameCheck = _bundleInputClassNameCheck)
+  let (_treeSelectionCheck = _treeSelectionWidgetCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {

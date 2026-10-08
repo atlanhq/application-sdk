@@ -2102,7 +2102,7 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
-| `APITree` | `apitree` | `dict[str, Any]` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc` |
+| `APITree` | `apitree` | `dict[str, Any]`, or `TreeSelection` with `treeSelection = true` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc`, `treeSelection` (see [Payload-safe tree selections](#payload-safe-tree-selections-treeselection)) |
 | `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
 | `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
 | `GlossarySelector` | `GlossarySelector` | `str` | Glossary picker. `selectorMode = "multiple"`, `showGlossaryIcon`, `showGlossaryCount`, `placeholderText` |
@@ -3797,6 +3797,32 @@ multi-entrypoint app each entrypoint's copy lands at
 
 See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)
 for the type vocabulary and the per-format mapping.
+
+---
+
+## Payload-safe tree selections (`treeSelection`)
+
+`treeSelection: Boolean = false` on `APITree`, and on a `ConditionalInput` with `baseWidgetType = "apitree"`.
+
+**Why.** Tree widgets render their Python field as `Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` even inside a bound (`PayloadSafetyError [AAF-CTR-002]`), so a contract with such a field does not import. `treeSelection = true` types the field as the SDK's `TreeSelection` instead: bounded at every level (`MaxItems(1000)` children per node), every leaf a dict.
+
+**What changes.** Only the field line in `_input.py`, plus its import:
+
+```python
+from application_sdk.contracts.types import TreeSelection
+...
+    component_include_filter: TreeSelection = Field(default_factory=dict)
+```
+
+**What does not change.** The value: it is the same plain nested dict the widget emits (`{"SAP": {"MM": {"MM-SRV": {}}}}`), in the app and on the wire, so stored configs validate unchanged and app code reading the dict needs no change. The JSON-string coercion the toolkit already generates for tree widgets still applies. The workflow config, credential config, manifest and widget UI are byte-identical.
+
+**Caveats.**
+
+- Default `false` keeps `dict[str, Any]`, so existing apps are unaffected until they opt in.
+- A value with a non-dict leaf (`{"SAP": true}`, `{"SAP": ["MM"]}`) is a validation error. Tree widgets emit dict leaves; check any hand-written test payloads.
+- On a `ConditionalInput`, evaluation fails unless `baseWidgetType = "apitree"`.
+- **Minimum SDK: the first release after 3.43.0.** The generated `_input.py` imports `application_sdk.contracts.types.TreeSelection`, which 3.43.0 and earlier do not have, so an app pinned to `atlan-application-sdk<=3.43.0` generates the file and then fails to import it. Raise the app's SDK floor (e.g. `atlan-application-sdk>3.43.0`) in the same change that sets `treeSelection = true`. The toolkit's own SDK-import check runs against SDK HEAD, so it does not catch an older pin.
+- For flat database/schema filters use the SDK's `FilterMap`, which `ExtractionInput`'s `include_filter` already uses.
 
 ---
 
