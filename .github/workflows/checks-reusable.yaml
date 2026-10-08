@@ -40,14 +40,87 @@ on:
         type: string
         required: false
         default: ""
+      private-git-deps:
+        description: >-
+          Set true when the app pins a PRIVATE atlanhq git dependency (e.g.
+          query-redaction). `setup-deps` runs `uv sync` before any hook, and an
+          unauthenticated clone of a private atlanhq repo fails there, so with
+          this flag atlanhq remotes are rewritten to a token URL
+          (ORG_PAT_GITHUB) first. Requires the caller to pass
+          `secrets: inherit`. Managed per-repo by `bootstrap`, which reads the
+          opt-in back off the caller so a re-sync cannot delete it.
+        type: boolean
+        required: false
+        default: false
+    secrets:
+      ORG_PAT_GITHUB:
+        required: false
+        description: >-
+          Token used to reach PRIVATE atlanhq git dependencies when
+          `private-git-deps` is true. Optional: a caller with only public deps
+          passes nothing. Declared so a caller that maps secrets explicitly is
+          validated at parse time instead of silently supplying an empty token.
 
 jobs:
+  # Merge-queue entry only: did combining with the base change the tree?
+  # Pre-commit reads the tree and nothing else, so on a queue commit whose tree
+  # is exactly the PR head's it can only repeat the PR's green verdict
+  # (FND-3321). Skipped (not billed) on every other event. An empty output —
+  # skipped or failed — is not `'true'`, so pre-commit then runs as before.
+  # Same job as conformance-reusable.yaml's; see docs/standards/ci.md ("What a
+  # merge-queue entry re-runs").
+  queue-diff:
+    name: Queue tree diff
+    if: github.event_name == 'merge_group'
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      identical: ${{ steps.diff.outputs.identical }}
+    steps:
+      # Credentials stay persisted: the script fetches the PR head from this
+      # same remote, and the repo may be private.
+      - name: Checkout queue commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+
+      - name: Fetch queue_tree_diff.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/queue_tree_diff.py
+          sparse-checkout-cone-mode: false
+          path: _sdk
+          persist-credentials: false
+
+      - name: Compare the queue commit with the PR head
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          QUEUE_HEAD_REF: ${{ github.event.merge_group.head_ref }}
+          QUEUE_SHA: ${{ github.sha }}
+          QUEUE_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+        run: python3 _sdk/.github/scripts/queue_tree_diff.py
+
   pre-commit:
     name: Pre-commit
+    needs: [queue-diff]
+    # `!cancelled()` so the skipped `queue-diff` on a PR does not skip this
+    # job too. The one skip is an identical queue tree; the skipped job still
+    # files its `Pre-commit` check run, which a required context counts as a
+    # pass. Keep `name:` static so that run carries the same context string.
+    if: ${{ !cancelled() && needs.queue-diff.outputs.identical != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
     timeout-minutes: 10
+    # Job-level, not step-level, because the `if:` guards below read it, and
+    # `secrets` cannot be referenced in an `if:` directly.
+    env:
+      GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -68,5 +141,49 @@ jobs:
           # shellcheck disable=SC2086  # deliberate word splitting: package list
           sudo apt-get install -y $SYSTEM_DEPS
 
+      # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
+      # would redirect every atlanhq URL to an unauthenticated token URL and
+      # fail far from the cause. Condition stays in `if:`, never in the shell
+      # (docs/standards/ci.md). Same pair as conformance-reusable.yaml.
+      - name: "Require ORG_PAT_GITHUB when private-git-deps is set"
+        if: inputs.private-git-deps && env.GIT_TOKEN == ''
+        run: |
+          echo "::error::private-git-deps is true but ORG_PAT_GITHUB is unset"
+          exit 1
+
+      # --global writes ~/.gitconfig, so it applies to the clone `uv sync`
+      # performs inside setup-deps.
+      - name: "Authenticate private atlanhq git dependencies"
+        if: inputs.private-git-deps && env.GIT_TOKEN != ''
+        run: |
+          git config --global url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "https://github.com/atlanhq/"
+          git config --global --add url."https://x-access-token:${GIT_TOKEN}@github.com/atlanhq/".insteadOf "ssh://git@github.com/atlanhq/"
+
       - uses: atlanhq/application-sdk/.github/actions/setup-deps@main
+
+      # A refused Renovate lock bump is withheld by writing a lock no
+      # `--locked` / `--check` consumer accepts (renovate_uv_lock_bounded.py,
+      # `withhold`). The required `scan / Build Image` used to be what rejected
+      # it; since FND-3328 that job skips on every PR but the bump-version PR,
+      # so this required job does it instead. Runs only when uv.lock differs
+      # from the base (see check_uv_lock.py). Script fetched at this workflow's
+      # own SHA, into its own path, and removed before pre-commit sees the tree.
+      - name: Fetch check_uv_lock.py from SDK
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts/check_uv_lock.py
+          sparse-checkout-cone-mode: false
+          path: .sdk-lock-check
+          persist-credentials: false
+
+      - name: uv.lock matches pyproject.toml
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: python3 .sdk-lock-check/.github/scripts/check_uv_lock.py
+
+      - name: Remove the fetched SDK script
+        run: rm -rf .sdk-lock-check
+
       - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1

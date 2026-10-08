@@ -1,11 +1,11 @@
 # actionlint configuration.
 #
-# Enabled after three consecutive @sdk-loop startup failures that a schema
+# Enabled after three consecutive workflow startup failures that a schema
 # validator would have caught before merge: a duplicate `description` key, and
 # a `needs.<job>` reference to a job the caller did not depend on. Both make
 # GitHub refuse to parse the workflow, and a workflow GitHub will not parse
 # runs NO jobs — so the symptom is silence, not an error, and CI stays green
-# while the lane is dead.
+# while the workflow is dead.
 #
 # ── About the ignores below ────────────────────────────────────────────────
 # Every one is a checked FALSE POSITIVE, not deferred work. Each was read
@@ -79,16 +79,13 @@ paths:
   .github/workflows/build-and-scan.yaml:
     ignore:
       - 'property "workflow_sha" is not defined'
-
-  # FALSE POSITIVE — actionlint only knows secrets declared under
-  # `workflow_call.secrets`, but a caller using `secrets: inherit` passes
-  # everything it has, declared or not. `APP_REPO_READ_TOKEN` is the caller-side
-  # name (see the header comment in that file), and it sits in a `||` fallback
-  # chain that ends at `secrets.GITHUB_TOKEN`, so the worst case is an empty
-  # term the chain skips over.
-  .github/workflows/v3-readiness-check.yaml:
+  # The queue-diff jobs' script checkout (FND-3321).
+  .github/workflows/checks-reusable.yaml:
     ignore:
-      - 'property "app_repo_read_token" is not defined'
+      - 'property "workflow_sha" is not defined'
+  .github/workflows/conformance-reusable.yaml:
+    ignore:
+      - 'property "workflow_sha" is not defined'
 
   # FALSE POSITIVE — deliberate kill switch, not dead code left by accident.
   # The job body and its input are retained on purpose so callers that still

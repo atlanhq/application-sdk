@@ -98,11 +98,13 @@ from application_sdk.validation.artifacts import (
 )
 from application_sdk.validation.assets import (
     AssetArtifactReport,
+    AssetBatchScope,
     AssetValidationFailure,
     AssetValidationReport,
     ReferentialFailure,
     asset_validation_event_fields,
     asset_validation_matrix_json,
+    asset_validation_summary_json,
     supports_asset_model,
     validate_asset,
     validate_assets_as_artifact,
@@ -194,11 +196,13 @@ __all__ = [
     "validate_artifacts",
     # Asset validation (BLDX-1555) — the NDJSON x ModelSource cell (FND-690)
     "AssetArtifactReport",
+    "AssetBatchScope",
     "AssetValidationFailure",
     "AssetValidationReport",
     "ReferentialFailure",
     "asset_validation_event_fields",
     "asset_validation_matrix_json",
+    "asset_validation_summary_json",
     "supports_asset_model",
     "validate_asset",
     "validate_assets_as_artifact",

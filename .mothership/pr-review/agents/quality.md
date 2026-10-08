@@ -1,4 +1,4 @@
-# Sub-agent — QUALITY Review (GPT-5.3-codex)
+# Sub-agent — QUALITY Review
 
 ## Role
 

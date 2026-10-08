@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import email.message
 import inspect
+import io
 import json
 import sys
 from datetime import date, timedelta
@@ -337,14 +339,28 @@ def test_normalize_merged_pr_maps_reviews():
     }
     out = rfs.normalize_merged_pr(pr)
     assert out == {
+        "mergedBy": {"login": None, "is_bot": False},
         "reviews": [
             {
                 "state": "APPROVED",
                 "body": "**Renovate auto-approval:** ...",
                 "author": {"login": "atlan-ci"},
             },
-        ]
+        ],
     }
+
+
+def test_normalize_merged_pr_marks_a_bot_merger():
+    pr = {
+        "mergedBy": {"__typename": "Bot", "login": "atlan-app-fleet"},
+        "reviews": {"nodes": []},
+    }
+    assert rfs.normalize_merged_pr(pr)["mergedBy"] == {
+        "login": "atlan-app-fleet",
+        "is_bot": True,
+    }
+    person = {"mergedBy": {"__typename": "User", "login": "someone"}}
+    assert rfs.normalize_merged_pr(person)["mergedBy"]["is_bot"] is False
 
 
 def test_normalize_merged_pr_handles_missing_author():
@@ -522,7 +538,9 @@ def test_run_writes_open_and_merged_files(tmp_path):
 
     assert json.loads((open_dir / "atlanhq_a.json").read_text())[0]["number"] == 1
     assert json.loads((open_dir / "atlanhq_b.json").read_text()) == []
-    assert json.loads((merged_dir / "atlanhq_a.json").read_text()) == [{"reviews": []}]
+    assert json.loads((merged_dir / "atlanhq_a.json").read_text()) == [
+        {"mergedBy": {"login": None, "is_bot": False}, "reviews": []}
+    ]
     assert json.loads((merged_dir / "atlanhq_b.json").read_text()) == []
 
 
@@ -799,6 +817,151 @@ def test_does_not_retry_a_malformed_query(monkeypatch):
     except RuntimeError as exc:
         assert "422" in str(exc)
     assert post.calls == 1
+
+
+# --- rate-limit retry (FND-3214) -------------------------------------------
+#
+# The one-day merged window raised a pass from 10 merged searches to 62, and two
+# runs in three then died on a secondary-rate-limit 403 — which skipped the
+# auto-merge re-arm step behind it. These go through the real urlopen ->
+# _post_graphql_once -> _post_graphql path, because the classification depends
+# on the HTTPError's status, headers and body, which a pre-wrapped RuntimeError
+# would not carry.
+
+_SECONDARY_LIMIT_BODY = (
+    b'{"message": "You have exceeded a secondary rate limit. Please wait a few '
+    b'minutes before you try again."}'
+)
+
+
+def _http_error(status: int, body: bytes, headers: dict | None = None):
+    hdrs = email.message.Message()
+    for key, value in (headers or {}).items():
+        hdrs[key] = value
+    return rfs.urllib.error.HTTPError(
+        rfs.GRAPHQL_URL, status, "Forbidden", hdrs, io.BytesIO(body)
+    )
+
+
+class _ScriptedUrlopen:
+    """Stands in for urlopen: raises each scripted HTTPError, then succeeds."""
+
+    def __init__(self, errors):
+        self.errors = list(errors)
+        self.calls = 0
+
+    def __call__(self, req, timeout=None):
+        self.calls += 1
+        if self.errors:
+            raise self.errors.pop(0)
+        return io.BytesIO(b'{"data": {"ok": true}}')
+
+
+def test_retries_a_secondary_rate_limit_after_a_minute(monkeypatch):
+    # The exact failure: 403, no retry headers, "secondary rate limit" in the body.
+    urlopen = _ScriptedUrlopen([_http_error(403, _SECONDARY_LIMIT_BODY)])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert urlopen.calls == 2
+    # GitHub's floor for a secondary limit with no header hint — not the 1s
+    # 5xx backoff, which would just trip the limit again.
+    assert slept == [60.0]
+
+
+def test_retries_an_abuse_detection_403(monkeypatch):
+    # GitHub's older wording for the same limit carries no "rate limit" text.
+    body = b'{"message": "You have triggered an abuse detection mechanism."}'
+    urlopen = _ScriptedUrlopen([_http_error(403, body)])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    assert rfs._post_graphql("tok", {}, sleep=slept.append) == {"data": {"ok": True}}
+    assert slept == [60.0]
+
+
+def test_rate_limit_backoff_grows_exponentially(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY) for _ in range(3)]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [60.0, 120.0, 240.0]
+
+
+def test_rate_limit_honours_a_longer_retry_after(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY, {"Retry-After": "90"})]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [90.0]
+
+
+def test_rate_limit_wait_is_capped(monkeypatch):
+    # An hour-long hint would outlive the job; clamp, and let the attempt cap
+    # fail the run with the real 403 if the limit really has not cleared.
+    urlopen = _ScriptedUrlopen([_http_error(429, b"{}", {"Retry-After": "3600"})])
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+    slept = []
+
+    rfs._post_graphql("tok", {}, sleep=slept.append)
+
+    assert slept == [rfs._RATE_LIMIT_MAX_WAIT_SECONDS]
+
+
+def test_rate_limit_gives_up_at_the_attempt_cap(monkeypatch):
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, _SECONDARY_LIMIT_BODY) for _ in range(rfs.GRAPHQL_ATTEMPTS)]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "secondary rate limit" in str(exc)
+    assert urlopen.calls == rfs.GRAPHQL_ATTEMPTS
+
+
+def test_does_not_retry_a_403_that_is_not_a_rate_limit(monkeypatch):
+    # A token without access fails identically every time — still one attempt.
+    urlopen = _ScriptedUrlopen(
+        [_http_error(403, b'{"message": "Resource not accessible by integration"}')]
+    )
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", urlopen)
+
+    try:
+        rfs._post_graphql("tok", {}, sleep=lambda _: None)
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "Resource not accessible" in str(exc)
+    assert urlopen.calls == 1
+
+
+def test_rate_limit_hint_reads_the_primary_quota_reset():
+    hdrs = email.message.Message()
+    hdrs["x-ratelimit-remaining"] = "0"
+    hdrs["x-ratelimit-reset"] = "1200"
+
+    assert rfs._rate_limit_hint(hdrs, now=1000.0) == 200.0
+    assert rfs._is_rate_limited(403, hdrs, "{}")
+
+
+def test_rate_limit_hint_ignores_reset_while_quota_remains():
+    hdrs = email.message.Message()
+    hdrs["x-ratelimit-remaining"] = "4000"
+    hdrs["x-ratelimit-reset"] = "1200"
+
+    assert rfs._rate_limit_hint(hdrs, now=1000.0) is None
+    assert not rfs._is_rate_limited(403, hdrs, "{}")
 
 
 def test_retries_a_transport_failure(monkeypatch):
@@ -1114,6 +1277,24 @@ def test_merged_date_windows_defaults_until_to_today():
     assert windows[-1].endswith(date.today().isoformat())
 
 
+def test_fetch_merged_prs_defaults_to_one_query_per_day():
+    # Every other test passes window_days explicitly, so none of them would
+    # notice the default widening back to a span that blew the cap: the fleet
+    # peaked at 884 merges in 2 days (2026-09-21..22), 471 in one.
+    queries = []
+
+    def fake_post(token, payload):
+        queries.append(payload["query"])
+        return _page([], has_next=False)
+
+    rfs.fetch_merged_prs(
+        "tok", "org:atlanhq", "2026-09-21", "number", post=fake_post, until="2026-09-22"
+    )
+    assert sum("merged:2026-09-21..2026-09-21" in q for q in queries) == 2
+    assert sum("merged:2026-09-22..2026-09-22" in q for q in queries) == 2
+    assert len(queries) == 4
+
+
 def test_fetch_merged_prs_queries_each_window_once_per_author():
     queries = []
 
@@ -1223,5 +1404,6 @@ def test_run_uses_windowed_merged_queries(tmp_path):
 
     merged_queries = [q for q in queries if "is:merged" in q]
     assert not any("merged:>=" in q for q in merged_queries)
-    # 30 days at the 7-day default = 5 windows, x2 authors.
-    assert len(merged_queries) == 10
+    # today-30..today inclusive is 31 days; at the 1-day default that is 31
+    # windows, x2 authors.
+    assert len(merged_queries) == 62

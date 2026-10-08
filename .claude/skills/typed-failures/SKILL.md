@@ -176,7 +176,7 @@ to set it.
 | **evidence fields** (dataclass attrs you add) | instance | ✅ when useful | Add fields specific to the leaf (e.g. `field` on InvalidInput-style errors, `db_name`/`schema_name` on a query failure). These land in `FailureDetails.evidence` automatically. |
 | `app_name` | instance | ❌ deliberately NOT set | AE attributes via DAG node label — single source of truth. Setting it on every leaf creates a second source of truth and confuses Grafana cuts. |
 | `run_id` | instance | ❌ deliberately NOT set | AE attaches from Temporal context at ingest. The producer doesn't carry it. |
-| `suggested_action` | instance | ⚠️ optional, at raise site | Free to set at the raise site when there's specific guidance to convey ("regrant Glue read access"). Don't pre-default per leaf — canned text is rarely better than the activity-specific context the call site has. |
+| `suggested_action` | instance | ⚠️ optional, at raise site | Free to set at the raise site when there's specific guidance to convey ("regrant Glue read access"). Don't pre-default per leaf — canned text is rarely better than the activity-specific context the call site has. Required on any error that reaches a failed preflight check (F007 blocks without it). |
 
 Document the three deliberate non-uses in the app's `failures.py` module
 docstring (see the Athena reference for the exact wording).
@@ -631,6 +631,10 @@ phase-2 sign-off.
    the action ("aws_role_arn is required" doesn't need a separate
    suggested_action saying "provide aws_role_arn"). Read the property
    matrix above and the Athena `failures.py` module docstring.
+   Exception: an error that reaches a failed preflight check needs a nonblank
+   `suggested_action` (F007, BLOCK) — set it at the construction site, or as a
+   class default on an app subclass whose message is fixed (the mysql and
+   metabase reference apps do this). Write it for the class's audience.
 
 4. **Promoting silent-swallow paths to raises in this skill's output.** That's
    a logic change. It goes in phase 2 after owner approval. Even if you're

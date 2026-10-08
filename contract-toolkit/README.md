@@ -106,6 +106,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/fanin/`](examples/fanin/) — multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.
 - [`examples/agent-e2e/`](examples/agent-e2e/) — agent/SDR e2e codegen: `_e2e_credential.py` emits both `<Name>CredentialBody` (direct) and `<Name>AgentCredentialBody` (lightweight), plus an `extraction-method` ConditionalInput whose `overrideEnum` widens the substitutions `Literal` to `["direct", "agent"]`.
 - [`examples/scheduled/`](examples/scheduled/) — cron background job via `schedules`; renders `triggers.schedules` into `manifest.json` (multiple schedules, non-UTC timezone, a `PAUSED` one). See [Schedules](docs/reference.md#schedules-background-jobs).
+- [`examples/streaming/`](examples/streaming/) — streaming dispatch via `streaming.enabled`: AE starts one short run per Kafka micro-batch and hands it the batch (the generated input model reads it from `batch_key`), instead of a per-batch run that reads the Iceberg events table. Two streaming triggers and `streamingWorkflowType` on the entrypoint. Its own app because a streaming entrypoint cannot also carry schedules or batch triggers — one extract node cannot serve both shells. See [Streaming Dispatch](docs/reference.md#streaming-dispatch-on-event-triggers).
 - [`examples/artifact-schemas/`](examples/artifact-schemas/) — data hand-off declarations via `artifactSchemas`; renders `app/generated/artifact_schemas.json` (parquet + NDJSON, nested paths, arrays of structs via the `[]` element step, an input artifact). See [Artifact Schemas](docs/reference.md#artifact-schemas-data-hand-off-declarations).
 
 ## What Gets Generated
@@ -431,6 +432,20 @@ All entrypoints are always routable via `?entrypoint=`. Set `packageId` on entry
 
 For multi-entrypoint apps, `packageId` also pins the stable card ID (e.g. `"@atlan/qlik-sense"`) so legacy Argo workflows that reference the app by their old `app_id` continue to resolve correctly, and existing connection references in the UI do not go blank after migration.
 
+The generated e2e harness derives each bundle entrypoint's identity from the contract. When it can't (for example, the entrypoint's name matches no `argoPackageNames` leaf, and setting `packageId` would re-key the card), state the values in `e2eOverrides` instead of hand-pinning them in the test module. It changes only that entrypoint's `_e2e_base.py`:
+
+```pkl
+new Entrypoint {
+  name = "onprem"
+  e2eOverrides {
+    connectorShortName = "mongo"
+    argoPackageName = "@atlan/mongo"
+    argoTemplateName = "atlan-mongo"
+    connectorConfigName = "atlan-connectors-mongo"
+  }
+}
+```
+
 ```pkl
 // app.pkl
 amends "@app-contract-toolkit/App.pkl"
@@ -481,6 +496,8 @@ app/generated/
 
 **Shared credentials:** Set `connectorConfigName = "atlan-connectors-teradata"` in each entrypoint contract. The bundle hoists the credential config to `app/generated/` root and deduplicates by filename. Duplicate names with different content fail generation.
 
+**Per-entrypoint input classes:** each `{entrypoint}/_input.py` declares `<PascalCase(entrypoint)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `miner` → `MinerAppInputContract`) and keeps `AppInputContract = <that class>` as an alias, so existing imports still work. Single-entrypoint apps still get `class AppInputContract`. See [docs/reference.md](docs/reference.md#multi-entrypoint-bundle).
+
 See [`examples/bundle/`](examples/bundle/) for a runnable example.
 
 ## Widget Types
@@ -521,6 +538,12 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 `default` by hand on a multi-select is rejected. See `docs/reference.md` and the
 [`full`](examples/full/) example.
 
+`TagsInput` takes optional `placeholderText`, `tokenSeparators`, `enabled`, `byocDisabled`,
+`allowClear`, `maxTagCount` and `maxTagTextLength`; each renders into `ui` only
+when set. `tokenSeparators { ", "; "," }` splits a pasted comma list into tags
+(the frontend does not trim the parts). See `docs/reference.md` for each
+setting and for what is not supported yet.
+
 ### Connection & Credential
 
 | Class | Widget | Python Type |
@@ -536,10 +559,12 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 | Class | Widget | Python Type |
 |---|---|---|
 | `Widgets.SqlTree` | `sqltree` | `dict[str, str]` |
-| `Widgets.APITree` | `apitree` | `dict[str, Any]` |
+| `Widgets.APITree` | `apitree` | `dict[str, Any]`; `TreeSelection` with `treeSelection = true` |
 | `Widgets.ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` |
 | `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` |
 | `Widgets.GlossarySelector` | `GlossarySelector` | `str` |
+
+`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change.
 
 ### Complex & Utility
 
@@ -552,6 +577,20 @@ JSON-stringified array, and the toolkit generates that string, so assigning
 | `Widgets.CloudProvider` | `CloudProvider` | `str` |
 | `Widgets.CustomWidget` | `<widgetName>` | `str` |
 | `Widgets.Sage` / `Widgets.SageV2` | `sage`/`sageV2` | `str` |
+
+`SageV2.warmup` (default `false`) declares that the app's handler overrides
+`Handler.warmup`, so the setup UI runs the warmup flow (poll `/warmup`, then
+`/check` with `tiers=["warmup"]`). `true` adds `"warmup": true` to the
+widget's `ui` block; the default leaves generated output unchanged. Keep it in
+step with the handler. See
+[docs/reference.md](docs/reference.md#sagev2-warmup).
+
+`ConditionalInput` with `baseWidgetType = "apitree"` takes the apitree props
+`metadataTemplateKey`, `metadataTransformerTemplateKey`, `flatten`, `strict`,
+and `multiSelect`, so the base `ui` keeps `metadataTemplateKey` and the
+direct-mode tree picker loads. `metadataTemplateKey` is a routing key (e.g.
+`"folders"`) that the app's metadata handler switches on, not a template body. Use it for an apitree that becomes a text input in agent
+mode. See [`docs/reference.md`](docs/reference.md#example-apitree-with-agent-mode-fallback).
 
 ## Field Lifecycle — Deprecating and Sunsetting Fields
 

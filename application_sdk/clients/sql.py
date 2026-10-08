@@ -5,15 +5,22 @@ This module provides SQL client classes for both synchronous and asynchronous
 database operations, supporting batch processing and server-side cursors.
 """
 
-import asyncio
-import concurrent
+import concurrent.futures
+import contextlib
+import contextvars
+import functools
 import hashlib
-from collections.abc import AsyncIterator, Iterator
-from concurrent.futures import ThreadPoolExecutor
-from typing import TYPE_CHECKING, Any, Union, cast
+import threading
+from collections.abc import AsyncIterator, Callable, Iterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
-from application_sdk._runtime.offload import run_in_thread
+from application_sdk._runtime.offload import (
+    CancelHandle,
+    run_in_thread,
+    submit_in_thread,
+)
 from application_sdk.clients._interface import ClientInterface
 from application_sdk.clients.models import DatabaseConfig
 from application_sdk.clients.sql_errors import (
@@ -39,6 +46,8 @@ from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
 
+T = TypeVar("T")
+
 
 def _escape_colons_for_text(query: str) -> str:
     """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
@@ -56,8 +65,86 @@ def _escape_colons_for_text(query: str) -> str:
 
 if TYPE_CHECKING:
     import pandas as pd
+    from sqlalchemy.engine import Connection
+    from sqlalchemy.engine.interfaces import DBAPICursor, ExecutionContext
     from sqlalchemy.ext.asyncio import AsyncConnection, AsyncEngine
     from sqlalchemy.orm import Session
+
+
+@dataclass(frozen=True)
+class _CancellableRead:
+    """One cancellable read, as seen from the worker thread running it."""
+
+    handle: CancelHandle
+    cancel_cursor: "Callable[[DBAPICursor], None]"
+
+
+#: The read the current worker thread is running, if it is cancellable. Set
+#: only inside the thread (run_in_thread runs each call in its own copy of the
+#: context), so it never leaks into the task or across calls.
+_ACTIVE_READ: contextvars.ContextVar[_CancellableRead | None] = contextvars.ContextVar(
+    "_ACTIVE_READ", default=None
+)
+
+
+@contextlib.contextmanager
+def _reading(read: _CancellableRead) -> Iterator[None]:
+    token = _ACTIVE_READ.set(read)
+    try:
+        yield
+    finally:
+        _ACTIVE_READ.reset(token)
+
+
+def _register_cursor_for_cancel(
+    conn: "Connection",
+    cursor: "DBAPICursor",
+    statement: str,
+    parameters: object,
+    context: "ExecutionContext | None",
+    executemany: bool,
+) -> None:
+    """``before_cursor_execute`` listener: hand the cursor to the read's handle.
+
+    Runs on the worker thread, at the first moment the DBAPI cursor exists.
+    A statement on any other thread — or outside a cancellable read — is left
+    alone.
+    """
+    read = _ACTIVE_READ.get()
+    if read is None:
+        return
+    read.handle.set(functools.partial(read.cancel_cursor, cursor))
+    if read.handle.requested:
+        # The caller is already gone; the action fired on set. Don't start a
+        # statement nobody is waiting for.
+        raise concurrent.futures.CancelledError
+
+
+def _install_cursor_cancel_listener(engine: object) -> None:
+    """Attach the cursor listener to ``engine`` once; skip anything not an Engine.
+
+    Done lazily on each read rather than in ``load()``, so a subclass that
+    builds its own engine is covered too. An async engine's reads don't run
+    on a worker thread, and a test double has no event surface.
+    """
+    from sqlalchemy import event  # noqa: PLC0415 — optional dep: sqlalchemy
+    from sqlalchemy.engine import Engine  # noqa: PLC0415 — optional dep: sqlalchemy
+
+    if not isinstance(engine, Engine):
+        return
+    if not event.contains(engine, "before_cursor_execute", _register_cursor_for_cancel):
+        event.listen(engine, "before_cursor_execute", _register_cursor_for_cancel)
+
+
+def _invalidate_if_cancelled(connection: "Connection", handle: CancelHandle) -> None:
+    """Drop a connection whose statement was cancelled instead of pooling it.
+
+    A cancelled connection may be mid-protocol, or carry server state the next
+    borrower does not expect; and a pool that pings or re-runs session setup on
+    checkout would pay a round trip to find out.
+    """
+    if handle.requested:
+        connection.invalidate()
 
 
 class BaseSQLClient(ClientInterface):
@@ -175,6 +262,30 @@ class BaseSQLClient(ClientInterface):
             self.engine.dispose()
             self.engine = None
         self.connection = None  # Should already be None, but ensure cleanup
+
+    def cancel_cursor(self, dbapi_cursor: "DBAPICursor") -> None:
+        """Stop the statement running on ``dbapi_cursor``. Default: do nothing.
+
+        Called when the task awaiting a read (``get_results``,
+        ``get_batched_results``, ``run_query``) is cancelled while the
+        statement is still running on its worker thread. It runs on the SDK's
+        ``sdk-cancel-`` pool — a third thread, concurrently with the blocked
+        driver call — so override it only with a driver call documented as
+        safe from another thread, e.g. ``dbapi_cursor.cancel()`` or
+        ``dbapi_cursor.connection.cancel()``.
+
+        DBAPI has no standard cancel, so the default is a no-op: the read
+        still hands control back at once, and the statement runs to
+        completion on its thread. Either way the connection is invalidated
+        rather than returned to the pool.
+
+        A failure is logged at WARNING and otherwise ignored. Never stop or
+        suspend a warehouse here: that is not this statement's to stop.
+
+        Args:
+            dbapi_cursor: The driver's own cursor, as passed to SQLAlchemy's
+                ``before_cursor_execute`` event.
+        """
 
     def get_iam_user_token(self):
         """Get an IAM user token for AWS RDS database authentication.
@@ -402,41 +513,78 @@ class BaseSQLClient(ClientInterface):
         if not self.engine:
             raise EngineNotInitializedError()
 
-        loop = asyncio.get_running_loop()
         logger.debug(
             "Running query (sha=%s, len=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
         )
 
-        # Use context manager for automatic connection cleanup
-        with self.engine.connect() as connection:
+        _install_cursor_cancel_listener(self.engine)
+        engine = self.engine
+        # Driver calls, connect included, go through run_in_thread, so a cancelled caller stops
+        # waiting at once — but the thread keeps using the connection until the
+        # call returns. The lock keeps the close (below) from running on the
+        # connection while an abandoned call still holds it. The cancel handle
+        # is what makes that call return early: the listener registers the
+        # cursor on it, and cancel_cursor() fires off both of those threads.
+        in_use = threading.Lock()
+        handle = CancelHandle()
+        read = _CancellableRead(handle, self.cancel_cursor)
+        opened: list["Connection"] = []
+
+        def _holding_connection(func: Callable[..., T]) -> Callable[..., T]:
+            @functools.wraps(func)  # keeps the callee's name for run_in_thread's label
+            def call(*args: Any) -> T:
+                with in_use, _reading(read):
+                    return func(*args)
+
+            return call
+
+        def _connect() -> "Connection":
+            connection = engine.connect()
+            if handle.requested:
+                connection.close()
+                raise concurrent.futures.CancelledError
+            opened.append(connection)
+            return connection
+
+        def _close() -> None:
+            for connection in opened:
+                _invalidate_if_cancelled(connection, handle)
+                connection.close()
+
+        try:
+            connection = await run_in_thread(handle.bind(_holding_connection(_connect)))
             if self.use_server_side_cursor:
                 connection = connection.execution_options(yield_per=batch_size)
 
-            with ThreadPoolExecutor() as pool:
-                from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
+            from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-                cursor = await loop.run_in_executor(
-                    pool, connection.execute, text(_escape_colons_for_text(query))
-                )
-                if not cursor or not cursor.cursor:
-                    raise UnsupportedSqlCursorError()
-                column_names: list[str] = [
-                    description.name.lower()
-                    for description in cursor.cursor.description
-                ]
+            cursor = await run_in_thread(
+                handle.bind(_holding_connection(connection.execute)),
+                text(_escape_colons_for_text(query)),
+            )
+            if not cursor or not cursor.cursor:
+                raise UnsupportedSqlCursorError()
+            column_names: list[str] = [
+                description.name.lower() for description in cursor.cursor.description
+            ]
 
-                while True:
-                    rows = await loop.run_in_executor(
-                        pool, cursor.fetchmany, batch_size
-                    )
-                    if not rows:
-                        break
+            fetchmany = handle.bind(_holding_connection(cursor.fetchmany))
+            while True:
+                rows = await run_in_thread(fetchmany, batch_size)
+                if not rows:
+                    break
 
-                    results = [dict(zip(column_names, row)) for row in rows]
-                    yield results
-            # Connection automatically closed by context manager
+                results = [dict(zip(column_names, row)) for row in rows]
+                yield results
+        except BaseException:
+            # Cancellation, an early aclose(), or a failure. A driver call may
+            # still be running, so closing here on the loop would block it on
+            # that call; hand the close to the pool to run once the call ends.
+            submit_in_thread(_holding_connection(_close))
+            raise
+        await run_in_thread(_holding_connection(_close))
 
         logger.info("Query execution completed")
 
@@ -498,7 +646,12 @@ class BaseSQLClient(ClientInterface):
             raise EngineNotInitializedError()
 
         with self.engine.connect() as conn:
-            return self._execute_pandas_query(conn, query, chunksize)
+            try:
+                return self._execute_pandas_query(conn, query, chunksize)
+            finally:
+                read = _ACTIVE_READ.get()
+                if read is not None:
+                    _invalidate_if_cancelled(conn, read.handle)
 
     async def _execute_async_read_operation(
         self, query: str, chunksize: int | None
@@ -528,11 +681,27 @@ class BaseSQLClient(ClientInterface):
                     self._read_sql_query, query, chunksize=chunksize
                 )
         else:
-            # Run the blocking operation in a thread pool
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                return await asyncio.get_running_loop().run_in_executor(
-                    executor, self._execute_query, query, chunksize
-                )
+            # run_in_thread, not a per-call ThreadPoolExecutor: leaving that
+            # executor's `with` block on cancellation calls shutdown(wait=True)
+            # on the loop thread, which freezes the loop until the query ends.
+            # The shared pool lets a cancelled read return at once while its
+            # thread drains on its own — and the handle lets cancel_cursor()
+            # cut that drain short at the driver.
+            _install_cursor_cancel_listener(self.engine)
+            handle = CancelHandle()
+            read = _CancellableRead(handle, self.cancel_cursor)
+            execute_query = self._execute_query
+
+            @functools.wraps(execute_query)  # keeps the name for the hold label
+            def _cancellable_query(
+                query: str, chunksize: int | None
+            ) -> Union["pd.DataFrame", Iterator["pd.DataFrame"]]:
+                with _reading(read):
+                    return execute_query(query, chunksize)
+
+            return await run_in_thread(
+                handle.bind(_cancellable_query), query, chunksize
+            )
 
     async def get_batched_results(
         self,

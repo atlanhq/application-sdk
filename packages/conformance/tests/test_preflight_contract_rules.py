@@ -29,6 +29,22 @@ def check(
     return [f.rule_id for f in scan(build_registry([path], tmp_path))]
 
 
+def f007_messages(tmp_path: Path, body: str, extra: str = "") -> list[str]:
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check("
+        + "self, input: PreflightInput) -> PreflightOutput"
+        + ":\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + "\n"
+    )
+    return [
+        f.message for f in scan(build_registry([path], tmp_path)) if f.rule_id == "F007"
+    ]
+
+
 @pytest.mark.parametrize("signature", ["self, input)", "self, input: dict) -> dict"])
 def test_handler_contract_rejects_untyped(tmp_path: Path, signature: str) -> None:
     assert "F006" in check(tmp_path, "return None", signature=signature)
@@ -194,6 +210,81 @@ def test_unrelated_exception_catch_does_not_hide_raise(tmp_path: Path):
     )
 
 
+_PREP_ERROR = "from application_sdk.errors import InternalError\nclass PrepError(InternalError):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "extra, raised, caught",
+    [
+        (
+            _PREP_ERROR + "from application_sdk.errors import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            _PREP_ERROR + "from application_sdk.errors.base import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            "from application_sdk.errors import AppTimeoutError, TaskStalledError\n",
+            "TaskStalledError",
+            "AppTimeoutError",
+        ),
+        (
+            "from application_sdk.errors import InvalidInputValueError\n",
+            "InvalidInputValueError",
+            "ValueError",
+        ),
+    ],
+    ids=["app-leaf-AppError", "submodule-AppError", "sdk-category", "builtin-base"],
+)
+def test_sdk_ancestor_catch_converts_raise(tmp_path, extra, raised, caught):
+    assert "F008" not in check(
+        tmp_path,
+        f'try:\n    raise {raised}(message="Failure")\nexcept {caught} as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])',
+        extra,
+    )
+
+
+def test_sdk_ancestor_catch_converts_helper_raise(tmp_path):
+    assert "F008" not in check(
+        tmp_path,
+        "try:\n    return probe()\nexcept AppError as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])",
+        _PREP_ERROR
+        + "from application_sdk.errors import AppError\n"
+        + 'def probe():\n    raise PrepError(message="Failure")\n',
+    )
+
+
+@pytest.mark.parametrize("caught", ["AuthError", "InvalidInputError"])
+def test_sdk_sibling_catch_does_not_hide_raise(tmp_path, caught):
+    assert "F008" in check(
+        tmp_path,
+        f'try:\n    raise PrepError(message="Failure")\nexcept {caught}:\n    return PreflightOutput(status="ready")',
+        _PREP_ERROR + "from application_sdk.errors import InvalidInputError\n",
+    )
+
+
+def test_sdk_error_ancestry_matches_runtime_mro():
+    from conformance.suite.checks.preflight._contracts import sdk_error_ancestry
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, BaseException)):
+            continue
+        expected = {
+            f"application_sdk.errors.{base.__name__}"
+            if base.__module__.startswith("application_sdk.errors")
+            else base.__name__
+            for base in cls.__mro__
+            if base is not object
+        }
+        assert sdk_error_ancestry(f"application_sdk.errors.{name}") == expected, name
+
+
 @pytest.mark.parametrize(
     "catch, raised", [("Exception", ""), ("AuthError as exc", "exc")]
 )
@@ -232,3 +323,233 @@ def test_partial_verdict_has_no_preflight_rule(tmp_path, status):
     finding.
     """
     assert check(tmp_path, f"return PreflightOutput(status={status}, checks=[])") == []
+
+
+def findings(tmp_path: Path, body: str, extra: str = ""):
+    """``check`` with the whole finding, for assertions on the message."""
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + "\n"
+    )
+    return scan(build_registry([path], tmp_path))
+
+
+AGGREGATION = "checks = []\nchecks.append(PreflightCheck(name='auth', passed=True))\n"
+
+
+def test_computed_aggregation_is_unresolved(tmp_path: Path) -> None:
+    """The baseline the next test is measured against."""
+    assert check(tmp_path, AGGREGATION + "return PreflightOutput(checks=checks)") == [
+        "F019"
+    ]
+
+
+@pytest.mark.parametrize(
+    "aggregation",
+    [
+        pytest.param("[*checks]", id="starred-copy"),
+        pytest.param("[*checks, PreflightCheck(name='spec', passed=True)]", id="mixed"),
+        pytest.param("(*checks,)", id="starred-tuple"),
+        pytest.param("[*list(checks)]", id="starred-call"),
+    ],
+)
+def test_list_display_does_not_clear_an_opaque_aggregation(
+    tmp_path: Path, aggregation: str
+) -> None:
+    """A cosmetic rewrap is not a resolution.
+
+    ``[*checks]`` is a semantically identical copy of ``checks``: the list has
+    ``elts`` so the node-type gate is satisfied, but nothing downstream can read
+    a role or a verdict out of the one ``Starred`` node.  If that cleared F019,
+    two characters would buy a green rule while an honest restructure bought
+    nothing, and the rule's fleet-wide signal would be worthless.
+    """
+    assert check(
+        tmp_path, AGGREGATION + f"return PreflightOutput(checks={aggregation})"
+    ) == ["F019"]
+
+
+def test_opaque_row_names_the_element(tmp_path: Path) -> None:
+    """The finding points at the opaque row, not at the whole call."""
+    reported = [
+        f
+        for f in findings(
+            tmp_path, AGGREGATION + "return PreflightOutput(checks=[*checks])"
+        )
+        if f.rule_id == "F019"
+    ]
+    assert len(reported) == 1
+    assert "`*checks`" in reported[0].message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(
+            "row = PreflightCheck(name='auth', passed=True)\n"
+            "return PreflightOutput(checks=[row])",
+            id="single-binding",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[self._probe()])\n",
+            id="method-returning-a-row",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[PreflightCheck(name='a', passed=True)"
+            " if input else PreflightCheck(name='b', passed=True)])",
+            id="conditional-row",
+        ),
+        pytest.param(
+            "return PreflightOutput(checks=[probe()])",
+            id="helper-returning-a-row",
+        ),
+    ],
+)
+def test_resolvable_rows_are_not_reported(tmp_path: Path, body: str) -> None:
+    """The gate is resolvability, so every row the analysis can read stays clean."""
+    extra = "def probe():\n    return PreflightCheck(name='auth', passed=True)\n"
+    tail = (
+        "\n    def _probe(self):\n"
+        "        return PreflightCheck(name='auth', passed=True)\n"
+    )
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + tail
+    )
+    assert [f.rule_id for f in scan(build_registry([path], tmp_path))] == []
+
+
+def test_rebound_row_is_unresolved(tmp_path: Path) -> None:
+    """Two assignments leave the value the list carries at runtime unknown."""
+    assert check(
+        tmp_path,
+        "row = PreflightCheck(name='auth', passed=True)\n"
+        "row = reconcile(row)\n"
+        "return PreflightOutput(checks=[row])",
+    ) == ["F019"]
+
+
+def test_f007_message_names_the_sdk_error_and_its_audience(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "RateLimitedError" in message
+    assert "audience USER" in message
+    assert "customer-facing" in message
+    assert "Unresolved factory values" not in message
+
+
+def test_f007_message_resolves_an_app_subclass_audience(tmp_path):
+    extra = (
+        "from application_sdk.errors import InternalError\n"
+        'class ProbeError(InternalError):\n    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "ProbeError" in message
+    assert "audience APP_OWNER" in message
+    assert "engineer-facing" in message
+
+
+def test_f007_message_honours_an_audience_override(tmp_path):
+    extra = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors import Audience, InternalError\n"
+        "class ProbeError(InternalError):\n"
+        "    audience: ClassVar[Audience] = Audience.PLATFORM\n"
+        '    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_message_keeps_internals_out(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "exception text" in message
+
+
+def test_sdk_error_audience_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_audience
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert (
+            sdk_error_audience(f"application_sdk.errors.{name}") == cls.audience.value
+        ), name
+
+
+def test_f007_full_description_names_each_audience_voice():
+    from conformance.suite.rules.preflight import RULES
+
+    (f007,) = [r for r in RULES if r.id == "F007"]
+    for audience in ("USER", "APP_OWNER", "PLATFORM"):
+        assert audience in f007.full_description
+    assert "exception text" in f007.full_description
+
+
+def test_f007_message_lists_every_missing_field(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails())])",
+    )
+    assert "message and suggested_action" in message
+    assert "explanation" in message
+    assert "engineer-facing" in message
+
+
+@pytest.mark.parametrize(
+    "audience",
+    [
+        pytest.param("audience=Audience.PLATFORM", id="enum-member"),
+        pytest.param('audience="PLATFORM"', id="string-value"),
+    ],
+)
+def test_f007_message_honours_a_failure_details_audience(tmp_path, audience):
+    """FailureDetails coerces the enum's string value, so both spellings route alike."""
+    (message,) = f007_messages(
+        tmp_path,
+        f"return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails({audience}))])",
+        "from application_sdk.errors import Audience\n",
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_reports_each_failed_error_on_one_line(tmp_path):
+    """Dedup keys on the error occurrence, so a single-line checks list loses no F007."""
+    messages = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=["
+        "PreflightCheck(passed=False, error=RateLimitedError().to_failure_details()), "
+        "PreflightCheck(passed=False, error=InternalError().to_failure_details())])",
+        "from application_sdk.errors import InternalError, RateLimitedError\n",
+    )
+    assert len(messages) == 2
+    assert any("RateLimitedError" in m for m in messages)
+    assert any("InternalError" in m for m in messages)

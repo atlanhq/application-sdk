@@ -4,9 +4,9 @@
 Every dashboard's ``repos.json`` is rebuilt by LISTING the bucket, so a repo
 that should not be on a panel keeps being enumerated forever: nothing removes
 its object. ``publish_fleet_dashboard.py`` now omits departed repos from the
-manifest on full-fleet runs, but the per-repo publishers (security /
-conformance / test-readiness, driven from each app repo's own
-``update-dashboard.yml``) have no full-fleet view and cannot. This is the
+manifest on full-fleet runs, but the test-readiness publisher
+(``update-fleet-dashboards.yaml``) skips a quiet repo rather than treating it
+as departed, so it cannot. This is the
 deliberate, human-triggered cleanup for those — FND-960.
 
 Two criteria, one per invocation:

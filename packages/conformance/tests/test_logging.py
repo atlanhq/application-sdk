@@ -1029,7 +1029,7 @@ def test_l021_silent_all_in_select(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["ALL"]\n'
-        'ignore = ["ANN"]\n'
+        'ignore = ["ANN", "G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
 
@@ -1040,6 +1040,7 @@ def test_l021_silent_category_prefix(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["E", "F", "G", "T2", "LOG"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
 
@@ -1049,8 +1050,25 @@ def test_l021_silent_exact_rule_ids(tmp_path: Path) -> None:
         '[project]\nname = "my-app"\n'
         "[tool.ruff.lint]\n"
         'select = ["E", "F", "G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_fires_when_g201_is_off_today_but_not_ignored(tmp_path: Path) -> None:
+    """An explicit select that leaves G201 out still needs the ignore.
+
+    G201 is off only until someone adds ``G`` to ``select`` or the config moves
+    to ``extend-select`` (ruff's defaults include G201 from 0.16); the ignore
+    is what keeps ruff and L017 from asking for opposite code for good.
+    """
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings and 'ignore = ["G201"]' in findings[0].message
 
 
 def test_l021_fires_when_rule_explicitly_ignored(tmp_path: Path) -> None:
@@ -1073,8 +1091,81 @@ def test_l021_silent_extend_select(tmp_path: Path) -> None:
         "[tool.ruff.lint]\n"
         'select = ["E", "F"]\n'
         'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G201"]\n'
     )
     assert not _l021_findings(tmp_path, toml)
+
+
+# ---------------------------------------------------------------------------
+# L021 — G201 must be off, or ruff contradicts L017
+#
+# G201 rewrites logger.error(..., exc_info=True) to logger.exception(...),
+# the exact call L017 forbids.  ruff's default rule set includes G201, so a
+# config that only extends the defaults has it on, and a G or ALL selection
+# turns it on explicitly.
+# ---------------------------------------------------------------------------
+
+
+def test_l021_fires_when_extend_select_leaves_default_g201_on(
+    tmp_path: Path,
+) -> None:
+    """No ``select`` key means ruff's defaults apply, and they include G201."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    msg = findings[0].message
+    assert "G201" in msg
+    assert 'extend-ignore = ["G201"]' in msg
+    assert "G001" not in msg
+
+
+def test_l021_silent_extend_select_with_g201_ignored(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'extend-ignore = ["G201"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_silent_g201_ignored_by_prefix(tmp_path: Path) -> None:
+    """Ignoring G2 turns G201 off as surely as naming it."""
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'extend-select = ["G001", "G003", "G004", "T201", "LOG009"]\n'
+        'ignore = ["G2"]\n'
+    )
+    assert not _l021_findings(tmp_path, toml)
+
+
+def test_l021_fires_when_select_all_leaves_g201_on(tmp_path: Path) -> None:
+    toml = '[project]\nname = "my-app"\n[tool.ruff.lint]\nselect = ["ALL"]\n'
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert "G201" in findings[0].message
+
+
+def test_l021_fires_when_select_g_leaves_g201_on(tmp_path: Path) -> None:
+    toml = (
+        '[project]\nname = "my-app"\n'
+        "[tool.ruff.lint]\n"
+        'select = ["E", "F", "G", "T201", "LOG"]\n'
+    )
+    findings = _l021_findings(tmp_path, toml)
+    assert findings
+    assert "G201" in findings[0].message
+
+
+def test_l021_no_ruff_config_also_asks_for_g201_ignore(tmp_path: Path) -> None:
+    findings = _l021_findings(tmp_path, '[project]\nname = "my-app"\n')
+    assert findings
+    assert "G201" in findings[0].message
 
 
 def test_l021_silent_sdk_self_check_exempt(tmp_path: Path) -> None:
@@ -1203,6 +1294,277 @@ def test_l004_silent_for_presanitized_variable_argument() -> None:
         "    logger.error('prime failed:\\n%s', safe_traceback)\n"
     )
     assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    x()\nexcept Exception as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('operation failed:\\n%s', trace_text)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_for_sanitized_traceback_in_generic_local() -> None:
+    # Follow the value, not its name: the local holds a redacted formatted trace.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_fires_for_timeout_warning_without_sanitized_traceback() -> None:
+    # A timeout warning with no sanitized traceback remains a missing-trace finding.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    wait_for_result()\nexcept TimeoutError:\n"
+        "    logger.warning('operation did not finish after %s seconds', seconds)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_for_unredacted_traceback_in_generic_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_not_the_logged_value() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    safe_details = redact_text(str(error))\n"
+        "    raw_details = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', raw_details)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_overwritten_before_logging() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    traceback_text = ''.join(traceback.format_exception(error))\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitizer_only_covers_part_of_the_local() -> None:
+    # The raw traceback is concatenated past the redaction; the local is not
+    # sanitizer output just because a sanitizer call appears in its value.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text('header') + raw_tb\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_silent_for_alias_of_sanitized_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    details = traceback_text\n"
+        "    logger.error('operation failed:\\n%s', details)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_fires_when_walrus_in_assignment_rebinds_sanitized_local() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text(raw_tb)\n"
+        "    holder = (traceback_text := raw_tb)\n"
+        "    logger.error('operation failed:\\n%s', traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_log_call_walrus_rebinds_sanitized_local() -> None:
+    # The walrus target is a store, and the logged value is the raw traceback.
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    raw_tb = ''.join(traceback.format_exception(error))\n"
+        "    traceback_text = redact_text(raw_tb)\n"
+        "    logger.error('operation failed:\\n%s', (traceback_text := raw_tb))\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_sanitized_local_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nimport traceback\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    traceback_text = redact_text(''.join(traceback.format_exception(error)))\n"
+        "    logger.error('operation failed: %s\\n%s', error, traceback_text)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    logger.error('operation failed: %s %s', redact(error), error)\n"
+    )
+    assert "L004" in _ids(src)
+
+
+def test_l004_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as error:\n"
+        "    logger.error('failed: %s (%s)', safe_traceback(error), type(error).__name__)\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_when_same_exception_trace_was_already_logged() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', safe_traceback(caught))\n"
+        "    try:\n        save_failure_details()\n"
+        "        logger.error('failure details saved to %s', details_path)\n"
+        "    except OSError:\n        pass\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_silent_when_sanitized_formatted_trace_was_already_logged() -> None:
+    src = (
+        "import logging\nimport traceback\n"
+        "logger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', "
+        "redact_secrets(''.join(traceback.format_exception(caught))))\n"
+        "    logger.warning('failure details saved')\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_prior_trace_is_for_another_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('another operation failed: %s', safe_traceback(other))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_still_fires_when_later_log_formats_raw_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', safe_traceback(caught))\n"
+        "    logger.error('raw error: %s', caught)\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_still_fires_after_cause_only_redaction() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', sanitize_cause_repr(caught))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_still_fires_when_prior_trace_is_in_nested_handler() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    try:\n        recover()\n"
+        "    except OSError as nested:\n"
+        "        logger.error('recovery failed: %s', safe_traceback(nested))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_still_fires_when_prior_trace_is_lower_level() -> None:
+    # Under LOG_LEVEL=ERROR the WARNING is filtered but the ERROR is emitted.
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.warning('operation failed: %s', safe_traceback(caught))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_silent_when_prior_trace_is_higher_level() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('operation failed: %s', safe_traceback(caught))\n"
+        "    logger.warning('failure details saved')\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_caught_is_only_a_helper_option() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    logger.error('other failed: %s', "
+        "safe_traceback(other, max_len=len(str(caught))))\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
+
+
+def test_l004_silent_when_prior_trace_was_logged_via_local() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(caught)\n"
+        "    logger.error('operation failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert "L004" not in _ids(src)
+
+
+def test_l004_still_fires_when_trace_local_is_rebound_before_log() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(caught)\n"
+        "    if retry:\n        trace_text = 'retrying'\n"
+        "    logger.error('operation failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 2
+
+
+def test_l004_still_fires_when_trace_local_is_for_another_exception() -> None:
+    src = (
+        "import logging\nlogger = logging.getLogger(__name__)\n"
+        "try:\n    perform()\nexcept Exception as caught:\n"
+        "    trace_text = safe_traceback(other)\n"
+        "    logger.error('other failed: %s', trace_text)\n"
+        "    logger.error('failure details saved')\n"
+    )
+    assert _ids(src).count("L004") == 1
 
 
 def test_l004_still_fires_when_sanitizer_used_elsewhere_in_handler() -> None:
@@ -1509,34 +1871,213 @@ def test_l010_fires_when_rebound_via_type_alias() -> None:
 
 
 # ---------------------------------------------------------------------------
-# L021 — hint must recommend individual pins, never the bare "G" category
-# (FND-58: G201 in the "G" group is the exact inverse of L017)
+# L021 — the hint names the G201/L017 conflict and the ignore that ends it
 # ---------------------------------------------------------------------------
 
 
-def test_l021_message_warns_against_bare_g_category(tmp_path: Path) -> None:
+def test_l021_message_explains_g201_conflict(tmp_path: Path) -> None:
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
-    py.write_text(
-        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["E", "F"]\n'
-    )
+    py.write_text('[project]\nname = "some-app"\n[tool.ruff.lint]\n')
     findings = check_ruff_config(py, tmp_path)
     assert findings and findings[0].rule_id == "L021"
     msg = findings[0].message
     assert "G201" in msg and "L017" in msg, "hint must explain the G201/L017 conflict"
+    assert 'extend-ignore = ["G201"]' in msg
     assert (
         "covers all rules in that group" not in msg
     ), "hint must not recommend category prefixes"
 
 
-def test_l021_bare_g_selection_still_detected_as_covered(tmp_path: Path) -> None:
-    # Detection semantics unchanged: an existing bare "G" selection DOES cover
-    # G001/G003/G004 (the conflict with L017 is guidance, not a detection gap).
+def test_l021_bare_g_selection_covers_rules_once_g201_ignored(
+    tmp_path: Path,
+) -> None:
+    # A bare "G" selection covers G001/G003/G004; with G201 ignored it no
+    # longer contradicts L017, so nothing is left to report.
     from conformance.suite.checks.logging._toml import check_ruff_config
 
     py = tmp_path / "pyproject.toml"
     py.write_text(
-        '[project]\nname = "some-app"\n[tool.ruff.lint]\nselect = ["G", "LOG", "T201"]\n'
+        '[project]\nname = "some-app"\n[tool.ruff.lint]\n'
+        'select = ["G", "LOG", "T201"]\nignore = ["G201"]\n'
     )
     assert check_ruff_config(py, tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# L010 — resource-identifier tokens used as URL path segments (FND-2549)
+#
+# Some source APIs call their resource identifiers "tokens" (Mode's
+# report/collection/query tokens are the slugs in its public URLs).  A
+# ``<noun>_token`` the same function interpolates as a URL path segment is an
+# identifier; a secret travels in a header or query parameter.  Both halves of
+# the exemption are pinned: the resource shapes stay silent, and every
+# auth-shaped name or non-path use still fires.
+# ---------------------------------------------------------------------------
+
+_L010_PREAMBLE = "import logging\nlogger = logging.getLogger(__name__)\n"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Mode client: the id is the request path, then logged on retry.
+        (
+            "async def get_reports(self, workspace, collection_token):\n"
+            "    await self._get(f'/api/{workspace}/collections/{collection_token}/reports')\n"
+            "    logger.warning('retrying collection %s', collection_token)\n"
+        ),
+        # Abbreviated noun, relative path, followed by a space.
+        (
+            "def fetch(rpt_token, expected):\n"
+            "    failed.append(f'queries/{rpt_token} ({expected})')\n"
+            "    logger.error('failed report %s', rpt_token)\n"
+        ),
+        # Path ends the string; implicit f-string concatenation.
+        (
+            "def lineage(qn, report_token, query_token):\n"
+            "    q = (f'{qn}/reports/{report_token}'\n"
+            "         f'/queries/{query_token}')\n"
+            "    logger.debug('skipping query %s', query_token)\n"
+        ),
+        # Attribute access in both places.
+        (
+            "def run(self):\n"
+            "    self._get(f'/api/reports/{self.report_token}?page=1')\n"
+            "    logger.info('report %s', self.report_token)\n"
+        ),
+        # Keyword form: both the key and the value are the resource token.
+        (
+            "def run(report_token):\n"
+            "    self._get(f'/api/reports/{report_token}/queries')\n"
+            "    logger.info('report', report_token=report_token)\n"
+        ),
+    ],
+)
+def test_l010_silent_for_resource_token_used_as_path_segment(body: str) -> None:
+    assert "L010" not in _ids(_L010_PREAMBLE + body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Auth-qualified tokens fire even when they appear in a path.
+        *(
+            f"def f({name}):\n"
+            f"    get(f'/api/v1/{{{name}}}/me')\n"
+            f"    logger.info('t %s', {name})\n"
+            for name in (
+                "access_token",
+                "refresh_token",
+                "github_token",
+                "bearer_token",
+                "id_token",
+                "reset_token",
+                "session_token",
+                "client_token",
+            )
+        ),
+        # Bare `token` never qualifies.
+        (
+            "def f(token):\n"
+            "    get(f'/api/{token}/me')\n"
+            "    logger.info('t %s', token)\n"
+        ),
+        # A resource-shaped name that is only logged, never a path segment.
+        ("def f(report_token):\n" "    logger.info('report %s', report_token)\n"),
+        # Query-string position is not a path segment.
+        (
+            "def f(report_token):\n"
+            "    get(f'/api/reports?token=/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # URL authority (userinfo) is not a path segment.
+        (
+            "def f(repo_token):\n"
+            "    clone(f'https://{repo_token}@github.com/org/repo')\n"
+            "    logger.info('cloning with %s', repo_token)\n"
+        ),
+        (
+            "def f(repo_token):\n"
+            "    clone(f'https://x/{repo_token}:x@host/')\n"
+            "    logger.info('cloning with %s', repo_token)\n"
+        ),
+        # The path use must be in the SAME function as the log call.
+        (
+            "def build(report_token):\n"
+            "    return f'/reports/{report_token}'\n"
+            "def log_it(report_token):\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # A nested function's path use does not exempt the outer log call.
+        (
+            "def outer(report_token):\n"
+            "    def inner():\n"
+            "        return f'/reports/{report_token}'\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Keyword form with a bare `token=` key still fires.
+        (
+            "def run(report_token):\n"
+            "    get(f'/api/reports/{report_token}/queries')\n"
+            "    logger.info('report', token=report_token)\n"
+        ),
+        # Secrets that ride in a URL path carry an auth word: still fire.
+        (
+            "def post(secret_token):\n"
+            "    send(f'/services/T1/B2/{secret_token}')\n"
+            "    logger.info('posting with %s', secret_token)\n"
+        ),
+        (
+            "def post(bot_token):\n"
+            "    send(f'/bot/{bot_token}/sendMessage')\n"
+            "    logger.info('posting with %s', bot_token)\n"
+        ),
+        (
+            "def post(hook_id, webhook_token):\n"
+            "    send(f'/webhooks/{hook_id}/{webhook_token}')\n"
+            "    logger.info('posting with %s', webhook_token)\n"
+        ),
+        (
+            "def resume(session_token):\n"
+            "    get(f'/sessions/{session_token}')\n"
+            "    logger.info('resuming %s', session_token)\n"
+        ),
+        # Query-parameter use of a resource-shaped name is not a path segment.
+        (
+            "def f(report_token):\n"
+            "    get(f'/api/reports?report_token={report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Query/fragment context is the whole f-string, not the previous Constant.
+        (
+            "def f(prefix, private_token):\n"
+            "    get(f'/api?prefix={prefix}/{private_token}')\n"
+            "    logger.info('t %s', private_token)\n"
+        ),
+        (
+            "def f(foo, report_token):\n"
+            "    get(f'/search?q={foo}&path=/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    get(f'/page#/reports/{report_token}')\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        # Header and body uses are not path segments either.
+        (
+            "def f(report_token):\n"
+            "    get('/api/reports', headers={'X-Report-Token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+        (
+            "def f(report_token):\n"
+            "    post('/api/reports', json={'report_token': report_token})\n"
+            "    logger.info('report %s', report_token)\n"
+        ),
+    ],
+)
+def test_l010_still_fires_outside_the_resource_token_exemption(body: str) -> None:
+    assert "L010" in _ids(_L010_PREAMBLE + body)

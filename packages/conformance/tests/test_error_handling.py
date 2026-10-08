@@ -411,6 +411,213 @@ except Exception as e:
     )
 
 
+# ---------------------------------------------------------------------------
+# E004 — severed-but-redacted re-raise (FND-2602)
+#
+# `raise X(...) from None` exists so a raw traceback cannot reach the sink when
+# the frame holds a resolved credential.  Severing and *dropping* the cause is
+# trace-loss; severing while the raised error carries the cause through a
+# sanitizer is not.  Without this distinction E004's only escape (log through a
+# sanitizer at warning/error) is exactly what L009 forbids, so a translate-and-
+# sever handler could satisfy neither rule.
+# ---------------------------------------------------------------------------
+
+
+def test_p004_no_finding_when_severed_raise_redacts_cause() -> None:
+    # atlan-openapi-app app/connector.py shape: the cause survives as a
+    # redacted summary in the typed error's own message.
+    assert "E004" not in _findings(
+        """\
+try:
+    store = CloudStore.from_credentials(credential_data)
+except Exception as exc:
+    raise ObjectStoreCredentialError(
+        message=f"credential was rejected: {sanitize_cause_repr(exc)}",
+        field="openapi_credential",
+    ) from None
+"""
+    )
+
+
+def test_p004_no_finding_when_severed_raise_uses_staged_redacted_local() -> None:
+    # The redacted text may be built up over several statements before the
+    # raise references it — the fixpoint in redaction_scope() resolves the chain.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    message = f"credential was rejected: {detail}"
+    raise ObjectStoreCredentialError(message) from None
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_redacted_local_is_annotated() -> None:
+    # `detail: str = sanitize_cause_repr(exc)` binds exactly as a plain assign
+    # does — an annotation must not cost the handler its exemption.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail: str = sanitize_cause_repr(exc)
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_redacted_local_is_overwritten_before_raise() -> None:
+    # Tracking is flow-sensitive: `detail` no longer holds the redacted cause by
+    # the time the raise reads it, so the cause is dropped after all.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    detail = config
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_only_one_branch_redacts_the_local() -> None:
+    # A name is live at the raise only when *every* path into it redacted the
+    # cause — here the else branch substitutes a constant.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    if terse(exc):
+        detail = sanitize_cause_repr(exc)
+    else:
+        detail = "unavailable"
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_no_finding_when_every_branch_redacts_the_local() -> None:
+    # The converse of the above, so the branch join is pinned in both directions.
+    assert "E004" not in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    if terse(exc):
+        detail = redact(exc)
+    else:
+        detail = sanitize_cause_repr(exc)
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_when_redacted_local_is_augmented_or_rebound() -> None:
+    # `+=` folds in text that was never redacted; a `for` target rebinds the
+    # name outright. Both drop it from the live set.
+    for mutation in (
+        "    detail += extra\n",
+        "    for detail in parts:\n        note(detail)\n",
+    ):
+        assert "E004" in _findings(
+            """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+"""
+            + mutation
+            + """\
+    raise ObjectStoreCredentialError(detail) from None
+"""
+        ), mutation
+
+
+def test_p004_still_flags_when_loop_kills_the_local_on_a_later_iteration() -> None:
+    # The loop body is iterated to a fixpoint: `detail` survives the first pass
+    # (it reads the still-live `carrier`) but not the second.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    detail = sanitize_cause_repr(exc)
+    for part in parts:
+        detail = carrier
+        carrier = part
+    raise ObjectStoreCredentialError(detail) from None
+"""
+    )
+
+
+def test_p004_still_flags_severed_raise_redacting_a_different_value() -> None:
+    # A sanitizer applied to something *other* than the caught exception does
+    # not carry the cause out — the failure is still dropped.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception as exc:
+    raise ObjectStoreCredentialError(redact(config)) from None
+"""
+    )
+
+
+def test_p004_still_flags_severed_raise_when_exception_is_unbound() -> None:
+    # `except Exception:` binds no name, so nothing can be carried out redacted.
+    assert "E004" in _findings(
+        """\
+try:
+    run()
+except Exception:
+    raise ObjectStoreCredentialError(f"rejected: {sanitize_cause_repr(exc)}") from None
+"""
+    )
+
+
+def test_p004_still_flags_swallowing_branch_before_severed_redacted_raise() -> None:
+    # The redaction exemption applies to the raise, not to the handler: a path
+    # that returns before reaching it still swallows.
+    assert "E004" in _findings(
+        """\
+def f():
+    try:
+        run()
+    except Exception as exc:
+        if quiet(exc):
+            return None
+        raise ObjectStoreCredentialError(sanitize_cause_repr(exc)) from None
+"""
+    )
+
+
+def test_p004_severed_redacted_raise_is_jointly_satisfiable_with_l009() -> None:
+    """The FND-2602 deadlock: E004 and L009 must both clear on one handler.
+
+    E004's sanitizer-log exemption only accepts warning/error/critical, which
+    are exactly the levels L009 fires on before a raise.  A handler that severs
+    and redacts instead of logging must therefore clear both rules with no log
+    call at all — otherwise the app carries a permanent warning or a suppression.
+    """
+    from conformance.suite.checks.logging import scan_text as scan_logging
+
+    src = """\
+try:
+    store = CloudStore.from_credentials(credential_data)
+except Exception as exc:
+    raise ObjectStoreCredentialError(
+        message=f"credential was rejected: {sanitize_cause_repr(exc)}",
+        field="openapi_credential",
+    ) from None
+"""
+    assert "E004" not in _findings(src)
+    assert "L009" not in {f.rule_id for f in scan_logging(src, "fake.py")}
+
+
 def test_p004_still_flags_conditional_reraise_that_can_fall_through() -> None:
     # A raise guarded by `if` with no else can be skipped — the fall-through path
     # swallows, so E004 must still fire.
@@ -538,6 +745,733 @@ def f():
     )
 
 
+# ── E004 — typed-failure exemption (FND-2628) ────────────────────────────────
+
+
+_PREFLIGHT_IMPORTS = (
+    "from application_sdk.handler.base import Handler\n"
+    "from application_sdk.handler.contracts import "
+    "PreflightCheck, PreflightInput, PreflightOutput\n"
+)
+
+
+def _probe(level: str) -> str:
+    """A preflight probe whose last-resort arm returns the failure as typed data."""
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        try:\n"
+        "            count = await self._count_dashboards()\n"
+        "        except Exception as exc:\n"
+        f'            logger.{level}("dashboardCountCheck failed", exc_info=True)\n'
+        "            return PreflightOutput(\n"
+        "                checks=[\n"
+        "                    PreflightCheck(\n"
+        '                        name="dashboardCountCheck",\n'
+        "                        passed=False,\n"
+        "                        error=SourceUnavailableError(\n"
+        '                            message="Failed to fetch dashboards.", cause=exc\n'
+        "                        ).to_failure_details(),\n"
+        "                    )\n"
+        "                ]\n"
+        "            )\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def _preflight_ids(root: Path, src: str) -> set[str]:
+    from conformance.suite.checks.preflight import scan_all
+
+    root.mkdir(parents=True, exist_ok=True)
+    path = root / "h.py"
+    path.write_text(src)
+    return {f.rule_id for f in scan_all([path], root)}
+
+
+def test_p004_typed_failure_return_is_jointly_satisfiable_with_f005(
+    tmp_path: Path,
+) -> None:
+    """The FND-2628 deadlock: E004 and F005 must both clear on one probe.
+
+    E004's log exemption accepts only warning/error/critical, and F005 forbids
+    warning inside ``preflight_check`` — so no log level clears both, and
+    narrowing the clause is wrong at the last-resort arm of a probe that
+    deliberately fails closed.  The arm converts the exception into a typed
+    failed-check row, so nothing is swallowed and neither rule has anything to
+    report.
+    """
+    debug = _probe("debug")
+    assert "E004" not in _findings(debug)
+    assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
+    # The level is not the escape: the only levels E004's log exemption accepts
+    # are exactly the one F005 forbids in this gate.
+    assert "F005" in _preflight_ids(tmp_path / "warn", _probe("warning"))
+
+
+def test_p004_no_finding_when_typed_failure_is_returned() -> None:
+    # The exception leaves the frame as typed data — the same property a
+    # cause-preserving re-raise has, so no log level decides its visibility.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
+def test_p004_no_finding_when_typed_failure_is_staged_across_statements() -> None:
+    # The row is built over several statements before the return references it —
+    # the fixpoint in typed_failure_scope() resolves the chain.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        transient = transient_failure(exc)
+        failure = transient if transient is not None else AuthError(cause=exc)
+        check = PreflightCheck(name="auth", passed=False, error=failure.to_failure_details())
+        return PreflightOutput(status=status, checks=[check])
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_after_the_try() -> None:
+    # The arm stages the row and lets the function's single trailing return hand
+    # it back, so the cleanup that must run on every path stays in one place.
+    assert "E004" not in _findings(
+        """\
+async def probe(self):
+    client = None
+    try:
+        client = await self._client()
+        return PreflightCheck(name="auth", passed=True), client
+    except Exception as exc:
+        logger.debug("auth failed", exc_info=True)
+        check = self._failed_check("auth", SourceUnavailableError(cause=exc), start)
+    if client is not None:
+        await client.close()
+    return check, None
+"""
+    )
+
+
+def test_p004_still_flags_typed_failure_returned_without_a_binding() -> None:
+    # `except Exception:` names nothing, so nothing of the caught exception can
+    # be carried out — the typed row below is about the probe, not the failure.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", SourceUnavailableError(message="unreachable"), start)
+"""
+    )
+
+
+def test_p004_still_flags_untyped_handoff_of_the_caught_exception() -> None:
+    # Handing the raw binding to a helper proves nothing about what it becomes,
+    # and under a broad catch nothing about the binding's own type either.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return failed_check("probe", exc, start)
+"""
+    )
+
+
+def test_p004_still_flags_return_none_after_building_a_typed_failure() -> None:
+    # Building the typed error and then returning a bare sentinel drops it.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        failure = SourceUnavailableError(cause=exc)
+        return None
+"""
+    )
+
+
+def test_p004_still_flags_bare_sentinel_return() -> None:
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed", exc_info=True)
+        return False
+"""
+    )
+
+
+def test_p004_sanitizer_exemption_does_not_apply_at_debug() -> None:
+    # The sanitizer exemption is a warning/error/critical exemption, like the
+    # exc_info one.  A debug line through a redaction helper is invisible under
+    # the customer's ERROR filter, so on its own it still swallows — which is
+    # why error-handling.prose.md routes preflight arms to the typed return
+    # rather than to a sanitized debug log (FND-2499).
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.debug("probe failed: %s", sanitize_cause_repr(exc))
+        return None
+"""
+    )
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        logger.warning("probe failed: %s", sanitize_cause_repr(exc))
+        return None
+"""
+    )
+
+
+def test_p004_still_flags_row_built_by_a_lowercase_helper() -> None:
+    # The classifier returns an AppError, but recognition is by construction
+    # of a capitalised type: a lowercase helper wrapping a lowercase classifier
+    # proves nothing.  Building the PreflightCheck inline is what clears it.
+    helper = """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        return [_check("probe", started, error=classify_driver_error(exc))]
+"""
+    inline = """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        return [
+            PreflightCheck(
+                name="probe",
+                passed=False,
+                error=classify_driver_error(exc).to_failure_details(),
+            )
+        ]
+"""
+    assert "E004" in _findings(helper)
+    assert "E004" not in _findings(inline)
+
+
+def test_p004_no_finding_when_local_helper_returns_typed_failure() -> None:
+    # The helper's return is inspectable in this module: the caught value flows
+    # through classification into a typed check, whether returned directly or
+    # staged in a value handed to the enclosing function's return.
+    src = """\
+def _build_failed_outcome(error):
+    details = classify_failure(error)
+    return Outcome(checks=[Check(name="connection", passed=False, error=details)])
+
+
+def direct_probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+
+
+def staged_probe():
+    try:
+        connect()
+    except Exception as caught:
+        outcome = _build_failed_outcome(caught)
+        return ProbeOutput(checks=outcome.checks)
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_a_proven_helper_whose_result_an_opaque_call_consumes() -> (
+    None
+):
+    # A proven helper nested inside a lowercase call does not reach the return:
+    # ``discard`` may drop the typed result, so the handoff stays opaque.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(checks=[Check(name="connection", passed=False, error=classify_failure(error))])
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return discard(_build_failed_outcome(caught))
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_no_finding_when_a_typed_constructor_wraps_the_helper_result() -> None:
+    # A class-like constructor keeps its arguments as part of the typed value.
+    src = """\
+def _build_failed_check(error):
+    return Check(name="connection", passed=False, error=classify_failure(error))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return ProbeOutput(checks=[_build_failed_check(caught)])
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_still_flags_a_helper_whose_return_only_mentions_a_typed_constructor() -> (
+    None
+):
+    # The helper's actual result is None: a constructor elsewhere in the return
+    # expression proves nothing about what the caller receives.
+    src = """\
+def _build_failed_outcome(error):
+    return (Outcome(error=error), None)[1]
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_still_flags_a_helper_name_an_enclosing_function_rebinds() -> None:
+    # The call resolves to the outer local, not the module helper.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe(normalize):
+    _build_failed_outcome = normalize
+
+    def probe():
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_name_declared_nonlocal() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe():
+    _build_failed_outcome = None
+
+    def probe():
+        nonlocal _build_failed_outcome
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_another_function_rebinds_with_global() -> None:
+    # Any function in the module can swap the helper through ``global``, so its
+    # summary is not a proof of what the call returns.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def install(replacement):
+    global _build_failed_outcome
+    _build_failed_outcome = replacement
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_reassigned_at_module_level() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+_build_failed_outcome = normalize
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_no_finding_when_the_helper_returns_a_private_typed_class() -> None:
+    # The evidence app's helper returns a module-private result class
+    # (``_TargetOutcome``); a leading underscore does not make it less class-like.
+    src = """\
+def _connect_failed_outcome(flavor, label, e, *, operation="connect"):
+    connect_error = classify_failure(e, operation=operation).to_failure_details()
+    return _TargetOutcome(
+        reachable=False,
+        checks=[PreflightCheck(name="version", passed=False, error=connect_error)],
+        message=f"{flavor} connection failed",
+    )
+
+
+async def preflight(flavor):
+    try:
+        targets = await discover(flavor)
+    except Exception as e:
+        outcome = _connect_failed_outcome(flavor, "", e, operation="discover targets")
+        return PreflightOutput(checks=outcome.checks, message=outcome.message)
+    return targets
+
+
+async def probe(flavor, label):
+    try:
+        client = await build(flavor, label)
+    except Exception as e:
+        return _connect_failed_outcome(flavor, label, e)
+    return client
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_opaque_helper_handoff() -> None:
+    # Passing the binding to a lowercase helper is not proof that its returned
+    # value preserves the failure as typed data.
+    assert "E004" in _findings(
+        """\
+def _opaque_outcome(error):
+    return normalize(error)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _opaque_outcome(caught)
+"""
+    )
+
+
+def test_p004_still_flags_helper_with_a_dropping_return_path() -> None:
+    # A typed result on one branch is not enough when another branch returns a
+    # bare sentinel instead of carrying the caught failure.
+    assert "E004" in _findings(
+        """\
+def _sometimes_typed(error):
+    if should_report(error):
+        return Outcome(error=classify_failure(error))
+    return None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _sometimes_typed(caught)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_exception_continue() -> None:
+    # A broad handler with no binding cannot hand the caught exception to a
+    # typed-result helper; continuing silently loses it.
+    assert "E004" in _findings(
+        """\
+def probe(items):
+    for item in items:
+        try:
+            inspect(item)
+        except Exception:
+            continue
+"""
+    )
+
+
+def test_p004_still_flags_typed_row_appended_inside_a_loop() -> None:
+    # A loop-body arm falls off its end into the next iteration, so the row
+    # staged in `checks` is never provably returned from the handler; moving
+    # the probe into a helper that returns its row is the provable shape.
+    loop = """\
+def probe(subchecks):
+    checks = []
+    for sub in subchecks:
+        try:
+            run(sub)
+        except Exception as exc:
+            checks.append(PreflightCheck(name=sub, passed=False, error=Err(cause=exc)))
+    return checks
+"""
+    helper = """\
+def run_subcheck(sub):
+    try:
+        run(sub)
+    except Exception as exc:
+        return PreflightCheck(name=sub, passed=False, error=Err(cause=exc))
+    return PreflightCheck(name=sub, passed=True)
+"""
+    assert "E004" in _findings(loop)
+    assert "E004" not in _findings(helper)
+
+
+def test_p004_still_flags_swallowing_path_before_the_typed_return() -> None:
+    # One branch returns the row, the other swallows — not every exit carries it.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        if quiet(exc):
+            return None
+        return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_that_is_never_returned() -> None:
+    # The row is staged and then dropped: the handler falls through and the
+    # function returns something else.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    return None
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_swallowed_on_a_branch_after_the_try() -> None:
+    # One arm below the `try` hands the row back, the other returns None — the
+    # staged row is not what the function hands back on every path.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    if cond:
+        return check
+    return None
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_rebound_after_the_try() -> None:
+    # The name is reassigned below the handler, so the return hands back
+    # something else entirely.
+    assert "E004" in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    check = None
+    return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_the_try_sits_in_a_loop() -> None:
+    # A `try` inside a loop changes what "after" means — the next iteration can
+    # overwrite the row before any return is reached, so the shape is not
+    # modelled and the handler has to prove itself some other way.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        try:
+            run(item)
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_continue_skips_the_later_return() -> None:
+    # The `try` sits in an `if` inside a loop: `continue` skips the loop-body
+    # `return` entirely, and the function then falls off with an implicit None.
+    # The walk must reject the loop owner before the appended sibling `return`
+    # makes the concatenated suffix read as always-exiting.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            continue
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_break_skips_the_later_return() -> None:
+    # Same composition with `break` — it leaves the loop past the `return`.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        if cond(item):
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            break
+        return check
+"""
+    )
+
+
+def test_p004_still_flags_staged_row_when_a_continue_escapes_through_a_with() -> None:
+    # The `with` between the handler and the loop is walked through, so the
+    # loop-owner check alone would not catch this: the `continue` at the
+    # handler's own depth is what leaves the chain past the return.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        with lock:
+            try:
+                run(item)
+            except Exception as exc:
+                check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+            if cond:
+                continue
+            return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_after_a_nested_try() -> None:
+    # The probe's `try` sits in an outer `try` body (the outer one owns the
+    # `finally` that closes the client) — the outer body runs in sequence after
+    # the inner construct, so the trailing return is genuinely reached.
+    assert "E004" not in _findings(
+        """\
+async def preflight_check(self, input):
+    client = SQLClient()
+    try:
+        try:
+            result = await client.get_results(sql)
+            tables_check = PreflightCheck(name="connectivity", passed=True)
+        except Exception as e:
+            logger.debug("connectivity check failed", exc_info=True)
+            listing_failure = TableListingError(cause=e)
+            tables_check = PreflightCheck(
+                name="connectivity",
+                passed=False,
+                error=listing_failure.to_failure_details(),
+            )
+        return PreflightOutput(status=status, checks=[tables_check])
+    finally:
+        await client.close()
+"""
+    )
+
+
+def test_p004_no_finding_when_loop_control_stays_inside_the_trailing_segment() -> None:
+    # A `break` for a loop nested in the trailing statements is ordinary loop
+    # control — it does not leave the chain, so the return still carries.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    try:
+        run()
+    except Exception as exc:
+        check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+    for x in xs:
+        if done(x):
+            break
+    return check
+"""
+    )
+
+
+def test_p004_no_finding_when_staged_row_is_returned_from_the_enclosing_if() -> None:
+    # The fall-through leaves the `try` and then the `if` arm it sits in; the
+    # segments are collected outwards until one is guaranteed to exit.
+    assert "E004" not in _findings(
+        """\
+def probe():
+    if enabled:
+        try:
+            run()
+        except Exception as exc:
+            check = failed_check("probe", SourceUnavailableError(cause=exc), start)
+        cleanup()
+        return check
+    return failed_check("probe", DisabledError(), start)
+"""
+    )
+
+
+def test_p004_still_flags_typed_return_escaped_by_an_outer_continue() -> None:
+    # `continue` at the handler's top level targets the loop outside the handler,
+    # skipping the return that would have carried the failure out.
+    assert "E004" in _findings(
+        """\
+def probe():
+    for item in items:
+        try:
+            run(item)
+        except Exception as exc:
+            if skip(item):
+                continue
+            return failed_check("probe", SourceUnavailableError(cause=exc), start)
+"""
+    )
+
+
 # ── P005 — ExceptBlockMissingExcInfo ─────────────────────────────────────────
 
 
@@ -656,6 +1590,150 @@ def do_it():
     )
 
 
+# E007 and E004 share one typed-failure predicate (typed_failure_scope): a
+# return that hands the caught exception back as typed data hides nothing.
+
+
+def test_p007_no_finding_narrow_catch_hands_exception_to_helper() -> None:
+    # Narrow catch: the binding is already a typed error, so passing it to a
+    # helper that builds the failed row carries it out.
+    _none(
+        """\
+async def probe(self):
+    try:
+        await client.verify_authentication()
+    except AuthRejectedError as exc:
+        return self._failed("authentication", started, exc)
+"""
+    )
+
+
+def test_p007_no_finding_broad_catch_wraps_exception_in_typed_error() -> None:
+    _none(
+        """\
+async def probe(self):
+    try:
+        await client.verify_authentication()
+    except Exception as exc:
+        return self._failed("authentication", started, AuthRejectedError(cause=exc))
+"""
+    )
+
+
+def test_p007_no_finding_tuple_return_carrying_typed_error() -> None:
+    _none(
+        """\
+def resolve(self):
+    try:
+        return load_credentials(), None
+    except ValueError as exc:
+        return None, self._failed("credentials", started, CredentialsUnusableError(cause=exc))
+"""
+    )
+
+
+def test_p007_no_finding_typed_row_staged_in_local() -> None:
+    _none(
+        """\
+def probe(self):
+    try:
+        return run()
+    except KeyError as exc:
+        row = self._failed("lookup", started, exc)
+        return row
+"""
+    )
+
+
+@pytest.mark.parametrize("sentinel", ["None", "0", "[]", "{}", "False"])
+@pytest.mark.parametrize("caught", ["KeyError as exc", "(KeyError, ValueError) as exc"])
+def test_p007_bare_sentinel_still_flagged_under_narrow_catch(
+    sentinel: str, caught: str
+) -> None:
+    _single(
+        f"""\
+def get_value():
+    try:
+        return fetch()
+    except {caught}:
+        return {sentinel}
+""",
+        "E007",
+    )
+
+
+def test_p007_bare_sentinel_still_flagged_under_broad_catch() -> None:
+    findings = _findings(
+        """\
+def get_value():
+    try:
+        return fetch()
+    except Exception as exc:
+        return None
+"""
+    )
+    assert "E007" in findings
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "str(exc)",
+        "repr(exc)",
+        'f"lookup failed: {exc}"',
+        '"lookup failed: {}".format(exc)',
+        "wrap(str(exc))",
+    ],
+)
+def test_p007_stringified_exception_still_flagged_under_narrow_catch(
+    value: str,
+) -> None:
+    # A narrow catch, so only the stringifier exclusion keeps these flagged:
+    # a string is the failure laundered into a plain value, not typed data.
+    _single(
+        f"""\
+def get_value():
+    try:
+        return fetch()
+    except KeyError as exc:
+        return {value}
+""",
+        "E007",
+    )
+
+
+def test_p007_broad_catch_bare_hand_off_to_helper_still_flagged() -> None:
+    # Under a broad catch nothing about exc is known, so a bare hand-off
+    # proves nothing — the same line E004 draws.
+    findings = _findings(
+        """\
+def probe(self):
+    try:
+        return run()
+    except Exception as exc:
+        return self._failed("lookup", started, exc)
+"""
+    )
+    assert "E007" in findings
+    assert "E004" in findings
+
+
+def test_p007_only_the_untyped_return_is_flagged() -> None:
+    # E007 is judged per return: the typed arm clears, the sentinel arm does not.
+    _single(
+        """\
+def probe(self):
+    try:
+        return run()
+    except KeyError as exc:
+        return self._failed("lookup", started, exc)
+    except ValueError as exc:
+        return None
+""",
+        "E007",
+    )
+
+
 # ── P008 — ImportErrorWithoutLogging ─────────────────────────────────────────
 
 
@@ -693,6 +1771,108 @@ except ImportError:
     logger.debug("ujson not available, falling back to stdlib json")
     import json
 """
+    )
+
+
+def test_p008_no_finding_when_typed_error_is_chained() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable(
+            message="backend runtime is required",
+            cause=exc,
+        ) from exc
+    return optional_backend
+"""
+    )
+
+
+def test_p008_silent_return_still_fires() -> None:
+    findings = _findings(
+        """\
+def use_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        return
+"""
+    )
+    assert "E008" in findings
+
+
+def test_p008_dropping_cause_still_fires() -> None:
+    _single(
+        """\
+try:
+    import optional_backend
+except ImportError:
+    raise BackendUnavailable("backend runtime is required") from None
+""",
+        "E008",
+    )
+
+
+def test_p008_unrelated_explicit_cause_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_explicit_cause_on_unbound_handler_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_no_finding_on_implicit_chain_or_bare_reraise() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend runtime is required")
+    return optional_backend
+
+
+def load_other():
+    try:
+        import other_backend
+    except ImportError:
+        raise
+    return other_backend
+"""
+    )
+
+
+def test_p008_conditional_reraise_that_can_fall_through_still_fires() -> None:
+    _single(
+        """\
+def load_backend(should_reraise):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        if should_reraise:
+            raise BackendUnavailable("backend runtime is required") from exc
+""",
+        "E008",
     )
 
 
@@ -1304,6 +2484,45 @@ except ValueError as e:
 # ── E019 — ExceptionTextInContractField ──────────────────────────────────────
 
 
+def test_e019_prescribes_the_statically_typed_error_form() -> None:
+    from importlib.resources import files
+
+    from conformance.suite.rules import get_rule
+
+    rule = get_rule("E019")
+    prose = (
+        files("conformance")
+        .joinpath("programs/areas/error-handling.prose.md")
+        .read_text()
+    )
+    e019_prose = prose.split("**E019 ExceptionTextInContractField**", 1)[1].split(
+        "- **E020", 1
+    )[0]
+    for text in (rule.full_description, e019_prose):
+        assert "error=err.to_failure_details()" in " ".join(text.split())
+        assert "`error=err`" not in text
+        assert "message=err.message" not in text
+
+
+def test_e019_finding_prescribes_the_statically_typed_error_form() -> None:
+    (finding,) = [
+        f
+        for f in scan_text(
+            """\
+try:
+    authenticate()
+except ValueError as e:
+    return AuthOutput(status="FAILED", message=str(e))
+""",
+            "fake.py",
+        )
+        if f.rule_id == "E019"
+    ]
+    assert "error=err.to_failure_details()" in finding.message
+    assert "error=err;" not in finding.message
+    assert "message=err.message" not in finding.message
+
+
 def test_e019_str_exc_in_returned_contract() -> None:
     # `return AuthOutput(message=str(e))` inside an except block leaks exc text.
     # E004 (broad except) co-fires — assert E019 membership, like the E015 tests.
@@ -1350,6 +2569,18 @@ try:
 except Exception as e:
     logger.warning("auth failed", exc_info=True)
     return AuthOutput(status="FAILED", message="Authentication failed")
+"""
+    )
+
+
+def test_e019_no_finding_classified_typed_error() -> None:
+    assert "E019" not in _findings(
+        """\
+try:
+    authenticate()
+except Exception as e:
+    err = classify(e)
+    return AuthOutput(status="FAILED", message=err.message, error=err)
 """
     )
 
@@ -1499,6 +2730,76 @@ def fail():
     raise {leaf}(message="something went wrong")
 """
     _single(src, "E018")
+
+
+@pytest.mark.parametrize(
+    ("imports", "cancelled_error"),
+    [
+        ("import asyncio", "asyncio.CancelledError()"),
+        ("import asyncio as tasklib", "tasklib.CancelledError()"),
+        ("from asyncio import CancelledError", "CancelledError()"),
+    ],
+)
+def test_p018_no_finding_stdlib_asyncio_cancelled_error(
+    imports: str, cancelled_error: str
+) -> None:
+    _none(
+        f"""\
+{imports}
+
+async def cancel_work():
+    raise {cancelled_error}
+"""
+    )
+
+
+def test_p018_no_finding_dotted_asyncio_exceptions_import() -> None:
+    _none(
+        """\
+import asyncio.exceptions
+
+async def cancel_work():
+    raise asyncio.exceptions.CancelledError()
+"""
+    )
+
+
+def test_p018_rebound_asyncio_name_is_not_trusted() -> None:
+    # The name was rebound after the import, so it no longer names the stdlib module.
+    _single(
+        """\
+import asyncio
+import domain_errors
+
+asyncio = domain_errors
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_sdk_cancelled_error_still_flagged() -> None:
+    _single(
+        """\
+def fail():
+    raise application_sdk.errors.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_other_module_aliased_as_asyncio_still_flagged() -> None:
+    _single(
+        """\
+import domain_errors as asyncio
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
 
 
 def test_p018_no_finding_classification_pending() -> None:
@@ -2335,10 +3636,7 @@ def test_e004_fires_when_exc_info_is_an_unrelated_name() -> None:
 def test_e005_silent_for_bare_except_is_not_widened_by_the_name_match() -> None:
     # A handler with no `as` binding has no name to match, so an `exc_info=<name>`
     # there stays unrecognised rather than being accepted on faith.
-    src = (
-        "try:\n    x()\nexcept Exception:\n"
-        "    logger.error('failed', exc_info=exc)\n"
-    )
+    src = "try:\n    x()\nexcept Exception:\n    logger.error('failed', exc_info=exc)\n"
     assert "E005" in _findings(src)
 
 
@@ -2361,6 +3659,65 @@ def test_e005_silent_for_sanitize_helper_attribute() -> None:
         "    logger.error('auth failed: %s', util.sanitize_cause_repr(e))\n"
     )
     assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_cause_with_qualified_error_code() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s (%s)', failure.qualified_code,\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_classified_error_with_status_code() -> None:
+    src = (
+        "try:\n    request()\nexcept Exception as failure:\n"
+        "    logger.warning('request failed (%s): %s', failure.status_code,\n"
+        "                   sanitize_cause_repr(classify_failure(failure)))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+@pytest.mark.parametrize("field", ["message", "payload", "response"])
+def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
+    field: str,
+) -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        f"    logger.warning('operation failed: %s %s', failure.{field},\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_for_metadata_beside_a_sanitized_local_alias() -> None:
+    # The sanitized exception may reach the log through a local first; the metadata fields
+    # beside it are as safe as when the sanitizer is called inline.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    detail = sanitize_cause_repr(failure)\n"
+        "    logger.warning('failed (%s): %s', failure.status_code, detail)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_the_sanitizer_covers_something_else() -> None:
+    # The metadata fields are only safe beside a sanitizer of the caught exception itself:
+    # redacting an unrelated value does not make the exception's own fields a boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('failed: %s %s', failure.status_code, redact(config))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_for_typed_code_without_sanitizer() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s', failure.qualified_code)\n"
+    )
+    assert "E005" in _findings(src)
 
 
 def test_e005_still_fires_without_sanitizer() -> None:
@@ -2391,6 +3748,111 @@ def test_e005_silent_for_presanitized_traceback_variable() -> None:
     assert "E005" not in _findings(src)
 
 
+def test_e005_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('connection failed:\\n%s', trace_text)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_contains_unrelated_value() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_log_also_passes_raw_exception() -> None:
+    # The alias is not the only route: the raw exception is formatted too.
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    logger.error('connection failed: %s %s', trace_text, caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    logger.error('connection failed: %s %s', redact(caught), caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    # type(e).__name__ / e.__class__ carry no message text, so they do not
+    # undo the redaction boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s (%s %s)', safe_traceback(caught),\n"
+        "                 type(caught).__name__, caught.__class__.__qualname__)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_type_projection_hides_raw_exception() -> None:
+    # type(...) of something other than the bare binding is not a projection.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s %s', safe_traceback(caught), type(caught, str(caught)))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught) if include_trace else endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_match_capture_rebinds_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    match caught:\n"
+        "        case trace_text:\n"
+        "            pass\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_is_overwritten() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    trace_text = str(caught)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "exception, message",
+    [
+        ("TimeoutError", "operation exceeded its time budget"),
+        ("RuntimeError", "cleanup was skipped after shutdown"),
+    ],
+)
+def test_e005_still_fires_for_unredacted_best_effort_warnings(
+    exception: str, message: str
+) -> None:
+    src = (
+        "try:\n    perform_operation()\n"
+        f"except {exception}:\n"
+        f"    logger.warning({message!r})\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
     src = (
         "try:\n    x()\nexcept Exception as e:\n"
@@ -2402,3 +3864,45 @@ def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
 def test_e004_still_fires_when_handler_logs_bare() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed')\n"
     assert "E004" in _findings(src)
+
+
+@pytest.mark.parametrize("level", ["debug", "info"])
+def test_e004_still_fires_when_sanitized_log_is_below_warning(level: str) -> None:
+    src = (
+        "try:\n    x()\nexcept Exception as e:\n"
+        f"    logger.{level}('close failed: %s', safe_traceback(e))\n"
+    )
+    assert "E004" in _findings(src)
+
+
+def _cleanup_helper_in_gate(level: str) -> str:
+    return (
+        _PREFLIGHT_IMPORTS + "class H(Handler):\n"
+        "    async def _close(self, client):\n"
+        "        try:\n"
+        "            await client.aclose()\n"
+        "        except Exception as exc:\n"
+        f"            logger.{level}('close failed: %s', safe_traceback(exc))\n"
+        "    async def preflight_check(self, input: PreflightInput) -> PreflightOutput:\n"
+        "        await self._close(object())\n"
+        "        return PreflightOutput(checks=[])\n"
+    )
+
+
+def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
+    tmp_path: Path,
+) -> None:
+    """FND-2569: a best-effort cleanup helper reached from preflight_check.
+
+    It has no verdict to return, so only a log can clear E004. DEBUG does not
+    (even sanitized) and WARNING trips F005; a sanitized ERROR clears both.
+    """
+    debug = _cleanup_helper_in_gate("debug")
+    assert "E004" in _findings(debug)
+    assert "F005" not in _preflight_ids(tmp_path / "debug", debug)
+    warning = _cleanup_helper_in_gate("warning")
+    assert "E004" not in _findings(warning)
+    assert "F005" in _preflight_ids(tmp_path / "warning", warning)
+    error = _cleanup_helper_in_gate("error")
+    assert "E004" not in _findings(error)
+    assert "F005" not in _preflight_ids(tmp_path / "error", error)

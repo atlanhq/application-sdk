@@ -1866,7 +1866,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         # A run that got as far as submitting its DAG, so the connection it
         # minted may exist — which is what teardown gates the reclaim on since
         # FND-1873.
-        harness._dag_submitted = True
+        harness._submitted_connection_qns = [self._QN]
         monkeypatch.setattr(
             "application_sdk.testing.e2e.base.purge_connection", _record
         )
@@ -1901,7 +1901,7 @@ class TestTeardownFallsBackToTheHarnessPurge:
         """
         harness = _ConcreteE2ETest()
         harness.connection_qualified_name = self._QN
-        harness._dag_submitted = True
+        harness._submitted_connection_qns = [self._QN]
 
         def _unreachable(self: object) -> Any:
             raise RuntimeError("no tenant configured")

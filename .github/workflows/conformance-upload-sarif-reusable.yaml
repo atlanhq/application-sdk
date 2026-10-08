@@ -63,7 +63,8 @@ on:
 jobs:
   upload:
     name: ${{ matrix.name }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
     strategy:
       fail-fast: false
       matrix:
@@ -92,8 +93,8 @@ jobs:
       # rejected — it 404s on a repo with no analyses yet, which is exactly a
       # newly-licensed repo, so the check would lock itself off permanently.
       #
-      # Nothing downstream depends on this upload: connector-pulse ingests the
-      # k.atlan.dev mirror published by `update-dashboard.yml`, not the Security
+      # Nothing downstream depends on this upload: connector-pulse reads
+      # conformance from the agent-sdk fleet scan ledger, not the Security
       # tab, so a skipped leg costs no fleet visibility.
       #
       # The decision itself is a tested Python script, not inlined shell:
@@ -126,11 +127,11 @@ jobs:
         id: probe
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python .github/scripts/probe_code_scanning.py
+        run: python3 .github/scripts/probe_code_scanning.py
 
       - name: "Download SARIF artifact"
         id: download
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           # Glob + merge-multiple, not the bare name: the suite's upload retry
           # cannot reuse the first attempt's artifact name (a failed
@@ -167,7 +168,7 @@ jobs:
       # side of the migration it is on.
       - name: "Upload SARIF to Security tab"
         if: hashFiles(format('{0}-upload.sarif', matrix.slug)) != '' && steps.probe.outputs.available == 'true'
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: ${{ matrix.slug }}-upload.sarif
           category: conformance-${{ matrix.slug }}

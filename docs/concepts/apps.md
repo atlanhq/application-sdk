@@ -297,7 +297,7 @@ within a single store the local tree stays authoritative. See
 [file-reference.md](file-reference.md) and
 [ADR-0014](../adr/0014-two-store-storage-architecture.md).
 
-Both transfer tasks validate the bytes they move. An upload confirms the local file did not shrink while it was read and that the store recorded what was sent, and records a `{key}.sha256` sidecar; a download confirms it wrote as many bytes as the store declared and, when a sidecar exists, that the content hashes to it. An artifact whose producer died mid-write therefore fails at the transfer boundary with a non-retryable `StorageIntegrityError` naming the file and both digests, rather than reaching a parser as an unattributable `Malformed JSON`. The checks live in the transfer primitives, so every path — these tasks, `FileReference` persist/materialize, prefix transfers, the writer chunk uploads — is covered by the same code. See [storage.md](storage.md#transfer-integrity).
+Both transfer tasks validate the bytes they move. An upload confirms the local file did not shrink while it was read and that the store recorded what was sent, and records a `{key}.sha256` sidecar; a download confirms it wrote as many bytes as the store declared and, when a sidecar exists, that the content hashes to it. An artifact whose producer died mid-write therefore fails at the transfer boundary with a non-retryable `StorageIntegrityError` naming the file and both digests, rather than reaching a parser as an unattributable `Malformed JSON`. The checks live in the transfer primitives, so every path — these tasks, `FileReference` persist/materialize, prefix transfers, the writer chunk uploads — is covered by the same code. When `download_file` cannot write because the local volume is full (`ENOSPC` / `EDQUOT`), it raises `StorageDiskFullError`, which is both a `DiskFullError` and a `StorageError`; above the chunking threshold, `download_file_chunked` (and so `download_prefix`) still reports the same condition as a plain `StorageError`. See [storage.md](storage.md#transfer-integrity) and [Running out of disk](storage.md#running-out-of-disk).
 
 **Writer output is staged, then published at `close()`.** A `Writer` (parquet, JSON) never writes into its output directory directly — it writes into a private staging tree (a sibling directory, not inside the output) and publishes into the output directory in one step when `close()` returns. Files produced by that writer are therefore absent from the output directory until `close()` completes; a writer that is cancelled or fails before `close()` publishes nothing. This is what stops a cancelled attempt's orphaned writer from colliding with, or being adopted into, a retry's output. The published filenames and object-store keys are unchanged — only the timing of when files appear in the output directory moves to `close()`. Note that publishing only *adds*: content already sitting in a reused output directory is left in place, and a deferred writer's `FileReference` walks the whole directory, so it adopts that content too.
 
@@ -437,7 +437,7 @@ runtime; `start_to_close` is the correct in-flight bound.
 ### Preflight Gate Posture
 
 Distinct from the SDR object-store preflight above, a connector can run a `preflight_check`
-handler as the first activity of every extraction workflow. Enforcement is a **gate** property,
+handler at the start of every extraction workflow, before any of its own tasks. Enforcement is a **gate** property,
 not a handler property: the handler always returns the honest verdict, and the gate decides what
 to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_gate_mode`
 `ClassVar`:
@@ -446,7 +446,8 @@ to do with a `NOT_READY` verdict. The posture is set per app via the `preflight_
   `outcome="would_block"` (with `gate_mode="soft"` and the per-check `check_matrix`) on the gate
   outcome event. The verdict is always reported, so connector-pulse can rank apps by how often they
   *would* have blocked real runs — that list is the "checks are ready to enforce" queue.
-- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`). This is the
+- **hard**: blocks the run when the verdict is `NOT_READY` (raises `PreflightFailed`) and the
+  failure it is attributed to is one the customer can act on — see the next section. This is the
   opt-in for apps whose checks are trusted to gate real runs.
 
 ```python
@@ -459,18 +460,26 @@ class MyConnector(App):
 Hard mode applies to every outcome the gate can attribute to the **source**, not only a
 `NOT_READY` verdict. Failures of the gate's own **plumbing** always fail open, in both postures —
 a platform blip must not fail a healthy run. The gate stamps which of the two happened as
-`gate_classification` on the outcome event, so the two are separable downstream:
+`gate_classification` on the outcome event, so the two are separable downstream.
+
+Among source-attributed outcomes, hard mode blocks only on a failure that is deterministic and that
+the customer can act on: the attributed `FailureDetails.category` (`details[0]`, the failure the
+row's `reason` names) must be `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`
+(`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run proceeds, as in
+soft mode. Hard mode **never** blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or the four pre-3.35
+fail-open categories (`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not
+the customer. An untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
 | Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
-| Verdict `NOT_READY` | — | report `would_block` | **block** |
-| Probe overran the budget | `source_unverifiable` | report `would_block` | **block** |
-| Handler raised any error, typed or not, outside the row below | `source_unverifiable` | report `would_block` | **block** |
+| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category, else `would_block` |
+| Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
+| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category, else `would_block` (an untyped crash is `INTERNAL`) |
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
-| Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** |
-| Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`) | `frame_lost` | report `would_block` | **block** |
-| Credential provably absent | `source_unverifiable` | report `would_block` | **block** |
+| Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
+| Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
+| Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
 | Credential lookup failed for another reason | `gate_broken` | fail open | fail open |
 | Secret-store outage in the gate's own resolution | `gate_broken` | fail open | fail open |
 | No worker ever ran the attempt (`SCHEDULE_TO_START`) | `gate_broken` | fail open | fail open |
@@ -490,20 +499,24 @@ plumbing and failed open, and every hard-mode app that predates this rule docume
 idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING line (and a
 `DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
 removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
-still rely on it. The row and the log line are the observable signal. From 3.40.0 it blocks like
-any other raise. Migrate by returning `READY` with the failed check as an advisory row, as below.
+still rely on it. The row and the log line are the observable signal. From 3.40.0 it is reported
+as `source_unverifiable` like any other raise, and it still never blocks: the four categories are
+in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
+row, as below, which keeps the other checks.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
 resuming — by **returning** `READY` with the failed check carrying the typed retryable error, never
 by raising. `PARTIAL` is deprecated and the gate treats it exactly like `READY`, so it adds nothing
 but a warning. The run proceeds in both modes, the row carries the check's code as `reason`, and
-the check list is preserved. Returning `NOT_READY` for a transient makes hard mode fail *closed* on
-a blip; raising it makes hard mode block with the right code but loses every other check.
+the check list is preserved. Returning an *untyped* `NOT_READY` for a transient makes hard mode
+fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it keeps the run going
+but loses every other check.
 
 A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
 holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure
 chain: the previous attempt's typed evidence when it left any, else a `TIMEOUT` attributed to the
-app owner. Only a gate that never ran at all fails open.
+app owner, which hard mode reports rather than blocks. Only a gate that never ran at all fails
+open.
 
 Every error that leaves the gate activity carries one `FailureDetails` as `details[0]` and
 `{"status": ..., "checks": [...]}` as `details[1]` (`status` is `not_ready` on every source-attributed
@@ -522,7 +535,8 @@ proceeded row `reason` is the verdict status, or the error code of the first fai
 run proceeded past one — a `PARTIAL` that hides a throttled probe behind the word `partial` cannot be
 ranked. On a `gate_broken` fail-open its `reason` names the *underlying* fault — the SDK unwraps Temporal's `ActivityError`/`ApplicationError`
 to the real error type (e.g. `DaprSidecarUnreachableError`), not the wrapper — so a persistent
-platform fault is separable from a transient blip on the dashboard. A deadline overrun carries no
+platform fault is separable from a transient blip on the dashboard, and `failure.message` carries
+the plumbing failure's own line when the envelope it left at `details[0]` is readable. A deadline overrun carries no
 error type to unwrap, so it reports which deadline fired instead: `Timeout:START_TO_CLOSE` (one
 attempt outran its own budget — what a dependency wait wider than the gate's `start_to_close` looks
 like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTBEAT`. A boot-time **posture** event
@@ -531,18 +545,54 @@ like), `Timeout:SCHEDULE_TO_CLOSE` (the retry window closed), or `Timeout:HEARTB
 events cannot supply: an app that never reaches a verdict emits no outcome row at all, so "which
 apps believe they are gated" is only answerable from posture rows.
 
-`frame_lost` is its own value because the failure chain cannot separate a probe that stalled
-the event loop past the gate's cancel from a worker that died under it. The mode still applies:
-a stalled probe is the common cause and the one its owner can fix, a lost worker is rare and
-retried, and the classification keeps the two separable in the dashboards.
+Any row with at least one failed check also carries `failure.message`, the human line for the
+failure the row is attributed to — the same one `reason` is derived from, so the two always agree.
+It is length-capped on the way out, and redacted twice over: `FailureDetails` scrubs `message` in its
+own validator, and the emit site scrubs again on the way to the attribute. The raw
+`PreflightOutput.message` / `PreflightCheck.message` an untyped verdict is built from never reach
+that validator, which is why the gate redacts them where it renders them too. Alongside it, `failure.check` names the check that message
+came from, matched on `(code, message)` rather than object identity: the workflow frame recovers its
+evidence off the failure chain, so what it holds crossed the wire, and a handler may hand one error
+to both the aggregate and a check, which coerce separately. Where several checks failed and none
+matches, the name is **omitted** rather than guessed — a name that contradicts `reason` on its own
+row is worse than no name. A `frame_lost` block has no checks at all and carries the message alone,
+as does a `gate_broken` row whose plumbing failure left a readable envelope. When the handler's error
+carries a `suggested_action`, the row also carries it as `failure.suggested_action`, kept separate
+from the message so "what happened" and "what to do" stay separately queryable. All three are
+conditional, like `failure.audience` and unlike the keys above: a clean `proceeded` row carries
+none. Every row derives `reason`, `failure.audience` and the `failure.*` text from one object — the
+block's primary failure, or the first failed check on a run that went ahead — so they describe one
+cause. That is what makes `reason` on a row that went ahead with a failed check the **code of that
+check**, on both surfaces, rather than the status: the status is already on the same row under
+`outcome`, and repeating it under `reason` hides which check failed on exactly the runs a dashboard
+needs to rank. With nothing failed there is no object to attribute to, and `reason` is the status.
+The `BLOCKED` lifecycle line (below) reads the same `details[0]`, so `Body` and `failure.message` are
+one sentence for every verdict shape; only the raised error's own message — the `exception.message`
+on the adjacent record — lists every failed check's line when several failed. They exist because `reason` is a code and `check_matrix` deliberately holds no messages, so
+without them the sentence explaining a block lived only on the adjacent `Completing activity as
+failed` record under `exception.message` — one record away, under a key nobody searches. The same
+two keys are on the interactive `Preflight check outcome` row, from the same helper, so the two
+surfaces cannot drift.
 
-**Upgrading an app that is already on hard mode:** the `source_unverifiable` and `frame_lost`
-rows above previously fell through to fail-open, so hard mode enforced only the `NOT_READY`
-verdict. They now block, except the `deprecated_fail_open` row, which keeps proceeding until
-3.40.0. Before taking this SDK version, confirm the handler finishes inside
-`preflight_gate_timeout_seconds` — an app whose preflight has been quietly overrunning the budget
-was proceeding on every run and will now abort on every run. The worker logs the budget alongside
-the hard-mode line at boot.
+That same sentence is also the `Body` of the interceptor's `… BLOCKED (preflight gate): <message>`
+lifecycle record, so a plain substring search finds a block without knowing to `JSONExtract`
+anything. Both read the block's `details[0]`, so the searchable text and the structured attribute
+cannot say different things. One gap remains by design: a **soft**-mode gate does not raise, so a
+`would_block` row has no lifecycle record to carry the sentence and is reachable through
+`failure.message` only.
+
+`frame_lost` is its own value because the failure chain cannot separate a probe that stalled
+the event loop past the gate's cancel from a worker that died under it. It is a `TIMEOUT`, so
+hard mode reports it as `would_block` rather than blocking, and the classification keeps the two
+causes separable in the dashboards.
+
+**Upgrading an app that is already on hard mode:** hard mode used to block on every
+source-attributed outcome whatever its category — a budget overrun, a lost frame, an unreachable
+source, an untyped handler crash. It now blocks only on the five customer-actionable categories
+above; the rest are reported as `would_block` and the run proceeds. A handler that wants a
+transient to stop a hard-gated run has to type it as one of those five, and an app that relied on a
+handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
+policy alongside the hard-mode line at boot.
 
 #### Sizing the check budget
 
@@ -563,6 +613,101 @@ The budget bounds the **whole handler call**, not each check, and it is a **dead
 reservation** — a handler returning in 3s holds its worker slot for 3s whatever the budget says.
 A generous budget therefore costs nothing on a healthy run; it only changes the run that would
 otherwise have been cut short.
+
+#### Waiting for a warmup (opt-in)
+
+Some checks cannot run until the source's compute is ready — a suspended warehouse resumed, a job
+queue drained. An app marks those checks `tier=CheckTier.WARMUP` and overrides `Handler.warmup`
+(see [Check tiers and warmup](handlers.md#check-tiers-and-warmup)). That is the whole opt-in: an
+app that does not override `warmup` never enters this phase, because the default answers `READY`.
+Three declarations tune it:
+
+```python
+class MyConnector(App):
+    preflight_warmup_ceiling_seconds = 1800      # default 600, floor 30s, no cap
+    preflight_warmup_probe_timeout_seconds = 10  # default 10, floor 1s, at most the ceiling
+    preflight_warmup_mode = PreflightGateMode.HARD  # default SOFT; no annotation
+```
+
+The ceiling is how long the gate waits for `READY`, measured from gate start. The wait holds no
+worker slot, so it can be far longer than `preflight_gate_timeout_seconds`, and the gate uses all
+of it only while the source keeps reporting it is not ready. The probe timeout is how long one
+`warmup` call may take on warm compute: it reaches the handler as
+`WarmupInput.probe_timeout_seconds`, is enforced around every probe, and sizes each probe activity
+(the probe timeout plus 10s of credential-resolution and scheduling headroom).
+`preflight_warmup_mode` decides whether a warmup that never got ready blocks the run, independent
+of `preflight_gate_mode` (below).
+
+The gate runs it like this:
+
+1. Before any check, the workflow dispatches one `{app}:preflight_warmup` activity: a single
+   `warmup` probe with its own timeout, so the probe never spends the check budget. Every app gets
+   this activity, including one that does not override `warmup`: for such an app the worker
+   answers `READY` at once, without resolving credentials or calling the handler, so it costs no
+   extra secret-store read. `READY` is followed by one dispatch of the check activity, `{app}:preflight`, with every
+   tier; its row is the row the gate always wrote, with no `gate_tier` or warmup fields.
+2. Otherwise the check activity runs only the `PREFLIGHT` tier, enforced like any verdict. Once
+   that dispatch lets the run go on, the workflow keeps polling `{app}:preflight_warmup` — one
+   probe per short activity, separated by durable timers, so the wait holds no worker slot. The
+   wait between polls is 5s doubling to 30s, or the source's `next_poll_seconds` with a 5s floor,
+   and never runs past the ceiling.
+3. On `READY` within the ceiling it dispatches the check activity again with only the `WARMUP`
+   tier. That verdict is enforced like any other, by category under `preflight_gate_mode`.
+
+The check activity never calls `warmup`; the tiers it runs are decided by the workflow from the
+probe activities.
+
+A typed AUTH, PERMISSION or NOT_FOUND raise from a probe ends the wait at once. It is a verdict on
+the source like any handler raise, so `preflight_gate_mode` gates it on its category. When the
+first probe raises it, no check runs at all: the run writes that one row. Any other raise, or a
+probe that overruns its timeout, reads as `WARMING` and is polled again.
+
+Two outcomes are attributed to the source's compute, and `preflight_warmup_mode` alone decides
+them: `SOFT` reports and lets the run proceed, `HARD` stops it, whatever `preflight_gate_mode` says.
+`UNAVAILABLE` ends the wait as `SOURCE_UNAVAILABLE` — "The source reported its compute as
+unavailable (SUSPENDED)" — with a row outcome of `would_block` or `blocked`. Reaching the ceiling
+still pending, or a `READY` that arrives only after it, is `SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED`
+(`SourceWarmupExhaustedError`, category `SOURCE_UNAVAILABLE`, audience `USER`) — "Source wasn't
+ready within 30 min; last reported: RESUMING", plus the last transient raise when there was one.
+Its row outcome is `warmup_exhausted` under either posture, and its `suggested_action` points at the
+source's size and queue, or at raising the ceiling. Both rows are `source_unverifiable`, and both
+stamp `gate_mode` with the warmup posture rather than the gate's, so a reader can tell a stopped run
+from a reported one without the app's config.
+
+While it waits, the workflow sets its Temporal current details — the line the run's health view
+shows — to `waiting for source warmup: <source_state, else the state>[, N queued], <elapsed>`, e.g.
+`waiting for source warmup: RESUMING, 40s`, and clears it when the wait ends. The warmup reads as
+the source getting ready, not as the connector failing. A warmup activity that itself fails — a
+lost worker, a credential lookup the secret store refused — is the gate's own plumbing. When the
+first probe activity fails this way, the gate falls back to one check dispatch with every tier, as
+if the probe had answered `READY`, and that row carries `warmup_outcome = 'broken'` so the missing
+probe stays visible. A later probe activity that fails ends the wait open, as `no_verdict` /
+`gate_broken`.
+
+The rows of a run that waited carry `gate_tier`: `preflight` on the first dispatch's row, `warmup`
+on the row that ended the wait. One run therefore has up to two rows; dedupe on
+`(workflow_run_id, gate_tier, gate_attempt)`. They also carry `warmup_outcome`: `warming` on the
+`preflight` row (written while the warmup is still in flight, so a run that ends there reads as
+warming, not as a missing verdict), or `unavailable` when the first probe already said so; and on
+the `warmup` row whatever ended the wait — `ready`, `unavailable`, `failed` (a typed raise),
+`exhausted` (the ceiling) or `broken` (a later probe activity failed). A run whose first probe
+activity failed has one row with no `gate_tier` and `warmup_outcome = 'broken'`. Once the wait has
+ended the row
+adds `warmup_duration_ms` (gate start to that state, on the workflow clock) and
+`warmup_transitions`, a JSON list of `{"state", "at_ms"}` objects for each state the probes
+observed, oldest first, capped at 32. Each check in `check_matrix` carries `tier` only when it is
+`warmup`. The storage probes (below) run once, on the first dispatch.
+
+`{app}:preflight_warmup` is registered for every app, since whether an app has a warmup is its
+handler's answer at run time, not a declaration. The name is reserved: a `@task` named
+`preflight_warmup` fails worker boot, on every app.
+
+`workflow.patched("preflight-gate-warmup")` guards this phase. PINNED workers drain a run on the
+build that started it, but an app can opt into `AUTO_UPGRADE` (`TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR`),
+which migrates in-flight runs onto a new build, and a deployment with no `ATLAN_APP_BUILD_ID` is
+unversioned. A run started before this phase recorded the check activity as its first gate command,
+so on replay it takes the unpatched branch: one check dispatch with every tier and no probe, exactly
+what it recorded. Every new run records the patch marker.
 
 #### Verifying artifact storage (opt-in)
 
@@ -661,6 +806,12 @@ auto-stamped and each row joins to the workflow outcome by run id:
 - Per-failure detail rides in one compact JSON attribute, `asset_validation_matrix` (bounded to a
   fixed number of rows per axis so it can't grow unbounded); the full human-readable report is also
   logged as a WARNING body, but only for flagged runs.
+- Complete counts ride in `asset_validation_summary`: one row per `(kind, type_name, detail)` over
+  **every** failure in the batch (e.g. `invalid` / `Column` / `required_for_creation:schema_qualified_name`),
+  so fleet-wide "which types fail which checks" queries are not limited by the matrix sample.
+- Batch context rides alongside: `assets_upload_kind`, `assets_parts_validated`,
+  `assets_parts_not_local` and `assets_referential_check`, so an orphan count can be read against
+  how the hand-off was assembled and whether the orphan pass ran at all.
 
 Uploads with nothing to validate emit nothing at all: when `ATLAN_VALIDATE_ASSETS_ON_UPLOAD=false`
 or when the path is not a `transformed/` subtree (e.g. a raw upload), no outcome event is produced.

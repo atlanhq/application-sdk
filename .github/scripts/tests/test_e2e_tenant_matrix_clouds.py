@@ -106,3 +106,28 @@ def test_main_does_not_echo_the_payload_when_it_cannot_be_parsed(capsys) -> None
     main(["--matrix-json", '{"aws": {"client_secret": "' + _SECRET + '"'])
     captured = capsys.readouterr()
     assert _SECRET not in captured.out + captured.err
+
+
+# ── Tenant pools (FND-3542) ──────────────────────────────────────────────────
+
+
+def test_system_matrix_keys_win_over_the_connector_matrix(capsys) -> None:
+    # Same precedence as the resolver: a repo that sees the system matrix places
+    # every leg there, so its fan-out is that map's clouds.
+    system = {"azure": _MATRIX["aws"]}
+    rc = main(
+        [
+            "--matrix-json",
+            json.dumps(_MATRIX),
+            "--system-matrix-json",
+            json.dumps(system),
+        ]
+    )
+    assert rc == 0
+    assert _clouds(capsys.readouterr().out) == "azure"
+
+
+@pytest.mark.parametrize("system", ["", "   "])
+def test_blank_system_matrix_reads_the_connector_matrix(system: str, capsys) -> None:
+    main(["--matrix-json", json.dumps(_MATRIX), "--system-matrix-json", system])
+    assert _clouds(capsys.readouterr().out) == "aws,gcp"

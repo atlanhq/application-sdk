@@ -1,7 +1,7 @@
-"""Every conformance matrix leg must watch the trees its own checkers read.
+"""Every conformance series must watch the trees its own checkers read.
 
-The conformance suite is scheduled per series, and each leg is gated by a
-``dorny/paths-filter`` glob (``matrix.paths``).  A leg whose glob does not cover
+The conformance suite is scheduled per series, and each series step is gated by
+its own named ``dorny/paths-filter`` filter.  A series whose glob does not cover
 a tree its checkers discover from is **silently skipped** on exactly the PRs
 that change that tree — the rules do not fire, nothing goes red, and the gap is
 invisible in the run summary because the leg reports success.
@@ -27,13 +27,17 @@ contains an alternative anchored at that root.
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 
 import pytest
-import yaml
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from _conformance_series import paths_glob  # noqa: E402
+from _conformance_series import series as conformance_series  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-CONFORMANCE = REPO_ROOT / ".github" / "workflows" / "conformance-reusable.yaml"
 CHECKS_DIR = REPO_ROOT / "packages" / "conformance" / "conformance" / "suite" / "checks"
 
 #: Discovery roots a checker can read, and the path prefix a leg's glob must
@@ -103,10 +107,10 @@ def _covers_root(paths_glob: str, root: str) -> bool:
 
 @pytest.fixture(scope="module")
 def legs() -> dict[str, str]:
-    """``{series letter: paths glob}`` for every leg in the conformance matrix."""
-    workflow = yaml.safe_load(CONFORMANCE.read_text(encoding="utf-8"))
-    matrix = workflow["jobs"]["suite"]["strategy"]["matrix"]["include"]
-    return {leg["series"]: leg["paths"] for leg in matrix if "paths" in leg}
+    """``{series letter: paths glob}`` for every filtered series in the job."""
+    return {
+        entry.letter: paths_glob(entry) for entry in conformance_series() if entry.globs
+    }
 
 
 @pytest.fixture(scope="module")

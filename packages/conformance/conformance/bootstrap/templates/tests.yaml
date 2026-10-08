@@ -16,6 +16,8 @@ name: Tests
 #                 services-script below only if that pattern doesn't fit.
 #   e2e         — full-DAG tests against a real tenant via e2e-full-reusable.
 #                 Triggered by the 'e2e' PR label or workflow_dispatch.
+#                 The label is consumed: Tests Gate removes it after the
+#                 run, so re-add it to run e2e again (FND-3411).
 #   Tests Gate  — aggregator gate; the check INTENDED to be the required one
 #                 for branch protection.  tests must pass; e2e can be skipped.
 #
@@ -164,6 +166,7 @@ jobs:
 <% endif %><% if dataforge_env_tier %>      dataforge-env-tier: "<< dataforge_env_tier >>"
 <% endif %><% if dataforge_output_prefix %>      dataforge-output-prefix: "<< dataforge_output_prefix >>"
 <% endif %><% if dataforge_hermetic_fallback %>      dataforge-hermetic-fallback: "<< dataforge_hermetic_fallback >>"
+<% endif %><% if dataforge_lifecycle %>      dataforge-lifecycle: << dataforge_lifecycle >>
 <% endif %><% if enable_e2e != 'true' %>
       enable-e2e: << enable_e2e >>
 <% endif %>

@@ -93,8 +93,13 @@ _Read by `remediate-finding` when `finding.area == "tests"`._
 Consult the finding's `hint` and `message`, then look at the actual source
 lines around `finding.line` in `finding.file` before proposing a fix.
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`; route
-to residue):
+**Judgment rules** (`autofixable = true` — every T-series rule is classified
+auto-fixable; `classification = "judgment"`; route to residue).  The write
+scope still excludes `tests/` and `.github/`, so until the lane's write scope
+is widened every T-series result is a **fully worked proposal** — the exact
+decorator, marker, file move or config change, mirrored from the test layout
+of the reference app named by `finding.canonical_reference` — routed to
+residue for a human to apply, not an applied edit:
 
 - **T001 UnmarkedIntegrationTest** — a test function or class under
   `tests/integration/` (or any path the runner identifies as an integration
@@ -297,9 +302,9 @@ to residue):
   Draft an initial unit suite covering the app's helper functions and
   `@task`-decorated activities directly (call them as coroutines — the
   decorator only attaches metadata outside the workflow runtime), following
-  the minimal shape in `atlan-hello-world-app/tests/unit/`: typed
-  `Input`/`Output` contracts, a `pytest.fixture` for the app instance, and
-  real outcome assertions. This is not exemptable — do not propose a
+  the shape in the three reference apps' `tests/unit/` (`atlan-openapi-app`,
+  `atlan-mysql-app`, `atlan-metabase-app`): typed `Input`/`Output` contracts,
+  a `pytest.fixture` for the app instance, and real outcome assertions. This is not exemptable — do not propose a
   suppression or an `exempt_test_tiers` entry for T010.
 
   `classification` is always `"judgment"` — route to residue; a from-scratch
@@ -704,14 +709,14 @@ to residue):
 
   Fix: import the generated modules and keep only what the contract cannot know —
   the source under test, the asset floors, and the run mode.
-  `atlan-mysql-app/tests/e2e/test_mysql_full_dag.py` is the reference:
+  `atlan-mysql-app/tests/e2e/test_mysql_e2e.py` is the reference:
 
   ```python
   from application_sdk.testing.e2e import RunMode
   from app.generated._e2e_base import MysqlGeneratedE2EBase
   from app.generated._e2e_credential import MysqlAgentCredentialBody
 
-  class TestMySQLFullDAG(MysqlGeneratedE2EBase):
+  class TestMySQLE2E(MysqlGeneratedE2EBase):
       mode = RunMode.AGENT
       include_filter = r"^def\.e2e_main$"
       expected_min_asset_counts = {"Database": 1, "Table": 2}
@@ -770,6 +775,42 @@ to residue):
   Suppress with `# conformance: ignore[T024] <reason>` on the `class` line when
   the mode is set dynamically (e.g. parametrised from an env var) rather than as
   a class attribute.
+
+  `classification` is always `"judgment"`.
+
+- **T025 EntrypointWithoutE2ECoverage** — the app is in **bundle mode**
+  (`app/generated/` holds one `<name>/manifest.json` subdirectory per
+  entrypoint) and at least one of those entrypoints is exercised by no
+  collectable e2e test class.  The finding names the uncovered entrypoint;
+  the others already have suites, so the shape to copy is in this repo.
+
+  Fix: add one suite per uncovered entrypoint under `tests/e2e/`, subclassing
+  that entrypoint's **generated** base — `app/generated/<name>/_e2e_base.py`
+  exposes `<Name>GeneratedE2EBase`, which is why K010 insists the scaffolding
+  exists.  No reference app is in bundle mode, so there is no cross-repo suite
+  to mirror: copy the shape from this repo's already-covered entrypoints (or,
+  if none is covered yet, the `<Ep>GeneratedE2EBase` subclass shown in the
+  rule's full description).  The
+  new class counts as covering its entrypoint by the same resolution the SDK
+  harness uses — the generated base, a class-level `entrypoint`, or a
+  `manifest_path` under `/generated/<ep>/` (`BaseE2ETest.entrypoint` /
+  `manifest_path` and `_derive_entrypoint` in
+  `application_sdk/testing/e2e/base.py`).  Set `mode` explicitly on the new
+  class (T024) — `RunMode.AGENT` for the normal CI-worker run.
+
+  Two things to establish before drafting, because both change the answer:
+  whether the generated base for that entrypoint actually exists (if it does
+  not, this is a **K010** finding first — say so and let the contract
+  regenerate before writing a test against a base that is absent), and
+  whether the entrypoint is genuinely meant to run end to end (a maintenance
+  or teardown entrypoint may legitimately have no full-DAG suite, which is a
+  suppression with that reason, not a fabricated test).
+
+  **Route to residue.** The write scope excludes `tests/`, so the deliverable
+  is a fully worked proposal — the file path, the base class to subclass, the
+  `mode`, and the entrypoint it covers — never an applied edit.  Never draft a
+  suite with no assertions or a stubbed body: that trades T025 for T005/T006
+  and leaves the entrypoint just as unproven.
 
   `classification` is always `"judgment"`.
 

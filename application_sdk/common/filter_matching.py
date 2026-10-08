@@ -62,6 +62,7 @@ import re
 import orjson
 
 from application_sdk.common.sql_filters import normalize_filters
+from application_sdk.errors import InvalidInputValueError
 
 # A filter as it arrives from a workflow spec / contract: a single pattern string,
 # a list of pattern strings, the hierarchical ``{"^db$": ["^schema$"]}`` map, a
@@ -75,7 +76,13 @@ def _compile(pattern: str, flags: int) -> re.Pattern[str]:
     try:
         return re.compile(pattern, flags)
     except re.error as exc:  # surface a clear error instead of a cryptic re.error
-        raise ValueError(f"Invalid filter pattern {pattern!r}: {exc}") from exc
+        raise InvalidInputValueError(
+            message=f"Invalid filter pattern {pattern!r}: {exc}",
+            field="filter_pattern",
+            constraint="valid Python regular expression",
+            value_summary=repr(pattern),
+            cause=exc,
+        ) from exc
 
 
 def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
@@ -119,11 +126,16 @@ def _to_patterns(filter_input: FilterInput, *, exact: bool) -> list[str]:
             else:
                 bad_keys.append(db)
         if bad_keys:
-            raise ValueError(
-                f"Filter map produced no patterns for key(s) {bad_keys!r} — a "
-                f"schema value is likely a bare string instead of a list (use "
-                f"{{'^db$': ['^sch$']}}, not {{'^db$': '^sch$'}}). Refusing to "
-                f"silently drop filters."
+            raise InvalidInputValueError(
+                message=(
+                    f"Filter map produced no patterns for key(s) {bad_keys!r} — a "
+                    f"schema value is likely a bare string instead of a list (use "
+                    f"{{'^db$': ['^sch$']}}, not {{'^db$': '^sch$'}}). Refusing to "
+                    f"silently drop filters."
+                ),
+                field="filter_input",
+                constraint="each schema value must be a list of patterns",
+                value_summary=repr(bad_keys),
             )
         return dict_patterns
 

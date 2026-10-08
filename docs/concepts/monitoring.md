@@ -387,7 +387,7 @@ for dashboards and alerts:
 | Token | Level | Message body |
 |-------|-------|--------------|
 | `workflow.started` | INFO | `workflow.started <WorkflowType>` |
-| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate)`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
+| `workflow.ended` | INFO / WARNING / ERROR | `workflow.ended <WorkflowType> OK (<ms>ms)`, `… BLOCKED (preflight gate): <message>`, or `… FAILED (<code>): <message> — at <file>:<line> in <fn>` |
 | `activity.started` | INFO | `activity.started <ActivityType>` |
 | `activity.ended` | INFO / WARNING / ERROR | same three shapes as `workflow.ended` |
 
@@ -403,6 +403,42 @@ the structured attributes, never on the body text.
     searches, and alert rules may match on these literal prefixes. The bodies after the token are
     human-readable summaries and may change; match on the token prefix and the structured
     attributes, not the body text.
+
+#### Build identity in the App lifecycle messages
+
+The `App started` and `App completed` lines name the build that produced the run, so a run's
+exported logs answer "what was running when this broke?" on their own, with no Temporal access:
+
+```
+App started sdk=3.37.0 app=0.2.3 commit=184ae7b
+App completed sdk=3.37.0 app=0.2.3 commit=184ae7b
+```
+
+| Key | Source | Meaning |
+|-----|--------|---------|
+| `sdk` | `application_sdk.__version__` | The application-sdk actually running. Always present. |
+| `app` | baked `app/atlan_build.json`, then `ATLAN_APPLICATION_VERSION` | The app release exactly as Global Marketplace stores it — a release tag for semver apps, a sha7 for CD apps. |
+| `commit` | baked `app/atlan_build.json`, then `ATLAN_COMMIT_SHA` | The git commit the image was built from. |
+
+**Why the message and not a structured attribute.** The message is the only field that survives
+every hop of the run-logs path. `observability.app_logs` has a fixed Iceberg schema whose ingest
+pipe maps a known field list onto columns, and the tenant edge then re-projects each record through
+closed structs that declare no attributes bag — so a new attribute reaches neither the run-log panel
+nor the downloaded export without a schema change in two services. A marker in the message needs
+none of that.
+
+A carrier with no value drops its key rather than emitting a bare `app=`, which would read as a
+value of its own. `sdk` is always known, so the marker is never empty and a reader never has to
+tell "no marker" from "no version". Keys are `k=v` and ASCII so an engineer grepping an exported
+run log for a version actually hits.
+
+Both boundaries carry it: a run whose logs are truncated from the top still has to answer which
+build produced it, and a failed run may never reach the end. The value is resolved once at import —
+no carrier can change for the life of the container, and both call sites run inside Temporal's
+workflow sandbox where per-call work is a determinism risk.
+
+See [Release flow → Image identity](../standards/release-flow.md#image-identity) for where the
+values come from.
 
 ### Asset-validation outcome event
 
@@ -421,9 +457,63 @@ attributes are allowlisted and reach OTLP:
 | `assets_orphaned` | referential-integrity (orphan) failures |
 | `assets_undeserializable` | records that could not be decoded |
 | `asset_validation_matrix` | compact JSON array of per-failure detail (bounded rows per axis), `JSONExtract`-able |
+| `asset_validation_summary` | JSON array of complete counts per `{kind, type_name, detail}` over the whole batch (see below) |
+| `assets_referential_check` | whether the orphan pass ran: `ran`, `not_requested` (an incomplete fan-in turned it off) or `skipped_unavailable` (no spill store). `assets_orphaned = 0` means "none found" only when this is `ran` |
+| `assets_upload_kind` | `upload` (one path) or `upload_refs` (every declared part of a fan-in, validated as one batch) |
+| `assets_parts_validated` | local paths validated together |
+| `assets_parts_not_local` | declared transformed parts not on this pod; non-zero turns the orphan pass off |
 
 Emitting `outcome="clean"` too gives a denominator, so a dashboard can rank connectors by
-flag-rate rather than only seeing failures. Uploads with nothing to validate (validation disabled, or
+flag-rate rather than only seeing failures.
+
+The matrix is a **sample** (capped per axis); `asset_validation_summary` is the **aggregate**. Each
+row is `{"kind", "type_name", "detail", "count"}`:
+
+| `kind` | `detail` | `count` |
+|--------|----------|---------|
+| `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
+| `undeserializable` | `decode:<reason>` — `malformed_json`, `schema_mismatch:<field path>` (e.g. `schema_mismatch:columnCount`), or the exception class; `type_name` is probed from the raw record | records |
+| `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type | distinct missing targets, plus `references` |
+| `truncated` | empty | summed count of rows past the cap (100), plus `references` summed over the orphan groups among them |
+
+Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide
+breakdown by app, tenant, type and rule. Two things make it return correct numbers:
+
+- Bound `Timestamp` and prefix-filter `ServiceName` first. `Body` is not indexed, and an unbounded
+  fleet scan of `service_logs` does not return.
+- Re-aggregate in an outer query. A single `GROUP BY` over `service_logs` has been observed to
+  return the same key on several rows with partial counts; the outer `sum` merges them. Distinct
+  workflow runs go through `uniqExactState` / `uniqExactMerge` so a run split across partial rows
+  is still counted once.
+
+`uploads` counts outcome events (one per validated upload, so a run with several uploads counts
+several times); `runs` counts distinct `workflow_run_id`s.
+
+```sql
+SELECT app, tenant, kind, type_name, detail,
+       sum(n) AS n, sum(uploads) AS uploads, uniqExactMerge(runs_state) AS runs
+FROM (
+  SELECT LogAttributes['app_name'] AS app,
+         TenantName AS tenant,
+         JSONExtractString(row, 'kind') AS kind,
+         JSONExtractString(row, 'type_name') AS type_name,
+         JSONExtractString(row, 'detail') AS detail,
+         sum(JSONExtractUInt(row, 'count')) AS n,
+         count() AS uploads,
+         uniqExactState(LogAttributes['workflow_run_id']) AS runs_state
+  FROM otel_logs.service_logs
+  ARRAY JOIN JSONExtractArrayRaw(LogAttributes['asset_validation_summary']) AS row
+  WHERE Timestamp >= now() - INTERVAL 1 DAY
+    AND ServiceName LIKE 'atlan-%'
+    AND Body = 'Transformed-asset validation outcome'
+    AND LogAttributes['outcome'] = 'flagged'
+  GROUP BY app, tenant, kind, type_name, detail
+)
+GROUP BY app, tenant, kind, type_name, detail
+ORDER BY n DESC
+```
+
+Uploads with nothing to validate (validation disabled, or
 a non-`transformed/` path) emit no event.
 
 Since [ADR-0020](../adr/0020-artifact-validation.md) this check is the artifact wrapper's
@@ -550,7 +640,9 @@ ORDER BY n DESC
 ### Artifact-validation posture event
 
 `"Artifact validation posture"` fires **once per registered app at worker build** — soft apps and
-switched-off deployments included. It carries `app_name` and `artifact_validation_mode`
+switched-off deployments included. It carries `app_name`, `asset_validation_on_upload`
+(`on`/`off` — whether `App.upload()` runs the transformed-asset check on this deployment, so an
+app with no asset outcome rows can be told apart from one with that check off) and `artifact_validation_mode`
 (`hard`/`soft`/`off`, where `off` means `ATLAN_VALIDATE_ARTIFACTS` is down for that deployment).
 
 It exists because the outcome events cannot supply a denominator. An app whose tasks hand off no
@@ -580,23 +672,34 @@ a clear evidence trail and a short time-to-diagnosis.
 | # | When | Level | Where | Grep |
 |---|------|-------|-------|------|
 | 1 | Worker/combined/handler startup | `INFO` | pod log (first lines) | `"Process memory at start"` |
-| 2 | Every 20 s during an active task, once RSS ≥ 80 % of limit | `WARNING` | pod log | `"Memory pressure on task"` |
+| 2 | During an active task while RSS ≥ 80 % of limit — on crossing, on each 5-point band climbed, and every 5 min in between | `WARNING` | pod log | `"Memory pressure on task"` |
 | 3 | Immediately after pod restart, if `exitCode == 137` | `CRITICAL` | pod log (first lines of new pod) | `"exit code 137 = SIGKILL"` |
 | 4 | When Temporal re-dispatches an activity after worker loss | `WARNING` | workflow log | `"re-dispatched after worker eviction"` |
 
 Signal 1 establishes a baseline (RSS at startup, limit, %) so you can see
-where memory stood when the pod was last healthy. Signal 2 fires on the rising
-edge and re-arms after the ratio drops below 75 %, giving pre-kill leading
-indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
+where memory stood when the pod was last healthy. Signal 2 fires on crossing
+80 %, again each time the ratio climbs another 5 points (85 / 90 / 95 %), and
+every 5 minutes while it stays within a band. A warned band re-arms once the
+ratio falls a full band below it, so a fall and second climb warns again, and
+the warning fully re-arms once the ratio drops below 75 %. Each repeat carries the change since the previous line (e.g.
+`+0.60 GiB in 40s`), so a fast climb to a kill shows its rate, and the
+container's cgroup usage (`container 0.95 GiB`), which also counts child
+processes such as the offload pool that the process RSS misses. The throttle is
+per process, not per activity: concurrent activities share it. Together these
+give pre-kill leading indicators in the killed pod's log. Signal 3 fires in the **replacement** pod's
 entrypoint immediately on restart — before any Temporal heartbeat timeout — so
 the first thing you see in `kubectl logs` is the exit code, along with the
 diagnostic commands to run. Signal 4 names OOM kill (pod exit 137) explicitly
 alongside KEDA scale-down, spot preemption, and rolling deploys.
 
-### Required Kubernetes configuration
+### Where the limit comes from
 
-Signal 2 and signal 1's percentage require `K8S_POD_MEMORY_LIMIT` to be
-injected via the Downward API:
+Signal 2 and signal 1's percentage need the container's memory limit. The SDK
+reads the enforced cgroup limit (`/sys/fs/cgroup/memory.max`, or
+`memory/memory.limit_in_bytes` on cgroup v1) first. No pod-spec wiring is
+needed, and because the heartbeat re-reads it every minute, a VPA resize
+(including an in-place one mid-activity) is picked up. Only when the cgroup reports no limit does it fall back
+to `K8S_POD_MEMORY_LIMIT`, which can still be injected via the Downward API:
 
 ```yaml
 env:
@@ -607,7 +710,7 @@ env:
         divisor: "1"          # raw bytes; parse_pod_memory_limit() also accepts Ki/Mi/Gi suffixes
 ```
 
-When this env var is absent the memory-pressure warning is silently disabled
+When neither supplies a limit the memory-pressure warning is silently disabled
 (no false positives in local dev / non-Kubernetes environments).
 
 ### Diagnostic runbook (OOM kill)

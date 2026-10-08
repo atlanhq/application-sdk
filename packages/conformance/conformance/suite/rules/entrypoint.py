@@ -24,7 +24,11 @@ meaningful on consumer apps, which must delegate startup to the SDK launcher.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -35,10 +39,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P017",
         canonical_reference=(
-            "atlan-hello-world-app app/run_dev.py — the worker comes from "
-            "`run_dev_combined`. No reference app constructs a Temporal Worker or Client; "
-            "the launcher is what wires interceptors, the activity registry and the task "
-            "queue together."
+            "atlan-mysql-app app/run_dev.py — `main()` is a single `await "
+            "run_dev_combined(MySQLApp, temporal_ui=True, example_input=...)`; no "
+            "Worker, Client, create_worker or AppWorker is constructed anywhere under "
+            "app/. The launcher is what wires interceptors, the activity registry and "
+            "the task queue together."
         ),
         scope=RuleScope.APP,
         name="ManualWorkerBootstrap",
@@ -90,6 +95,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "exception outside that exemption and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p017",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-orchestration",
+        ),
     ),
     RuleDefinition(
         id="P018",
@@ -135,5 +144,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "exception and stays visible in SARIF.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-orchestration",
+        ),
     ),
 )

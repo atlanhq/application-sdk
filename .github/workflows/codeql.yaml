@@ -31,22 +31,22 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/init@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           languages: ${{ matrix.language }}
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/autobuild@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
 
       - name: Perform CodeQL Analysis
-        uses: github/codeql-action/analyze@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/analyze@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           category: "/language:${{matrix.language}}"
           upload: never
           output: codeql-results
 
       - name: Upload to Security tab
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         continue-on-error: true
         with:
           sarif_file: codeql-results/python.sarif
@@ -112,7 +112,7 @@ jobs:
         id: upload-codeql-sarif
         if: always()
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: codeql-sarif
           path: codeql-results/
@@ -134,7 +134,7 @@ jobs:
       - name: Upload SARIF as artifact (retry)
         if: steps.upload-codeql-sarif.outcome == 'failure'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # A DISTINCT name, never the first attempt's: a FinalizeArtifact
           # failure leaves an unfinalized record holding that name for the whole

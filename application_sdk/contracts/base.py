@@ -59,6 +59,8 @@ Evolution:
 import hashlib
 import posixpath
 import re
+import sys
+import typing
 import warnings
 from enum import StrEnum
 from typing import (
@@ -74,6 +76,7 @@ from typing import (
 )
 
 import orjson
+import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
@@ -706,15 +709,87 @@ def _is_unbounded_list(field_type: type) -> bool:
     return _is_unbounded_collection(field_type, list)
 
 
-def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
+_TYPE_ALIAS_TYPES: tuple[type, ...] = tuple(
+    {
+        t
+        for t in (
+            getattr(typing, "TypeAliasType", None),
+            getattr(typing_extensions, "TypeAliasType", None),
+        )
+        if t is not None
+    }
+)
+
+
+def _resolve_alias_reference(ref: str, namespace: dict[str, Any]) -> Any:
+    """Resolve a quoted name inside a type alias's value, or ``None``.
+
+    ``list["UnsafeMap"]`` keeps the name as a plain string and ``List["UnsafeMap"]``
+    as a ``ForwardRef``; either way the alias's own module is where the name
+    lives. Only plain and dotted names are looked up, never evaluated.
+    """
+    head, *rest = ref.strip().split(".")
+    obj = namespace.get(head)
+    for part in rest:
+        obj = getattr(obj, part, None)
+    return obj
+
+
+def _is_type_arg(arg: Any) -> bool:
+    """Whether a generic's argument is a type to check, not a constraint value."""
+    return (
+        isinstance(arg, (type, str, typing.ForwardRef, *_TYPE_ALIAS_TYPES))
+        or get_origin(arg) is not None
+    )
+
+
+def _is_forbidden_type(
+    field_type: type,
+    _aliases: frozenset[int] = frozenset(),
+    _namespace: dict[str, Any] | None = None,
+) -> tuple[bool, str]:
     """Check if a type is forbidden in contracts.
 
     Args:
         field_type: The type to check.
+        _aliases: ids of the type aliases already being checked, so a recursive
+            alias (``TreeSelection``) is checked once rather than forever.
+        _namespace: globals of the module that defined the alias being checked,
+            used to resolve quoted references inside its value.
 
     Returns:
         Tuple of (is_forbidden, reason string).
     """
+    # A type alias (``TypeAliasType`` or a 3.12 ``type X = ...`` statement) has no
+    # origin and is not a class, so without unwrapping it every check below skips
+    # it and an alias over ``Any`` or an unbounded dict would pass. A recursive
+    # reference back to an alias already under check adds nothing new.
+    if isinstance(field_type, _TYPE_ALIAS_TYPES):
+        if id(field_type) in _aliases:
+            return False, ""
+        module = sys.modules.get(getattr(field_type, "__module__", "") or "")
+        return _is_forbidden_type(
+            field_type.__value__,  # type: ignore[attr-defined]
+            _aliases | {id(field_type)},
+            vars(module) if module is not None else _namespace,
+        )
+
+    # A quoted reference inside an alias (``list["UnsafeMap"]``) has no origin
+    # either, so it used to be skipped and the type it names went unchecked.
+    # Resolve it against the alias's module. One that cannot be resolved yet is
+    # skipped, matching validate_payload_safety's NameError policy for forward
+    # references during module initialisation.
+    if isinstance(field_type, (str, typing.ForwardRef)):
+        name = (
+            field_type.__forward_arg__
+            if isinstance(field_type, typing.ForwardRef)
+            else field_type
+        )
+        resolved = _resolve_alias_reference(name, _namespace or {})
+        if resolved is None:
+            return False, ""
+        return _is_forbidden_type(resolved, _aliases, _namespace)
+
     origin = get_origin(field_type)
 
     # Check for Any
@@ -747,22 +822,25 @@ def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
             if inner_origin in (list, dict):
                 inner_args = get_args(inner_type)
                 for arg in inner_args:
-                    if isinstance(arg, type) or get_origin(arg) is not None:
-                        is_forbidden, reason = _is_forbidden_type(arg)
+                    if _is_type_arg(arg):
+                        is_forbidden, reason = _is_forbidden_type(
+                            arg, _aliases, _namespace
+                        )
                         if is_forbidden:
                             return True, reason
             else:
                 # For other Annotated types, recurse normally
-                return _is_forbidden_type(inner_type)
+                return _is_forbidden_type(inner_type, _aliases, _namespace)
         return False, ""
 
-    # Recursively check generic args (e.g., list[dict[str, Any]])
-    if origin is not None:
+    # Recursively check generic args (e.g., list[dict[str, Any]]). Literal's
+    # args are values, not types, even when they are strings.
+    if origin is not None and origin is not typing.Literal:
         args = get_args(field_type)
         for arg in args:
             # Skip non-type args (like constraint instances)
-            if isinstance(arg, type) or get_origin(arg) is not None:
-                is_forbidden, reason = _is_forbidden_type(arg)
+            if _is_type_arg(arg):
+                is_forbidden, reason = _is_forbidden_type(arg, _aliases, _namespace)
                 if is_forbidden:
                     return True, reason
 

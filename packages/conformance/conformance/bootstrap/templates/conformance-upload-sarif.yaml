@@ -1,4 +1,7 @@
 name: "Conformance SARIF Upload"
+# Installed by `bootstrap --sarif-upload true`: public repos only (FND-3336).
+# A private repo cannot accept the upload without GitHub Advanced Security, so
+# there this workflow could only probe, skip and still bill a job per series.
 # Thin caller. Uploads SARIF results from the Conformance workflow to the GitHub
 # Security tab. The whole body — the GHAS eligibility probe, the artifact
 # download, the suppression strip and the upload — lives in the reusable, so the

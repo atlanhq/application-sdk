@@ -14,6 +14,38 @@ from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin
 
 
+def import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Each name an import binds, mapped to the module or object it names.
+
+    ``import a.b`` binds ``a`` to the package ``a`` (``a.b`` is reached through
+    it), unlike ``import a.b as c``, which binds ``c`` to ``a.b``. A name the
+    module also assigns, defines or rebinds anywhere is left out: after
+    ``asyncio = domain_errors`` the name no longer names the stdlib module.
+    """
+    bound: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bound[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".")[0]
+                    bound[root] = root
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                bound[alias.asname or alias.name] = f"{node.module}.{alias.name}"
+    rebound = {
+        n.id
+        for n in ast.walk(tree)
+        if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store | ast.Del)
+    } | {
+        n.name
+        for n in ast.walk(tree)
+        if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+    }
+    return {name: origin for name, origin in bound.items() if name not in rebound}
+
+
 class Checker(
     SilentSwallowMixin,
     UntypedRaiseMixin,
@@ -30,12 +62,15 @@ class Checker(
         directives: dict[int, _IgnoreDirective],
         atlan_ioerror_imported: bool,
         legacy_aliases: frozenset[str] = frozenset(),
+        local_helpers: dict[str, ast.FunctionDef] | None = None,
     ) -> None:
         self._filename = filename
         self._directives = directives
         self._atlan_ioerror_imported = atlan_ioerror_imported
         self._legacy_aliases = legacy_aliases
+        self._local_helpers = local_helpers or {}
         self._findings: list[Finding] = []
+        self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._except_stack: list[ast.ExceptHandler] = []
@@ -61,6 +96,10 @@ class Checker(
         )
 
     # ── Context management ────────────────────────────────────────────────────
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._import_origins = import_bindings(node)
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not

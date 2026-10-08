@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.manifest_contract import scan_all
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -333,6 +334,134 @@ def test_k018_ignores_platform_injected_credential_arg(tmp_path: Path) -> None:
         {"extract": _extract_node({"credential": "{{credential}}"})},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+# ---------------------------------------------------------------------------
+# K018 — args wired to a non-value widget (SageV2 preflight runner, FND-3519)
+# ---------------------------------------------------------------------------
+#
+# The preflight runner's checks execute in the UI through Handler.preflight_check;
+# no runtime path reads the `preflight_check` arg, so dropping it is harmless. The
+# widget type comes from the generated config JSON beside the manifest, and the
+# exemption keys on the *form key*, never on the arg name.
+
+_PREFLIGHT_ARGS = {"preflight_check": "{{preflight-check}}"}
+
+
+def _ui(widget: str) -> dict:
+    return {"widget": widget, "label": "", "hidden": False}
+
+
+def _write_config(directory: Path, properties: dict) -> None:
+    """A generated connector config JSON (``config.properties`` shape)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "myapp.json").write_text(
+        json.dumps(
+            {"id": "myapp", "name": "myapp", "config": {"properties": properties}}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _preflight_app(tmp_path: Path, properties: dict | None) -> list:
+    paths = _write_py(
+        tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
+    )
+    generated = tmp_path / "app" / "generated"
+    _write_manifest(
+        generated / "manifest.json", {"extract": _extract_node(_PREFLIGHT_ARGS)}
+    )
+    if properties is not None:
+        _write_config(generated, properties)
+    return paths
+
+
+def test_k018_ignores_arg_wired_to_sagev2_widget(tmp_path: Path) -> None:
+    paths = _preflight_app(
+        tmp_path, {"preflight-check": {"type": "string", "ui": _ui("sageV2")}}
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_ignores_conditional_whose_every_branch_is_sagev2(tmp_path: Path) -> None:
+    """The mysql shape: a conditional input that is SageV2 on every branch."""
+    paths = _preflight_app(
+        tmp_path,
+        {
+            "preflight-check": {
+                "type": "conditional",
+                "ui": _ui("sageV2"),
+                "conditions": [
+                    {
+                        "property": "extraction-method",
+                        "value": "direct",
+                        "ui": _ui("sageV2"),
+                    },
+                    {
+                        "property": "extraction-method",
+                        "value": "agent",
+                        "ui": _ui("sageV2"),
+                    },
+                ],
+            }
+        },
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_still_flags_same_arg_wired_to_value_widget(tmp_path: Path) -> None:
+    """Keyed on the widget, not the name: a text input named preflight-check is config."""
+    paths = _preflight_app(
+        tmp_path, {"preflight-check": {"type": "string", "ui": _ui("input")}}
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_still_flags_conditional_with_a_value_branch(tmp_path: Path) -> None:
+    paths = _preflight_app(
+        tmp_path,
+        {
+            "preflight-check": {
+                "type": "conditional",
+                "ui": _ui("sageV2"),
+                "conditions": [
+                    {
+                        "property": "extraction-method",
+                        "value": "direct",
+                        "ui": _ui("sageV2"),
+                    },
+                    {
+                        "property": "extraction-method",
+                        "value": "agent",
+                        "ui": _ui("input"),
+                    },
+                ],
+            }
+        },
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_still_flags_preflight_arg_without_config_json(tmp_path: Path) -> None:
+    """No config JSON to read the widget from — nothing is exempted."""
+    paths = _preflight_app(tmp_path, None)
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_non_value_exemption_is_scoped_to_the_manifests_own_directory(
+    tmp_path: Path,
+) -> None:
+    """A SageV2 declared in another directory's config does not exempt this manifest."""
+    paths = _preflight_app(tmp_path, None)
+    _write_config(
+        tmp_path / "app" / "generated" / "other",
+        {"preflight-check": {"type": "string", "ui": _ui("sageV2")}},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
 
 
 # ---------------------------------------------------------------------------
@@ -734,6 +863,346 @@ def test_k018_silent_when_two_live_contracts_are_ambiguous(tmp_path: Path) -> No
         {"extract": _extract_node(_APP_SPECIFIC_ARGS)},
     )
     assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+# An app that overrides ``run`` on an SDK template base binds *that* method's
+# Input. The toolkit-generated ``AppInputContract`` beside it is the app's only
+# ExtractionInput descendant, so a scan that misses the override falls back to
+# the generated stub and flags every key the real contract declares.
+_TEMPLATE_RUN_OVERRIDE_APP = """\
+from application_sdk.templates import {base}
+from application_sdk.contracts.base import Input, Output
+
+class MyInput(Input):
+    connection: str = ""
+    workspace_id: str = ""
+
+class MyOutput(Output):
+    pass
+
+class MyApp({base}):
+    async def run(self, input: MyInput) -> MyOutput:
+        pass
+"""
+
+_GENERATED_INPUT_STUB = """\
+from application_sdk.templates.contracts import ExtractionInput
+
+class AppInputContract(ExtractionInput):
+    pass
+"""
+
+
+@pytest.mark.parametrize("base", ["BaseMetadataExtractor", "SqlApp"])
+def test_k018_pairs_run_override_on_sdk_template_with_its_own_input(
+    tmp_path: Path, base: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_APP.format(base=base),
+            "app/generated/_input.py": _GENERATED_INPUT_STUB,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "connection": "{{connection}}",
+                    "workspace_id": "{{workspace-id}}",
+                    "not_on_my_input": "{{not-on-my-input}}",
+                }
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"not_on_my_input"}
+    assert all(f.file == "app/workflow.py" for f in findings)
+
+
+_TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP = """\
+from application_sdk.templates import {base}
+from application_sdk.templates.contracts import ExtractionInput{alias}
+
+class MyApp({base}):
+    async def run(self, input: {name}):
+        return await super().run(input)
+"""
+
+
+@pytest.mark.parametrize(
+    ("base", "alias", "name"),
+    [
+        ("SqlMetadataExtractor", "", "ExtractionInput"),
+        ("SqlApp", " as EI", "EI"),
+    ],
+)
+def test_k018_pairs_run_override_typed_with_an_sdk_template_input(
+    tmp_path: Path, base: str, alias: str, name: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/workflow.py": _TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP.format(
+                base=base, alias=alias, name=name
+            ),
+            "app/generated/_input.py": _GENERATED_INPUT_STUB,
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {"connection": "{{connection}}", "not_on_input": "{{not-on-input}}"}
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"not_on_input"}
+    assert all(f.file == "app/workflow.py" for f in findings)
+
+
+def test_k018_run_override_anchors_on_the_entrypoint_class_not_a_helper(
+    tmp_path: Path,
+) -> None:
+    """A helper class above the app, taking the same Input, is not the owner."""
+    src = _TEMPLATE_RUN_OVERRIDE_SDK_INPUT_APP.format(
+        base="SqlMetadataExtractor", alias="", name="ExtractionInput"
+    ).replace(
+        "class MyApp(",
+        "class Helper:\n"
+        "    def describe(self, input: ExtractionInput) -> str:\n"
+        "        return ''\n"
+        "\n"
+        "# conformance: ignore[K018] tracked elsewhere\n"
+        "class MyApp(",
+    )
+    paths = _write_py(
+        tmp_path,
+        {"app/workflow.py": src, "app/generated/_input.py": _GENERATED_INPUT_STUB},
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"not_on_input": "{{not-on-input}}"})},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert findings and all(f.suppressed for f in findings)
+
+
+# ---------------------------------------------------------------------------
+# K018 — run() inherited unchanged from an SDK template (FND-3110)
+# ---------------------------------------------------------------------------
+
+# An app that writes no run() of its own gets the template's run(), and the
+# runtime validates the payload against THAT method's Input. A generated
+# AppInputContract beside it is never bound, so an arg it declares is dropped.
+_INHERITED_TEMPLATE_RUN_APP = """\
+from application_sdk.templates import {base}
+
+class MyApp({base}):
+    async def fetch_databases(self, input):
+        pass
+"""
+
+
+def _generated_extraction_input(fields: str = "    pass\n") -> str:
+    return (
+        "from application_sdk.templates.contracts import ExtractionInput\n"
+        "\n"
+        "class AppInputContract(ExtractionInput):\n"
+        f"{fields}"
+    )
+
+
+@pytest.mark.parametrize(
+    "base", ["SqlApp", "SqlMetadataExtractor", "IncrementalSqlMetadataExtractor"]
+)
+def test_k018_pairs_inherited_template_run_with_the_template_input(
+    tmp_path: Path, base: str
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base=base),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "include_filter": "{{include-filter}}",
+                    "fetch_partitions": "{{fetch-partitions}}",
+                }
+            )
+        },
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert all(f.file == "app/app.py" for f in findings)
+
+
+def test_k018_inherited_sql_query_extractor_run_pairs_with_query_input(
+    tmp_path: Path,
+) -> None:
+    """The template's own Input decides, not the ExtractionInput anchor."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": _INHERITED_TEMPLATE_RUN_APP.format(base="SqlQueryExtractor"),
+            "app/generated/_input.py": _generated_extraction_input(),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {
+            "extract": _extract_node(
+                {
+                    "include_filter": "{{include-filter}}",
+                    "lookback_days": "{{lookback-days}}",
+                }
+            )
+        },
+    )
+    assert _flagged(_unsuppressed(scan_all(paths, tmp_path), "K018"), "K018") == {
+        "include_filter"
+    }
+
+
+def test_k018_inherited_template_run_through_an_in_repo_base(tmp_path: Path) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/base.py": (
+                "from application_sdk.templates import SqlApp as _Sql\n"
+                "\n"
+                "class ConnectorBase(_Sql):\n"
+                "    pass\n"
+            ),
+            "app/app.py": (
+                "from app.base import ConnectorBase\n"
+                "\n"
+                "class MyApp(ConnectorBase):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _unsuppressed(scan_all(paths, tmp_path), "K018")
+    assert _flagged(findings, "K018") == {"fetch_partitions"}
+    assert {f.file for f in findings} == {"app/app.py"}
+
+
+def test_k018_in_repo_run_on_a_base_is_not_the_template_run(tmp_path: Path) -> None:
+    """A run() on an in-repo base is not inherited from the template."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "\n"
+                "class Mixin:\n"
+                "    async def run(self, input):\n"
+                "        pass\n"
+                "\n"
+                "class MyApp(Mixin, SqlApp):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_inherited_run_follows_the_mro_not_depth_first(tmp_path: Path) -> None:
+    """``MyApp(A, B)`` takes ``run`` from ``B``'s mixin before the template both share."""
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "from application_sdk.templates import SqlApp\n"
+                "\n"
+                "class RunMixin:\n"
+                "    async def run(self, input):\n"
+                "        pass\n"
+                "\n"
+                "class A(SqlApp):\n"
+                "    pass\n"
+                "\n"
+                "class B(RunMixin, SqlApp):\n"
+                "    pass\n"
+                "\n"
+                "class MyApp(A, B):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert not any(
+        "inherits run()" in f.message for f in _only(scan_all(paths, tmp_path), "K018")
+    )
+
+
+def test_k018_local_class_named_like_a_template_keeps_the_fallback(
+    tmp_path: Path,
+) -> None:
+    paths = _write_py(
+        tmp_path,
+        {
+            "app/app.py": (
+                "class SqlApp:\n"
+                "    pass\n"
+                "\n"
+                "class MyApp(SqlApp):\n"
+                "    pass\n"
+            ),
+            "app/generated/_input.py": _generated_extraction_input(
+                "    fetch_partitions: bool = False\n"
+            ),
+        },
+    )
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_inherited_template_run_suppressed_on_the_app_class(
+    tmp_path: Path,
+) -> None:
+    src = _INHERITED_TEMPLATE_RUN_APP.format(base="SqlApp").replace(
+        "class MyApp(", "# conformance: ignore[K018] tracked elsewhere\nclass MyApp("
+    )
+    paths = _write_py(tmp_path, {"app/app.py": src})
+    _write_manifest(
+        tmp_path / "app" / "generated" / "manifest.json",
+        {"extract": _extract_node({"fetch_partitions": "{{fetch-partitions}}"})},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert findings and all(f.suppressed for f in findings)
 
 
 # ---------------------------------------------------------------------------

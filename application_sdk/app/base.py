@@ -15,13 +15,14 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractAsyncContextManager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import (
     TYPE_CHECKING,
     Any,
     ClassVar,
     Literal,
     Never,
+    Sequence,
     TypeVar,
     cast,
     get_type_hints,
@@ -58,7 +59,9 @@ from application_sdk.app.entrypoint import (
 from application_sdk.app.registry import AppMetadata, resolve_pool_queue
 from application_sdk.app.task import get_task_metadata, is_task, task
 from application_sdk.constants import (
+    APPLICATION_VERSION,
     ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    COMMIT_SHA,
     LOCAL_WORKFLOW_ID,
 )
 from application_sdk.contracts.base import HeartbeatDetails, Input, Output
@@ -88,6 +91,7 @@ from application_sdk.errors import (
 from application_sdk.errors.base import AppError as _NewAppError
 from application_sdk.errors.leaves import InternalError as _InternalError
 from application_sdk.errors.leaves import InvalidInputError as _InvalidInputError
+from application_sdk.handler.contracts import PreflightGateMode
 
 # Fixed event name for the structured, queryable transformed-asset validation
 # outcome. Emitted on every upload from inside the upload activity, so the
@@ -101,10 +105,10 @@ from application_sdk.errors.leaves import InvalidInputError as _InvalidInputErro
 from application_sdk.observability.events import ASSET_VALIDATION_EVENT
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.observability.observability import AtlanObservability
+from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
     from application_sdk.execution.progress import ProgressWatchdogMode
-    from application_sdk.handler.contracts import PreflightGateMode
 
 _task_logger = get_logger(__name__)
 
@@ -181,23 +185,29 @@ def _resolve_transformed_target(local_path: str) -> "Path | None":
     return None
 
 
-async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) -> None:
+async def _warn_on_invalid_transformed_assets(
+    local_path: str | Sequence[str],
+    app_name: str,
+    *,
+    not_local: Sequence[str] = (),
+) -> None:
     """Best-effort, warn-only validation of transformed asset NDJSON before upload.
 
     BLDX-1555 defense-in-depth at the SDR→Atlan boundary. When ``local_path``
     holds transformed asset output, every record is validated against the
     pyatlan_v9 ``.validate()`` backbone (plus the referential/orphan pass). On
     **every** upload a structured :data:`ASSET_VALIDATION_EVENT` is emitted with
-    the per-axis counts and a compact per-failure ``asset_validation_matrix`` JSON
-    attribute, all allowlisted for OTLP so they reach ClickHouse and join to the
+    the per-axis counts, a compact per-failure ``asset_validation_matrix`` JSON
+    attribute (a bounded sample) and an ``asset_validation_summary`` JSON attribute
+    (complete per-type, per-rule counts), all allowlisted for OTLP so they reach ClickHouse and join to the
     workflow outcome by Temporal run id (mirrors the preflight gate's outcome
     event). A ``clean`` outcome is emitted too, so there is a denominator to rank
     flag-rate against. A human-readable WARNING with the full ``format_report()``
     is additionally logged only when the batch is flagged. Extracts and transforms
-    are full by design by default, so the batch is complete and the orphan pass is
-    accurate. This **never** blocks the upload and **never** raises — a defect in
-    the scaffold must not break a real handoff — and it scans every record (no
-    sampling) so the summary is accurate.
+    are full by design by default, so the batch — the whole hand-off, see below —
+    is complete and the orphan pass is accurate. This **never** blocks the upload
+    and **never** raises — a defect in the scaffold must not break a real handoff
+    — and it scans every record (no sampling) so the summary is accurate.
 
     **The check is reached through the generic wrapper** (ADR-0020, FND-690):
     ``validate_artifact(target, ModelSource(model=Asset))`` is the NDJSON x
@@ -230,10 +240,26 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     validation must not stall an upload forever. The wrapper is synchronous by
     design precisely so this caller owns that decision.
 
-    Referential (orphan) integrity runs by default on this hook: extracts and
-    transforms are full by design by default, so every referenced parent is
-    present in the same batch and the orphan pass is accurate. Even on an
-    atypical partial batch the worst case is a spurious warning.
+    **The batch is the whole hand-off, not one file** (FND-3414). The orphan pass
+    is only accurate over everything delivered together: a fanned-out connector
+    writes one file per typename, so a child's parent is routinely in a sibling
+    file. ``local_path`` is therefore either one path (``upload``) or every
+    declared part of a fan-in delivery (``upload_refs``), validated as one batch
+    with one :data:`ASSET_VALIDATION_EVENT`. One part goes through the wrapper as
+    above; several go straight to
+    :func:`~application_sdk.validation.assets.validate_assets_as_artifact` — the
+    cell the wrapper dispatches that one part to — because the wrapper's unit is
+    a single artifact path and the parts share no local root to hand it.
+
+    A declared part that is not on this pod (a distributed fan-in, where the
+    upload streams it from the deployment store) makes the batch incomplete.
+    ``upload_refs`` passes those parts' store keys as ``not_local``. When any of
+    them is a transformed part, the orphan pass is skipped with a warning, and
+    per-asset validation still runs over the parts that are local — reporting a
+    parent as missing because it was written on another pod would be the false
+    positive this fixes. When *no* transformed part is local, the same warning
+    says validation was skipped entirely, so a fully distributed fan-in is never
+    silent.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — deferred-constant import mirrors upload()'s pattern
         VALIDATE_ASSETS_ON_UPLOAD,
@@ -244,9 +270,28 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     # pays for a child-process dispatch.
     if not VALIDATE_ASSETS_ON_UPLOAD:
         return
-    target = _resolve_transformed_target(local_path)
-    if target is None:
+    paths = [local_path] if isinstance(local_path, str) else list(local_path)
+    targets = [
+        str(target)
+        for target in map(_resolve_transformed_target, paths)
+        if target is not None
+    ]
+    remote = [key for key in not_local if "transformed" in PurePosixPath(key).parts]
+    if remote:
+        _task_logger.warning(
+            "Transformed-asset validation: %d of %d declared transformed file(s) "
+            "are not on this pod, so the batch is incomplete; %s",
+            len(remote),
+            len(remote) + len(targets),
+            (
+                "skipping the referential (orphan) check"
+                if targets
+                else "skipping validation"
+            ),
+        )
+    if not targets:
         return
+    check_referential_integrity = not remote
 
     from pyatlan_v9.model.assets import (  # noqa: PLC0415 — deferred: pyatlan_v9 stays off the import path of an app that never uploads transformed assets
         Asset,
@@ -254,22 +299,34 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
 
     from application_sdk.validation import (  # noqa: PLC0415 — deferred: only load the validator on the upload path
         AssetArtifactReport,
+        AssetBatchScope,
         ModelSource,
         asset_validation_event_fields,
         validate_artifact,
+        validate_assets_as_artifact,
     )
 
     # Best-effort: run_best_effort isolates the scan in a child process and, on
     # any native crash / timeout / error, logs a warning and returns None — the
     # upload is never blocked, failed, or crashed by the validation scaffold.
-    report = await run_best_effort(
-        validate_artifact,
-        str(target),
-        ModelSource(model=Asset),
-        label="Transformed-asset validation",
-        logger=_task_logger,
-        timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
-    )
+    if len(targets) == 1 and check_referential_integrity:
+        report = await run_best_effort(
+            validate_artifact,
+            targets[0],
+            ModelSource(model=Asset),
+            label="Transformed-asset validation",
+            logger=_task_logger,
+            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
+    else:
+        report = await run_best_effort(
+            validate_assets_as_artifact,
+            targets,
+            check_referential_integrity=check_referential_integrity,
+            label="Transformed-asset validation",
+            logger=_task_logger,
+            timeout=VALIDATE_ASSETS_TIMEOUT_SECONDS,
+        )
 
     if report is None:
         # run_best_effort swallowed a native crash / timeout / error (it already
@@ -299,12 +356,22 @@ async def _warn_on_invalid_transformed_assets(local_path: str, app_name: str) ->
     try:
         assets = report.assets
         flagged = not assets.ok
-        _task_logger.info(
-            ASSET_VALIDATION_EVENT,
-            **asset_validation_event_fields(
-                assets, app_name=app_name, max_items=_VALIDATION_MATRIX_MAX_ROWS
+        # The summary walks every failure (a broken batch can carry millions), so
+        # the projection is built off the event loop to keep heartbeats flowing.
+        fields = await run_in_thread(
+            asset_validation_event_fields,
+            assets,
+            app_name=app_name,
+            max_items=_VALIDATION_MATRIX_MAX_ROWS,
+            scope=AssetBatchScope(
+                # One path is ``upload``; a list is every declared part of an
+                # ``upload_refs`` fan-in (see the docstring).
+                upload_kind="upload" if isinstance(local_path, str) else "upload_refs",
+                parts_validated=len(targets),
+                parts_not_local=len(remote),
             ),
         )
+        _task_logger.info(ASSET_VALIDATION_EVENT, **fields)
         if flagged:
             _task_logger.warning(
                 "Transformed-asset validation flagged issues before upload "
@@ -379,6 +446,44 @@ def _run_started_at_epoch() -> float:
     except Exception:
         return 0.0  # conformance: ignore[E007] workflow-context probe; "no run to measure" is the answer, and a log line here would fire per dispatch on every local run
     return start_time.timestamp() if start_time is not None else 0.0
+
+
+def _format_build_identity() -> str:
+    """``sdk=<v> app=<v> commit=<sha>`` for the App lifecycle messages (FND-1936).
+
+    This rides in the *message* rather than in structured attributes, because
+    the message is the only field that survives every hop of the run-logs path.
+    The Iceberg table behind it (``observability.app_logs``) has a fixed schema
+    and the ingest pipe's Jolt shift maps a known field list onto those columns,
+    so a new attribute is never carried; heracles then re-projects each record
+    through two closed structs that declare no attributes bag. A marker in the
+    message needs none of that to change, and reaches the run-log panel, the
+    ``.log`` and ``.ndjson`` exports and any future consumer at once.
+
+    The remaining structured carriers are the OTel Resource ``sdk.version``
+    (on every OTLP log record) and the ``app_version`` / ``commit_sha`` fields
+    on ``worker_start`` and ``token_refresh`` events. Those still answer fleet
+    questions this string cannot. The four interceptor lifecycle lines
+    (``workflow.*`` / ``activity.*``) no longer carry ``sdk.version`` /
+    ``app.version`` attributes.
+
+    Keys are ``k=v`` and ASCII so that the grep that motivated this — an
+    engineer searching an exported run log for a version — actually hits.
+    An empty carrier drops its key rather than emitting a bare ``app=``, which
+    would read as a value of its own. ``sdk`` is always known.
+    """
+    parts = [f"sdk={_SDK_VERSION}"]
+    if APPLICATION_VERSION:
+        parts.append(f"app={APPLICATION_VERSION}")
+    if COMMIT_SHA:
+        parts.append(f"commit={COMMIT_SHA}")
+    return " ".join(parts)
+
+
+#: Computed once at import: every carrier is an import-time constant and none
+#: can change for the life of the container, so the workflow-side call sites
+#: below do no work and stay sandbox-safe.
+_BUILD_IDENTITY = _format_build_identity()
 
 
 def _safe_log(level: str, message: str, **attrs: Any) -> None:
@@ -824,19 +929,25 @@ class App(ABC):
 
     Soft (default) never blocks — a ``NOT_READY`` verdict lets the run proceed
     and is emitted as ``outcome="would_block"`` on the gate outcome event so it
-    is always reported. Hard is the opt-in that blocks the run on every outcome
-    the gate attributes to the source: a ``NOT_READY`` verdict, anything the
-    handler raises, a probe overrunning the budget, a frame Temporal ended. Set
-    it once the app's checks are trusted to gate real runs. The bare strings
+    is always reported. Hard is the opt-in that blocks the run on an outcome
+    the gate attributes to the source — a ``NOT_READY`` verdict, anything the
+    handler raises, a frame Temporal ended — when the attributed failure is one
+    the customer can act on (``GATE_BLOCKING_CATEGORIES``: auth, permission,
+    invalid input, precondition, not found). Anything else, including a probe
+    overrunning the budget or an unreachable source, is reported as
+    ``would_block`` and the run proceeds. Set it once the app's checks are
+    trusted to gate real runs. The bare strings
     ``"hard"`` and ``"soft"`` are accepted and coerced once; any other value
     resolves to soft. This attribute is the only source of the posture: the
     worker and the workflow both read it, so they cannot disagree. See the
     adopt-preflight-gate skill.
 
     Note this posture applies to *every* outcome the gate can attribute to the
-    source, not only a ``NOT_READY`` verdict: a probe that overruns
-    :attr:`preflight_gate_timeout_seconds`, a handler crash, and a missing
-    credential all block in hard mode. Failures of the gate's own plumbing (secret
+    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``,
+    ``SOURCE_UNAVAILABLE`` or the deprecated fail-open categories: a probe that
+    overruns :attr:`preflight_gate_timeout_seconds` and an untyped handler crash
+    (``INTERNAL``) are reported, a missing credential typed ``NOT_FOUND`` blocks.
+    Failures of the gate's own plumbing (secret
     store outage, rate limit, worker unavailable) always fail open, in both
     postures — a platform blip must not fail a healthy run."""
 
@@ -854,8 +965,9 @@ class App(ABC):
     whatever this says. The 150s default is deliberately generous while the fleet's
     real check durations are being measured; expect it to come down once the
     distribution is known. Raise it only for a source demonstrably slower than
-    that, and size checks to finish inside it with headroom. In hard mode an overrun blocks
-    the run, so this value and the handler's actual cost must agree. Probes must
+    that, and size checks to finish inside it with headroom. An overrun is a ``TIMEOUT``,
+    which hard mode reports rather than blocks, so a budget smaller than the handler's
+    real cost silently turns the gate into a report. Probes must
     also stay awaitable: cancellation lands at an ``await``, so blocking
     synchronous I/O on the event loop cannot be interrupted."""
 
@@ -869,6 +981,40 @@ class App(ABC):
     ``schedule_to_close`` window. So an app declaring a large
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here: at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
+
+    preflight_warmup_ceiling_seconds: ClassVar[int] = 600
+    """How long the gate waits, from gate start, for the source's warmup.
+
+    Read only when a run's first :meth:`Handler.warmup
+    <application_sdk.handler.base.Handler.warmup>` probe is not ``READY`` —
+    never for an app that does not override ``warmup``, whose default answers
+    ``READY``. The gate then runs the ``PREFLIGHT`` tier, polls ``warmup`` on
+    durable timers (5s doubling to 30s, or the source's ``next_poll_seconds``
+    with a 5s floor), and runs the ``WARMUP`` tier once it reports ``READY``.
+    The wait holds no worker slot, so this can be far longer than
+    :attr:`preflight_gate_timeout_seconds`; the loop exits on the first
+    terminal observation and uses the full ceiling only while the source keeps
+    reporting it is not ready. Reaching it is
+    ``SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED``, and :attr:`preflight_warmup_mode`
+    decides whether that blocks. Floor 30s, no cap (Snowflake declares 1800)."""
+
+    preflight_warmup_probe_timeout_seconds: ClassVar[int] = 10
+    """How long one ``warmup`` probe should take on warm compute.
+
+    Passed to the handler as ``WarmupInput.probe_timeout_seconds`` and enforced
+    around each probe; it also sizes each poll activity. Floor 1s, at most the
+    ceiling."""
+
+    preflight_warmup_mode = PreflightGateMode.SOFT
+    """Whether a warmup that never got ready blocks the run, independent of
+    :attr:`preflight_gate_mode`.
+
+    Applies to the two outcomes the gate attributes to the source's compute:
+    ``UNAVAILABLE`` and the ceiling. ``SOFT`` (default) reports them and lets
+    the run proceed; ``HARD`` stops it. A typed AUTH / PERMISSION / NOT_FOUND
+    raise from ``warmup`` is a verdict like any check's, so
+    :attr:`preflight_gate_mode` decides that one. Assign it without an
+    annotation (``preflight_warmup_mode = PreflightGateMode.HARD``)."""
 
     preflight_verify_storage: ClassVar[bool] = False
     """Also verify the run's artifact object store(s) in the preflight gate.
@@ -1132,7 +1278,10 @@ class App(ABC):
         return self._task_context.get_heartbeat_details(cls)
 
     async def run_in_thread(
-        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+        self,
+        func: Callable[..., Any],
+        *args: Any,
+        **kwargs: Any,
     ) -> Any:
         """Run a blocking function in a thread pool.
 
@@ -1146,9 +1295,12 @@ class App(ABC):
                 rows = await self.run_in_thread(cursor.execute, sql)
 
         Args:
-            func: Blocking function to run.
+            func: Blocking function to run. Bind a
+                :class:`~application_sdk.execution.heartbeat.CancelHandle` to it
+                (``handle.bind(func)``) to cancel the driver call when this task
+                is cancelled.
             *args: Positional arguments for func.
-            **kwargs: Keyword arguments for func.
+            **kwargs: Keyword arguments for func, all passed through.
 
         Returns:
             Result of ``func(*args, **kwargs)``.
@@ -1432,13 +1584,17 @@ class App(ABC):
         """
         return await self._upload_impl(input)
 
-    async def _upload_impl(self, input: UploadInput) -> UploadOutput:
+    async def _upload_impl(
+        self, input: UploadInput, *, validate_assets: bool = True
+    ) -> UploadOutput:
         """Body of :meth:`upload`, callable from inside another ``@task``.
 
         ``upload`` is a ``@task``, and a ``@task`` cannot call another one — so
         every framework task that needs the same store routing, dual-write
         fan-out and pre-handoff validation calls this instead of duplicating
-        them. :meth:`upload_refs` is the other caller.
+        them. :meth:`upload_refs` is the other caller; it passes
+        ``validate_assets=False`` because it validates its whole declaration as
+        one batch instead of one file at a time (FND-3414).
         """
         from application_sdk.constants import (  # noqa: PLC0415 — import here to avoid module-level circular import (same pattern as normalize_key)
             DEPLOYMENT_ARTIFACT_DUAL_WRITE_ENABLED,
@@ -1466,7 +1622,8 @@ class App(ABC):
         # pyatlan_v9 backbone before the handoff. Warn-only, best-effort, and
         # run in an isolated child process (CNCT-85) so a native decode fault
         # kills only the child and never blocks or crashes the event loop.
-        await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
+        if validate_assets:
+            await _warn_on_invalid_transformed_assets(input.local_path, self._app_name)
 
         # Build the ordered list of (store, label, fatal) upload targets.
         # See ADR-0014 §"BLDX-1464 dual-write" for the full routing decision.
@@ -1922,6 +2079,23 @@ class App(ABC):
 
         source_prefix = input.source_prefix.strip("/")
 
+        # Validate the declaration as one batch, not per file (FND-3414): a
+        # fanned-out connector writes one file per typename, so a child's parent
+        # is usually in a sibling file and a per-file orphan pass flags nearly
+        # every cross-typename reference. A part this pod never held is passed
+        # by store key, so the hook can say the batch is incomplete.
+        local: list[str] = []
+        not_local: list[str] = []
+        for declared in input.files:
+            path = declared.ref.local_path
+            if path and Path(path).exists():
+                local.append(path)
+            else:
+                not_local.append(declared.ref.storage_path or "")
+        await _warn_on_invalid_transformed_assets(
+            local, self._app_name, not_local=not_local
+        )
+
         delivered: list[FileReference] = []
         file_count = 0
         for declared in input.files:
@@ -1957,7 +2131,8 @@ class App(ABC):
                     # A declared file that contributes zero objects is a hole in
                     # the tree the consumer will walk — fail here, loudly.
                     raise_on_empty=True,
-                )
+                ),
+                validate_assets=False,
             )
             delivered.append(out.ref)
             file_count += out.ref.file_count
@@ -2247,10 +2422,11 @@ class App(ABC):
         # Inert when this runs inside the generated Temporal workflow (the
         # normal case — on_complete() is called from _run()'s finally). Both
         # legs self-guard on ``utils.in_temporal_workflow``: the object-store
-        # sink in ``AtlanObservability._flush_records`` and the Segment drain in
-        # ``SegmentClient.flush()``. Neither is a loss — OTLP export is per-call,
-        # and queued Segment events go out on the worker's batch timer, with
-        # ``close()`` draining the remainder at process exit. The call is kept
+        # sink in ``AtlanObservability._flush_records`` (which returns the
+        # records to the buffer for the worker's periodic flush) and the
+        # Segment drain in ``SegmentClient.flush()``. Neither is a loss — OTLP
+        # export is per-call, and queued Segment events go out on the worker's
+        # batch timer, with ``close()`` draining the remainder at process exit. The call is kept
         # for the non-workflow callers of on_complete() (direct invocation,
         # tests, and any subclass that calls super() outside a workflow).
         try:
@@ -2495,6 +2671,9 @@ async def _run_preflight_gate(
     budget_seconds: int | None = None,
     max_attempts: int | None = None,
     gate_mode: object = None,
+    warmup_ceiling_seconds: object = None,
+    warmup_probe_timeout_seconds: object = None,
+    warmup_mode: object = None,
 ) -> None:
     """Run the SDK-owned pre-extraction preflight gate (HYP-1883).
 
@@ -2532,6 +2711,32 @@ async def _run_preflight_gate(
     ``gate_outcome_row`` the activity uses, so a consumer parsing ``gate_mode``
     or ``gate_attempt`` never drops the rows that prove a gate never ran or never
     returned.
+
+    **Warmup phase (FND-3039).** Before any check, this frame dispatches one
+    ``{app}:preflight_warmup`` activity: one ``Handler.warmup`` probe with its
+    own timeout (the app's probe timeout plus slack), so the probe never spends
+    the check activity's budget. ``READY`` — what an app that does not override
+    ``warmup`` always answers — is followed by one check dispatch with every
+    tier, exactly as before tiers. Otherwise the check activity runs the
+    ``PREFLIGHT`` tier, and once that dispatch lets the run go on, this frame
+    waits: further probes separated by durable timers, so the wait holds no
+    worker slot. On ``READY`` it dispatches the check activity again with
+    ``tiers={WARMUP}``. ``UNAVAILABLE`` and the ceiling (from gate start) are
+    attributed to the source and ``warmup_mode`` alone decides whether they
+    block; a typed AUTH / PERMISSION / NOT_FOUND raise from a probe is a
+    verdict, gated on its category under ``gate_mode``. A first probe whose own
+    plumbing fails falls back to one dispatch with every tier (its row says
+    ``warmup_outcome=broken``); a later one fails open as ``no_verdict`` /
+    ``gate_broken``.
+
+    **Replay.** ``workflow.patched("preflight-gate-warmup")`` guards this
+    phase. PINNED workers drain a run on the build that started it, but an app
+    can opt into ``AUTO_UPGRADE`` (``TEMPORAL_DEFAULT_VERSIONING_BEHAVIOR``),
+    which migrates in-flight runs onto a new build, and a deployment with no
+    ``ATLAN_APP_BUILD_ID`` is unversioned. A run started before the phase
+    recorded the check activity as its first command, so on replay it takes the
+    unpatched branch: one check dispatch with every tier and no probe, exactly
+    the sequence it recorded. Every new run records the patch marker.
     """
     with workflow.unsafe.imports_passed_through():
         from application_sdk.credentials.ref import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
@@ -2540,15 +2745,24 @@ async def _run_preflight_gate(
         from application_sdk.errors.categories import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             Audience,
         )
+        from application_sdk.errors.wire import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            FailureDetails,
+        )
         from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
             PREFLIGHT_OUTCOME_EVENT,
+            WARMUP_TRANSITIONS_MAX,
             PreflightClassification,
             PreflightGateInput,
             PreflightRowOutcome,
+            WarmupOutcome,
+            WarmupPoll,
+            WarmupTransition,
+            WarmupWait,
             build_workflow_block,
             classify_gate_failure,
             coerce_gate_mode,
             frame_death_details,
+            gate_blocks,
             gate_budget_seconds,
             gate_heartbeat_timings,
             gate_outcome_level,
@@ -2557,10 +2771,28 @@ async def _run_preflight_gate(
             gate_timeouts,
             is_preflight_block,
             preflight_gate_activity_name,
+            preflight_warmup_activity_name,
             underlying_error_type,
+            warmup_activity_timeouts,
+            warmup_exhausted_details,
+            warmup_retry_policy,
+            warmup_unavailable_details,
+            warmup_waiting_details,
+        )
+        from application_sdk.handler._warmup import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            warmup_ceiling_seconds as _warmup_ceiling_seconds,
+        )
+        from application_sdk.handler._warmup import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            warmup_poll_delay,
+        )
+        from application_sdk.handler._warmup import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            warmup_probe_timeout_seconds as _warmup_probe_timeout_seconds,
         )
         from application_sdk.handler.contracts import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
+            CheckTier,
             PreflightCheck,
+            WarmupObservation,
+            WarmupState,
         )
 
     entry = entrypoint or "<implicit>"
@@ -2576,7 +2808,11 @@ async def _run_preflight_gate(
         attempt: int,
         checks: list[PreflightCheck] | None = None,
         audience: str | None = None,
+        primary: FailureDetails | None = None,
         exc_info: bool = False,
+        tier: CheckTier | None = None,
+        warmup_seen: WarmupWait | None = None,
+        row_mode: PreflightGateMode | None = None,
     ) -> None:
         checks = checks or []
         row = gate_outcome_row(
@@ -2585,12 +2821,15 @@ async def _run_preflight_gate(
             outcome=outcome,
             reason=reason,
             checks=checks,
-            mode=mode,
+            mode=row_mode or mode,
             classification=classification,
             duration_ms=duration_ms,
             budget_seconds=budget,
             attempt=attempt,
             audience=audience,
+            primary=primary,
+            tier=tier,
+            warmup=warmup_seen,
         )
         if exc_info:
             row["exc_info"] = True
@@ -2617,7 +2856,123 @@ async def _run_preflight_gate(
         _emit_skipped("input_not_credential_resolvable")
         return
 
+    def _elapsed_ms() -> float:
+        return round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
+
+    def _no_verdict(
+        e: Exception,
+        tier: CheckTier | None,
+        warmup_seen: WarmupWait | None = None,
+    ) -> None:
+        """Apply the mode to a check dispatch that returned no verdict.
+
+        Re-raises the activity's deliberate block unchanged; otherwise
+        classifies from the chain, fails open on the gate's own plumbing, and
+        blocks or reports anything attributed to the source, as
+        ``gate_blocks`` decides from the posture and the evidence's category.
+        """
+        # The activity emits the blocked outcome event before it raises; the
+        # workflow re-raises the deliberate block unchanged.
+        if is_preflight_block(e):
+            raise e
+        failure = classify_gate_failure(e)
+        if failure.classification is PreflightClassification.GATE_BROKEN:
+            _emit_row(
+                PreflightRowOutcome.NO_VERDICT,
+                underlying_error_type(e),
+                failure.classification,
+                _elapsed_ms(),
+                attempt=failure.attempt,
+                audience=Audience.APP_OWNER.value,
+                # The plumbing error's own details[0], read off the chain by
+                # classify_gate_failure when it can be parsed — _plumbing_error
+                # leaves it there for exactly this consumer. None only for a bare
+                # exception that carried none; the row then has the stack trace
+                # and no sentence. Same ladder as the other two branches.
+                primary=failure.evidence,
+                exc_info=True,
+                tier=tier,
+                warmup_seen=warmup_seen,
+            )
+            return
+        evidence = failure.evidence or frame_death_details(e, app_name, budget)
+        blocks = gate_blocks(mode, evidence.category)
+        _emit_row(
+            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
+            evidence.code,
+            failure.classification,
+            _elapsed_ms(),
+            attempt=failure.attempt,
+            checks=failure.checks,
+            audience=evidence.audience.value,
+            primary=evidence,
+            exc_info=True,
+            tier=tier,
+            warmup_seen=warmup_seen,
+        )
+        if blocks:
+            raise build_workflow_block(
+                evidence, failure.checks, app_name, failure.attempt
+            ) from e
+
+    ceiling, _ = _warmup_ceiling_seconds(warmup_ceiling_seconds)
+    probe_timeout, _ = _warmup_probe_timeout_seconds(
+        warmup_probe_timeout_seconds, ceiling
+    )
     dispatched_at = workflow.now()
+    warmup_posture = coerce_gate_mode(warmup_mode)
+    deadline = dispatched_at + timedelta(seconds=ceiling)
+    transitions: list[WarmupTransition] = []
+    warmup_s2c, warmup_sc2 = warmup_activity_timeouts(probe_timeout)
+
+    def _observe(observation: WarmupObservation) -> None:
+        """Record *observation* if its state changed; refresh the health line."""
+        if not transitions or transitions[-1].state is not observation.state:
+            transitions.append(
+                WarmupTransition(state=observation.state, at_ms=_elapsed_ms())
+            )
+        if observation.state.is_pending:
+            _set_health_line(warmup_waiting_details(observation, _elapsed_ms() / 1000))
+
+    def _wait(outcome: WarmupOutcome) -> WarmupWait:
+        return WarmupWait(
+            outcome=outcome,
+            duration_ms=_elapsed_ms(),
+            transitions=transitions[:WARMUP_TRANSITIONS_MAX],
+        )
+
+    async def _poll() -> WarmupPoll:
+        """One ``{app}:preflight_warmup`` activity: its own timeout, never the
+        check activity's budget."""
+        return await workflow.execute_activity(
+            preflight_warmup_activity_name(app_name),
+            gate_input,
+            result_type=WarmupPoll,
+            schedule_to_close_timeout=warmup_sc2,
+            start_to_close_timeout=warmup_s2c,
+            retry_policy=warmup_retry_policy(),
+        )
+
+    def _terminal(error: FailureDetails) -> None:
+        """A typed AUTH / PERMISSION / NOT_FOUND raise from the probe: a verdict
+        on the source like any handler raise, so category gating under the
+        gate posture."""
+        _set_health_line("")
+        blocks = gate_blocks(mode, error.category)
+        _emit_row(
+            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
+            error.code,
+            PreflightClassification.SOURCE_UNVERIFIABLE,
+            _elapsed_ms(),
+            attempt=0,
+            audience=error.audience.value,
+            primary=error,
+            tier=CheckTier.WARMUP,
+            warmup_seen=_wait(WarmupOutcome.FAILED),
+        )
+        if blocks:
+            raise build_workflow_block(error, [], app_name, 0)
+
     try:
         # Inside the guard: an exception escaping here would become a workflow
         # *task* failure, which Temporal retries indefinitely (see
@@ -2625,52 +2980,189 @@ async def _run_preflight_gate(
         start_to_close, schedule_to_close = gate_timeouts(budget, max_attempts)
         heartbeat_timeout, _ = gate_heartbeat_timings(start_to_close.total_seconds())
         gate_input = PreflightGateInput.from_extraction_input(input_data, entrypoint)
+    except Exception as e:
+        _no_verdict(e, None, None)
+        return
+
+    async def _dispatch_checks(
+        tiers: frozenset[CheckTier] | None, warmup_seen: WarmupWait | None
+    ) -> None:
         await workflow.execute_activity(
             preflight_gate_activity_name(app_name),
-            gate_input,
+            gate_input.model_copy(update={"tiers": tiers, "warmup": warmup_seen}),
             schedule_to_close_timeout=schedule_to_close,
             start_to_close_timeout=start_to_close,
             heartbeat_timeout=timedelta(seconds=heartbeat_timeout),
             retry_policy=gate_retry_policy(max_attempts),
         )
-    except Exception as e:
-        # The activity emits the blocked outcome event before it raises; the
-        # workflow re-raises the deliberate block unchanged.
-        if is_preflight_block(e):
-            raise
-        elapsed_ms = round((workflow.now() - dispatched_at).total_seconds() * 1000, 1)
-        failure = classify_gate_failure(e)
-        if failure.classification is PreflightClassification.GATE_BROKEN:
-            _emit_row(
-                PreflightRowOutcome.NO_VERDICT,
-                underlying_error_type(e),
-                failure.classification,
-                elapsed_ms,
-                attempt=failure.attempt,
-                audience=Audience.APP_OWNER.value,
-                exc_info=True,
-            )
-            return
-        evidence = failure.evidence or frame_death_details(e, app_name, budget)
-        _emit_row(
-            PreflightRowOutcome.BLOCKED
-            if mode.enforces
-            else PreflightRowOutcome.WOULD_BLOCK,
-            evidence.code,
-            failure.classification,
-            elapsed_ms,
-            attempt=failure.attempt,
-            checks=failure.checks,
-            audience=evidence.audience.value,
-            exc_info=True,
-        )
-        if mode.enforces:
-            raise build_workflow_block(
-                evidence, failure.checks, app_name, failure.attempt
-            ) from e
+
+    # A run started before the warmup phase existed recorded the check activity
+    # as its first command. An AUTO_UPGRADE app (TEMPORAL_DEFAULT_VERSIONING_
+    # BEHAVIOR) migrates such a run onto this build, so it must replay the old
+    # sequence: one check dispatch with every tier, no probe.
+    if not workflow.patched("preflight-gate-warmup"):
+        try:
+            await _dispatch_checks(None, None)
+        except Exception as e:
+            _no_verdict(e, None, None)
         return
 
-    # Success: the activity already emitted the proceeded outcome event.
+    # The first warmup probe is its own activity, ahead of the checks, so it
+    # never spends the check budget. READY — what every app that does not
+    # override Handler.warmup answers — sends one check dispatch with every
+    # tier, exactly as before tiers.
+    first_poll: WarmupPoll | None = None
+    try:
+        first_poll = await _poll()
+    except Exception:
+        # The probe's own plumbing failed: run every tier, as before tiers, and
+        # say so on that row. A broken probe must not cost the run its verdict.
+        _safe_log(
+            "warning",
+            "Preflight warmup probe failed; running every check tier",
+            app_name=app_name,
+            entrypoint=entry,
+            exc_info=True,
+        )
+    if first_poll is not None and first_poll.is_terminal and first_poll.error:
+        _observe(first_poll.observation)
+        _terminal(first_poll.error)
+        return
+    seen = first_poll.observation if first_poll is not None else None
+    if seen is None or seen.state is WarmupState.READY:
+        try:
+            await _dispatch_checks(
+                None,
+                None if seen is not None else WarmupWait(outcome=WarmupOutcome.BROKEN),
+            )
+        except Exception as e:
+            _no_verdict(e, None, None)
+        # Success: the activity already emitted the proceeded outcome event.
+        return
+
+    _observe(seen)
+    first_wait = WarmupWait(
+        outcome=WarmupOutcome.UNAVAILABLE
+        if seen.state is WarmupState.UNAVAILABLE
+        else WarmupOutcome.WARMING
+    )
+    try:
+        await _dispatch_checks(frozenset({CheckTier.PREFLIGHT}), first_wait)
+    except Exception as e:
+        _set_health_line("")
+        _no_verdict(e, CheckTier.PREFLIGHT, first_wait)
+        return
+
+    terminal: FailureDetails | None = None
+    last_error: FailureDetails | None = (
+        first_poll.error if first_poll is not None else None
+    )
+    unhinted = 0
+    # Set only by a poll after the PREFLIGHT dispatch; the first probe ran
+    # before it, so it is in time by construction.
+    late_ready = False
+    try:
+        while seen.state.is_pending:
+            remaining = (deadline - workflow.now()).total_seconds()
+            if remaining <= 0:
+                break
+            delay = warmup_poll_delay(unhinted, seen.next_poll_seconds, remaining)
+            if seen.next_poll_seconds is None:
+                unhinted += 1
+            if delay > 0:
+                await workflow.sleep(timedelta(seconds=delay))
+            poll = await _poll()
+            if poll.is_terminal:
+                terminal = poll.error
+                break
+            last_error = poll.error
+            seen = poll.observation
+            _observe(seen)
+            # The deadline is checked again when the poll returns: one that
+            # started inside the ceiling can finish outside it, and a READY that
+            # arrives late does not buy the WARMUP checks extra time.
+            late_ready = seen.state is WarmupState.READY and workflow.now() >= deadline
+    except Exception as e:
+        # The poll activity turns everything the probe does into a WarmupPoll,
+        # so what reaches here is the gate's own plumbing: fail open.
+        _set_health_line("")
+        _emit_row(
+            PreflightRowOutcome.NO_VERDICT,
+            underlying_error_type(e),
+            PreflightClassification.GATE_BROKEN,
+            _elapsed_ms(),
+            attempt=0,
+            audience=Audience.APP_OWNER.value,
+            exc_info=True,
+            tier=CheckTier.WARMUP,
+            warmup_seen=_wait(WarmupOutcome.BROKEN),
+        )
+        return
+    _set_health_line("")
+
+    if terminal is not None:
+        _terminal(terminal)
+        return
+
+    if seen.state is WarmupState.READY and not late_ready:
+        ready = _wait(WarmupOutcome.READY)
+        try:
+            await _dispatch_checks(frozenset({CheckTier.WARMUP}), ready)
+        except Exception as e:
+            _no_verdict(e, CheckTier.WARMUP, ready)
+        return
+
+    # UNAVAILABLE, or still warming at the ceiling: the WARMUP checks cannot
+    # run, and the reason is the source's compute. The warmup posture alone
+    # decides here, not gate_blocks: both are SOURCE_UNAVAILABLE, which
+    # gate_blocks never blocks on (FND-3036).
+    blocks = warmup_posture.enforces
+    if seen.state is WarmupState.UNAVAILABLE:
+        evidence = warmup_unavailable_details(seen, app_name)
+        _emit_row(
+            PreflightRowOutcome.BLOCKED if blocks else PreflightRowOutcome.WOULD_BLOCK,
+            evidence.code,
+            PreflightClassification.SOURCE_UNVERIFIABLE,
+            _elapsed_ms(),
+            attempt=0,
+            audience=evidence.audience.value,
+            primary=evidence,
+            tier=CheckTier.WARMUP,
+            warmup_seen=_wait(WarmupOutcome.UNAVAILABLE),
+            row_mode=warmup_posture,
+        )
+    else:
+        evidence = warmup_exhausted_details(seen, app_name, ceiling, last_error)
+        _emit_row(
+            PreflightRowOutcome.WARMUP_EXHAUSTED,
+            evidence.code,
+            PreflightClassification.SOURCE_UNVERIFIABLE,
+            _elapsed_ms(),
+            attempt=0,
+            audience=evidence.audience.value,
+            primary=evidence,
+            tier=CheckTier.WARMUP,
+            warmup_seen=_wait(WarmupOutcome.EXHAUSTED),
+            # The posture that decided this row, so a reader can tell a stopped
+            # run from a reported one without the app's config.
+            row_mode=warmup_posture,
+        )
+    if blocks:
+        raise build_workflow_block(evidence, [], app_name, 0)
+
+
+def _set_health_line(text: str) -> None:
+    """Set the run's Temporal current details — the line its health view shows.
+
+    Best effort: the line is a courtesy, and anything escaping here would be a
+    workflow *task* failure, which Temporal retries indefinitely. Emits no
+    command, so it is replay-safe and needs no patch marker. ``""`` clears it.
+    """
+    try:
+        workflow.set_current_details(text)
+    # conformance: ignore[E004] a status line must never fail the gate; logged at DEBUG with exc_info=True
+    except Exception:
+        _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
 def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
@@ -2893,7 +3385,7 @@ def generate_workflow_class(
 
         _safe_log(
             "info",
-            "App started",
+            f"App started {_BUILD_IDENTITY}",
             app_name=app_name,
             run_id=str(run_id),
             correlation_id=context.correlation_id,
@@ -2923,6 +3415,9 @@ def generate_workflow_class(
                 getattr(app_cls, "preflight_gate_timeout_seconds", None),
                 getattr(app_cls, "preflight_gate_max_attempts", None),
                 getattr(app_cls, "preflight_gate_mode", None),
+                getattr(app_cls, "preflight_warmup_ceiling_seconds", None),
+                getattr(app_cls, "preflight_warmup_probe_timeout_seconds", None),
+                getattr(app_cls, "preflight_warmup_mode", None),
             )
             entry_method = getattr(app_instance, entry_method_name)
             result = await entry_method(input_data)
@@ -2933,9 +3428,11 @@ def generate_workflow_class(
             with workflow.unsafe.imports_passed_through():
                 from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — temporal workflow sandbox: import must be inside imports_passed_through()
                     is_preflight_block,
+                    preflight_block_message,
                 )
             # A deliberate preflight-gate block logs terse (classification already
-            # on the error's FailureDetails); the marker may sit on a cause.
+            # on the error's FailureDetails); the marker may sit on a cause, so
+            # the reason is read off the block itself, not Temporal's wrapper.
             if is_preflight_block(e):
                 _safe_log(
                     "warning",
@@ -2943,7 +3440,7 @@ def generate_workflow_class(
                     app_name=app_name,
                     run_id=str(run_id),
                     correlation_id=context.correlation_id,
-                    reason=str(e),
+                    reason=preflight_block_message(e) or str(e),
                 )
             else:
                 _safe_log(
@@ -3004,7 +3501,7 @@ def generate_workflow_class(
             duration_ms = round((end_time - start_time).total_seconds() * 1000, 2)
             _safe_log(
                 "info",
-                "App completed",
+                f"App completed {_BUILD_IDENTITY}",
                 app_name=app_name,
                 run_id=str(run_id),
                 correlation_id=context.correlation_id,

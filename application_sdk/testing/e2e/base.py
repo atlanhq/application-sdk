@@ -137,6 +137,7 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.e2e.tenant_pool import TenantPool, check_tenant_pool
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
@@ -222,6 +223,13 @@ _DEFAULT_SEED_STORE_BINDING = "atlan-objectstore"
 # deprecation in this SDK names its removal version; this is the one for that
 # field.
 DATABASE_SPEC_CREDENTIAL_TYPE_REMOVAL_VERSION = "4.0"
+
+# The mustache key the toolkit's ``ConnectionSelector`` input fills — the
+# connection a utility DAG (connection-delete, a miner) acts on rather than
+# creates. Teardown reads it to tell a submit against another connection from
+# one that may mint the run's own; see
+# BaseE2ETest._submit_may_create_connection.
+_CONNECTION_SELECTOR_SUBSTITUTION = "{{connection-qualified-name}}"
 
 # Node statuses that are a genuine failure and are never tolerated by the
 # skip-tolerant DAG gate (see BaseE2ETest._core_dag_ok). Pending/Scheduled are
@@ -752,6 +760,16 @@ class BaseE2ETest:
     argo_template_name: ClassVar[str] = ""
     mode: ClassVar[RunMode] = RunMode.DIRECT
     app_service_url: ClassVar[str] = ""
+
+    # Which of the above setup_method insists on, and which tenant pool the
+    # suite may run on (see application_sdk.testing.e2e.tenant_pool). Fixed per
+    # base class, not per suite: SystemAppE2ETest sets both.
+    _required_class_attrs: ClassVar[tuple[str, ...]] = (
+        "connector_short_name",
+        "argo_package_name",
+        "argo_template_name",
+    )
+    _tenant_pool: ClassVar[TenantPool] = TenantPool.CONNECTOR
 
     # --- source-availability tier --------------------------------------
     # Sourcing is the app owner's responsibility. When a connector has NO
@@ -1287,17 +1305,18 @@ class BaseE2ETest:
                 not strictly below the poll ceiling, so the watchdog could never
                 fire.
             MissingHarnessEnvError: The environment carries no tenant.
+            TenantPoolMismatchError: The suite is not written for the tenant
+                pool this run is on.
         """
-        for required in (
-            "connector_short_name",
-            "argo_package_name",
-            "argo_template_name",
-        ):
+        for required in type(self)._required_class_attrs:
             if not getattr(type(self), required, ""):
                 raise MissingHarnessClassAttrError(
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+        check_tenant_pool(
+            type(self)._tenant_pool, os.environ, suite=type(self).__name__
+        )
 
         self._node_dispatch = {}
         self._queue_pollers = {}
@@ -1317,11 +1336,13 @@ class BaseE2ETest:
         # "nothing exists here". The two flags below are the existence ones.
         self._connection_seeded = False
         # Whether anything has been sent that can bring this run's own
-        # connection into being: the create write, and a DAG submit. Both are
-        # set on the way *in* to the call, for the reason
-        # :meth:`_own_connection_may_exist` gives.
+        # connection into being: the create write, and a DAG submit — recorded
+        # as the connection that submit was about, because a submit against a
+        # different one creates nothing here. Both are set on the way *in* to
+        # the call, for the reason :meth:`_own_connection_may_exist` gives.
         self._connection_create_attempted = False
-        self._dag_submitted = False
+        self._submitted_connection_qns: list[str] = []
+        self._payload_substitutions: MustacheSubstitutions | None = None
         self._seeded_connection_qns: list[str] = []
         self._seeded_prefixes: list[str] = []
         self._validate_dag_runs()
@@ -1768,8 +1789,8 @@ class BaseE2ETest:
         if conn_qn and not self._own_connection_may_exist():
             logger.info(
                 "e2e cleanup: no cleanup needed for %s — this run seeded no "
-                "connection and submitted no DAG, so nothing was ever created "
-                "under that name",
+                "connection under that name and submitted no DAG that could "
+                "create it, so nothing was ever created there",
                 conn_qn,
             )
             # Emptied rather than filtered out of the loop below, so the
@@ -1777,9 +1798,15 @@ class BaseE2ETest:
             # do not shift when the run's own connection is skipped.
             conn_qn = ""
         seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
+        # A suite that seeds under its own QN registers that name twice — once
+        # as the run's own, once as seeded. One delete reclaims it; a second is
+        # a full AE run against a connection the first already purged.
+        # Skipped in place, for the same ordinal-stability reason as above.
+        reached: set[str] = set()
         for ordinal, target in enumerate((conn_qn, *seeded), start=1):
-            if not target:
+            if not target or target in reached:
                 continue
+            reached.add(target)
             report = await self._delete_connection_via_app(target, ordinal=ordinal)
             if report is not None and report.complete:
                 continue
@@ -1795,15 +1822,20 @@ class BaseE2ETest:
         create one, and nothing else does:
 
         * the Atlas create :meth:`seed_connection` issues;
-        * a DAG submit, whose run mints the Connection on the tenant.
+        * a DAG submit against that name, whose run mints the Connection on
+          the tenant. A submit against a *different* connection — a
+          :class:`DAGSpec` that rebinds the run, or a utility DAG pointed at a
+          seeded connection (see :meth:`_submit_may_create_connection`) — is
+          recorded under that other name and does not count here.
 
         A run that made neither call holds a freshly minted name under which,
         by construction, nothing can exist — a suite that skipped in
         :meth:`seed_prerequisites`, a leg where the source-availability tier
-        wired no AE client at all, or a test that errored before it submitted.
+        wired no AE client at all, a test that errored before it submitted, or
+        a connection-delete suite whose only DAG purged a seeded connection.
         Deleting that name costs an AE workflow publish, a submit and a
         minute of polling to reclaim nothing, on every leg of every push
-        (FND-1873).
+        (FND-1873, FND-3405).
 
         **Both flags are set on the way in to the call, not on its way out**,
         and each for the same reason: a call whose response never arrived is
@@ -1829,9 +1861,53 @@ class BaseE2ETest:
             Whether teardown has anything to reclaim under
             ``self.connection_qualified_name``.
         """
-        return bool(getattr(self, "_connection_create_attempted", False)) or bool(
-            getattr(self, "_dag_submitted", False)
+        if getattr(self, "_connection_create_attempted", False):
+            return True
+        own_qn = getattr(self, "connection_qualified_name", "")
+        return own_qn in getattr(self, "_submitted_connection_qns", ())
+
+    def _submit_may_create_connection(self) -> bool:
+        """Whether the DAG about to be submitted could create the active connection.
+
+        Answers ``False`` only on positive evidence that the run is about some
+        *other* connection, and both halves of that evidence are required:
+
+        * the run declares ``expect_connection = False`` — it is not graded on
+          landing a Connection, so nothing says it publishes one; and
+        * its ``{{connection-qualified-name}}`` substitution (the toolkit's
+          ``ConnectionSelector`` input) names connections, none of them this
+          one.
+
+        Either half alone is not enough. A crawler expects its connection, and
+        mints it from the ``{{connection}}`` substitution whatever else it is
+        handed. A miner may not expect one, but with no selector pointing
+        elsewhere the harness cannot tell which connection it enriches. Every
+        doubtful case answers ``True``: an extra delete costs a minute of a
+        runner, a missed one leaks a connection onto a shared tenant.
+
+        The selector is read from the substitutions :meth:`_build_ae_payload`
+        recorded for this run, not by calling the hook again: a suite that
+        overrides ``_build_ae_payload`` records none, and is treated as giving
+        no evidence.
+
+        Returns:
+            Whether a submit now may bring ``self.connection_qualified_name``
+            into being.
+        """
+        if self._dag.expect_connection:
+            return True
+        substitutions = getattr(self, "_payload_substitutions", None)
+        if substitutions is None:
+            return True
+        selected = substitutions.model_dump(by_alias=True, mode="json").get(
+            _CONNECTION_SELECTOR_SUBSTITUTION
         )
+        if isinstance(selected, str):
+            selected = [selected]
+        if not isinstance(selected, list):
+            return True
+        named = {qn for qn in selected if isinstance(qn, str) and qn}
+        return not named or self.connection_qualified_name in named
 
     async def _delete_connection_via_app(
         self, qualified_name: str, *, ordinal: int
@@ -3301,7 +3377,12 @@ class BaseE2ETest:
 
         Subclasses never override this method — they override the two
         typed hooks above.
+
+        The substitutions are kept on ``_payload_substitutions`` so the submit
+        can read what it is about to send without calling the hook again — see
+        :meth:`_submit_may_create_connection`.
         """
+        self._payload_substitutions = self._mustache_substitutions()
         return build_ae_payload(
             run_id=self.run_id,
             mode=self.mode,
@@ -3310,7 +3391,7 @@ class BaseE2ETest:
             argo_template_name=self.argo_template_name,
             app_service_url=self.app_service_url,
             connection=self.connection_spec(),
-            mustache_subs=self._mustache_substitutions(),
+            mustache_subs=self._payload_substitutions,
             credential_body=self._credential_body(),
             ae_workflow_slug=slug,
             entrypoint=self._resolved_entrypoint(),
@@ -4031,6 +4112,10 @@ class BaseE2ETest:
                 inference.
         """
         slug = await self._bootstrap_workflow()
+        # Cleared first so a previous run's substitutions can never stand in
+        # for this one's, under a ``_build_ae_payload`` override that does not
+        # record its own.
+        self._payload_substitutions = None
         payload = self._build_ae_payload(slug)
 
         # Override-proof app-entrypoint injection. Per-app subclasses commonly
@@ -4055,7 +4140,11 @@ class BaseE2ETest:
         # executing orphaned rather than one that never happened, and that run
         # creates the connection teardown has to reclaim. See
         # :meth:`_own_connection_may_exist`.
-        self._dag_submitted = True
+        if self._submit_may_create_connection():
+            self._submitted_connection_qns = [
+                *getattr(self, "_submitted_connection_qns", ()),
+                self.connection_qualified_name,
+            ]
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
 

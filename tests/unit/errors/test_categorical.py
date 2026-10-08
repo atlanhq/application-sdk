@@ -13,6 +13,7 @@ from application_sdk.errors.leaves import (
     DependencyUnavailableError,
     InternalError,
     InvalidInputError,
+    InvalidInputValueError,
     NotFoundError,
     PreconditionError,
     RateLimitedError,
@@ -300,6 +301,60 @@ class TestTaskStalledError:
 
         assert (fd.app_name, fd.run_id) == ("_app", "run-1")
         assert fd.suggested_action == "declare an allowance"
+
+
+class TestInvalidInputValueError:
+    """The builtin-compatible subtype of the INVALID_INPUT leaf.
+
+    Not in ``_LEAVES``: that table is one entry per ``FailureCategory``, and
+    this shares INVALID_INPUT with :class:`InvalidInputError` by design.
+    """
+
+    def test_is_both_an_invalid_input_error_and_a_value_error(self) -> None:
+        # The whole reason this type exists: a pre-typed call site documented a
+        # bare `ValueError`, so `except ValueError:` in an app must keep
+        # catching it while the failure gains a typed envelope.
+        e = InvalidInputValueError(message="max_workers must be >= 1, got 0")
+        assert isinstance(e, ValueError)
+        assert isinstance(e, InvalidInputError)
+
+    def test_metadata(self) -> None:
+        assert InvalidInputValueError.category is FailureCategory.INVALID_INPUT
+        assert InvalidInputValueError.default_retryable is False
+        assert InvalidInputValueError.code == "INVALID_INPUT_VALUE"
+        assert InvalidInputValueError.audience is Audience.USER
+
+    def test_distinguishable_from_the_bare_leaf_on_the_wire(self) -> None:
+        """Same category, different code — so the shim is countable on its own.
+
+        Collapsing it into ``INVALID_INPUT.INVALID_INPUT`` would hide how much
+        of the fleet still depends on the builtin-``ValueError`` contract,
+        which is what decides when the shim can be retired.
+        """
+        shim = InvalidInputValueError(message="bad").to_failure_details()
+        leaf = InvalidInputError(message="bad").to_failure_details()
+
+        assert shim.category is leaf.category
+        assert shim.code != leaf.code
+        assert (
+            InvalidInputValueError(message="bad").qualified_code
+            == "INVALID_INPUT.INVALID_INPUT_VALUE"
+        )
+
+    def test_inherited_fields_reach_the_envelope(self) -> None:
+        fd = InvalidInputValueError(
+            message="max_workers must be >= 1, got 0",
+            field="max_workers",
+            constraint=">= 1",
+            value_summary="0",
+        ).to_failure_details()
+
+        assert fd.category is FailureCategory.INVALID_INPUT
+        assert fd.audience is Audience.USER
+        assert fd.retryable is False
+        assert fd.evidence["field"] == "max_workers"
+        assert fd.evidence["constraint"] == ">= 1"
+        assert fd.evidence["value_summary"] == "0"
 
 
 def test_internal_error_classification_pending_default() -> None:

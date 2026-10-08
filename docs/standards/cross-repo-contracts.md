@@ -26,6 +26,17 @@ supposed to branch on a field rather than regex a message. That makes the field
 *names*, the enum *spellings*, and the category-to-code relationship a contract,
 not an implementation detail.
 
+`message` and `suggested_action` are **redacted where the envelope is built**, by
+a `field_validator` on the model: URL userinfo of any shape
+(`scheme://user:pass@host` or a bare token as the username → `scheme://***@host`;
+only the Azure blob schemes' `container@account` addressing is left alone, and
+only while no password is present) and secret-named query or DSN parameters
+(`password=`, `api_key=`, `pwd=`, … → `***`). A consumer must not expect raw credential text in either
+field, and must not rely on either as a stable identifier — the same handler
+line can arrive redacted differently if the redaction rules change. The pass is
+idempotent, so an envelope replayed off the wire compares equal. `evidence` is
+handled by key name instead: a secret-named key is rejected, not masked.
+
 What this means in practice:
 
 - **`category` is coarse; `code` is the specific cause.** A consumer that keys a
@@ -102,7 +113,7 @@ route:
 |---|---|
 | **Produced by** | `get_persistent_s3_prefix()` in `application_sdk/common/incremental/helpers.py`, from `PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE` in `application_sdk/constants.py`; local counterpart `get_persistent_artifacts_path()` |
 | **Layout** | `persistent-artifacts/apps/{application_name}/connection/{connection_id}/`, where `connection_id` is the **last** segment of `connection_qualified_name` |
-| **Written under it** | `marker.txt` (the incremental watermark, via `persist_marker_to_storage`), `current-state/`, and per-app siblings such as a miner's own marker file |
+| **Written under it** | `marker.txt` (the incremental watermark, via `persist_marker`), `current-state/`, and per-app siblings such as a miner's own marker file |
 | **Read by** | Every connector app doing incremental extraction — the crawler and the miner of the same connection both key off this prefix, in separate repos, and must agree; the object store retains it across runs, so past runs read what past SDK versions wrote |
 | **Pinned by** | `TestExtractEpochId` and `TestGetPersistentS3Prefix` in `tests/unit/common/incremental/test_helpers.py`; conformance `P048`/`P049` enforce that apps derive it from here rather than re-deriving it |
 
@@ -132,12 +143,67 @@ Two consequences for changes here:
   segment, which is not a name and would collapse every such connection onto a
   single shared directory.
 
+## The S3 current-state layout, its manifest, and the incremental diff
+
+| | |
+|---|---|
+| **Produced by** | `CurrentStateStore.commit()` in `application_sdk/common/incremental/state/store.py`, called by `create_current_state_snapshot()` in `state/state_writer.py`; the diff by `create_incremental_diff()` / `_write_metadata()` in `state/incremental_diff.py`, uploaded by `create_current_state_snapshot()` before the commit |
+| **Layout** | Under the connection-scoped prefix (previous entry), `persistent-artifacts/apps/{app}/connection/{id}/`: **current state** at `current-state/{entity}/{stamp}--{file}.json` plus `current-state/.sdk-manifest`; **incremental diff** at `runs/{run_id}/incremental-diff/` (`INCREMENTAL_DIFF_SUBPATH_TEMPLATE`) with `table/`, `column/`, `schema/`, `database/`, `delete/table/`, `delete/column/` and `metadata.json` |
+| **Shape** | `.sdk-manifest` is JSON: `version`, `run_id`, `committed_at`, `keys` → size. `{stamp}` is 12 hex characters derived from the committing run ID. After the manifest is written, the commit prunes every key the manifest does not name — the snapshot it replaced, a failed run's uploads, and unstamped legacy keys — except keys with its own run's stamp, since two attempts of one run can overlap. An earlier attempt's leftovers go with the next run's commit. It then re-uploads any key the manifest names that the store no longer holds. Between a failed run and the next commit, a listing can hold stamped keys the manifest does not name — the manifest, not the listing, is the snapshot. This relies on one run per connection at a time, which scheduling guarantees. `metadata.json` is JSON with `is_incremental`, `tables_created`, `tables_updated`, `tables_backfill`, `tables_deleted`, `columns_total`, `columns_deleted`, `schemas_total`, `databases_total`, `total_changed_entities`, `total_files` |
+| **Read by** | **Argo publish templates** in marketplace-packages — the incremental connectors pass `current-state/` as `transformed-input-path` (marketplace-scripts' `convert_transformer_file_structure` globs it with `**/*.json` and takes the parent directory as the asset type), and `metadata.json` routes the publish (diff with entities → stream publish; no diff → batch publish; diff with zero entities → skip). **atlan-snowflake-app**, which duplicates the layout: it builds the `persistent-artifacts/apps/{app}/connection/{id}` prefix and the `current-state` subpath from its own constants rather than from this SDK. **atlan-oracle-app**, which rebuilds the object keys under that prefix itself. The SDK's own `probe()` on the next run |
+| **Pinned by** | `tests/unit/common/incremental/test_current_state_store.py` (`test_manifest_name_is_invisible_to_the_publish_glob`, the commit/prune tests, the two-run end-to-end test), the FND-3061 regressions in `test_state_lifecycle_characterization.py`, and `TestWriteMetadata` in `tests/unit/common/incremental/test_incremental_diff.py` (`test_metadata_key_set_is_the_argo_routing_contract` pins the exact `metadata.json` key set) |
+
+Constraints that come from the readers:
+
+- **The manifest must never match `**/*.json`.** A root `_manifest.json` would
+  be parsed by the publish converter as asset records under an asset type
+  named `current-state`. Hence the dot-prefixed, suffix-less `.sdk-manifest`.
+- **Entity files must stay directly under `{entity}/`.** The converter reads
+  the asset type from the file's parent directory, so the run stamp goes in
+  the file name, never in a subdirectory. Readers must glob `{entity}/*.json`:
+  file names change every commit.
+- **The prefix, `current-state`, and `runs/{run_id}/incremental-diff` are
+  spelled out in other repos.** atlan-snowflake-app and atlan-oracle-app do
+  not import them from here, so renaming or relocating any segment strands
+  those apps' state exactly as the previous entry describes for the marker —
+  silently, with a full re-extraction as the only symptom. Coordinate the
+  change with both apps, and with the Argo templates, before landing it.
+- **A key a reader rebuilds must still exist after the prune.** An app that
+  constructs a current-state key by name rather than listing the prefix will
+  miss run-stamped files; that app must list `{entity}/`, not guess a name.
+- **The snapshot is the manifest, not the listing.** A reader that lists or
+  globs `current-state/` — the Argo publish converter, atlan-oracle-app's
+  direct `download_prefix` reads — also sees stamped keys no manifest names: a
+  failed commit's upload, until the next commit prunes it (see **Shape**).
+  New readers go through `CurrentStateStore.probe()` / `materialize()`, which
+  read only the manifest's keys. Glob readers that run after a commit, such as
+  Argo publish, see only its snapshot. A glob reader that runs before the next
+  commit, such as atlan-oracle-app's carry-forward reads, still sees a failed
+  run's copy, and the fix for it is to read through the manifest. The old
+  layout was worse on both counts: it never pruned at all.
+- **A damaged manifest resets the connection to a full extraction.** If
+  `.sdk-manifest` is unreadable or names a key the store does not hold, the
+  template's probes treat the snapshot as absent (`DamagedManifestPolicy.TREAT_AS_ABSENT`):
+  the run extracts in full, writes no diff, and its commit replaces the
+  manifest and prunes every key it does not name. For readers this means a
+  damaged manifest is followed by one full snapshot — and a batch publish, not
+  a stream one — rather than a connection that fails every run. A failed
+  listing or manifest read still fails the task, so a transient outage never
+  becomes a full extraction.
+- **`metadata.json` keys are routing inputs.** Adding a key is safe; renaming
+  or dropping one — or writing it non-atomically — changes which publish mode
+  Argo picks. It is written with `atomic_write` because a truncated counts
+  block reads as zero entities and turns a stream publish into a skipped one.
+- **Diff before commit.** The diff is uploaded before `CurrentStateStore.commit`
+  moves the snapshot, so any committed snapshot has a durable diff behind it;
+  a publish step reading both never sees a committed snapshot without its diff.
+
 ## The preflight gate's Temporal failure payload
 
 | | |
 |---|---|
 | **Produced by** | `_gate_error()` and `_plumbing_error()` in `application_sdk/execution/_temporal/preflight_gate.py`, on every error that leaves the `{app}:preflight` activity, and on the block the workflow raises for a dead gate frame (`build_workflow_block()`, which routes through `_gate_error()`) |
-| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...], "attempt": N}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. `attempt` is the activity attempt that raised. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure. `details[0]` is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty |
+| **Shape** | An `ApplicationError` whose `details[0]` is one `FailureDetails` (category, code, audience, retryable, message, suggested_action, evidence) and whose `details[1]` is `{"status": ..., "checks": [...], "attempt": N}`, every check in wire form. `status` is `not_ready` on every exit the gate attributes to the source, and `null` on a gate-plumbing failure, where no verdict was reached and the run proceeds. `attempt` is the activity attempt that raised. The wire `type` is `PreflightFailed` for the block, `PreflightNoVerdict` for a non-final attempt's retry marker, and the raising class name (e.g. `DependencyUnavailableError`) for a gate-plumbing failure. `details[0]` is present even when the raising leaf's own evidence cannot be serialised; the gate synthesises one rather than leave the position empty. For a verdict with no typed error, `details[0].message` is the handler's `result.message`, else every failed check's line joined with `; `, else a fixed line — the same string the raised error's message and the log rows carry |
 | **Read by** | The Automation Engine, which attributes a failed run from `details[0]` of the terminal failure and of the gate activity's failure; the Temporal UI's activity pane, which renders `details[1]`; the workflow itself, which reads `attempt` and the marker's evidence off a killed frame's chain |
 | **Pinned by** | `TestEveryExitCarriesFailureDetails`, `TestPlumbingPayloadNeverLosesItsPrimary` and `TestEveryGateErrorCarriesTheAttempt` in `tests/unit/execution/test_preflight_gate_classification.py` |
 
@@ -216,8 +282,91 @@ nothing retries. A break costs rows, not runs, and nothing goes red:
   to `app_id` — agreed with the `system-workflows` owners and rolled out in the
   order the bullet above demands: header added here, released, fleet bumped,
   *then* enforced at the receiver.
+- **A run that waits on a warmup writes two rows, told apart by per-check `tier`.**
+  When a run's first `Handler.warmup` probe is not `READY`, the gate dispatches
+  once for the `preflight` tier and once more for the `warmup` tier, and each
+  dispatch persists its own verdict over only that tier's checks. A run whose
+  first probe is `READY` (every app that does not override `warmup`) writes one
+  row, as before. The probe itself is a separate `{app}:preflight_warmup`
+  activity that persists nothing. `payload.preflight.checks[].tier` is on the wire only for a
+  `warmup` check; a `preflight` check, the default, carries no `tier` key, so an
+  untiered app's payload is byte-for-byte what it was. A reader that counts runs
+  must group on `workflow_slug` and the run, not count rows. The warmup phase's
+  own outcome, duration and observed transitions are deliberately **not** sent:
+  they describe the gate's wait, not the verdict, and live on the
+  `Preflight gate outcome` log row (`warmup_outcome`, `warmup_duration_ms`,
+  `warmup_transitions`). Adding `tier` relies on the receiver tolerating keys
+  it does not derive a column from inside `payload` — the relay contract this
+  entry already assumes for `payload`, but not separately verified against the
+  receiver here.
 - **The two enum vocabularies must stay in step.** `PreflightResultOrigin` and
   `ExtractionMethod` are validated against the receiver's own enums; a value it
   does not accept is a 422 and a dropped row, visible only as one WARNING
   carrying a status code. Adding a member on either side is additive; renaming
   one is not.
+
+## The warmup tier's wire values
+
+| | |
+|---|---|
+| **Produced by** | `CheckTier`, `WarmupState`, `WarmupObservation` and `PreflightStatus.PENDING` in `application_sdk/handler/contracts.py`; the `/workflows/v1/check` and `/workflows/v1/warmup` routes in `application_sdk/handler/service.py`; `PreflightRowOutcome.WARMUP_EXHAUSTED` in `application_sdk/handler/_preflight_outcome.py` and `WarmupOutcome` in `application_sdk/execution/_temporal/preflight_gate.py`, stamped on the `Preflight gate outcome` row |
+| **Shape** | Tier strings `preflight` / `warmup`, in the `/check` request's `tiers` and on a check's `tier`. A `preflight` check omits `tier` everywhere a check is serialised (`PreflightCheck.to_wire`, the `/check` body, `check_matrix`), so only a `warmup` check carries one. `preflight.status` gains `pending` on a tiered `/check`, with `preflight.warmup` set to the observation (`state`, `source_state`, and `queued_queries` / `next_poll_seconds` when set) or `null`. `POST /workflows/v1/warmup` answers `data` = the observation plus `ceiling_seconds`, `success` `false` only for `state: "unavailable"`. `WarmupState` strings are `cold` / `warming` / `queued` / `ready` / `unavailable`. On the gate row: `outcome` gains `warmup_exhausted`; `gate_tier` is `preflight` / `warmup`; `warmup_outcome` is `warming` / `ready` / `unavailable` / `failed` / `exhausted` / `broken`; `warmup_transitions` is a JSON list of `{"state", "at_ms"}` |
+| **Read by** | The connector-setup UI, which sends `tiers` to `/check`, polls `/warmup` until `ready` or `ceiling_seconds`, and renders a `pending` verdict from `preflight.warmup`; connector-pulse, which buckets `warmup_exhausted` (and a newest row with `warmup_outcome = 'warming'`) as "warming", apart from `no_verdict` |
+| **Pinned by** | `TestContracts`, `TestCheckPreflightTierOnly`, `TestCheckWarmupTier` and `TestWarmupRoute` in `tests/unit/handler/test_warmup.py`; `TestTheCeiling` and `TestTheWarmupRowFields` in `tests/unit/execution/test_preflight_warmup.py` |
+
+Every value here is additive for a caller that does not know about tiers: a
+`/check` without `tiers` never probes and never answers `pending`, an app that
+does not override `Handler.warmup` writes the gate row it always did
+(its run gains one `{app}:preflight_warmup` activity, which writes no row), and a
+`preflight` check is serialised exactly as an untiered check was. A consumer
+that does read them must treat `pending` as "not yet verified", never as a
+pass or a failure, and must not branch on `source_state`, which is the
+source's own display label. The strings are shipped values: renaming one is a
+breaking change for the UI and the dashboards, adding one is not.
+
+## The streaming event-trigger contract (`trigger_config` keys ↔ `$.event.*` args)
+
+This one runs **both ways**, which is why it is here rather than only in the
+Automation Engine: the toolkit produces the trigger config AE reads, and AE
+produces the event shape an app's DAG reads through paths the toolkit renders.
+
+| | |
+|---|---|
+| **Produced by (toolkit → AE)** | The `triggers.events[].trigger_config` block rendered by `contract-toolkit/src/App.pkl` and `NativeApp.pkl` from `EventTriggerConfig` |
+| **Produced by (AE → app)** | `event_context` in `automation_engine/workflows/streaming_batch.py`, constructed there and nowhere else; `workflows/executor.py` forwards it unchanged into `$.event.*` |
+| **Key (toolkit → AE)** | `streaming_enabled`, `ack_paths`; `max_retries` is deliberately **not** rendered under streaming |
+| **Key (AE → app)** | Exactly four: `batch_key` (always set), `batch` (the events inline, or `null` above AE's inline cap), `event_count`, `topic` |
+| **Read by** | The Automation Engine, which registers the trigger and picks a dispatch shell from `streaming_enabled`; every streaming consumer app, whose extract-node args resolve `$.event.batch` / `$.event.batch_key` |
+| **Pinned by** | `contract-toolkit/tests/streaming_trigger_config_test.pkl` (render shape, both schemas, and every refusal) and the streaming section of `contract-toolkit/scripts/check-invariants.sh` (the eval-failure cases facts cannot express) |
+| **Owner (AE side)** | Anurag Badoni — change `event_context` or the `TriggerConfig` keys through this entry |
+| **Design record** | DISTR-973 |
+
+Both directions fail **silently** by default, which is what makes this worth an
+entry rather than a comment:
+
+- **AE ignores unknown `trigger_config` keys.** Pydantic drops what it does not
+  model, so a toolkit-side key AE has not implemented registers as a trigger
+  with that key absent — for `streaming_enabled` that means a contract reading
+  as streaming and running as batch, with nothing logged. Ship the AE side
+  first, always.
+- **A `$.event.*` path AE does not send fails the node** with `did not match
+  any value` at run time, not at render time. Adding a key to `event_context`
+  is safe; renaming or removing one breaks every DAG wired to it, and the
+  toolkit cannot catch it because the path is a string it renders faithfully.
+- **`batch` is permanent, but it is not the contract.** `batch_key` is always
+  set — AE writes the object before deciding whether the batch fits inline.
+  `batch` is present-but-`null` above the cap, deliberately: an *absent* key
+  raises `did not match any value`, while a null one lets the consumer fall
+  through to the key. A DAG that reads `batch` alone applies nothing on the
+  first over-cap batch and reports success, and Kafka was acked when the run
+  started. Handle `batch_key`; treat `batch` as an optimisation.
+- **An SDK app receives only `batch_key`.** The generated input model declares
+  `batch_key` and not `batch`, and the SDK's `Input` drops undeclared keys. The
+  `{id, topic, data}` envelope has no typed contract, and an untyped list of
+  dicts fails the SDK's payload-safety check, so `batch` stays undeclared until
+  the envelope gets a real type definition. Giving it one, on either side, is
+  a change to this entry.
+- **`ack_paths` renders under streaming even though it is inert there**, because
+  AE's `_validate_event_ack_paths` rejects an event trigger with a falsy value.
+  `[""]` is AE's fire-and-forget form. Suppressing it needs the AE change
+  shipped first — the same ordering as the first bullet.

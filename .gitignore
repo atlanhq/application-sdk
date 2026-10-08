@@ -197,3 +197,7 @@ renovate-config/README.md
 # CI scratch: the sdr-e2e composite writes test output, container logs and the
 # harness evidence bundle here, then uploads the directory as an artifact.
 results/
+
+# Built into the conformance wheel from the repo-root contract_schema.lock.json
+# (FND-3108); the root file is the only committed SDK ledger.
+packages/conformance/conformance/data/contract_schema.lock.json

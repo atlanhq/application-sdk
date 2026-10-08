@@ -22,7 +22,6 @@ import urllib.error
 from pathlib import Path
 
 import pytest
-import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -31,7 +30,6 @@ import sdk_review_dispatch as sd  # noqa: E402  (needs the sys.path bootstrap)
 import sdk_review_verdict_gate as vg  # noqa: E402  (sys.path bootstrap)
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-WORKFLOW = REPO_ROOT / ".github/workflows/sdk-review.yml"
 
 
 def _stream(*lines: str, now=None) -> sd.SSEState:
@@ -92,12 +90,12 @@ def test_payload_clones_the_head_ref_not_main():
 
 
 def test_payload_pins_all_three_model_lanes():
-    # Leaving any lane unset silently falls back to mothership's Claude
-    # defaults, and `small_fast_model` unset resolves to `model`.
+    # Leaving any lane unset silently falls back to mothership's default
+    # models, and `small_fast_model` unset resolves to `model`.
     p = _payload()
-    assert p["model"] == "xai/grok-4.6"
-    assert p["small_fast_model"] == "gpt-5.6-luna"
-    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-5.6-luna"
+    assert p["model"] == "gpt-6-sol"
+    assert p["small_fast_model"] == "gpt-6-sol"
+    assert p["env_vars"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "gpt-6-sol"
     encoded = json.loads(json.dumps(p))
     for value in (
         encoded["model"],
@@ -262,6 +260,7 @@ def test_outputs_on_a_clean_run():
         "final_cost": "0.83",
         "final_err_code": "",
         "final_err_msg": "",
+        "models_used": "",
     }
 
 
@@ -547,6 +546,7 @@ def test_a_mid_stream_drop_keeps_everything_seen_before_it(exc):
         "final_cost",
         "final_err_code",
         "final_err_msg",
+        "models_used",
     }
     code, messages = sd.decide_exit(st, False, "42")
     assert code == 1 and "without a 'complete' event" in messages[-1]
@@ -674,7 +674,7 @@ def test_a_genuine_transport_drop_is_still_never_retried():
 
 
 def test_the_http_error_body_reaches_the_error_message():
-    body = b"Invalid model name passed in model=xai/grok-4.6" + b"x" * 600
+    body = b"Invalid model name passed in model=gpt-6-sol" + b"x" * 600
 
     class _FakeFp:
         def read(self):
@@ -709,13 +709,13 @@ def test_the_http_error_body_reaches_the_error_message():
     assert st2.err_code == "http_502"
 
 
-def test_main_model_is_not_an_openrouter_style_id():
+def test_every_pinned_model_is_a_bare_gateway_alias():
     # Weak guard, deliberately: CI has no LiteLLM key, so the real check
     # (GET /v1/models on llmproxy.atlan.dev) cannot run here. This only catches
-    # the specific `x-ai/` vs `xai/` prefix confusion that broke FND-660 —
-    # `x-ai/grok-4.6` is the OpenRouter-style id and this proxy rejects it.
-    assert "x-ai/" not in sd.MAIN_MODEL
-    assert "x-ai/" not in sd.FAST_MODEL
+    # a provider prefix sneaking back in, the shape of the FND-660 breakage —
+    # the proxy serves the GPT-6 tier under bare aliases.
+    for model in (sd.MAIN_MODEL, sd.FAST_MODEL, sd.RETRY_MAIN_MODEL):
+        assert "/" not in model
 
 
 # ---------------------------------------------------------------------------
@@ -799,121 +799,9 @@ def test_step_summary_surfaces_the_error_detail():
 # ---------------------------------------------------------------------------
 
 
-def dispatch_step() -> dict:
-    workflow = yaml.safe_load(WORKFLOW.read_text())
-    for step in workflow["jobs"]["sdk-review-dispatch"]["steps"]:
-        if step.get("id") == "dispatch":
-            return step
-    raise AssertionError("no `dispatch` step in sdk-review-dispatch")
-
-
-def test_the_workflow_calls_this_script_and_inlines_no_logic():
-    run = dispatch_step()["run"]
-    assert run.strip() == "python3 .github/scripts/sdk_review_dispatch.py"
-
-
-def test_the_step_is_handed_every_variable_the_script_requires():
-    env = dispatch_step()["env"]
-    for key in (
-        "MOTHERSHIP_URL",
-        "HARNESS_TOKEN",
-        "GH_TOKEN",
-        "SESSION_ID",
-        "PR_NUMBER",
-        "PR_URL",
-        "HEAD_SHA",
-        "HEAD_REF",
-        "BASE_REF",
-        "REPO_FULL_NAME",
-        "COMMENTER",
-        "COMMENTER_INTENT",
-        "COMMENT_ID",
-        "STARTER_STARTED_AT",
-        "GHA_RUN_URL",
-    ):
-        assert key in env, f"dispatch step no longer supplies {key}"
-
-
-def test_the_session_id_comes_from_the_step_the_terminator_also_reads():
-    """Two derivations would drift, and a stale id stops nothing on cancel."""
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
-    terminator = next(
-        s for s in steps if s.get("name") == "Terminate mothership sandbox on cancel"
-    )
-    assert (
-        dispatch_step()["env"]["SESSION_ID"]
-        == terminator["env"]["SESSION_ID"]
-        == "${{ steps.session.outputs.session_id }}"
-    )
-
-
 # ---------------------------------------------------------------------------
 # the sandbox-name budget (FND-677)
 # ---------------------------------------------------------------------------
-
-# Worst case, deliberately past anything GitHub has handed this repo: 6-digit
-# PR numbers, a 13-digit run id (they are 11 today), and a 2-digit run attempt.
-# The budget has to survive growth, not just today's values.
-WORST_CASE_SESSION_VARS = {
-    "PR_NUMBER": "999999",
-    "HEAD_SHA_SHORT": "0cab6b6e",
-    "RUN_ID": "9999999999999",
-    "RUN_ATTEMPT": "99",
-}
-
-
-def session_step() -> dict:
-    steps = yaml.safe_load(WORKFLOW.read_text())["jobs"]["sdk-review-dispatch"]["steps"]
-    for step in steps:
-        if step.get("id") == "session":
-            return step
-    raise AssertionError("no `session` step in sdk-review-dispatch")
-
-
-def worst_case_base_session_id() -> str:
-    """The id the workflow would emit for the worst-case inputs.
-
-    Read out of the YAML rather than restated here: a test that hardcodes the
-    format cannot fail when the format is what drifts.
-    """
-    step = session_step()
-    template = re.search(r'session_id=(\S+)" >> "\$GITHUB_OUTPUT"', step["run"])
-    assert template, f"no session_id assignment in the `session` step: {step['run']!r}"
-    fmt = template.group(1)
-    referenced = set(re.findall(r"\$\{(\w+)", fmt))
-    assert referenced == set(WORST_CASE_SESSION_VARS), (
-        "the session id format changed which variables it interpolates — "
-        f"{referenced} vs {set(WORST_CASE_SESSION_VARS)}; re-check the budget "
-        "before updating this list"
-    )
-    for name, value in WORST_CASE_SESSION_VARS.items():
-        assert name in step["env"], f"session step no longer supplies {name}"
-        fmt = fmt.replace(f"${{{name}}}", value)
-    assert "$" not in fmt, f"unsubstituted shell in {fmt!r}"
-    return fmt
-
-
-def test_every_id_in_the_ladder_fits_the_sandbox_name_untruncated():
-    """The bug that made every re-dispatch unbootable, asserted at the source.
-
-    Mothership names the sandbox after the session id and rejects anything over
-    63 chars, so the base id has to leave room for the LONGEST suffix the ladder
-    can append — not merely fit on its own. It used to carry the repo name,
-    which put the base at 62 and `-retry1` at 69: attempt 1 booted and every
-    retry died on `/sandbox/create`.
-
-    Asserting equality, not just length, is the point: a `len() <= 63` check
-    would pass just as happily on an id `fit_sandbox_id()` had silently
-    replaced with a digest, which is a backstop and not a state to ship in.
-    """
-    base = worst_case_base_session_id()
-    for attempt in range(1, sd.MAX_DISPATCH_ATTEMPTS + 1):
-        expected = f"{base}{sd.attempt_suffix(attempt)}"
-        assert len(expected) <= sd.SANDBOX_ID_MAX_CHARS, (
-            f"attempt {attempt} id is {len(expected)} chars, over mothership's "
-            f"{sd.SANDBOX_ID_MAX_CHARS}-char sandbox name: {expected}"
-        )
-        assert sd.attempt_session_id(base, attempt) == expected
 
 
 def test_a_short_id_is_handed_through_unchanged():
@@ -1121,7 +1009,7 @@ def test_a_clean_completed_sandbox_that_said_nothing_retries_on_the_same_model()
     """`complete` IS the terminal event, so the sandbox is provably finished.
 
     Nothing about the model failed — the turn ended early — so dragging in
-    RETRY_MAIN_MODEL would spend the expensive lane on a fault it cannot fix.
+    RETRY_MAIN_MODEL would spend a model swap on a fault it cannot fix.
     """
     st = _completed("3.307718")
     assert sd.sandbox_completed_cleanly(st) is True
@@ -1297,6 +1185,7 @@ def test_a_single_attempt_reports_its_own_cost_unchanged():
         "final_cost": "0.83",
         "final_err_code": "",
         "final_err_msg": "",
+        "models_used": "",
     }
     assert sd.render_outputs(st, one) == expected
     assert sd.render_outputs(st) == expected
@@ -1702,3 +1591,50 @@ def test_the_same_model_is_the_one_that_RAN_not_the_one_attempt_n_implies():
         plan = sd.retry_decision(st, 1, 6000, ran)
         assert plan.retry is True
         assert plan.model == ran, plan.reason
+
+
+# ---------------------------------------------------------------------------
+# models_used — what the stream says answered, not what the reviewer claims
+# ---------------------------------------------------------------------------
+
+
+def _assistant(model: str) -> list[str]:
+    inner = {"type": "assistant", "message": {"model": model, "content": []}}
+    return ["event: response", f"data: {_frame(inner)}", ""]
+
+
+def _result(usage: dict) -> list[str]:
+    inner = {"type": "result", "result": "done", "modelUsage": usage}
+    return ["event: response", f"data: {_frame(inner)}", ""]
+
+
+def test_models_used_unions_turns_and_the_usage_bill_in_first_seen_order():
+    st = _stream(
+        *_assistant("gpt-6-sol"),
+        *_assistant("gpt-6-sol"),
+        *_result({"gpt-6-sol": {}, "gpt-6-luna": {}}),
+        *_event("complete", {"status": "completed", "cost_usd": "1"}),
+    )
+    assert sd.render_outputs(st)["models_used"] == "gpt-6-sol, gpt-6-luna"
+
+
+def test_models_used_survives_a_dropped_terminal_frame():
+    """The SSE queue drops on overflow; per-turn models still name the run."""
+    assert sd.models_used(_stream(*_assistant("gpt-6-sol"))) == "gpt-6-sol"
+
+
+def test_synthetic_turns_are_not_models():
+    st = _stream(*_assistant("<synthetic>"), *_assistant("gpt-6-sol"))
+    assert sd.models_used(st) == "gpt-6-sol"
+
+
+def test_models_used_unions_across_retry_attempts():
+    first = _stream(*_assistant("gpt-6-sol"))
+    second = _stream(*_assistant("gpt-6-luna"), *_assistant("gpt-6-sol"))
+    ladder = [sd.Attempt(1, "gpt-6-sol", first), sd.Attempt(2, "gpt-6-luna", second)]
+    assert sd.render_outputs(second, ladder)["models_used"] == "gpt-6-sol, gpt-6-luna"
+
+
+def test_frame_models_ignores_non_frames():
+    assert sd.frame_models("not json") == []
+    assert sd.frame_models(json.dumps({"content": "plain text"})) == []

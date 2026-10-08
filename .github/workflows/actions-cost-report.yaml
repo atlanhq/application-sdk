@@ -1,0 +1,115 @@
+# Weekly Actions Cost Report — standalone scheduled workflow (FND-3324).
+#
+# A template change once doubled the fleet's Actions bill and went unnoticed
+# for two months. This runs the billed-minutes report
+# (actions_minutes_report.py) once a week, compares the week that just ended
+# with the one before, publishes the top workflows and jobs with their deltas,
+# and posts to Slack when the total or any single workflow grew more than 25%.
+# See actions_cost_weekly.py for the exact rule.
+#
+# Weekly, not daily. The comparison is week over week, and a daily run would
+# re-scan six of the same seven days each time. Monday 03:10 UTC reports the
+# Mon..Sun week that ended at midnight and stays clear of the 02:30 gate
+# enforcement sweep and the :20/:40 dashboard runs.
+#
+# One job. It runs in this public repo, so its minutes are free, and the scan's
+# API calls are what it costs. It scans a seeded sample of 12 fleet repos (the
+# same seed as the M1 baseline in docs/standards/ci.md) over 14 days, not the
+# whole fleet: two weeks of the full fleet is more GraphQL points than the
+# fleet App's hourly budget, which the Renovate sweep and the dashboards also
+# spend. A template change lands in every repo, so a sample still shows it.
+#
+# Schedule only, no workflow_dispatch: a scheduled run always executes the
+# default branch, and this job holds fleet-wide credentials. Same reasoning as
+# update-fleet-dashboards.yaml.
+#
+# The Kryptonite publish reuses publish_fleet_dashboard.py. The scan output
+# has the same repos/<slug>.json + fleet.json + history_*.jsonl layout, with
+# history keyed by the reported week's Monday.
+name: Weekly Actions Cost Report
+
+on:
+  schedule:
+    - cron: "10 3 * * 1"
+
+permissions:
+  contents: read
+  id-token: write # OIDC for aws-actions/configure-aws-credentials
+
+# Queue rather than cancel: the history download → merge → upload must never
+# race itself. With a weekly trigger, overlap only happens if a run hangs.
+concurrency:
+  group: actions-cost-report
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Weekly Actions Cost Report
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout application-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      # Org-wide: the report reads Actions runs and check runs on fleet repos.
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      # Exits 1 when there is a regression and the Slack alert could not be
+      # sent, so a regression nobody heard about turns the run red. The
+      # dashboard files are written before that, so the publish below still
+      # runs. Slack receives aggregate minutes and workflow names only.
+      - name: Scan and compare week over week
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          SLACK_ACTIONS_COST_WEBHOOK: ${{ secrets.SLACK_ACTIONS_COST_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/actions_cost_weekly.py \
+            --owner atlanhq \
+            --sample 12 \
+            --seed 3312 \
+            --out-dir actions-cost-out
+
+      # A separate step so the report still reaches the run page when the
+      # step above exits 1 on a failed Slack alert; the job stays red.
+      - name: Publish step summary
+        if: ${{ !cancelled() && hashFiles('actions-cost-out/summary.md') != '' }}
+        run: cat actions-cost-out/summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload report
+        if: ${{ !cancelled() && hashFiles('actions-cost-out/summary.md') != '' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: actions-cost-report
+          path: actions-cost-out
+          # Long enough to compare a few weeks by hand; the trend itself lives
+          # in the Kryptonite history.
+          retention-days: 30
+
+      - name: Setup AWS Credentials
+        if: ${{ !cancelled() && hashFiles('actions-cost-out/fleet.json') != '' }}
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      # Full-fleet mode, not --partial-scan: fleet.json and its history are
+      # the point. The manifest lists the sampled repos; when the fleet
+      # changes and the seeded sample reshuffles, publish_fleet_dashboard.py
+      # keeps the old entries (its orphan cap) rather than dropping them.
+      - name: Deploy to Kryptonite (actions cost)
+        if: ${{ !cancelled() && hashFiles('actions-cost-out/fleet.json') != '' }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish_fleet_dashboard.py \
+            --dir actions-cost-out \
+            --prefix actions-cost-dashboard

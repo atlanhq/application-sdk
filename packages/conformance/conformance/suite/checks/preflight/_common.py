@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     _SDK_CONTRACT_MODULE_PREFIXES,
     ImportProvenance,
@@ -24,7 +29,6 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     collect_classes,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -34,6 +38,18 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 
 _PREFLIGHT_INPUT = "PreflightInput"
 _PREFLIGHT_CHECK = "PreflightCheck"
+
+#: Rules whose fully defined scenario matrix closes a *value-level* F019
+#: gap.  ``conformance.preflight_testing.assert_preflight_result`` asserts,
+#: in every F016 scenario, exactly the properties those
+#: findings say the static pass could not resolve: every failed check carries
+#: a typed ``FailureDetails`` with a nonblank message and suggested action, no
+#: passed check carries one, and the verdict agrees with the
+#: mandatory/advisory roles and the short-circuit order.  A *structural* gap —
+#: an unparsed file, an undiscovered handler, an unresolved contract class —
+#: never gets this set: a test does not tell the analysis what it failed to
+#: read.  Conformance only checks the matrix is defined; the test gate runs it.
+SCENARIO_COVERAGE = frozenset({"F016"})
 
 
 @dataclass(frozen=True)
@@ -50,7 +66,13 @@ class Source:
 
 @dataclass(frozen=True)
 class Registry:
-    """Cross-file registry built once in ``scan_all`` and shared by all passes."""
+    """Cross-file registry built once in ``scan_all`` and shared by all passes.
+
+    ``by_name`` maps a bare class name to its record, first-wins across files.
+    A module-level rebinding (``OpenAPIConnectorInput = AppInputContract``) is
+    keyed there too, pointing at the record of the class it names, so a
+    contract declared under an alias resolves like the class itself.
+    """
 
     sources: tuple[Source, ...]
     by_name: dict[str, ClassRecord]
@@ -64,6 +86,7 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
     parse_failures: list[str] = []
     by_name: dict[str, ClassRecord] = {}
     aliases_by_rel: dict[str, dict[str, str]] = {}
+    alias_targets: dict[str, str] = {}
 
     for path in paths:
         try:
@@ -96,6 +119,10 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
         aliases_by_rel[rel] = aliases
         for rec in collect_classes(tree, rel, aliases):
             by_name.setdefault(rec.name, rec)
+        for local, target in _module_alias_targets(tree, aliases).items():
+            alias_targets.setdefault(local, target)
+
+    _resolve_alias_records(by_name, alias_targets)
 
     return Registry(
         sources=tuple(sources),
@@ -103,6 +130,69 @@ def build_registry(paths: list[Path], root: Path) -> Registry:
         aliases_by_rel=aliases_by_rel,
         parse_failures=tuple(parse_failures),
     )
+
+
+def _module_alias_targets(tree: ast.Module, aliases: dict[str, str]) -> dict[str, str]:
+    """Return module-level ``Local = Target`` bindings as ``{local: target_name}``.
+
+    A contract generated from ``contract/app.pkl`` is imported under its
+    generated name and re-bound to a domain name
+    (``OpenAPIConnectorInput = AppInputContract``); the ``TypeAlias``-annotated
+    form is the same shape. The right-hand side is de-aliased through the
+    file's import aliases so a renamed import still lands on the original class
+    name. Only a plain ``Name``/``Attribute`` value qualifies — ``X = list[Y]``
+    is not an alias of ``Y``.
+    """
+    targets: dict[str, str] = {}
+    for stmt in tree.body:
+        bindings: list[ast.Name]
+        if isinstance(stmt, ast.Assign):
+            bindings = [t for t in stmt.targets if isinstance(t, ast.Name)]
+            value = stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
+            bindings = [stmt.target]
+            value = stmt.value
+        else:
+            continue
+        if isinstance(value, ast.Name):
+            target = value.id
+        elif isinstance(value, ast.Attribute):
+            target = value.attr
+        else:
+            continue
+        for binding in bindings:
+            if binding.id != target:
+                targets.setdefault(binding.id, aliases.get(target, target))
+    return targets
+
+
+def _resolve_alias_records(
+    by_name: dict[str, ClassRecord], alias_targets: dict[str, str]
+) -> None:
+    """Point every alias name at the :class:`ClassRecord` it ultimately names.
+
+    Without this an entrypoint that declares its input under an alias has no
+    entry in ``by_name`` at all, and every pass that resolves a contract by
+    name reports it as unanalysable while the class sits in the same scan.
+
+    The registry is keyed on bare names and is first-wins, so the chain is
+    followed globally and a real class definition always beats an alias. The
+    walk continues through alias-to-alias hops, which covers a re-export chain
+    across modules; a cycle stops at the name that started it. An alias whose
+    chain never reaches a scanned class is left out, so an unresolvable name
+    still reports conservatively.
+    """
+    for name, first in alias_targets.items():
+        if name in by_name:
+            continue
+        seen = {name}
+        target = first
+        while target not in by_name and target in alias_targets and target not in seen:
+            seen.add(target)
+            target = alias_targets[target]
+        rec = by_name.get(target)
+        if rec is not None:
+            by_name[name] = rec
 
 
 def effective_task_name(
@@ -150,6 +240,33 @@ def _first_param_annotation_name(
         return None
     name = _annotation_terminal_name(params[0].annotation)
     return aliases.get(name, name) if name else None
+
+
+def _is_callable_annotation(annotation: ast.expr) -> bool:
+    """``Callable``, ``Callable[...]``, ``typing.Callable`` and the like."""
+    if isinstance(annotation, ast.Subscript):
+        annotation = annotation.value
+    if isinstance(annotation, ast.Name):
+        return annotation.id == "Callable"
+    return isinstance(annotation, ast.Attribute) and annotation.attr == "Callable"
+
+
+def binding_targets(node: ast.stmt) -> list[ast.expr]:
+    """The targets a plain, chained or ``Callable``-annotated assignment binds.
+
+    An annotated assignment binds a callback only when it says so. A
+    ``preflight_check: str = ""`` field on a generated input contract is data,
+    not the hook, and must not read as an unresolved callback binding.
+    """
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if (
+        isinstance(node, ast.AnnAssign)
+        and node.value is not None
+        and _is_callable_annotation(node.annotation)
+    ):
+        return [node.target]
+    return []
 
 
 def find_preflight_check_sites(
@@ -214,10 +331,12 @@ def find_preflight_check_sites(
                     == _PREFLIGHT_INPUT
                 ):
                     sites.append((src, node))
-            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+                node.value, ast.Name
+            ):
                 target = functions.get(node.value.id)
                 if target is not None:
-                    for binding in node.targets:
+                    for binding in binding_targets(node):
                         if isinstance(binding, ast.Name):
                             functions[binding.id] = target
                             if (
@@ -262,42 +381,26 @@ def is_preflightcheck_call(
 def collect_entrypoint_input_contract_names(reg: Registry) -> frozenset[str]:
     """Class names of every entrypoint *input* contract (outputs excluded).
 
-    Fork of ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` with
-    the ``func.returns`` (output) branch dropped, so the gate-path metadata parity
-    check compares only against what the extraction input actually carries.
+    Same boundary detection as
+    ``_entrypoint_contract_fields.collect_entrypoint_contract_names``
+    (``classify_boundary_method``) with the output side dropped, so the gate-path
+    metadata parity check compares only against what the extraction input
+    actually carries.
     """
     contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
     for src in reg.sources:
+        scope = BoundaryScope.for_module(
+            src.tree,
+            prov=src.prov,
+            aliases=src.aliases,
+            by_name=reg.by_name,
+            app_cache=app_cache,
+        )
         for cls in _class_defs(src.tree):
             for func in _iter_class_body_methods(cls):
-                is_ep = False
-                if any(
-                    is_entrypoint_decorator(d, src.prov) for d in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(d, src.prov) for d in func.decorator_list):
-                    continue
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in cls.bases:
-                        bname = (
-                            base.id
-                            if isinstance(base, ast.Name)
-                            else getattr(base, "attr", None)
-                        )
-                        if bname is None:
-                            continue
-                        bname = src.aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(
-                                bname, "App", reg.by_name, app_cache, set()
-                            )
-                            is True
-                        ):
-                            is_ep = True
-                            break
-                if not is_ep:
+                boundary = classify_boundary_method(cls, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
                 non_self = _get_non_self_params(func)
                 if non_self and non_self[0].annotation is not None:
@@ -429,10 +532,10 @@ def coverage_findings(reg: Registry):
                     )
                 )
             elif (
-                isinstance(node, ast.Assign)
+                isinstance(node, (ast.Assign, ast.AnnAssign))
                 and any(
                     isinstance(t, ast.Name) and t.id == "preflight_check"
-                    for t in node.targets
+                    for t in binding_targets(node)
                 )
                 and not any(s is src for s, _ in sites)
             ):
@@ -441,13 +544,16 @@ def coverage_findings(reg: Registry):
                         filename=src.rel,
                         rule_id="F019",
                         node=node,
-                        message="Dynamic preflight callback binding is unresolved; register behavioral scenarios and use a statically resolvable callback.",
+                        message="Dynamic preflight callback binding is unresolved; bind preflight_check to a statically resolvable callback. Executed scenarios do not clear this: the analysis never reaches the callback to check it.",
                         directives=src.directives,
                     )
                 )
     for src, func in sites:
         contracts = contracts_for_site(reg, src)
-        if contracts and any(name not in reg.by_name for name in contracts):
+        if contracts and any(
+            name not in reg.by_name and name not in SDK_TEMPLATE_CONTRACT_FIELDS
+            for name in contracts
+        ):
             findings.append(
                 make_finding(
                     filename=src.rel,

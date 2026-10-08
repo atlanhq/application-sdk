@@ -313,6 +313,19 @@ def test_accepted_markers_for_repo_reads_pyproject(tmp_path: Path) -> None:
     assert accepted_markers_for_repo(tmp_path) == {"integration", "s3_integration"}
 
 
+def test_integration_is_accepted_even_when_addopts_deselects_only_other_markers(
+    tmp_path: Path,
+) -> None:
+    # An app whose addopts deselects only `e2e` was told to mark its integration
+    # tests `e2e`, which hid them from its integration job too: that job runs
+    # `pytest tests/integration/` with the same addopts, so it collected 0 items
+    # and exited 5. `integration` is the canonical tier marker and stays accepted.
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = \"-m 'not e2e' --strict-markers\"\n"
+    )
+    assert accepted_markers_for_repo(tmp_path) == {"e2e", "integration"}
+
+
 def test_accepted_markers_for_repo_falls_back_when_absent(tmp_path: Path) -> None:
     # No pyproject.toml at all → default {"integration"}.
     assert accepted_markers_for_repo(tmp_path) == {"integration"}
@@ -329,5 +342,5 @@ def test_t001_rule_metadata() -> None:
     assert rule.name == "UnmarkedIntegrationTest"
     assert rule.tier == EnforcementTier.WARN
     assert rule.scope == RuleScope.BOTH  # useful on the SDK too, not app-only
-    assert rule.autofixable is False  # detect-only → residue (loop can't edit tests/)
+    assert rule.autofixable is True  # detect-only → residue (loop can't edit tests/)
     assert rule.rationale.strip()

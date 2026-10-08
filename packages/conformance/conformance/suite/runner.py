@@ -18,7 +18,7 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,6 +34,7 @@ from conformance.suite.checks import (
     bootstrap_drift,
     client_seam,
     coverage_config,
+    credential_seam,
     dependency_conformance,
     deprecation,
     determinism,
@@ -71,11 +72,7 @@ from conformance.suite.checks import (
 )
 from conformance.suite.checks._ast_common import TOOL_VERSION, detect_scope
 from conformance.suite.rules import CATALOG, assert_registry_consistent, get_rule
-from conformance.suite.schema.disposition import (
-    EnforcementTier,
-    RuleMechanism,
-    RuleScope,
-)
+from conformance.suite.schema.disposition import EnforcementTier, RuleScope
 from conformance.suite.schema.findings import Finding, findings_to_report
 
 
@@ -121,6 +118,12 @@ _CHECKS: list[CheckRegistration] = [
         series=persistence_seam.SERIES,
         discover=persistence_seam.discover,
         scan_path=persistence_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=credential_seam.SERIES,
+        discover=credential_seam.discover,
+        scan_path=credential_seam.scan_path,
+        scan_all=credential_seam.scan_all,
     ),
     CheckRegistration(
         series=download_retry.SERIES,
@@ -520,6 +523,30 @@ def parse_rule_ids(raw: str) -> set[str]:
     return ids
 
 
+def _is_excluded(rel: str, excluded_prefixes: tuple[str, ...]) -> bool:
+    """Whether repo-relative POSIX path *rel* falls under an ``--exclude`` prefix.
+
+    Matched on path-component boundaries: ``tools`` covers ``tools`` and
+    ``tools/x.py`` but never ``tools_extra/x.py``.
+    """
+    return any(
+        rel == prefix or rel.startswith(prefix + "/") for prefix in excluded_prefixes
+    )
+
+
+def _drop_excluded(
+    paths: Iterable[Path], root: Path, excluded_prefixes: tuple[str, ...]
+) -> list[Path]:
+    """Return *paths* minus those under an ``--exclude`` prefix of *root*."""
+    if not excluded_prefixes:
+        return list(paths)
+    return [
+        p
+        for p in paths
+        if not _is_excluded(p.relative_to(root).as_posix(), excluded_prefixes)
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Atlan conformance suite runner.")
     parser.add_argument("--repo", default=".", metavar="DIR")
@@ -527,26 +554,10 @@ def main(argv: list[str] | None = None) -> int:
         "--output", metavar="FILE", help="Write SARIF to FILE (default: stdout)"
     )
     parser.add_argument("--tool-version", default=TOOL_VERSION, metavar="VERSION")
-    execution = parser.add_mutually_exclusive_group()
-    execution.add_argument(
-        "--with-tests",
-        action="store_true",
-        help="Execute registered preflight scenarios in a bounded pytest subprocess.",
-    )
-    execution.add_argument(
+    parser.add_argument(
         "--static",
         action="store_true",
-        help="Run static analysis only (default); TEST rules are reported as not evaluated.",
-    )
-    parser.add_argument(
-        "--test-timeout",
-        type=float,
-        default=120.0,
-        help="Maximum seconds for the complete preflight scenario subprocess.",
-    )
-    parser.add_argument(
-        "--test-python",
-        help="Python executable from the app's test environment (default: current interpreter).",
+        help="Static analysis only. Always the case; accepted for compatibility.",
     )
     parser.add_argument(
         "--series",
@@ -600,8 +611,6 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
-    if not 0 < args.test_timeout < float("inf"):
-        parser.error("--test-timeout must be positive and finite")
 
     rule_ids: set[str] | None = None
     if args.rule:
@@ -642,16 +651,7 @@ def main(argv: list[str] | None = None) -> int:
         # (e.g. the all-APP D-series when scanning the SDK itself).
         if not _series_in_scope(check.series, active_scope):
             continue
-        paths: list[Path] = []
-        for p in check.discover(root):
-            if excluded_prefixes:
-                rel = p.relative_to(root).as_posix()
-                if any(
-                    rel == prefix or rel.startswith(prefix + "/")
-                    for prefix in excluded_prefixes
-                ):
-                    continue
-            paths.append(p)
+        paths = _drop_excluded(check.discover(root), root, excluded_prefixes)
         if check.scan_all is not None:
             all_findings.extend(check.scan_all(paths, root))
         else:
@@ -665,48 +665,14 @@ def main(argv: list[str] | None = None) -> int:
         and (rule_ids is None or rid in rule_ids)
         and (not args.series or rid[0] in requested)
     }
-    test_rules = {
-        rid for rid in selected_rules if get_rule(rid).mechanism is RuleMechanism.TEST
-    }
-    behavior_summary = {
-        rid: {"execution": "not_evaluated", "complete": False}
-        for rid in sorted(test_rules)
-    }
     if "F015" in selected_rules:
         from conformance.suite.checks.preflight._lifetime import scan_removed_config
 
         all_findings.extend(
             finding
             for finding in scan_removed_config(root)
-            if not any(
-                finding.file == prefix or finding.file.startswith(prefix + "/")
-                for prefix in excluded_prefixes
-            )
+            if not _is_excluded(finding.file, excluded_prefixes)
         )
-    if args.with_tests and test_rules:
-        from conformance.suite.checks.preflight._behavior import run_behavior
-        from conformance.suite.checks.preflight._common import (
-            build_registry,
-            entrypoint_contracts,
-        )
-
-        paths = preflight.discover(root)
-        entries = tuple(entrypoint_contracts(build_registry(paths, root))) or (
-            "default",
-        )
-        scopes = [active_scope.value] if active_scope is not None else ["app", "sdk"]
-        for scope in scopes:
-            result = run_behavior(
-                root,
-                test_rules,
-                scope,
-                args.test_timeout,
-                entries if scope == "app" else ("default",),
-                args.test_python,
-            )
-            all_findings.extend(result.findings)
-            behavior_summary.update(result.summary)
-
     # Drop findings for rules outside the active scope.  This is the
     # finding-level counterpart to the series-level skip above: it covers
     # mixed-scope series (e.g. C, where C001 is 'both' but C002/C003 are 'app')
@@ -742,8 +708,6 @@ def main(argv: list[str] | None = None) -> int:
     for result in report.runs[0].results:
         if result.rule_id == "F019":
             result.properties["atlan/analysisStatus"] = "unresolved"
-    if behavior_summary:
-        report.runs[0].properties["atlan/preflightTests"] = behavior_summary
     payload = json.dumps(report.model_dump(by_alias=True, exclude_none=True), indent=2)
 
     if args.output:

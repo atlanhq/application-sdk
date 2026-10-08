@@ -1,5 +1,132 @@
 # Changelog
 
+## v3.44.0 (October 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.43.0...v3.44.0
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) (by @cmgrote in [01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+- SystemAppE2ETest submits straight to AE on an isolated system-app tenant pool (FND-3542) (#4249) (by @cmgrote in [3c3cf93](https://github.com/atlanhq/application-sdk/commit/3c3cf93))
+
+
+## v3.43.0 (October 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.1...v3.43.0
+
+### Features
+
+- fleet-wide signals on warn-mode asset validation telemetry (FND-3495) (#4226) (by @cmgrote in [8b712ee](https://github.com/atlanhq/application-sdk/commit/8b712ee))
+
+### Bug Fixes
+
+- pin daprd internal gRPC port so it cannot take the API port (#4181) (by @mitshah-atlan in [1e0d547](https://github.com/atlanhq/application-sdk/commit/1e0d547))
+- skip local sidecars when uploading a directory (#4222) (by @Dexters-Hub in [f444725](https://github.com/atlanhq/application-sdk/commit/f444725))
+
+
+## v3.42.1 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.0...v3.42.1
+
+### Bug Fixes
+
+- skip duplicate and never-created connection QNs in teardown (FND-3405) (#4197) (by @cmgrote in [1c4c0d4](https://github.com/atlanhq/application-sdk/commit/1c4c0d4))
+- run the orphan pass over the whole upload_refs declaration (FND-3414) (#4198) (by @cmgrote in [5901772](https://github.com/atlanhq/application-sdk/commit/5901772))
+
+
+## v3.42.0 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.41.0...v3.42.0
+
+### Features
+
+- add a preflight gate warmup tier with a stateless warmup probe, PENDING verdicts and category-gated hard mode, plus driver-level read cancellation and a worker-free handler (FND-3237) (#4130) (by @cmgrote in [f6a0eaa](https://github.com/atlanhq/application-sdk/commit/f6a0eaa))
+
+### Bug Fixes
+
+- write local sidecars when persisting a directory FileReference (#4127) (by @cmgrote in [907728a](https://github.com/atlanhq/application-sdk/commit/907728a))
+- FND-3272 classify a full volume during download as DiskFullError (#4145) (by @SwarnadeepChatterjee in [e0764aa](https://github.com/atlanhq/application-sdk/commit/e0764aa))
+- keep run_query connect and close off the event loop, add conformance rule P054 (#4167) (by @fyzanshaik-atlan in [28e24be](https://github.com/atlanhq/application-sdk/commit/28e24be))
+- raise FastAPI to 0.142.2 with native telemetry off and OTel 1.45 (#4131) (by @cmgrote in [46e1633](https://github.com/atlanhq/application-sdk/commit/46e1633))
+
+
+## v3.41.0 (October 02, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.40.0...v3.41.0
+
+### Features
+
+- read memory limit from cgroup, repeat pressure warning (#4061) (by @SwarnadeepChatterjee in [1d43fb7](https://github.com/atlanhq/application-sdk/commit/1d43fb7))
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) (by @cmgrote in [20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug Fixes
+
+- exit when the worker teardown after a fatal error never finishes (#4057) (by @Lalit3716-atlan in [2093ddd](https://github.com/atlanhq/application-sdk/commit/2093ddd))
+- harden storage primitives and fix incremental state correctness (#4070) (by @cmgrote in [e738386](https://github.com/atlanhq/application-sdk/commit/e738386))
+- forward aws_external_id to STS AssumeRole in CloudStore S3 (#4108) (by @ashish-atlan in [9b3366a](https://github.com/atlanhq/application-sdk/commit/9b3366a))
+
+
+## v3.40.0 (September 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.1...v3.40.0
+
+### Features
+
+- route workflow-input credentials centrally with route_credentials (#4029) (by @cmgrote in [5ef14b8](https://github.com/atlanhq/application-sdk/commit/5ef14b8))
+- correct UI clickthrough and workflow-id uniqueness guidance (#4033) (by @cmgrote in [b784ee8](https://github.com/atlanhq/application-sdk/commit/b784ee8))
+
+
+## v3.39.1 (September 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.0...v3.39.1
+
+### Bug Fixes
+
+- honour exclude_table_regex from the connector form in SqlApp (FND-2733) (#3955) (by @vaibhavatlan in [c6d47bd](https://github.com/atlanhq/application-sdk/commit/c6d47bd))
+- FND-2570 bind activity log context instead of passing it to loguru format (#3987) (by @sachi-atlan in [b677246](https://github.com/atlanhq/application-sdk/commit/b677246))
+
+
+## v3.39.0 (September 23, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0
+
+### Features
+
+- name the build in the App lifecycle messages, drop the log attributes (#3928) (by @vaibhavatlan in [db5da5f](https://github.com/atlanhq/application-sdk/commit/db5da5f))
+
+### Bug Fixes
+
+- redact secrets in lifecycle FAILED Body lines (#3924) (by @cmgrote in [735e8c2](https://github.com/atlanhq/application-sdk/commit/735e8c2))
+- redact Azure SharedAccessKey and AccountKey values (#3937) (by @vaibhavatlan in [9ad05d8](https://github.com/atlanhq/application-sdk/commit/9ad05d8))
+- strip pyatlan placeholder guid in entity_bytes (#3944) (by @cmgrote in [37a0fa5](https://github.com/atlanhq/application-sdk/commit/37a0fa5))
+- FND-2501 carry a typed error on AuthOutput and surface it from test_auth (#3939) (by @sachi-atlan in [6105ad1](https://github.com/atlanhq/application-sdk/commit/6105ad1))
+- redact the auth/preflight/metadata boundary logs (#3948) (by @vaibhavatlan in [e42af02](https://github.com/atlanhq/application-sdk/commit/e42af02))
+
+
+## v3.38.0 (September 22, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.37.0...v3.38.0
+
+### Features
+
+- accept explicit credentials for the IAM-role RDS token path (#3905) (by @vaibhavatlan in [a649dc5](https://github.com/atlanhq/application-sdk/commit/a649dc5))
+- name the failing check and its reason on outcome rows (CONNECT-1821) (#3901) (by @rishab-atlan in [2dd8e53](https://github.com/atlanhq/application-sdk/commit/2dd8e53))
+
+
+## v3.37.0 (September 21, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.3...v3.37.0
+
+### Features
+
+- hold a restarted worker back, and only when something is coming (#3722) (by @TechyMT in [8940fcc](https://github.com/atlanhq/application-sdk/commit/8940fcc))
+
+### Bug Fixes
+
+- stamp sdk and app version on every lifecycle log line (#3872) (by @vaibhavatlan in [1533fca](https://github.com/atlanhq/application-sdk/commit/1533fca))
+- emit a typed FailureCategory from the SDK's remaining untyped raise sites (#3857) (by @AtMrun in [45a8be1](https://github.com/atlanhq/application-sdk/commit/45a8be1))
+
+
 ## v3.36.3 (September 19, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.36.2...v3.36.3

@@ -180,27 +180,26 @@ def test_the_merge_job_combines_both_architectures(
     )
 
 
-# ── The published ladder still reaches both registries ───────────────────────
+# ── The published ladder goes to GHCR, and nothing logs in to Harbor ─────────
 
 
-def test_harbor_release_still_publishes_to_both_registries() -> None:
-    """The GHCR mirror is what keeps app CI off Harbor's S3 egress. Losing it
-    is a cost regression that nothing else reports."""
+def test_harbor_release_publishes_to_ghcr_only() -> None:
+    """``registry.atlan.com`` is the registry gateway in front of GHCR now, so
+    the public reference resolves to the GHCR push without a second one."""
     registries = {repo.split("/")[0] for repo in harbor_release_tags.REPOS}
-    assert registries == {"registry.atlan.com", "ghcr.io"}
+    assert registries == {"ghcr.io"}
 
 
-def test_only_the_merge_job_holds_the_harbor_credential() -> None:
-    """The per-arch legs push half-images. Harbor's project is the public,
-    partner-facing catalog, so it must never see an `-amd64` tag — the build
-    legs simply cannot reach it."""
-    build_job = yaml.dump(_job(_HARBOR, "build"))
-    merge_job = yaml.dump(_job(_HARBOR, "merge"))
-    assert "HARBOR_PASSWORD" not in build_job, (
-        "the per-arch build job can log in to Harbor. It pushes arch-suffixed "
-        "staging tags, which do not belong in the public catalog."
-    )
-    assert "HARBOR_PASSWORD" in merge_job
+@pytest.mark.parametrize(
+    "workflow", [_HARBOR, _REPO_ROOT / ".github/workflows/pull_request.yaml"]
+)
+def test_no_job_logs_in_to_registry_atlan_com(workflow: Path) -> None:
+    """Harbor is retired behind the registry gateway, which rejects the old
+    HARBOR_* credentials. A login step to it fails the job before any build
+    runs — the e2e base-image legs failed exactly this way."""
+    body = yaml.dump(_load(workflow))
+    assert "HARBOR_PASSWORD" not in body
+    assert "registry: registry.atlan.com" not in body
 
 
 def test_the_staging_tags_the_merge_reads_are_the_ones_the_build_wrote() -> None:
@@ -238,8 +237,6 @@ _CONSUMERS_ONLY = frozenset(
         # Read the tag / scan the published image.
         "check-dapr-version.yaml",
         "daily-security-scan.yml",
-        "update-dashboard.yaml",
-        "v3-readiness-check.yaml",
         "vuln-reconcile-on-release.yml",
     }
 )

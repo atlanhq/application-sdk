@@ -216,9 +216,9 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.17"
+          version: "0.12.23"
 
       # Version omitted deliberately — as it now is at every call site: the
       # action resolves the single pin in application_sdk/pkl_version.py, so no
@@ -227,7 +227,7 @@ jobs:
 
       # Renovate 43 requires Node >=24.11 — newer than the ubuntu-latest default,
       # so pin the runtime explicitly rather than relying on the preinstalled one.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 

@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import ast
 
+from conformance.suite.checks._ast_common import SDK_APP_BASE_NAMES
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     ImportProvenance,
     collect_import_provenance,
@@ -43,11 +44,7 @@ _SDK_PREFIX = "application_sdk"
 
 
 def _sdk_app_aliases(tree: ast.AST) -> frozenset[str]:
-    """Return local names bound to the SDK ``App`` class in this module.
-
-    Mirrors ``entrypoint_alignment._code_entrypoints._sdk_app_aliases`` so a
-    ``from application_sdk.app import App as Base`` import still anchors discovery.
-    """
+    """Return local names bound to an SDK ``App``-family base in this module."""
     bound: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.ImportFrom) or node.level > 0:
@@ -55,19 +52,37 @@ def _sdk_app_aliases(tree: ast.AST) -> frozenset[str]:
         module = node.module or ""
         if module == _SDK_PREFIX or module.startswith(_SDK_PREFIX + "."):
             for alias in node.names:
-                if alias.name == "App":
+                if alias.name in SDK_APP_BASE_NAMES:
                     bound.add(alias.asname or alias.name)
     return frozenset(bound)
 
 
-def _is_app_subclass(node: ast.ClassDef, app_aliases: frozenset[str]) -> bool:
-    """True if *node* directly subclasses the SDK ``App`` class (by alias name)."""
+def _base_names(node: ast.ClassDef) -> set[str]:
+    names: set[str] = set()
     for base in node.bases:
-        if isinstance(base, ast.Name) and base.id in app_aliases:
-            return True
-        if isinstance(base, ast.Attribute) and base.attr in app_aliases:
-            return True
-    return False
+        if isinstance(base, ast.Name):
+            names.add(base.id)
+        elif isinstance(base, ast.Attribute):
+            names.add(base.attr)
+    return names
+
+
+def _app_family_classes(tree: ast.AST) -> list[ast.ClassDef]:
+    """Classes deriving from an SDK ``App``-family base, directly or via a local base."""
+    family = set(_sdk_app_aliases(tree))
+    if not family:
+        return []
+    classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    found: dict[int, ast.ClassDef] = {}
+    changed = True
+    while changed:
+        changed = False
+        for cls in classes:
+            if id(cls) not in found and _base_names(cls) & family:
+                found[id(cls)] = cls
+                family.add(cls.name)
+                changed = True
+    return list(found.values())
 
 
 def _is_workflow_method(
@@ -94,21 +109,19 @@ def _is_workflow_method(
 def workflow_method_nodes(
     tree: ast.AST,
 ) -> list[ast.FunctionDef | ast.AsyncFunctionDef]:
-    """Return every workflow-context method defined on an ``App`` subclass.
+    """Return every workflow-context method defined on an ``App``-family subclass.
 
-    Only methods declared *directly* in an ``App`` subclass body are classified;
+    Only methods declared *directly* in such a class body are classified;
     nested functions inside a workflow method are covered transitively because the
     detectors ``ast.walk`` each returned node.  Returns ``[]`` when the module does
-    not import the SDK ``App`` (nothing to anchor on).
+    not import an SDK ``App``-family base (nothing to anchor on).
     """
-    app_aliases = _sdk_app_aliases(tree)
-    if not app_aliases:
+    classes = _app_family_classes(tree)
+    if not classes:
         return []
     prov = collect_import_provenance(tree)
     methods: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.ClassDef) and _is_app_subclass(node, app_aliases)):
-            continue
+    for node in classes:
         for member in node.body:
             if isinstance(
                 member, (ast.FunctionDef, ast.AsyncFunctionDef)
@@ -125,13 +138,8 @@ def async_method_names(tree: ast.AST) -> frozenset[str]:
     or a plain async helper) returns a coroutine, so calling it without ``await``
     (and not wrapping it in ``create_task``/``gather``) silently drops the work.
     """
-    app_aliases = _sdk_app_aliases(tree)
-    if not app_aliases:
-        return frozenset()
     names: set[str] = set()
-    for node in ast.walk(tree):
-        if not (isinstance(node, ast.ClassDef) and _is_app_subclass(node, app_aliases)):
-            continue
+    for node in _app_family_classes(tree):
         for member in node.body:
             if isinstance(member, ast.AsyncFunctionDef):
                 names.add(member.name)

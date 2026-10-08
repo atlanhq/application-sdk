@@ -26,7 +26,7 @@ jobs:
       security-events: write # for github/codeql-action/upload-sarif to upload SARIF results
       actions: read # only required for a private repository by github/codeql-action/upload-sarif to get the Action run status
     name: Build
-    runs-on: "ubuntu-24.04"
+    runs-on: "ubuntu-26.04"
     timeout-minutes: 10
 
     steps:
@@ -41,10 +41,10 @@ jobs:
           output: 'trivy-results.sarif'
           severity: 'CRITICAL,HIGH'
         env:
-          TRIVY_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-db:2
-          TRIVY_JAVA_DB_REPOSITORY: public.ecr.aws/aquasecurity/trivy-java-db:1
+          TRIVY_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-db:2,ghcr.io/aquasecurity/trivy-db:2,public.ecr.aws/aquasecurity/trivy-db:2
+          TRIVY_JAVA_DB_REPOSITORY: mirror.gcr.io/aquasec/trivy-java-db:1,ghcr.io/aquasecurity/trivy-java-db:1,public.ecr.aws/aquasecurity/trivy-java-db:1
 
       - name: Upload Trivy scan results to GitHub Security tab
-        uses: github/codeql-action/upload-sarif@1c5b675653bb5c22dbe9b12b556ec555138e09fd # v4
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4
         with:
           sarif_file: 'trivy-results.sarif'

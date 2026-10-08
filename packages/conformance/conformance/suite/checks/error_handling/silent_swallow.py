@@ -12,6 +12,7 @@ from ._helpers import (
     _body_has_bypassing_exit,
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
+    _body_returns_typed_failure,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -19,6 +20,10 @@ from ._helpers import (
     _inherits_logging_filter,
     _is_gather_call,
     _iter_shallow,
+    _return_carries_typed_failure,
+    redaction_scope,
+    typed_failure_scope,
+    visible_helpers,
 )
 
 
@@ -92,12 +97,30 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
-        # Pass only if the handler re-raises with the trace preserved on *every*
+        # Pass only if the handler re-raises with the cause preserved on *every*
         # path (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad
         # catch that translates-and-chains swallows nothing. A guaranteeing raise
         # alone is not enough — a preceding `return`/`break`/`continue` (swallow)
-        # or `raise ... from None` (trace-loss) bypasses it, so those disqualify.
-        if _body_always_raises(node.body) and not _body_has_bypassing_exit(node.body):
+        # or a `raise ... from None` that drops the cause bypasses it, so those
+        # disqualify. A severed raise that carries the caught exception through a
+        # redaction helper does not: it preserves the cause in the only form that
+        # is safe to emit from a frame holding a resolved credential.
+        scope = redaction_scope(node)
+        if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
+            node.body, scope=scope
+        ):
+            return
+        # Same principle on the other arm: a handler that converts the caught
+        # exception into a typed value and hands it back swallows nothing — the
+        # failure leaves the frame as data for the caller to report, so no log
+        # level decides whether it is visible. Every exit must carry it, and an
+        # unbound `except Exception:` never can.
+        if _body_returns_typed_failure(
+            node,
+            function=self._function_stack[-1] if self._function_stack else None,
+            redaction=scope,
+            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
+        ):
             return
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
@@ -122,7 +145,7 @@ class SilentSwallowMixin:
             # the failure IS logged; exc_info there would leak past the
             # sanitizer, so its absence must not flag the handler.
             if func.attr in ("warning", "error", "critical") and call_uses_sanitizer(
-                call
+                call, handler=node
             ):
                 return
         self._add(
@@ -149,7 +172,7 @@ class SilentSwallowMixin:
                 continue
             if func.attr == "exception":
                 continue  # logger.exception() implies exc_info — skip
-            if call_uses_sanitizer(call):
+            if call_uses_sanitizer(call, handler=node):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
                 continue
@@ -166,10 +189,24 @@ class SilentSwallowMixin:
     # ── E007 ─────────────────────────────────────────────────────────────────
 
     def _check_p007(self, node: ast.ExceptHandler) -> None:
+        # A return that hands the caught exception back as typed data hides
+        # nothing: the failure leaves the frame for the caller to report. This
+        # is the same predicate E004 uses for its typed-failure exemption, so
+        # the two rules never disagree about one shape. It is applied per
+        # return, because E007 judges each return on its own.
+        scope = typed_failure_scope(
+            node,
+            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
+            enclosing_function=self._function_stack[-1]
+            if self._function_stack
+            else None,
+        )
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
             if _any_logging_in(node.body[:i]):
+                continue
+            if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
             self._add(
                 "E007",
@@ -185,6 +222,16 @@ class SilentSwallowMixin:
             return
         exc_type = _get_name(node.type)
         if exc_type not in _OPTIONAL_IMPORT_TYPES:
+            return
+        # An unconditional cause-preserving re-raise surfaces the missing
+        # dependency instead of hiding it behind a silent fallback. An explicit
+        # ``from`` replaces the implicit context, so it only counts when the
+        # cause carries the caught ImportError.
+        if (
+            _body_always_raises(node.body)
+            and not _body_has_bypassing_exit(node.body)
+            and _raises_chain_caught(node)
+        ):
             return
         if _any_logging_in(node.body):
             return
@@ -258,15 +305,16 @@ class SilentSwallowMixin:
                         and kw.value.value is True
                         for kw in val.keywords
                     )
-                    if has_re:
+                    if (
+                        has_re
+                        and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                    ):
                         # Only track single Name targets: chained assignments
                         # (a = b = ...) would emit one finding per target, and
                         # attribute targets (self.x = ...) produce false positives
                         # because the inspection-side check only matches ast.Name.
-                        if len(node.targets) == 1 and isinstance(
-                            node.targets[0], ast.Name
-                        ):
-                            gather_vars[node.targets[0].id] = node
+                        gather_vars[node.targets[0].id] = node
 
         cancelled = _cancelled_task_names(func_node)
 
@@ -291,11 +339,15 @@ class SilentSwallowMixin:
                 # isinstance(var, ...) direct check
                 if isinstance(node, ast.Call):
                     func = node.func
-                    if isinstance(func, ast.Name) and func.id == "isinstance":
-                        if node.args and isinstance(node.args[0], ast.Name):
-                            if node.args[0].id in names:
-                                inspected = True
-                                break
+                    if (
+                        isinstance(func, ast.Name)
+                        and func.id == "isinstance"
+                        and node.args
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id in names
+                    ):
+                        inspected = True
+                        break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -312,10 +364,13 @@ class SilentSwallowMixin:
                         break
                 # `x = var[i]` / `x = var[0]` — subscripting the result list to
                 # inspect elements one by one.
-                if isinstance(node, ast.Subscript):
-                    if isinstance(node.value, ast.Name) and node.value.id in names:
-                        inspected = True
-                        break
+                if (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in names
+                ):
+                    inspected = True
+                    break
             if not inspected:
                 self._add(
                     "E010",
@@ -357,6 +412,28 @@ class SilentSwallowMixin:
             f"except {exc_type}: [continue/break/pass] inside a loop — exception is "
             f"silently swallowed. Log at DEBUG before the loop control statement.",
         )
+
+
+def _raises_chain_caught(handler: ast.ExceptHandler) -> bool:
+    """True when every ``raise ... from <cause>`` in *handler* chains the caught error.
+
+    A bare ``raise`` or ``raise X(...)`` keeps the ImportError as implicit
+    context. An explicit ``from`` replaces that context, so the cause must read
+    the handler's bound name; an unbound handler has nothing to chain. Nested
+    ``def``/``class`` bodies are skipped — their raises are not handler exits.
+    """
+    caught = frozenset({handler.name}) if handler.name else frozenset()
+    for stmt in handler.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in (stmt, *_iter_shallow(stmt)):
+            if not isinstance(node, ast.Raise) or node.cause is None:
+                continue
+            if not any(
+                isinstance(n, ast.Name) and n.id in caught for n in ast.walk(node.cause)
+            ):
+                return False
+    return True
 
 
 def _inspection_aliases(

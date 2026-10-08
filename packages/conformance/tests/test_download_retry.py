@@ -24,7 +24,7 @@ def test_rule_is_registered_and_warn_tier() -> None:
     rule = get_rule(RULE_ID)
     assert rule.name == "UnretriedToolDownload"
     assert rule.tier is EnforcementTier.WARN
-    assert rule.autofixable is False
+    assert rule.autofixable is True
 
 
 # ── Logical-line joining ───────────────────────────────────────────────────────

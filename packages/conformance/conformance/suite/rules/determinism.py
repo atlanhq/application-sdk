@@ -24,7 +24,11 @@ in the SDK itself and in every consumer app.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -40,17 +44,18 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="P020",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `run()` only sequences @task calls; "
-            "the clock, the filesystem and the RNG are all touched inside tasks. Workflow "
-            "code is replayed, so a non-deterministic call there produces a different "
-            "history on every replay."
+            "atlan-metabase-app app/connector.py — `transform_data` stamps "
+            "`last_sync_run_at_ms=int(time.time() * 1000)` inside the @task; neither "
+            "`extract_metadata` nor `extract_lineage` reads the clock, uuid or the "
+            "RNG. Workflow code is replayed, so a non-deterministic call there "
+            "produces a different history on every replay."
         ),
         scope=RuleScope.BOTH,
         name="NonDeterministicPrimitiveInWorkflow",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="determinism",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -88,13 +93,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P020] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P021",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — `generate_greetings` does the "
-            "tempfile and the write, and `run()` does neither. The comment on run() states "
-            "the rule in the app's own words: network, disk and clock live inside a @task."
+            "atlan-openapi-app app/connector.py — `run()` validates the input, resolves "
+            "the credential ref, builds task inputs and awaits `download_cloud_spec`, "
+            "`extract_spec`, `transform` and the framework's `self.upload(...)`; the "
+            "tempfile, the HTTP fetch and the object-store download "
+            "live inside those tasks. The comment above the download call states the "
+            "rule in the app's own words: cloud I/O must run in an activity, not "
+            "workflow code."
         ),
         scope=RuleScope.BOTH,
         name="SideEffectIoInWorkflow",
@@ -117,7 +130,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "Inside an ``App`` subclass's workflow-context method a call performs\n"
             "side-effecting I/O — ``open``, ``requests``/``httpx``/``urllib``,\n"
             "``socket``, ``subprocess``, ``threading``/``multiprocessing``,\n"
-            "``os.getenv`` / ``os.environ[...]``.  Move it into a ``@task`` method:\n"
+            "``os.getenv`` / ``os.environ[...]``, ``application_sdk.storage``\n"
+            "object-store calls (``download_file``, ``upload_file``, …), and the\n"
+            "data-scale inventory P023 defers to this rule in workflow context:\n"
+            "whole-file ``Path.read_bytes``/``read_text``/``write_*``, pandas and\n"
+            "pyarrow readers/writers, ``json.load``/``pickle.load``-style file\n"
+            "serialization, ``shutil`` tree ops and ``glob``/``os.walk`` traversal.\n"
+            "Move it into a ``@task`` method:\n"
             "workflow code must be deterministic, and activities are where I/O and\n"
             "external state belong.\n"
             "\n"
@@ -127,21 +146,42 @@ RULES: tuple[RuleDefinition, ...] = (
             "suppress a reviewed exception with ``# conformance: ignore[P021]\n"
             "<reason>``.\n"
         ),
+        rule_interactions=(
+            "P008 bounds the obvious fix. If the flagged I/O shares a block with "
+            "self.download() / self.upload() / self.upload_refs(), moving the "
+            "block wholesale into a @task trades this finding for P008 findings: "
+            "those helpers are framework tasks and must be called from run() "
+            "(observed going 0 -> 2 in FND-2542). Split by responsibility "
+            "instead — the @task takes the raw I/O and RETURNS ITS DECISION as "
+            "typed output, and the transfers stay in run(). Returning the "
+            "decision is the part that actually fixes replay: a branch taken on "
+            "os.path.isfile re-probes the disk on every replay and can diverge, "
+            "whereas a branch taken on a recorded task result cannot. Note the "
+            "checker flags only the curated call list, so os.path.isfile / "
+            "os.path.getsize / os.makedirs beside a flagged shutil.copyfile are "
+            "part of the same defect and are not separately reported — clearing "
+            "only the flagged line leaves the non-determinism in place."
+        ),
         help_uri=f"{_HELP_BASE}#p021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-orchestration",
+        ),
     ),
     RuleDefinition(
         id="P022",
         canonical_reference=(
-            "atlan-metabase-app app/connector.py — every same-class async call in `run()` "
-            "is awaited. A dropped coroutine does not run and does not raise; the workflow "
-            "simply proceeds as if the step had succeeded."
+            "atlan-openapi-app app/connector.py — every same-class async call in "
+            "`OpenAPIConnector.run` is awaited: `self.download_cloud_spec`, "
+            "`self.extract_spec` and `self.transform`. A dropped coroutine does not run and "
+            "does not raise; the workflow simply proceeds as if the step had succeeded."
         ),
         scope=RuleScope.BOTH,
         name="UnawaitedCoroutine",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -175,13 +215,20 @@ RULES: tuple[RuleDefinition, ...] = (
             "coroutine is deliberately discarded and that is provably harmless.\n"
         ),
         help_uri=f"{_HELP_BASE}#p022",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P023",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — the blocking JSONL writes go through "
-            "`self.run_in_thread(write_jsonl, ...)` rather than being called inline in an "
-            "async def. The comment there records why the generator has to be materialised "
+            "atlan-metabase-app app/connector.py — the `extract_collections` @task hands "
+            "its blocking JSONL write to `await self.run_in_thread(write_jsonl, out, "
+            "records)`, passing the callable rather than writing the file inline in the "
+            "async def, as its sibling extract tasks do. Where the blocking work is a sync "
+            "generator, `build_lineage_records` offloads `_build_process_records` in one "
+            "call, and that helper's docstring records why the loop has to be materialised "
             "first."
         ),
         scope=RuleScope.BOTH,
@@ -189,7 +236,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -216,7 +263,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "Inside an ``async def``, code either re-enters the event loop\n"
             "(``asyncio.run(...)`` or ``*.run_until_complete(...)``, including\n"
             "``loop.run_until_complete`` / ``asyncio.get_event_loop()....``), makes\n"
-            "a blocking synchronous call (``requests.*``, ``urllib.request.*``,\n"
+            "a blocking synchronous call (``requests.get`` / ``post`` / … /\n"
+            "``request``, ``urllib.request.urlopen`` / ``urlretrieve``,\n"
             "``time.sleep``), or does tree-scale filesystem work\n"
             "(``shutil.rmtree`` / ``shutil.copytree`` / ``shutil.move``, plus the\n"
             "SDK's ``SafeFileOps.rmtree`` / ``SafeFileOps.move`` wrappers).  Await the coroutine\n"
@@ -231,6 +279,24 @@ RULES: tuple[RuleDefinition, ...] = (
             "(``Path.read_text`` / ``write_bytes`` / …), file-handle\n"
             "(de)serialization (``json.load`` / ``json.dump`` / ``pickle`` /\n"
             "``tomllib``), and ``subprocess.*`` / ``os.system``.\n"
+            "\n"
+            "Only the calls that send a request are network findings.\n"
+            "Constructors do no I/O — ``requests.Session()``,\n"
+            "``requests.adapters.HTTPAdapter()``, ``requests.Request()``,\n"
+            "``urllib.request.Request()``, ``urllib.request.build_opener()`` — so\n"
+            "building a client in an ``async def`` is silent, and so is a lookup\n"
+            "such as ``requests.codes.get``.  A send on the client is flagged:\n"
+            "``get`` / ``post`` / … / ``request`` / ``send`` on a\n"
+            "``requests.Session()``, or ``open`` on a ``build_opener()`` /\n"
+            "``OpenerDirector()``.  The send is found inline\n"
+            "(``requests.Session().send(...)``), through a name bound in the same\n"
+            "or an enclosing function (``s = ...``, ``s: ... = ...``, ``with ... as\n"
+            "s``, ``s := ...``; the nearest binding wins, and a parameter, loop,\n"
+            "comprehension or ``except ... as`` name shadows it), or through a\n"
+            "``self.<attr>`` bound to one client in the methods of the same class\n"
+            "(``__init__`` included, an initial ``None`` allowed, nested classes\n"
+            "excluded on both sides).  A class body is its own scope, which its\n"
+            "methods do not see.  A module-level client is not tracked.\n"
             "\n"
             "Single-syscall filesystem operations (``os.remove``, ``os.unlink``,\n"
             "``os.rmdir``) are **not** flagged: one inode operation does not earn a\n"
@@ -255,25 +321,35 @@ RULES: tuple[RuleDefinition, ...] = (
             "Blocking sync I/O and filesystem work are reported only **outside**\n"
             "workflow context — inside workflow methods the same calls are owned by\n"
             "P020 (sleep) and P021 (file/network I/O), so they are not\n"
-            "double-counted.  Remediation is a restructure, so findings route to\n"
-            "residue.  Land as ``WARN``; suppress with\n"
+            "double-counted.  Remediation is a restructure, so a fix is written per\n"
+            "site rather than applied mechanically.  Land as ``WARN``; suppress with\n"
             "``# conformance: ignore[P023] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p023",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P024",
         canonical_reference=(
-            "atlan-openapi-app app/connector.py — connector code uses the async client "
-            "surface; the only synchronous pyatlan AtlanClient in the repo is in "
-            "tests/e2e/test_connection_reuse.py, where there is no event loop to block."
+            "atlan-openapi-app app/connector.py — constructs no pyatlan client at all: "
+            "`OpenAPIConnector.run` reaches Atlan through the SDK's `self.upload(...)` and "
+            "the publish DAG node, so no sync AtlanClient sits on the event loop. No app/ "
+            "module in any of the three reference apps constructs AtlanClient or "
+            "AsyncAtlanClient; the only AtlanClient among them is a sync test helper in "
+            "atlan-openapi-app tests/e2e/test_connection_reuse.py, outside P-series "
+            "discovery. Where app code does need a client, the shape is the SDK seam in "
+            "application_sdk/credentials/atlan_client.py — `create_async_atlan_client` / "
+            "`AtlanClientMixin.get_or_create_async_atlan_client`."
         ),
         scope=RuleScope.BOTH,
         name="SyncAtlanClientInApp",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
@@ -305,21 +381,26 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P024] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p024",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P031",
         canonical_reference=(
             "atlan-openapi-app app/connector.py — blocking work is offloaded with "
-            "`self.run_in_thread`, the App's own bounded pool. asyncio's shared default "
-            "executor is process-wide, so one app's blocking work starves every other "
-            "coroutine on the worker."
+            "`self.run_in_thread`, the SDK's dedicated sdk-blocking pool. "
+            "asyncio.to_thread and run_in_executor(None, ...) land on the shared default "
+            "executor, which Temporal's Python SDK also uses internally, so long "
+            "blocking calls there can exhaust it and deadlock the worker."
         ),
         scope=RuleScope.BOTH,
         name="SharedDefaultExecutorOffload",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.13.0",
         rationale=(
@@ -348,17 +429,35 @@ RULES: tuple[RuleDefinition, ...] = (
             "``App.run_in_thread()`` or ``self.task_context.run_in_thread()`` — which\n"
             "dispatches onto the SDK's own dedicated ``sdk-blocking-*`` thread pool.\n"
             "\n"
-            "``run_in_executor(<some-executor>, ...)`` with any executor other than\n"
-            "``None`` is not flagged — a call-site-owned ``ThreadPoolExecutor`` is\n"
-            "not the shared-pool contention this rule targets.\n"
+            "``run_in_executor`` on an executor other than ``None`` is not this rule; a\n"
+            "``with``-scoped executor is P054.\n"
             "``application_sdk/_runtime/offload.py`` is exempt: that is where\n"
             "``run_in_thread()``'s own dedicated-executor dispatch lives.\n"
             "\n"
             "Remediation is a restructure (swap in ``run_in_thread()``), so findings\n"
-            "route to residue.  Land as ``WARN``; suppress a reviewed exception with\n"
+            "are fixed per site, not mechanically.  Land as ``WARN``; suppress a\n"
+            "reviewed exception with\n"
             "``# conformance: ignore[P031] <reason>``.\n"
         ),
+        rule_interactions=(
+            "Applied together with F011 on preflight paths. run_in_thread moves "
+            "the work to the SDK's pool but carries no deadline, so F011 treats "
+            "the swapped call exactly as it treated asyncio.to_thread: an "
+            "executor wait that must sit under an enclosing deadline. When the "
+            "flagged offload is on a preflight path, add the deadline in the "
+            "same edit, using the module-level "
+            "application_sdk.execution.heartbeat.run_in_thread (preflight runs on "
+            "Handler, and App.run_in_thread raises outside a @task): "
+            "asyncio.wait_for(run_in_thread(fn, arg), "
+            "timeout=...) or async with asyncio.timeout(...) sized from the "
+            "remaining preflight budget. A swap that keeps an existing deadline "
+            "must keep it around the new call."
+        ),
         help_uri=f"{_HELP_BASE}#p031",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P036",
@@ -418,5 +517,69 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P036] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p036",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="P054",
+        canonical_reference=(
+            "application_sdk/clients/sql.py — `BaseSQLClient.run_query` and "
+            "`_execute_async_read_operation` offload every driver call with "
+            "`run_in_thread` instead of a `with`-scoped executor, so cancelling the "
+            "awaiting task never joins a blocked driver call on the event loop."
+        ),
+        scope=RuleScope.BOTH,
+        name="ScopedExecutorJoinedOnCancel",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="async-correctness",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.43.0",
+        rationale=(
+            "`with ThreadPoolExecutor() as pool:` exits by calling "
+            "`pool.shutdown(wait=True)` on the event loop thread. When the awaiting "
+            "task is cancelled while the executor runs a blocking driver call, that "
+            "`wait=True` blocks the loop until the call returns and freezes the whole "
+            "worker — every other task on the loop stops with it (FND-2873). The fix "
+            "is a dedicated executor created without `with` and shut down with "
+            "`shutdown(wait=False)` in `finally`, or `run_in_thread(fn, ...)` when the "
+            "call has no thread affinity."
+        ),
+        short_description=(
+            "A `with`-scoped ThreadPoolExecutor joined on cancel blocks the event loop"
+        ),
+        full_description=(
+            "Inside an ``async def``, a ``with`` statement constructs a\n"
+            "``ThreadPoolExecutor`` bound to a name and the body offloads work to it\n"
+            "with ``.run_in_executor(<that name>, ...)``, e.g.\n"
+            "``with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)``.\n"
+            "\n"
+            "A task cancelled inside that ``with`` block leaves through\n"
+            "``pool.shutdown(wait=True)``, which runs on the event loop thread and\n"
+            "blocks until the driver call returns — freezing the whole worker, not just\n"
+            "the cancelled task.\n"
+            "\n"
+            "Fix (a): use ``run_in_thread(fn, ...)``, which dispatches onto the SDK's\n"
+            "dedicated pool and does not join on cancel — the shape\n"
+            "``application_sdk/clients/sql.py`` ``BaseSQLClient.run_query`` uses.\n"
+            "Fix (b): when the calls must stay on one thread (some DB-API cursors break\n"
+            "when ``execute`` and ``fetchmany`` run on different threads), keep a\n"
+            "dedicated executor created **without** ``with`` and call\n"
+            "``executor.shutdown(wait=False)`` in ``finally``.\n"
+            "\n"
+            "``run_in_executor(None, ...)`` is P031, not this rule; a ``with``-scoped\n"
+            "executor that only calls ``pool.submit(...)`` is out of scope.  Land as\n"
+            "``WARN``; suppress a reviewed exception on the ``with`` line (the finding\n"
+            "anchors there, not on the ``run_in_executor`` call) with\n"
+            "``# conformance: ignore[P054] <reason>``.\n"
+        ),
+        help_uri=f"{_HELP_BASE}#p054",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
 )

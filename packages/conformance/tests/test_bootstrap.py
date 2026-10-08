@@ -14,6 +14,7 @@ import re
 import subprocess
 
 import pytest
+import yaml
 from conformance.bootstrap import extract as extract_mod
 from conformance.bootstrap.args import BOOTSTRAP_USAGE, FLAGS, parse_bootstrap_args
 from conformance.bootstrap.autodetect import derive_app_name_from_dir
@@ -21,12 +22,17 @@ from conformance.bootstrap.command import (
     _KNOWN_LEGACY_CONNECTOR_REVIEW_BLOCK,
     _bootstrap_file,
 )
+from conformance.bootstrap.extract import (
+    SARIF_UPLOAD_OPT_IN_MARKER,
+    extract_sarif_upload,
+)
 from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_CONNECTOR_REVIEW_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_WORKFLOWS,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 from conformance.cli import _cmd_bootstrap
@@ -131,6 +137,9 @@ def test_parse_bootstrap_args_defaults() -> None:
         # canonical and C002 stays silent.
         "unit_coverage_fail_under": "",
         "use_ghcr_base": "",
+        # "" = defer to an opt-in already on disk; with none, the SARIF upload
+        # workflow is not installed (public repos only, FND-3336).
+        "sarif_upload": "",
         # No flag of its own: autodetected from an existing
         # vulnerability-scan.yml so an app that vendors LFS-tracked assets into
         # its Docker build context keeps `lfs: true` across a bootstrap run.
@@ -138,6 +147,10 @@ def test_parse_bootstrap_args_defaults() -> None:
         # Same round trip on the RELEASE image build: autodetected from an
         # existing build-and-publish.yaml so a bootstrap run cannot drop it.
         "build_publish_lfs": "",
+        "conformance_private_git_deps": "",
+        "release_private_git_auth": "",
+        "build_publish_private_git_auth": "",
+        "checks_private_git_deps": "",
         "enforce": "",
         "conformance_blocking": "",
         "renovate_automerge": "",
@@ -564,7 +577,7 @@ def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
     Same invariant as `gen-contract-ledger`, via the shared baseline helper."""
     import json
 
-    from conformance.suite.checks.deprecation._ledger_schema import load_ledger
+    from conformance.suite.checks.deprecation._ledger_schema import load_sdk_ledger
 
     (tmp_path / "app.py").write_text(
         "from application_sdk.app import App\n\n"
@@ -579,8 +592,8 @@ def test_cmd_bootstrap_contract_ledger_holds_only_consumer_contracts(
     contracts = {f["contract"] for f in payload["fields"]}
     assert contracts == {"MyInput"}
 
-    # Nothing from the SDK's own bundled ledger leaked in.
-    bundled = {f.contract for f in load_ledger(None).fields}
+    # Nothing from the SDK's own ledger leaked in.
+    bundled = {f.contract for f in load_sdk_ledger().fields}
     assert (
         bundled
     ), "the packaged SDK ledger should be non-empty for this to mean anything"
@@ -733,7 +746,7 @@ _FORCE_ALL_SCHEDULE = (
     "force-all: ${{ github.event_name == 'schedule' "
     "|| github.event_name == 'workflow_dispatch' }}"
 )
-_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 */6 * * *"'
+_SCHEDULE_BLOCK = 'schedule:\n    - cron: "17 3 * * *"'
 
 
 def test_conformance_yaml_default_exit_zero_false() -> None:
@@ -859,7 +872,12 @@ def test_all_shims_have_atlanhq_uses_reference() -> None:
     # `conformance-upload-sarif.yaml` left this set in FND-1994: it is now a
     # thin caller like the rest, so it must carry an `atlanhq/` reference and
     # is no longer exempt.
-    inline_ok = {"release-gate.yaml"}
+    # `connector-review-gate.yaml` is inline for the same reason
+    # `release-gate.yaml` is: a ruleset matches on the check-run name, and for
+    # a job that `uses:` a reusable that name gains a "<caller job id> / "
+    # prefix. The required context here is the bare string "Connector Review",
+    # so the job has to be inline to produce it.
+    inline_ok = {"release-gate.yaml", "connector-review-gate.yaml"}
     for name in MANAGED_WORKFLOWS:
         content = render(name)
         if name in inline_ok:
@@ -873,6 +891,78 @@ def test_no_jinja2_placeholders_in_rendered_output() -> None:
         content = render(name)
         assert "<< " not in content, f"Unresolved jinja2 placeholder in {name}"
         assert " >>" not in content, f"Unresolved jinja2 placeholder in {name}"
+
+
+#: Inline required-check gates whose merge_group pass-through must be a
+#: job-level skip, mapped to that skip's exact `if:`.
+_MERGE_GROUP_SKIPPING_GATES = {
+    "release-gate.yaml": "github.event_name == 'pull_request'",
+    "connector-review-gate.yaml": "github.event_name != 'merge_group'",
+}
+
+
+@pytest.mark.parametrize(
+    ("name", "job_if"), sorted(_MERGE_GROUP_SKIPPING_GATES.items())
+)
+def test_gate_skips_merge_group_at_job_level(name: str, job_if: str) -> None:
+    """FND-3320: on merge_group these gates have nothing to check.
+
+    A job that starts only to skip every step is billed a runner minute per
+    queue entry; a job-level skip bills nothing and still files the check run
+    (conclusion `skipped`, a pass for a required check). That holds only while
+    the job `name:` is a static string, so the skipped run carries the exact
+    ruleset context, and no step re-tests the event the job already selected.
+    """
+    workflow = yaml.safe_load(render(name))
+    (job,) = workflow["jobs"].values()
+    assert job["if"] == job_if
+    assert "${{" not in job["name"]
+    for step in job["steps"]:
+        assert "event_name" not in str(step.get("if", "")), step.get("name")
+
+
+_SUPERSEDING_CALLERS = {
+    "conformance.yaml": "conformance-",
+    "release-gate.yaml": "release-gate-",
+    "connector-review-gate.yaml": "connector-review-",
+    "generated-freshness.yaml": "generated-freshness-caller-",
+}
+
+
+@pytest.mark.parametrize(("name", "prefix"), sorted(_SUPERSEDING_CALLERS.items()))
+def test_caller_supersedes_only_on_a_new_pr_commit(name: str, prefix: str) -> None:
+    """FND-3314: a new commit on a PR cancels the previous commit's run.
+
+    The group is shared only by `opened` and `synchronize` and is run-unique
+    everywhere else, so a merge_group entry never evicts another (FND-218), and
+    neither do same-SHA events (reopened, labeled, review): a shared group holds
+    one pending run, and a cancel or a third arrival would leave a `cancelled`
+    check on the head SHA, which Renovate never merges past. Only `synchronize`
+    cancels, for the same reason.
+    """
+    concurrency = yaml.safe_load(render(name))["concurrency"]
+    assert concurrency == {
+        "group": prefix
+        + "${{ github.event_name == 'pull_request' && contains(fromJSON("
+        + '\'["opened", "synchronize"]\'), github.event.action)'
+        + " && github.ref || github.run_id }}",
+        "cancel-in-progress": "${{ github.event_name == 'pull_request' && "
+        "github.event.action == 'synchronize' }}",
+    }
+
+
+def test_generated_freshness_caller_group_differs_from_reusable() -> None:
+    """Caller and called workflow sharing a workflow-level group string is a
+    deadlock GitHub resolves by cancelling the call."""
+    reusable = (
+        pathlib.Path(__file__).resolve().parents[3]
+        / ".github/workflows/generated-freshness.yaml"
+    )
+    reusable_group = yaml.safe_load(reusable.read_text())["concurrency"]["group"]
+    caller_group = yaml.safe_load(render("generated-freshness.yaml"))["concurrency"][
+        "group"
+    ]
+    assert reusable_group.split("$")[0] != caller_group.split("$")[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1011,6 +1101,7 @@ def test_renovate_json_soft_mode_conformance_package_carve_out() -> None:
     assert conf_rule["automerge"] is True
     assert conf_rule["platformAutomerge"] is True
     assert conf_rule["matchUpdateTypes"] == ["minor", "patch"]
+    assert conf_rule["groupName"] == "conformance package"
 
 
 def test_renovate_json_hard_mode_has_no_conformance_carve_out() -> None:
@@ -2304,6 +2395,104 @@ def test_cmd_bootstrap_json_reports_a_removal_as_touched(
 
 
 # ---------------------------------------------------------------------------
+# Opt-in SARIF upload (FND-3336): public repos only
+# ---------------------------------------------------------------------------
+
+_SARIF_REL = f".github/workflows/{SARIF_UPLOAD_WORKFLOW}"
+
+# What every repo bootstrapped before FND-3336 holds: the canonical as it was,
+# without the opt-in marker.
+_UNMARKED_SARIF_COPY = "\n".join(
+    line
+    for line in render(SARIF_UPLOAD_WORKFLOW).splitlines()
+    if line != SARIF_UPLOAD_OPT_IN_MARKER
+)
+
+
+def test_sarif_upload_is_not_an_always_managed_shim() -> None:
+    """Listed in MANAGED_WORKFLOWS it would be written into every private repo."""
+    assert SARIF_UPLOAD_WORKFLOW not in MANAGED_WORKFLOWS
+    assert SARIF_UPLOAD_WORKFLOW not in RETIRED_WORKFLOWS
+
+
+def test_sarif_upload_canonical_carries_the_opt_in_marker() -> None:
+    """Autodetection keys on the marker, so a copy bootstrap writes must keep it
+    or the next bare run would remove the public repo's own opt-in."""
+    assert extract_sarif_upload(render(SARIF_UPLOAD_WORKFLOW)) == "true"
+    assert extract_sarif_upload(_UNMARKED_SARIF_COPY) == ""
+
+
+def test_cmd_bootstrap_does_not_install_sarif_upload_by_default(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    assert not (tmp_path / _SARIF_REL).exists()
+
+
+def test_cmd_bootstrap_installs_sarif_upload_when_opted_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    assert (tmp_path / _SARIF_REL).read_text() == render(SARIF_UPLOAD_WORKFLOW)
+
+
+@pytest.mark.parametrize("argv", [[], ["--resync"]])
+def test_cmd_bootstrap_removes_an_unmarked_sarif_upload(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys, argv: list[str]
+) -> None:
+    """The private-repo case: the pre-opt-in copy goes, and the deletion is in
+    `touched` so the resync lane stages it."""
+    dest = tmp_path / _SARIF_REL
+    dest.parent.mkdir(parents=True)
+    dest.write_text(_UNMARKED_SARIF_COPY)
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([*argv, "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert not dest.exists()
+    assert _SARIF_REL in payload["touched"]
+
+
+def test_cmd_bootstrap_keeps_an_opted_in_sarif_upload(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    """The public-repo case: a bare re-run (and so the fleet resync) keeps it."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    capsys.readouterr()
+    _cmd_bootstrap(["--resync", "--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert (tmp_path / _SARIF_REL).read_text() == render(SARIF_UPLOAD_WORKFLOW)
+    assert _SARIF_REL in payload["unchanged"]
+
+
+def test_cmd_bootstrap_sarif_upload_false_removes_an_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--sarif-upload", "true"])
+    _cmd_bootstrap(["--sarif-upload", "false"])
+    assert not (tmp_path / _SARIF_REL).exists()
+
+
+def test_cmd_bootstrap_sarif_upload_absent_is_not_reported(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch, capsys
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap(["--json"])
+    payload = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert _SARIF_REL not in payload["touched"]
+    assert _SARIF_REL not in payload["unchanged"]
+
+
+def test_parse_bootstrap_args_rejects_a_non_boolean_sarif_upload() -> None:
+    with pytest.raises(SystemExit) as exc:
+        parse_bootstrap_args(["--sarif-upload", "yes"])
+    assert exc.value.code == 2
+
+
+# ---------------------------------------------------------------------------
 # Auto-detection: unit-tests-workflow from build-and-publish.yaml
 # ---------------------------------------------------------------------------
 
@@ -3160,7 +3349,8 @@ def _dataforge_tests_yaml() -> str:
         "      # No hermetic Cosmos, so an unresolved source must fail fast:\n"
         '      # the "true" default would let a dataforge miss turn the\n'
         "      # INTEGRATION merge gate green against no source at all.\n"
-        '      dataforge-hermetic-fallback: "false"\n',
+        '      dataforge-hermetic-fallback: "false"\n'
+        "      dataforge-lifecycle: true\n",
     )
 
 
@@ -3185,6 +3375,31 @@ def test_resync_keeps_the_dataforge_inputs(
     assert 'dataforge-env-tier: "dev"' in after
     assert 'dataforge-output-prefix: "COSMOSNOSQL"' in after
     assert 'dataforge-hermetic-fallback: "false"' in after
+    assert "dataforge-lifecycle: true" in after
+
+
+def test_c002_accepts_a_dataforge_lifecycle_opt_in(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``dataforge-lifecycle: true`` is a per-repo value, not drift (FND-2579).
+
+    Written unquoted, the way the connectors opting in to the FND-1992 wake
+    write it, since the reusable declares the input as a boolean.
+    """
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="app").replace(
+            '      app-image-name: "atlan-app-app"\n',
+            '      app-image-name: "atlan-app-app"\n'
+            '      dataforge-datasource: "teradata"\n'
+            "      dataforge-lifecycle: true\n",
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
 
 
 def test_resync_of_a_dataforge_file_lands_the_structural_catch_up(

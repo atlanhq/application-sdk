@@ -74,6 +74,24 @@ GATE_TIMEOUT_KEY = "gate_timeout_seconds"
 GATE_DURATION_KEY = "gate_duration_ms"
 GATE_ATTEMPTS_KEY = "gate_attempt"
 
+# Which check tier a gate row reports (``fast`` / ``warmup``). Only an app that
+# declares a warmup is dispatched per tier, and only its rows carry the key, so
+# every other app's row is unchanged. Two rows of one run then share a
+# ``gate_attempt``; dedupe on ``(workflow_run_id, gate_tier, gate_attempt)``.
+GATE_TIER_KEY = "gate_tier"
+
+# What the warmup phase did, on the rows of an app that declares one (FND-3041).
+# ``warmup_outcome`` is a closed vocabulary (``WarmupOutcome``): ``warming`` on a
+# ``fast`` row, emitted while the warmup is still in flight, so a run that ends
+# there reads as warming and not as a missing verdict. ``warmup_duration_ms`` is
+# the workflow's own clock from gate start to the state that ended the wait, and
+# ``warmup_transitions`` is the JSON list of states the polls observed, each with
+# its offset — both present only once the wait has ended. Allowlisted, so each is
+# its own attribute rather than a key inside one JSON blob.
+WARMUP_OUTCOME_KEY = "warmup_outcome"
+WARMUP_DURATION_KEY = "warmup_duration_ms"
+WARMUP_TRANSITIONS_KEY = "warmup_transitions"
+
 # Which surface ran Handler.preflight_check on a "Preflight check outcome" row:
 # "http" (the setup form endpoint) or "sdr" (the interactive test-connection
 # activity). The gate's own rows use their distinct event body instead.
@@ -86,6 +104,14 @@ PREFLIGHT_SURFACE_KEY = "preflight_surface"
 # ClickHouse (JSONExtract-able); the scalar counts sit alongside it as their own
 # attributes.
 ASSET_VALIDATION_MATRIX_KEY = "asset_validation_matrix"
+# The matrix is a bounded *sample*; the summary is the complete per-(kind, type,
+# rule) count over the whole batch, also one JSON string, so a dashboard can rank
+# which asset types fail which checks across the fleet without the sample cap.
+ASSET_VALIDATION_SUMMARY_KEY = "asset_validation_summary"
+# On the boot-time "Artifact validation posture" row: whether this deployment runs
+# the transformed-asset check at all ("on"/"off"). With it, an app that emits no
+# asset outcome rows can be told apart from one whose validation is switched off.
+ASSET_VALIDATION_ON_UPLOAD_KEY = "asset_validation_on_upload"
 
 # Generic artifact-validation outcome-event keys (ADR-0020), shared with the
 # emitter (``application_sdk.validation.artifacts``) so a rename is a single edit
@@ -205,14 +231,25 @@ _KNOWN_EXTRA_KEYS = frozenset(
         GATE_TIMEOUT_KEY,
         GATE_DURATION_KEY,
         GATE_ATTEMPTS_KEY,
+        GATE_TIER_KEY,
+        WARMUP_OUTCOME_KEY,
+        WARMUP_DURATION_KEY,
+        WARMUP_TRANSITIONS_KEY,
         PREFLIGHT_SURFACE_KEY,
         # ── Transformed-asset validation outcome event ───────────────────
         ASSET_VALIDATION_MATRIX_KEY,
+        ASSET_VALIDATION_SUMMARY_KEY,
         "assets_total",
         "assets_passed",
         "assets_invalid",
         "assets_orphaned",
         "assets_undeserializable",
+        "assets_referential_check",
+        "assets_upload_kind",
+        "assets_parts_validated",
+        "assets_parts_not_local",
+        # ── Artifact validation posture row: transformed-asset switch ────
+        ASSET_VALIDATION_ON_UPLOAD_KEY,
         # ── Generic artifact validation outcome event (ADR-0020) ─────────
         ARTIFACT_VALIDATION_MATRIX_KEY,
         ARTIFACT_FORMAT_KEY,

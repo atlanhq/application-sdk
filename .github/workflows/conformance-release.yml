@@ -19,6 +19,7 @@ on:
     branches: [main]
     paths:
       - "packages/conformance/**"
+      - "contract_schema.lock.json"
   workflow_dispatch:
 
 permissions:
@@ -73,9 +74,9 @@ jobs:
           python-version: "3.14"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.17"
+          version: "0.12.23"
 
       - name: Compute version, bump pyproject + __init__, update CHANGELOG
         id: versions
@@ -88,6 +89,13 @@ jobs:
           # fires this workflow exactly like a merge into main (#3794).
           PR_MERGE_COMMIT_SHA: ${{ github.event.pull_request.merge_commit_sha }}
         run: python .github/scripts/conformance_release.py
+
+      # The root uv.lock records this workspace member's version, so the bump
+      # above leaves it stale and the gate's `uv lock --check` fails the
+      # release PR. Relock so the bump and the lock land in one commit.
+      - name: Relock workspace
+        if: steps.versions.outputs.skip != 'true'
+        run: uv lock
 
       - name: Sanity-build package
         if: steps.versions.outputs.skip != 'true'
@@ -107,7 +115,8 @@ jobs:
           git checkout -b "${BUMP_BRANCH}"
           git add packages/conformance/pyproject.toml \
                   packages/conformance/conformance/__init__.py \
-                  packages/conformance/CHANGELOG.md
+                  packages/conformance/CHANGELOG.md \
+                  uv.lock
           git commit -m "chore(conformance): release v${new_version}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 

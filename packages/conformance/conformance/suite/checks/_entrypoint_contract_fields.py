@@ -6,9 +6,16 @@ generator; the K-series (contract-toolkit) is expected to need the same
 entrypoint-contract and field-resolution primitives, which is why this lives
 at ``suite/checks/`` top level rather than inside ``deprecation/``.
 
-The check uses the same cross-file class-registry machinery as P013/P014:
-``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
-``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
+Both entrypoint discovery and base-class resolution read the class registry by
+bare name, so a caller that seeds that registry with module-level rebindings
+(:func:`_ast_common.register_alias_records`) gets both for free: an entrypoint
+annotated as ``OpenAPIConnectorInput`` where ``OpenAPIConnectorInput =
+AppInputContract`` resolves to the generated class it names, and a contract
+inheriting from an aliased base resolves that base's fields.
+
+Entrypoint detection is ``prescriptions._boundary_methods.classify_boundary_method``,
+the one detector P013/P014, the K-series and the preflight checks share, over the
+cross-file ``collect_classes`` registry.
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
@@ -27,26 +34,28 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import NamedTuple
 
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_BASES,
     SDK_TEMPLATE_CONTRACT_FIELDS,
+)
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
 )
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
-    ImportProvenance,
     collect_import_provenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -443,7 +452,99 @@ def resolve_contract_fields(
     return list(fields_by_name.values())
 
 
+def sdk_contract_ancestors(
+    classdef: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
+) -> frozenset[str]:
+    """SDK contract names *classdef* inherits from, directly or via in-repo bases.
+
+    Walks the same base chain as :func:`resolve_contract_fields` and returns the
+    ancestors it resolves from the static SDK registries rather than from repo
+    source. A name declared in the scanned repo is never included, so an SDK
+    self-scan (where the templates are in-repo) yields an empty set, and
+    neither is a base its defining module imports from a non-SDK module.
+
+    A base imported from a third-party package (one whose top-level package no
+    scanned file lives under) is not resolved through a same-named in-repo
+    class either: the name match would be a coincidence, and following it
+    would credit the importing contract with an unrelated class's SDK
+    ancestors.
+    """
+    found: set[str] = set()
+    seen: set[str] = {classdef.name}
+    records = (
+        [r for recs in by_name_all.values() for r in recs]
+        if by_name_all
+        else list(by_name.values())
+    )
+    repo_packages = {
+        part for rec in records for part in Path(rec.file).with_suffix("").parts
+    }
+
+    def walk(name: str, foreign: Mapping[str, str | None]) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        if name in foreign and foreign[name] not in (None, *repo_packages):
+            return
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                for base_name in rec.bases:
+                    walk(base_name, rec.non_sdk_bases)
+        elif name in foreign:
+            return
+        elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
+            found.add(name)
+            found.update(SDK_TEMPLATE_CONTRACT_BASES.get(name, ()))
+
+    candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
+    own_foreign: Mapping[str, str | None] = next(
+        (r.non_sdk_bases for r in candidates if r is not None and r.node is classdef),
+        {},
+    )
+    for base in classdef.bases:
+        bname = _base_name(base)
+        if bname is not None:
+            walk(aliases.get(bname, bname), own_foreign)
+    return frozenset(found)
+
+
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
+
+
+def _declared_contract_name(
+    name: str, aliases: dict[str, str], by_name: dict[str, ClassRecord]
+) -> str:
+    """Resolve an annotated contract name to the class that actually declares it.
+
+    Two rebindings sit between the name an entrypoint annotates and the
+    ``ClassDef`` a scan can read fields from: a renamed import (*aliases*), and
+    a module-level rebinding registered into *by_name* by
+    ``register_alias_records``.  The second is the shape a pkl-generated
+    contract takes — ``OpenAPIConnectorInput = AppInputContract`` — and until
+    it was resolved here, the returned name matched no ``ClassDef`` in the
+    scan, so B005/B006 silently checked nothing at all for that contract: the
+    guarantee the ledger exists to provide was simply absent (FND-2605).
+
+    Returning the *declaring* class's name (rather than the local one) is what
+    makes the ledger key stable: an app that later renames or drops the
+    rebinding does not change the contract's ledger identity, and one that
+    moves from a rebinding to a subclass gets the churn exactly once, for the
+    new class, rather than every time the local name changes.
+
+    A no-op for a name that is already a class in the scan, and for one the
+    registry cannot resolve at all.
+    """
+    resolved = aliases.get(name, name)
+    record = by_name.get(resolved)
+    return record.name if record is not None else resolved
 
 
 def collect_entrypoint_contract_names(
@@ -452,45 +553,35 @@ def collect_entrypoint_contract_names(
 ) -> frozenset[str]:
     """Return the class names of all entrypoint Input/Output contracts.
 
-    Mirrors P013 boundary detection — collects contract class names instead of
-    emitting findings.  ``@task`` contract names are excluded.
+    Shares P013's boundary detection (``classify_boundary_method``) — collects
+    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
+
+    Names are reported as the class that *declares* the contract.  When the
+    caller has seeded *by_name* with module-level rebindings (see
+    ``register_alias_records``), a contract annotated under an alias therefore
+    comes back under the aliased class's own name, which is the name the
+    ``ClassDef`` carries and the name the ledger keys on.
     """
     entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
 
-    for path, tree in file_trees.items():
-        prov: ImportProvenance = collect_import_provenance(tree)
+    for tree in file_trees.values():
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        scope = BoundaryScope.for_module(
+            tree,
+            prov=collect_import_provenance(tree),
+            aliases=aliases,
+            by_name=by_name,
+            app_cache=app_cache,
+        )
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
 
             for func in _iter_class_body_methods(class_node):
-                is_ep = False
-
-                if any(
-                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
-                    continue  # @task — skip entirely
-
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in class_node.bases:
-                        bname = _base_name(base)
-                        if bname is None:
-                            continue
-                        bname = aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(bname, "App", by_name, app_cache, set())
-                            is True
-                        ):
-                            is_ep = True
-                            break
-
-                if not is_ep:
+                boundary = classify_boundary_method(class_node, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
 
                 non_self = _get_non_self_params(func)
@@ -499,11 +590,37 @@ def collect_entrypoint_contract_names(
                     if ann is not None:
                         name = _annotation_terminal_name(ann)
                         if name:
-                            entrypoint_contracts.add(aliases.get(name, name))
+                            entrypoint_contracts.add(
+                                _declared_contract_name(name, aliases, by_name)
+                            )
 
                 if func.returns is not None:
                     name = _annotation_terminal_name(func.returns)
                     if name:
-                        entrypoint_contracts.add(aliases.get(name, name))
+                        entrypoint_contracts.add(
+                            _declared_contract_name(name, aliases, by_name)
+                        )
 
     return frozenset(entrypoint_contracts)
+
+
+#: Where the SDK declares :data:`SDK_CONTRACT_BASE_FIELDS`' classes.
+SDK_CONTRACT_BASE_MODULE = "application_sdk/contracts/base.py"
+
+
+def sdk_base_contract_names(by_name: dict[str, ClassRecord]) -> frozenset[str]:
+    """The SDK contract bases (``Input``, ``Output``, ``PublishInputMixin``) declared in this scan.
+
+    They are no entrypoint's contract, but every app contract inherits from
+    one, so the SDK records them in its own ledger alongside its template
+    contracts. A 'sunset' there is what lets B005 in a consumer app recognise
+    a base field the SDK retired (FND-3107/FND-3108). Only the SDK's own scan
+    declares them, in :data:`SDK_CONTRACT_BASE_MODULE`; anywhere else the set
+    is empty.
+    """
+    return frozenset(
+        name
+        for name in SDK_CONTRACT_BASE_FIELDS
+        if (rec := by_name.get(name)) is not None
+        and Path(rec.file).as_posix() == SDK_CONTRACT_BASE_MODULE
+    )

@@ -86,6 +86,7 @@ auto-merge loop is what the SDK-evolution rebuild was undoing).
     path. The stopping line is strict: keep looping until **every finding (nits
     included) is fixed** → green CI + `READY_TO_MERGE`. The only other way to end
     is a documented `NEEDS_HUMAN` stop — a finding you dispute that the reviewer
-    re-raises — with your rationale in the `<!-- SDK_RESOLVE_SUMMARY -->`. Never
+    re-raises, or a disproportionate / non-converging fix you declined
+    (ORCHESTRATION §3d) — with your rationale in the `<!-- SDK_RESOLVE_SUMMARY -->`. Never
     stop on an open nit you have simply left unaddressed, and never ship
     (merge-ready) over a finding you dispute.

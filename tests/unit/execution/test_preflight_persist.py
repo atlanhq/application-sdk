@@ -21,6 +21,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     _config_from_snapshot,
 )
 from application_sdk.handler.contracts import (
+    CheckTier,
     PreflightCheck,
     PreflightOutput,
     PreflightStatus,
@@ -564,6 +565,37 @@ class TestThePreflightResultsRouteContract:
             "app_id",
             "app_version",
         }
+
+    def test_a_warmup_check_carries_its_tier_and_a_preflight_one_does_not(self):
+        """FND-3041: per-check ``tier`` tells a warmup run's two rows apart, and
+        an app that never tiers its checks (every row ``PREFLIGHT``, the
+        default) sends exactly what it did before."""
+        result = PreflightOutput(
+            status=PreflightStatus.READY,
+            checks=[
+                PreflightCheck(name="scan", passed=True, tier=CheckTier.WARMUP),
+                PreflightCheck(name="grants", passed=True),
+                PreflightCheck(name="reach", passed=True, tier=CheckTier.PREFLIGHT),
+            ],
+        )
+        warmup, default, explicit = persist.verdict_payload(result)["preflight"][
+            "checks"
+        ]
+        assert warmup["tier"] == "warmup"
+        assert "tier" not in default
+        assert "tier" not in explicit
+
+    def test_no_warmup_phase_field_crosses(self):
+        """The warmup's own outcome and timing stay on the log row."""
+        assert not {
+            "warmup_outcome",
+            "warmup_duration_ms",
+            "warmup_transitions",
+        } & (
+            persist._VERDICT_WIRE_FIELDS
+            | persist._CHECK_WIRE_FIELDS
+            | persist._ERROR_WIRE_FIELDS
+        )
 
     def test_the_closed_vocabularies_match_the_receivers(self):
         """A value the route's enums reject is a 422 and a dropped row."""

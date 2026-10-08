@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from application_sdk.common.aws_utils import (
+    _normalize_external_id,
     create_aws_client,
     create_aws_session,
     create_engine_url,
@@ -17,6 +18,7 @@ from application_sdk.common.aws_utils_errors import (
     AwsClientCreationError,
     AwsCredentialSourceConflictError,
     AwsCredentialSourceMissingError,
+    AwsPartialCredentialsError,
     AwsRdsTokenError,
     AwsRegionNotFoundError,
 )
@@ -133,7 +135,7 @@ class TestAWSUtils:
         ParamValidationError. Trust policies that don't require an external
         ID are valid; the SDK must not force one. Regression test for HYP-1445.
         """
-        for blank in (None, ""):
+        for blank in (None, "", "   "):
             mock_client.reset_mock()
             mock_sts = MagicMock()
             mock_rds = MagicMock()
@@ -186,6 +188,149 @@ class TestAWSUtils:
 
         kwargs = mock_sts.assume_role.call_args.kwargs
         assert kwargs.get("ExternalId") == "my-external-id"
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_strips_external_id(self, mock_client):
+        """A padded external ID reaches STS trimmed (STS admits no whitespace)."""
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "test_key",
+                "SecretAccessKey": "test_secret",
+                "SessionToken": "test_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            external_id="  my-external-id\n",
+        )
+
+        kwargs = mock_sts.assume_role.call_args.kwargs
+        assert kwargs.get("ExternalId") == "my-external-id"
+
+    @pytest.mark.parametrize(
+        ("raw", "expected"),
+        [
+            ("ext-id-123", "ext-id-123"),
+            ("  ext-id-123\t", "ext-id-123"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    def test_normalize_external_id(self, raw: str | None, expected: str | None):
+        """The one rule every AssumeRole call site applies to ExternalId."""
+        assert _normalize_external_id(raw) == expected
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_passes_explicit_credentials(
+        self, mock_client
+    ):
+        """Explicit credentials must reach the STS client, not the default chain.
+
+        Without them a caller holding resolved credentials can only authenticate
+        by staging them into ``os.environ``; ``os.environ`` is process-global, so
+        concurrent callers race over it.
+        """
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed_key",
+                "SecretAccessKey": "assumed_secret",
+                "SessionToken": "assumed_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            aws_access_key_id="caller_key",
+            aws_secret_access_key="caller_secret",
+        )
+
+        sts_kwargs = mock_client.call_args_list[0].kwargs
+        assert sts_kwargs.get("aws_access_key_id") == "caller_key"
+        assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
+        assert "aws_session_token" not in sts_kwargs
+        assert sts_kwargs.get("region_name") == "us-east-1"
+
+    @patch("boto3.client")
+    def test_generate_aws_rds_token_with_iam_role_passes_session_token(
+        self, mock_client
+    ):
+        """Temporary caller credentials must reach STS with the session token."""
+        mock_sts = MagicMock()
+        mock_rds = MagicMock()
+        mock_client.side_effect = [mock_sts, mock_rds]
+        mock_sts.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "assumed_key",
+                "SecretAccessKey": "assumed_secret",
+                "SessionToken": "assumed_token",
+            }
+        }
+        mock_rds.generate_db_auth_token.return_value = "test_token"
+
+        generate_aws_rds_token_with_iam_role(
+            role_arn="arn:aws:iam::123456789012:role/test-role",
+            host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+            user="test_user",
+            aws_access_key_id="caller_key",
+            aws_secret_access_key="caller_secret",
+            aws_session_token="caller_session",
+        )
+
+        sts_kwargs = mock_client.call_args_list[0].kwargs
+        assert sts_kwargs.get("aws_access_key_id") == "caller_key"
+        assert sts_kwargs.get("aws_secret_access_key") == "caller_secret"
+        assert sts_kwargs.get("aws_session_token") == "caller_session"
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_partial(self):
+        """A half-supplied pair must fail closed, not fall through to the default chain.
+
+        Falling through would assume the role as whatever ambient identity is
+        present (env / instance profile), not the account the caller meant.
+        """
+        with pytest.raises(AwsPartialCredentialsError) as exc_info:
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_access_key_id="caller_key",
+            )
+        assert exc_info.value.code == "INVALID_INPUT_AWS_PARTIAL_CREDENTIALS"
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_secret_only(self):
+        """Secret without access key is the other half of a partial pair."""
+        with pytest.raises(AwsPartialCredentialsError):
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_secret_access_key="caller_secret",
+            )
+
+    def test_generate_aws_rds_token_with_iam_role_raises_when_token_without_pair(
+        self,
+    ):
+        """A session token without the key pair is incomplete explicit credentials."""
+        with pytest.raises(AwsPartialCredentialsError):
+            generate_aws_rds_token_with_iam_role(
+                role_arn="arn:aws:iam::123456789012:role/test-role",
+                host="database-1.abc123xyz.us-east-1.rds.amazonaws.com",
+                user="test_user",
+                aws_session_token="caller_session",
+            )
 
     @patch("boto3.client")
     def test_generate_aws_rds_token_with_iam_role_error(self, mock_client):

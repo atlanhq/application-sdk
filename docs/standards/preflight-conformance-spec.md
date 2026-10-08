@@ -1,8 +1,8 @@
 # Preflight conformance specification
 
-Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules (17 static, 3 behavioral), with 7 BLOCK and 13 WARN; the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
+Current policy: the SDK deprecates `PreflightStatus.PARTIAL`. Removal lands in the first minor release after the reference apps stop returning it, anchored at v3.40.0 so B003 forces a deliberate re-schedule if that release arrives first; the gate emits a `DeprecationWarning` when a handler returns it. A PARTIAL verdict is reported by B001 as a deprecated-enum-member read, not by a preflight rule: a preflight-specific rule would put a second WARN on the same line. F016 scenarios accept PARTIAL only when every failed check is advisory; use NOT_READY for mandatory failures and READY for supported continuation, retaining truthful typed check evidence. The gate's treatment of PARTIAL is unchanged until removal. There are 20 preflight rules, all static, with 4 BLOCK and 16 WARN (F017 and F018 are retired and never fire); the generated catalog page `packages/conformance/conformance/docs/rules/preflight.md` is the source of truth for tiers.
 
-Status: conformance implementation and remaining acceptance requirements, 2026-09-08. F003, F006, F007 and F016–F018 join F001 at BLOCK; other preflight rules remain WARN. Static checks run by default; behavioral checks require `--with-tests` and app/SDK scenario adapters. SDK production behavior is unchanged.
+Status: conformance implementation and remaining acceptance requirements, 2026-09-08; revised 2026-09-24 (FND-2746); check cost tiers and warmup added 2026-10-04 (FND-3042). F003, F006 and F007 join F001 at BLOCK; other preflight rules remain WARN. **Conformance and tests are separate measures:** no preflight rule executes tests. F016 checks statically that the required scenarios are *defined*; whether they *pass* is the test gate's measure. F016 is WARN until the fleet has registered its scenarios. F017 and F018 were SDK-scoped and are retired: the SDK owns both the gate and its tests, so their matrices below are an SDK test plan (FND-2747), not conformance rules. SDK production behavior is unchanged.
 
 The rules ship as the conformance F-series; F001–F005 were first published as P032–P035 and P047. The detector audit that validated them against connector snapshots is recorded on [CONNECT-812](https://linear.app/atlan-epd/issue/CONNECT-812) and in [PR #3710](https://github.com/atlanhq/application-sdk/pull/3710); its counts are tied to one connector revision and one detector build, so they are not kept in this repository.
 
@@ -49,18 +49,34 @@ The SDK deprecates PARTIAL, with removal in the first minor release after the re
 
 ### Target SDK enforcement
 
-Under PR #3685, a handler cannot request fail-open by raising `RateLimitedError`, `DependencyUnavailableError`, or another category. The SDK applies mode to handler-originated failures. Hard mode must prevent extraction after a rejected verdict, handler crash, handler deadline overrun, or a running gate attempt whose failure is classified as source-unverifiable by the workflow. Soft mode records `would_block` and proceeds.
+Under PR #3685, a handler cannot request fail-open by raising `RateLimitedError`, `DependencyUnavailableError`, or another category. The SDK applies mode to handler-originated failures. Hard mode must prevent extraction after a rejected verdict, handler crash, handler deadline overrun, or a running gate attempt whose failure is classified as source-unverifiable by the workflow — when the attributed failure's category is in `GATE_BLOCKING_CATEGORIES` (`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`; FND-3040). Every other category, including the `TIMEOUT` of an overrun and the `INTERNAL` of an untyped crash, records `would_block` and proceeds in hard mode too. Soft mode records `would_block` and proceeds.
 
 SDK infrastructure failures remain distinct. Credential-store transport failures and activity scheduling failures can produce typed no-verdict fail-open outcomes. A definitive credential absence is not equivalent to a credential-store outage. Optional storage verification can return a confirmed blocking verdict even though storage is SDK-owned; failure origin alone does not replace the distinction between a returned storage verdict and a plumbing exception.
 
 A Temporal timeout type is evidence about execution, not proof of a source root cause. Test running-attempt timeouts separately from never-started activities, credential-resolution stalls, store-probe failures, worker loss, and external cancellation. Preserve earlier typed evidence when present; without it, do not label an app deadline as a confirmed customer connectivity failure.
+
+### Check cost tiers and warmup
+
+This section's *cost tier* (`PreflightCheck.tier`: `PREFLIGHT` or `WARMUP`) is a property of a check. It is unrelated to the WARN/BLOCK *enforcement tier* of a conformance rule used elsewhere in this document.
+
+A `PREFLIGHT` check runs on demand and at gate start, with no preparation. A `WARMUP` check runs only once the app's `Handler.warmup` reports `READY`. A check with no tier is `PREFLIGHT`. Assign the tier by one question: **can the source answer this check without starting, resuming, or queueing for compute it bills for?** Yes is `PREFLIGHT`: login, token introspection, grant reads the metadata service answers, reachability. No is `WARMUP`: a query that executes on a suspended warehouse, a probe that waits for a job-queue slot, a scan of a catalog that must be indexed first. A check that is slow only because it fans out over the source's scope is a budget problem (F012) and stays `PREFLIGHT`. Reachability and authentication are always `PREFLIGHT`, so bad credentials fail at gate start and not after a resume. A `PREFLIGHT` check must not resume the source as a side effect; the resume belongs in `Handler.warmup`.
+
+A `WARMUP` tier is a promise the app keeps in two places at once: `WARMUP`-tier checks and a `warmup` override. Without the override the default answers `READY` on every surface, so the `WARMUP` checks run at gate start against cold compute, the cost the tier was meant to avoid. An override with no `WARMUP` checks sends every run whose first probe is not `READY` into a wait with nothing behind it. Either half on its own is a mistake: report it, don't infer intent from it. `App.preflight_warmup_ceiling_seconds` (default 600), `preflight_warmup_probe_timeout_seconds` (default 10) and `preflight_warmup_mode` (default `SOFT`) have defaults, so declaring them is optional.
+
+The handler must also honour `PreflightInput.tiers`: skip the checks outside it. The SDK checks every returned row's tier after the call, and a row outside the requested tiers is no verdict (a `500` on `/check`, `no_verdict` / `gate_broken` in the gate), never a silent drop.
+
+The probe has a contract of its own. `warmup` is stateless and idempotent: each call both pushes the warmup forward and reports where it is, and returns within `WarmupInput.probe_timeout_seconds`, reporting `WARMING` or `QUEUED` when the source has not answered by then. `UNAVAILABLE` is for a source that will not get ready on its own. A typed `AUTH`, `PERMISSION` or `NOT_FOUND` raise ends the gate's wait at once; any other raise, or a probe that overruns its timeout, reads as `WARMING` and is polled again until the ceiling. Reaching the ceiling still pending is `SOURCE_UNAVAILABLE_WARMUP_EXHAUSTED` (category `SOURCE_UNAVAILABLE`, row outcome `warmup_exhausted`).
+
+**Blocking is the exception to the category rule above.** An `UNAVAILABLE` observation and a warmup that reaches its ceiling are decided by `App.preflight_warmup_mode` alone, independent of `preflight_gate_mode`: `HARD` blocks the run, although `SOURCE_UNAVAILABLE` is not in `GATE_BLOCKING_CATEGORIES`, and `SOFT` reports and proceeds. The row's `gate_mode` is the warmup posture. A typed `AUTH` / `PERMISSION` / `NOT_FOUND` raise from the probe, and a `WARMUP`-tier *verdict* returned after `READY`, are enforced like any other verdict, by category under `preflight_gate_mode`. A warmup activity that itself fails (lost worker, refused credential lookup) is gate plumbing and fails open: the first probe activity falls back to one check dispatch with every tier (`warmup_outcome = 'broken'` on its row), and a later one ends the wait as `no_verdict` / `gate_broken`. The first probe is its own `{app}:preflight_warmup` activity ahead of the check activity, for every app, so it never spends the check budget.
+
+Test warmup behaviour against `application_sdk.testing.WarmingSource`, a scripted source whose script gives one answer per probe (`COLD → WARMING → QUEUED → READY`, or `→ UNAVAILABLE`, or a raise at any step). Back the app's source-client fake with it, so the app's real `warmup` runs. Do not replace `warmup` itself, for the same reason app tests do not replace `preflight_check`. SDK gate tests use `WarmingSourceHandler`, the synthetic-handler form.
 
 ## Existing machinery to extend
 
 | Existing surface | Current behavior | Required change |
 | --- | --- | --- |
 | F001, reserved preflight activity | STATIC, BLOCK | Retain; cover supported decorator aliases and wrappers without treating an unrelated decorator as SDK `task`. |
-| F002, duplicate workflow preflight | STATIC, WARN | Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up. |
+| F002, duplicate workflow preflight | STATIC, WARN | Retain; relate the duplicate to the selected workflow. Removal requires a cold-source scenario because a duplicate may have been providing warm-up; the supported replacement is a declared warmup (see [Check cost tiers and warmup](#check-cost-tiers-and-warmup)). |
 | F003, untyped failed check | STATIC, BLOCK | Extend beyond literal `passed=False` where local data flow proves failure. Runtime assertions cover dynamic expressions, factories, and keyword expansion. |
 | F004, metadata/input parity | STATIC, WARN | Compare the selected entrypoint's contract, not the union of all contracts. Unresolved contracts must report incomplete analysis. |
 | F005, handler warning logs | STATIC, WARN | Retain its existing identity. A log statement cannot substitute for a typed result. Apply safe reachable-helper discovery. |
@@ -79,9 +95,9 @@ Implementation references:
 
 ## Proposed rule allocation
 
-The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F019, and F020, which flags a suppression that still cites one of the five retired P-ids. The vacated P-ids stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020.
+The preflight rules occupy their own F-series: F001–F005 (formerly P032–P035 and P047), F006–F016, F019, and F020, which flags a suppression that still cites a retired id (the five vacated P-ids, or F017/F018, retired in 0.39.0 and deleted in 0.40.0). The vacated P-ids and F017/F018 stay unused. Catalog tests enforce uniqueness and pin the F-series to exactly F001–F020, excluding F017 and F018.
 
-Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006, F007, and F016–F018 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. Behavioral rules require complete passing scenarios when explicitly run with `--with-tests`; missing or skipped scenarios are errors. Static-only runs still report behavioral checks as not evaluated. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
+Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level corresponding to BLOCK. F001, F003, F006 and F007 use BLOCK (SARIF `error`). F003/F006/F007 enforce typed failures, handler contracts, and definite missing failure guidance. F016 reports each required scenario that is not defined — missing, skipped, declared unsupported, not calling the contract assertion, or not statically resolvable. Other preflight rules remain WARN because their findings include heuristics, unresolved analysis, or SDK-version-dependent advice. `--exit-zero` preserves error findings while returning a successful process exit for soft enforcement. Further BLOCK promotions require the graduation criteria below. Do not promote heuristic findings merely because a rollout deadline arrives.
 
 | ID and name | Scope / mechanism | Detects or requires | Target tier |
 | --- | --- | --- | --- |
@@ -95,9 +111,9 @@ Use `WARN` and `BLOCK` as enforcement tiers; `error` is the SARIF level correspo
 | F013 PreflightCancellationCleanup | APP / STATIC | Owned resources acquired on a preflight path with missing exceptional cleanup, or blocking cleanup in async code. Resolve delegated ownership before flagging. | WARN |
 | F014 PreflightFailureExposure | APP / STATIC | Raw exception interpolation into preflight wire fields or traceback diagnostics that can expose credential-bearing values on the preflight path. Reuse existing secret/error checks where applicable. | BLOCK for proven unsafe paths |
 | F015 PreflightRemovedGateContract | APP / STATIC | Executable/deployment references to the removed env override or private category-based gate helpers under the target SDK contract. Tests intentionally verifying removal are excluded. | BLOCK after SDK applicability is established |
-| F016 PreflightBehaviorContract | APP / TEST | Real-handler scenarios verify verdicts, typing, actions, input parity, scope/fallback parity, truthful check rows, deadlines, and cleanup. | BLOCK |
-| F017 PreflightWorkflowEnforcement | SDK / TEST | Real workflow execution prevents extraction scheduling on hard-mode gate rejection and handles infrastructure/cancellation paths according to contract. | BLOCK |
-| F018 PreflightExitEvidence | SDK / TEST | Consistent typed status/check payloads across HTTP, supported SDR, activity and workflow exits; complete outcome schema; safe log-buffer handoff. | BLOCK |
+| F016 PreflightBehaviorContract | APP / STATIC | Every required real-handler scenario — verdicts, typing, actions, input parity, scope/fallback parity, truthful check rows, deadlines, and cleanup — is defined as a collected, unskipped test that calls the contract assertion. The test gate runs them. | WARN, then BLOCK once the fleet has registered its scenarios |
+| F017 PreflightWorkflowEnforcement | SDK / deleted | Deleted in 0.40.0; the enforcement matrix below is asserted by the SDK's own tests. | — |
+| F018 PreflightExitEvidence | SDK / deleted | Deleted in 0.40.0; the exit and evidence matrix below is asserted by the SDK's own tests. | — |
 | F019 PreflightAnalysisCoverage | APP / STATIC | Declared preflight entrypoints not analyzed, unresolved dispatch/contract shapes, and absent required scenario registration. Known no-preflight apps are explicitly not applicable, not healthy preflight implementations. | WARN for unresolved analysis; BLOCK for missing required registration after adoption |
 
 F016 can emit separately identified scenario failures under one rule. Do not create an independent rule for every spelling of the same error or every connector. Error-category correctness and preflight/extraction tolerance parity remain behavioral requirements; simple co-occurrence of two error subclasses does not prove misclassification.
@@ -153,7 +169,19 @@ Run tests without production credentials or live customer systems. Isolate delib
 
 The adapter must explicitly mark unsupported scenario families with a reason. Skips, xfails, zero collected tests, missing adapters, or fixture setup failures cannot establish conformance. Measure evidence coverage per entrypoint and scenario rather than test-file presence.
 
+#### Warmup scenarios (recommended; not detected)
+
+An app that overrides `Handler.warmup` should also pin the rows below. They are **not** in `F016_SCENARIOS` (`packages/conformance/conformance/preflight_scenarios.py`), so F016 neither requires nor reports them. Adding them there would oblige every app, warmup or not, to register them, which needs an applicability rule first.
+
+| Scenario | Required observation |
+| --- | --- |
+| Cold source reaches READY | Against a scripted `WarmingSource` walking `COLD → WARMING → QUEUED → READY`: each `warmup` call reports the step it reached, with no state carried between calls, and returns within `probe_timeout_seconds`; the `WARMUP` checks then run and return a truthful verdict. |
+| Source never warms | Scripted `→ UNAVAILABLE` (or a typed AUTH / PERMISSION / NOT_FOUND raise): `warmup` reports `UNAVAILABLE` or raises the typed, actionable leaf, and no `WARMUP` check claims a pass. The probe does not turn a transient source error into `UNAVAILABLE`: it raises it or keeps reporting `WARMING`, and the gate polls again. |
+| Tier assignment | Reachability and authentication rows are `PREFLIGHT`; a `tiers={PREFLIGHT}` request against a cold scripted source returns no `WARMUP` row and never probes the source's compute. |
+
 ### F017 SDK enforcement matrix
+
+Retained as the SDK's test plan for gate enforcement; the F017 rule is retired (FND-2747 maps it onto `tests/unit/app/test_preflight_gate.py`).
 
 Execute a real Temporal test workflow through the SDK wrapper. Register a harmless extraction sentinel activity. In every hard-mode block case, assert the workflow fails with the preflight error and inspect history to prove the extraction sentinel was never scheduled. In permitted cases, assert it executes exactly once. Mocked `execute_activity` tests remain useful unit coverage but are insufficient for this guarantee.
 
@@ -163,6 +191,8 @@ Run the matrix in soft and hard mode and with relevant attempt counts. Assert mo
 
 ### F018 SDK exit and evidence matrix
 
+Retained as the SDK's test plan for exit evidence; the F018 rule is retired (FND-2747).
+
 Validate HTTP success and raised-error paths, supported SDR dispatch, returned activity results, deliberate activity blocks, retry markers, plumbing failures, and workflow-built blocks after activity death. Assert status, checks, primary typed cause, audience, action, and message precedence. Infrastructure no-verdict payloads must not claim a readiness verdict.
 
 For PR #3685, preserve existing HTTP status and legacy `detail` compatibility while checking the additive typed body. Keep legacy successful response compatibility tests. Verify all declared outcome keys on activity and workflow emissions, failed-check codes on proceeded advisory results, and the unmeasured duration sentinel. Do not equate an empty check matrix with a healthy gate.
@@ -171,9 +201,7 @@ Exercise log-buffer flush triggers from worker, workflow, and no-running-loop co
 
 ### Runner integration
 
-Add a TEST execution stage to the full conformance invocation using the existing findings/SARIF model. Collect scenario results and map them to F016, F017, or F018. Preserve a static-only invocation that runs no tests and reports TEST coverage as not evaluated; an explicit mode or flag is implementation work, not an existing CLI capability. Specify the adapter API, test markers, subprocess timeout, and result schema in the harness implementation PR before app adoption; none is an existing public API promised by this document.
-
-The full gate must distinguish a passing executed scenario from missing, skipped, failed-to-run, or unsupported evidence. Do not add a new rule mechanism or silently derive a pass from the absence of findings. Preserve existing suppression behavior; do not require inline source comments as the adoption mechanism.
+Conformance reads the scenario registrations statically and never executes them. A TEST execution stage (`--with-tests`) and a report-ingest path (`--preflight-report`) were built, then deprecated and removed in 0.40.0: running the scenarios inside conformance duplicated the test job, and grading its report coupled two workflows' sequencing. The split is: F016 distinguishes a defined scenario from a missing, skipped, unsupported, unasserted or unresolvable one; the test gate distinguishes a passing scenario from a failing one. Neither derives a pass from the other. A fully defined F016 matrix clears F019's value-level gaps. Preserve existing suppression behavior; a suppressed F016 finding never counts as a defined scenario.
 
 ## Registry coverage ledger
 
@@ -185,7 +213,7 @@ The registry's main table and comments reuse identifiers. This document qualifie
 | PF-02, PF-13, PF-14 | F010 and strengthened F004; F016 verifies entrypoint and credential routing. Arbitrary async credential derivation is not fixed by a connection-field validator. |
 | PF-03 | F001/F002 provenance improvements and F019 discovery coverage. |
 | PF-04 | Non-finding: absent interactive entrypoint remains legal; F010 must include it as a counterexample. |
-| PF-05, PF-06 | F016 cold-source and duplicate-removal scenarios. Old retry-warms-source advice is version-specific and must not be applied unchanged after #3685. |
+| PF-05, PF-06 | F016 cold-source and duplicate-removal scenarios; for an app that declares a warmup, the warmup scenarios run against a scripted `WarmingSource`. Old retry-warms-source advice is version-specific and must not be applied unchanged after #3685. |
 | PF-07 | F018 attempt/final-outcome evidence and consumer deduplication. |
 | PF-08, PF-15, PF-27, PF-30 | F016 checks actual discovery/authorization scope and rejects vacuous remote success. Fast duration is a telemetry signal, not proof. |
 | PF-09 | F018 evidence and sink tests; fleet storage/query coverage remains telemetry validation, not an app lint. |
@@ -217,7 +245,7 @@ The registry's main table and comments reuse identifiers. This document qualifie
 
 1. Implement discovery coverage and shared scenario/result infrastructure. Preserve existing rule identities and validate provisional IDs against the implementation branch.
 2. Strengthen F003; add F006/F007/F008/F015 and the corresponding F016 cases. This establishes typed, actionable, returned verdicts and safe upgrade diagnostics.
-3. Add F017/F018 execution and wire tests alongside the target SDK contract. Require actual workflow-history evidence for the no-extraction guarantee.
+3. Assert the F017/F018 matrices in the SDK's own tests alongside the target SDK contract (FND-2747). Require actual workflow-history evidence for the no-extraction guarantee.
 4. Extend input parity and add scope, fallback, truthful-result, budget, and cleanup coverage. Keep semantic static approximations at WARN.
 5. Run a representative app cohort covering SQL, HTTP, multi-entrypoint, direct/agent credentials, cold-start sources, and fallback extraction. Use synthetic reproductions derived from the registry, including negative controls.
 6. Promote precise rules to BLOCK only after applicable apps have scenarios, known findings are fixed or explicitly accounted for, detector counterexamples pass, and unresolved-analysis rates are reported. Hard-mode enablement additionally needs a fresh, build-bound runtime measurement; green conformance alone is insufficient.

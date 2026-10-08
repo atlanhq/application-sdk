@@ -166,7 +166,9 @@ instruction may interact with others.
   earlier build stage, or append `USER appuser` after it to restore the runtime
   user.
 
-**Judgment rules** (`autofixable = false`, `classification = "judgment"`):
+**Judgment rules** (`autofixable = true` — the placeholder edit is mechanical;
+`classification = "judgment"` — only the developer can supply the real value,
+so the result is routed to residue):
 
 - **I003 DockerfileAppModuleMissing** — no `ENV ATLAN_APP_MODULE=…` is set.
   Draft an addition after the `FROM` line (or after the last `ENV` block):

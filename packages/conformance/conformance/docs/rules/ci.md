@@ -17,8 +17,8 @@ Suppress a finding on the violating line or the line directly above it:
 |---|---|---|---|---|---|---|
 | [C001](#c001) | `UnpinnedActionReference` | `block` | `both` | `supply-chain` | yes | 0.2.0 |
 | [C002](#c002) | `BootstrapWorkflowDrift` | `warn` | `app` | `ci-consistency` | yes | 0.3.0 |
-| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | — | 0.4.0 |
-| [C004](#c004) | `UnretriedToolDownload` | `warn` | `both` | `ci-reliability` | — | 0.18.0 |
+| [C003](#c003) | `GitignoreMissingEntry` | `warn` | `both` | `ci-consistency` | yes | 0.4.0 |
+| [C004](#c004) | `UnretriedToolDownload` | `warn` | `both` | `ci-reliability` | yes | 0.18.0 |
 
 ---
 
@@ -38,9 +38,12 @@ customers run.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app .github/workflows/checks.yml — third-party actions are pinned to a
-  full 40-character commit SHA with the human-readable version in a trailing comment.
-  Only atlanhq/application-sdk's own reusable refs use @main.
+- **Compliant example:** atlan-metabase-app .github/workflows/checks.yml — a thin caller whose one `uses:` is
+  `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`; its header says
+  the third-party action pins live in that SDK reusable, not in the app. Every `uses:`
+  in the three reference apps is an atlanhq/ ref (exempt) or a local ./ action, so no
+  mutable third-party pin is left to drift.
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 External actions reused via `uses:` must be pinned to a full-length commit SHA (digest),
 never a mutable tag (@v4) or branch (@main). A tag can be re-pointed to malicious code
@@ -66,6 +69,9 @@ invisible until exploited or until the step fails.
   `atlan-application-sdk-conformance bootstrap` rather than hand-edited. The canonical
   content is the bootstrap output, so re-running it is the fix; editing the file in
   place is what caused the drift.
+- **Fix by:** `atlan-application-sdk-conformance bootstrap --json` — run with no other flags;
+  `--resync` is a human-only remedy for drifted `tests.yaml` / `renovate.json`
+  (FND-2542)
 
 The `atlan-application-sdk-conformance bootstrap` command installs a standard set of CI
 workflow shims into `.github/workflows/`. This rule flags any managed file that is
@@ -74,12 +80,24 @@ missing or whose content has diverged from what `bootstrap` would write, plus an
 deletes, which until it does keeps firing on every PR with nothing behind it. Re-run
 `bootstrap` to re-sync (the same bare re-run removes a retired file); structural drift
 is flagged while intentional per-repo value choices (e.g. `unit_tests_workflow_file`)
-are preserved. The exceptions are `tests.yaml` and `renovate.json`, write-if-absent
-scaffolds a bare re-run never rewrites — pass `--resync` to pull their structure
-forward, which likewise preserves each file's recognized per-repo values (tests.yaml's
-app-name, app-image-name, enable-e2e, services-script, unit-coverage-fail-under,
-force-external-runtime and any explicit `secrets:` mapping; renovate.json's auto-merge
+are preserved. `conformance-upload-sarif.yaml` is opt-in, for public repos only: absent
+is clean, since a private repo cannot accept the upload without GitHub Advanced
+Security. A copy without the `bootstrap --sarif-upload true` marker is reported for
+removal, which a bare re-run does. The exceptions are `tests.yaml` and `renovate.json`,
+write-if-absent scaffolds a bare re-run never rewrites — pass `--resync` to pull their
+structure forward, which likewise preserves each file's recognized per-repo values
+(tests.yaml's app-name, app-image-name, enable-e2e, services-script,
+unit-coverage-fail-under, force-external-runtime, dataforge-hermetic-fallback,
+dataforge-lifecycle and any explicit `secrets:` mapping; renovate.json's auto-merge
 mode).
+
+A caveat `--resync` cannot express: the canonical template has no slot for per-repo
+*rationale*. Values survive, the comments explaining them do not. That matters where the
+comment is the only thing protecting a deliberate choice — a repo pinning
+`dataforge-hermetic-fallback: "false"` because it has no seedable source loses the note
+saying the reusable's `true` default would fall back to a source that does not exist and
+report the e2e leg green. The setting survives; the reason a reviewer would need before
+changing it does not (FND-2542).
 
 `--resync` refuses rather than downgrading. A re-render replaces the whole file, so
 anything the canonical template has no place for would be deleted; when a `tests.yaml`
@@ -110,7 +128,7 @@ silently reverting the app to Harbor. Set it with `--use-ghcr-base` or by hand; 
 
 ## C003 — `GitignoreMissingEntry` {#c003}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** — · **Since:** 0.4.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-consistency` · **Autofixable:** yes · **Since:** 0.4.0
 
 > .gitignore is absent or missing a standard required entry
 
@@ -121,9 +139,11 @@ carry.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-hello-world-app .gitignore — carries the standard entries this rule checks for,
-  including `.venv/` and `.claude/worktrees/`. A missing entry is usually the newest
-  one, added centrally after the repo was scaffolded.
+- **Compliant example:** atlan-openapi-app .gitignore — carries every entry this rule requires, including
+  `.venv/`, `.atlan/`, `.claude/worktrees/` and `remediation/`, plus the
+  `.mothership/.cache/` line the bootstrap appends. A missing entry is usually the
+  newest one, added centrally after the repo was scaffolded.
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 The `atlan-application-sdk-conformance bootstrap` command scaffolds a standard
 .gitignore when the file is absent. This rule flags any required entry that is missing
@@ -140,7 +160,7 @@ overall.
 
 ## C004 — `UnretriedToolDownload` {#c004}
 
-**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-reliability` · **Autofixable:** — · **Since:** 0.18.0
+**Tier:** `warn` · **Scope:** `both` · **Fix belongs in:** `ci` · **Category:** `ci-reliability` · **Autofixable:** yes · **Since:** 0.18.0
 
 > CI downloads a tool over the network with no retry
 
@@ -151,9 +171,11 @@ ejected PR that costs a full re-queue. The remediation is almost always a single
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app .github/workflows/checks.yml — tooling arrives through
-  `atlanhq/application-sdk/.github/actions/setup-deps`, which owns the retry, instead of
-  each workflow curling a binary of its own. No reference app downloads a tool inline.
+- **Compliant example:** atlan-openapi-app .github/workflows/checks.yml — a thin caller of
+  `atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main`, whose
+  `setup-deps` step owns the retry, instead of the workflow curling a binary of its own.
+  No workflow or composite action in the three reference apps downloads a tool inline.
+- **Fix by:** [`programs/areas/ci.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/ci.prose.md)
 
 Flags a `curl`/`wget` that installs something — it writes the response to a file or
 pipes it into a shell or `tar` — and carries no retry, plus `uv python install`, which

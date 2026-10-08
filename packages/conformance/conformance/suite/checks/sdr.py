@@ -94,11 +94,15 @@ import ast
 import json
 import re
 import sys
-import tomllib
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import discover, make_cli_main
-from conformance.suite.checks._version import parse_version, version_reached
+from conformance.suite.checks._version import (
+    SDK_DISTRIBUTION,
+    locked_sdk_version,
+    parse_version,
+    version_reached,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
@@ -799,7 +803,12 @@ def _check_p030(paths: list[Path], root: Path) -> list[Finding]:
                 "FileReference declaration as one tree, which is the shape a "
                 "fanned-out connector needs — and never mark this finding a false "
                 "positive without "
-                "a green full-DAG e2e proving assets land in Atlas."
+                "a green full-DAG e2e proving assets land in Atlas. Bytes may "
+                "already move through a path this check does not recognise: an app "
+                "task calling storage.transfer.upload, or the inherited "
+                "upload_to_atlan shim. Run the full-DAG e2e on main first as a "
+                "baseline, then convert keeping keys identical (pin storage_path, "
+                "or declare refs with labels) and compare the Atlas inventory."
             ),
         )
     )
@@ -816,6 +825,169 @@ _AGENT_AWARE_RESOLVER_ATTRS = frozenset(
     {"from_workflow_args", "resolve_agent_credential", "resolve_agent_json"}
 )
 
+#: ``application_sdk.credentials.route_credentials`` (SDK >= 3.40.0) routes
+#: through ``CredentialRef.resolve`` — agent-aware by construction — and is what
+#: P053 prescribes in place of a hand-rolled ``CredentialRef.resolve`` call, so
+#: an app that has migrated onto it must not read to P037 as GUID-only.
+_ROUTE_CREDENTIALS = "route_credentials"
+
+
+_SDK_CALLABLE = "sdk-callable"
+_SDK_MODULE = "sdk-module"
+_OTHER = "other"
+
+_ScopeNode = (
+    ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda | ast.ClassDef
+)
+
+
+def _import_binding(node: ast.Import | ast.ImportFrom) -> dict[str, str]:
+    """What each name an import binds is, as far as the SDK router goes."""
+    bound: dict[str, str] = {}
+    if isinstance(node, ast.ImportFrom):
+        from_sdk = (
+            node.level == 0
+            and bool(node.module)
+            and node.module.split(".")[0] == "application_sdk"
+        )
+        for alias in node.names:
+            name = alias.asname or alias.name
+            if not from_sdk:
+                bound[name] = _OTHER
+            elif alias.name == _ROUTE_CREDENTIALS:
+                bound[name] = _SDK_CALLABLE
+            else:
+                bound[name] = _SDK_MODULE
+    else:
+        for alias in node.names:
+            name = alias.asname or alias.name.split(".")[0]
+            is_sdk = alias.name.split(".")[0] == "application_sdk"
+            bound[name] = _SDK_MODULE if is_sdk else _OTHER
+    return bound
+
+
+def _default_exprs(args: ast.arguments) -> list[ast.expr]:
+    """The default expressions of *args*.
+
+    ``kw_defaults`` holds ``None`` for each required keyword-only parameter
+    (``def f(*, x)``); those are not expressions and are skipped.
+    """
+    return [*args.defaults, *(d for d in args.kw_defaults if d is not None)]
+
+
+def _scope_bindings(scope: _ScopeNode) -> dict[str, str]:
+    """Every name *scope* binds itself, classified for the SDK router.
+
+    Parameters, assignments, loop / ``with`` / ``except`` targets, nested
+    ``def`` / ``class`` names and imports all bind in the scope that contains
+    them (a nested function's *body* is its own scope and is not walked).  A
+    name bound both by an SDK import and by anything else in the same scope is
+    not trusted: statically it may be either at the call.  ``global`` /
+    ``nonlocal`` names bind nothing here.
+    """
+    bindings: dict[str, str] = {}
+    declared_outer: set[str] = set()
+
+    def bind(name: str, kind: str) -> None:
+        previous = bindings.get(name)
+        bindings[name] = kind if previous in (None, kind) else _OTHER
+
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+        args = scope.args
+        for arg in (*args.posonlyargs, *args.args, *args.kwonlyargs):
+            bind(arg.arg, _OTHER)
+        for arg in (args.vararg, args.kwarg):
+            if arg is not None:
+                bind(arg.arg, _OTHER)
+    roots: list[ast.AST] = (
+        [scope.body] if isinstance(scope, ast.Lambda) else list(scope.body)
+    )
+    stack = list(roots)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            bind(node.name, _OTHER)
+            # Decorators and defaults evaluate in this scope; the body does not.
+            stack.extend(node.decorator_list)
+            if not isinstance(node, ast.ClassDef):
+                stack.extend(_default_exprs(node.args))
+            continue
+        if isinstance(node, ast.Lambda):
+            stack.extend(_default_exprs(node.args))
+            continue
+        if isinstance(node, (ast.Global, ast.Nonlocal)):
+            declared_outer.update(node.names)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name, kind in _import_binding(node).items():
+                bind(name, kind)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            bind(node.id, _OTHER)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            bind(node.name, _OTHER)
+        stack.extend(child for child in ast.iter_child_nodes(node) if child is not None)
+    for name in declared_outer:
+        bindings.pop(name, None)
+    return bindings
+
+
+class _RouterCallFinder(ast.NodeVisitor):
+    """Collect the calls that reach the SDK's ``route_credentials``.
+
+    A name is resolved the way Python resolves it: innermost function scope
+    outward to the module, skipping class bodies for anything nested inside
+    them.  So ``from application_sdk.credentials import route_credentials as
+    route`` does not make a helper's own ``route`` parameter the SDK router.
+    """
+
+    def __init__(self) -> None:
+        self._stack: list[tuple[dict[str, str], bool]] = []
+        self.calls: set[int] = set()
+
+    def _resolve(self, name: str) -> str | None:
+        innermost = True
+        for bindings, is_class in reversed(self._stack):
+            if is_class and not innermost:
+                continue
+            if name in bindings:
+                return bindings[name]
+            innermost = False
+        return None
+
+    def _visit_scope(self, node: _ScopeNode) -> None:
+        self._stack.append((_scope_bindings(node), isinstance(node, ast.ClassDef)))
+        self.generic_visit(node)
+        self._stack.pop()
+
+    visit_Module = _visit_scope
+    visit_FunctionDef = _visit_scope
+    visit_AsyncFunctionDef = _visit_scope
+    visit_Lambda = _visit_scope
+    visit_ClassDef = _visit_scope
+
+    def visit_Call(self, node: ast.Call) -> None:
+        func = node.func
+        if isinstance(func, ast.Name):
+            if self._resolve(func.id) == _SDK_CALLABLE:
+                self.calls.add(id(node))
+        elif isinstance(func, ast.Attribute) and func.attr == _ROUTE_CREDENTIALS:
+            root = _attribute_root(func.value)
+            if root is not None and self._resolve(root) == _SDK_MODULE:
+                self.calls.add(id(node))
+        self.generic_visit(node)
+
+
+def _sdk_router_calls(tree: ast.AST) -> set[int]:
+    """``id()`` of every call in *tree* that is the SDK's ``route_credentials``."""
+    finder = _RouterCallFinder()
+    finder.visit(tree)
+    return finder.calls
+
+
+def _attribute_root(node: ast.expr) -> str | None:
+    while isinstance(node, ast.Attribute):
+        node = node.value
+    return node.id if isinstance(node, ast.Name) else None
+
 
 def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, bool]:
     """Scan one module AST for the two P037 signals.
@@ -827,7 +999,8 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
       ``resolve_credential_raw(...)`` call — or ``None`` if there is none.
     * ``agent_aware`` is True if any *agent-aware* resolver entry point is called
       (``CredentialRef.resolve`` / ``CredentialRef.from_workflow_args`` /
-      ``resolve_agent_credential`` / ``resolve_agent_json``) or a
+      ``resolve_agent_credential`` / ``resolve_agent_json`` /
+      ``route_credentials``) or a
       ``CredentialRef(...)`` is built with an ``agent_spec``/``agent_json`` kwarg.
 
     Using the AST (not text) keeps docstring/comment mentions of
@@ -835,12 +1008,18 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
     """
     custom_site: tuple[int, str] | None = None
     agent_aware = False
+    router_calls = _sdk_router_calls(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         func = node.func
+        # The SDK's credential seam, reached through a name that — in the
+        # scope of the call — is bound to the SDK import (bare, aliased, or a
+        # module-qualified attribute); see _RouterCallFinder.
+        if id(node) in router_calls:
+            agent_aware = True
         # Direct constructor: CredentialRef(...)
-        if isinstance(func, ast.Name) and func.id == "CredentialRef":
+        elif isinstance(func, ast.Name) and func.id == "CredentialRef":
             if custom_site is None:
                 custom_site = (node.lineno, "CredentialRef(...)")
             if any(kw.arg in ("agent_spec", "agent_json") for kw in node.keywords):
@@ -1058,6 +1237,7 @@ def _check_p038(paths: list[Path], root: Path) -> list[Finding]:
 
 #: The class name the Pkl generator emits for the extract-input contract model.
 _GENERATED_INPUT_CLASS = "AppInputContract"
+_GENERATED_BUNDLE_INPUT_CLASS = re.compile(r"[A-Z][A-Za-z0-9]*AppInputContract")
 
 
 def _manifest_carries_agent_routing(manifest_path: Path) -> bool:
@@ -1159,10 +1339,13 @@ def _class_declares_agent_json(node: ast.ClassDef) -> bool:
     return False
 
 
-def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, bool]]:
-    """Analyse the ``AppInputContract`` class in a generated ``_input.py``.
+def _generated_input_contract_findings(
+    path: Path, rel: str
+) -> list[tuple[int, bool, str]]:
+    """Analyse the generated input contract class in a generated ``_input.py``.
 
-    Returns ``(lineno, unsafe)`` for each ``AppInputContract`` definition, where
+    That class is ``AppInputContract``, or ``<Entrypoint>AppInputContract`` in a
+    bundle. Returns ``(lineno, unsafe, name)`` for each such definition, where
     ``unsafe`` is True iff the model subclasses the bare ``Input`` base (not the
     ``*ExtractionInput`` family, which declares ``agent_json``), declares no
     ``agent_json`` field of its own, and does not accept extra fields — the shape
@@ -1172,9 +1355,12 @@ def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, 
         tree = ast.parse(path.read_text(encoding="utf-8"))
     except (OSError, SyntaxError, ValueError):
         return []
-    results: list[tuple[int, bool]] = []
+    results: list[tuple[int, bool, str]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef) or node.name != _GENERATED_INPUT_CLASS:
+        if not isinstance(node, ast.ClassDef) or not (
+            node.name == _GENERATED_INPUT_CLASS
+            or _GENERATED_BUNDLE_INPUT_CLASS.fullmatch(node.name)
+        ):
             continue
         bases = _class_base_names(node)
         # The *ExtractionInput family (SDK templates) declares agent_json → safe.
@@ -1186,7 +1372,7 @@ def _generated_input_contract_findings(path: Path, rel: str) -> list[tuple[int, 
             or _class_allows_extra_fields(node)
         )
         unsafe = extends_bare_input and not safe
-        results.append((node.lineno, unsafe))
+        results.append((node.lineno, unsafe, node.name))
     return results
 
 
@@ -1227,7 +1413,9 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
                 rel = str(input_py.relative_to(root))
             except ValueError:
                 rel = str(input_py)
-            for lineno, unsafe in _generated_input_contract_findings(input_py, rel):
+            for lineno, unsafe, name in _generated_input_contract_findings(
+                input_py, rel
+            ):
                 if not unsafe:
                     continue
                 findings.append(
@@ -1238,7 +1426,7 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
                         column=1,
                         message=(
                             f"{rel}:{lineno}: the generated extract-input contract "
-                            "'AppInputContract' subclasses the bare Input base, "
+                            f"'{name}' subclasses the bare Input base, "
                             "declares no agent_json field, and rejects extra fields — "
                             "so the agent_json the platform forwards in SDR (agent) "
                             "mode is silently dropped by Pydantic. The extract input's "
@@ -1265,39 +1453,7 @@ def _check_p039(manifests: list[Path], root: Path) -> list[Finding]:
 _SDR_INTERACTIVE_SDK_FLOOR = (3, 30, 0)
 _SDR_INTERACTIVE_SDK_FLOOR_STR = "3.30.0"
 
-#: The SDK distribution an app depends on. Matched name-normalised against the
-#: ``[[package]]`` entries in the app's ``uv.lock``.
-_SDK_PACKAGE = "atlan-application-sdk"
-
-
-def _normalise_pkg_name(name: str) -> str:
-    """PEP 503 name normalisation — runs of ``-``/``_``/``.`` fold to one ``-``."""
-    return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def _locked_sdk_version(root: Path) -> str | None:
-    """Return the ``atlan-application-sdk`` version locked in ``root/uv.lock``.
-
-    ``None`` means "can't confirm" — no lock, an unparseable lock, or no such
-    package in it. A version we cannot read is never treated as a violation
-    (mirrors heracles' own below-floor guard, which fails open on an unreadable
-    ``sdk_version`` rather than hard-blocking).
-    """
-    lock = root / "uv.lock"
-    if not lock.is_file():
-        return None
-    try:
-        doc = tomllib.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
-        return None
-    target = _normalise_pkg_name(_SDK_PACKAGE)
-    for pkg in doc.get("package", []):
-        if not isinstance(pkg, dict):
-            continue
-        if _normalise_pkg_name(str(pkg.get("name", ""))) == target:
-            version = pkg.get("version")
-            return str(version) if version is not None else None
-    return None
+_SDK_PACKAGE = SDK_DISTRIBUTION
 
 
 def _check_p051(root: Path) -> list[Finding]:
@@ -1315,7 +1471,7 @@ def _check_p051(root: Path) -> list[Finding]:
     it, or unparseable) is left silent: it can't be confirmed below the floor,
     and D-series already governs a missing / unbounded SDK declaration.
     """
-    locked = _locked_sdk_version(root)
+    locked = locked_sdk_version(root)
     if locked is None:
         return []
     parsed = parse_version(locked)

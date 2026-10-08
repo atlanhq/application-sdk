@@ -71,7 +71,7 @@ import ast
 import re
 import sys
 import tomllib
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from importlib import metadata as importlib_metadata
 from pathlib import Path
@@ -1421,7 +1421,7 @@ def _scan_query_transformer_duckdb(
     rel_import, import_line = import_site
     suppressions = parse_toml_suppressions(pyproject_text)
     # Anchor at the SDK dependency line (where the extra belongs) so the
-    # finding lands where the fix goes; fall back to the [project] header.
+    # finding lands where the fix goes; fall back to line 1 of pyproject.toml.
     sdk_norm = _normalise_name(SDK_PACKAGE)
     anchor_line = 1
     for entry in _iter_dep_entries(pyproject_text):
@@ -1443,8 +1443,16 @@ def _scan_query_transformer_duckdb(
                 f"'{SDK_PACKAGE}[sql]'/'[incremental]' extra or direct duckdb "
                 f"dependency is declared. Every transform_metadata call then "
                 f"fails at runtime with ImportError: 'duckdb is required for "
-                f"DuckDBConnectionManager'. Reference the SDK as "
-                f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock. If the app "
+                f"DuckDBConnectionManager'. First confirm a live code path "
+                f"imports the module at {rel_import}: if it is dead code "
+                f"(nothing imports it), delete it instead of adding a "
+                f"dependency; if the repo keeps it "
+                f"on purpose (e.g. frozen reference code), suppress D010 on "
+                f"this finding's pyproject.toml anchor line (pyproject.toml:"
+                f"{anchor_line} — the SDK dependency line when [project] "
+                f"dependencies declares one, else line 1). For a live import, "
+                f"reference the SDK as "
+                f"'{SDK_PACKAGE}[sql]' (or [incremental]) and relock; if the app "
                 f"is pinned to the deprecated '{SDK_PACKAGE}[daft]' extra, upgrade "
                 f"to SDK >= 3.28.0 instead — that extra resolved empty over "
                 f"3.22–3.27 and aliases [sql] again from 3.28.0, so the bump is "
@@ -1470,27 +1478,7 @@ def _collect_top_level_imports(py_files: Iterable[Path]) -> set[str]:
     (``from . import x``) are skipped — they target the app's own package, never
     a declared third-party distribution.
     """
-    modules: set[str] = set()
-    for path in py_files:
-        try:
-            raw = path.read_bytes()
-        except OSError:
-            continue
-        try:
-            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
-            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
-            # decoded correctly instead of crashing on a UTF-8 decode.
-            tree = ast.parse(raw)
-        except (SyntaxError, ValueError):
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    modules.add(alias.name.split(".", 1)[0])
-            elif isinstance(node, ast.ImportFrom):
-                if node.level == 0 and node.module:
-                    modules.add(node.module.split(".", 1)[0])
-    return modules
+    return _collect_source_usage(py_files)[0]
 
 
 # A SQLAlchemy dialect string encodes the DBAPI driver as ``dialect+driver`` —
@@ -1511,21 +1499,263 @@ def _collect_dialect_drivers(py_files: Iterable[Path]) -> set[str]:
     false positives): an over-captured token only ever suppresses a D003 finding
     for a dependency literally named like that token.
     """
+    return _collect_source_usage(py_files)[1]
+
+
+# A SQLAlchemy URL's scheme also names the dialect class to load. A dialect
+# SQLAlchemy does not ship is resolved through the ``sqlalchemy.dialects``
+# entry-point group: ``crate://…`` loads the entry point named ``crate`` and
+# ``foo+bar://…`` loads ``foo.bar``. The package registering it (for example
+# sqlalchemy-cratedb) is therefore used without ever being imported, and a bare
+# ``scheme://`` carries no ``+driver`` for _collect_dialect_drivers to see.
+_SQLALCHEMY_URL_SCHEME_RE = re.compile(
+    r"(?<![A-Za-z0-9_.+-])([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?://"
+)
+# A ``URL.create(drivername=…)`` value names the dialect with no ``://``.
+_SQLALCHEMY_DRIVERNAME_RE = re.compile(
+    r"^([A-Za-z_][A-Za-z0-9_]*)(?:\+([A-Za-z_][A-Za-z0-9_]*))?$"
+)
+_SQLALCHEMY_DIALECTS_GROUP = "sqlalchemy.dialects"
+# SDK classes that create a SQLAlchemy engine on the repo's behalf. A connector
+# built on ``BaseSQLClient`` loads its dialect through SQLAlchemy without ever
+# importing ``sqlalchemy`` itself. Importing the module is not enough: the SDK
+# imports SQLAlchemy lazily, inside ``BaseSQLClient.load()``.
+_SQLALCHEMY_LOADER_CLASSES = frozenset({"BaseSQLClient", "AsyncBaseSQLClient"})
+# Modules those classes are importable from: the defining module and the
+# public package that re-exports them.
+_SQLALCHEMY_LOADER_MODULES = frozenset(
+    {"application_sdk.clients.sql", "application_sdk.clients"}
+)
+
+
+def _dialect_entry_point_name(dialect: str, driver: str | None) -> str:
+    """Render a dialect the way SQLAlchemy looks it up (``foo+bar`` -> ``foo.bar``)."""
+    return f"{dialect}.{driver}" if driver else dialect
+
+
+def _docstring_ids(tree: ast.AST) -> set[int]:
+    """Return ``id()`` of every module/class/function docstring constant."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
+            continue
+        body = node.body
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            ids.add(id(body[0].value))
+    return ids
+
+
+def _url_create_drivername(call: ast.Call) -> str | None:
+    """Return the literal ``drivername`` of a ``URL.create(...)`` call, else None.
+
+    Only a direct string constant counts: a name, f-string or concatenation is
+    not resolved, so a partial value such as ``f"crate{suffix}"`` can never be
+    read as the complete dialect ``crate``.
+    """
+    func = call.func
+    if not (isinstance(func, ast.Attribute) and func.attr == "create"):
+        return None
+    owner = func.value
+    owner_name = (
+        owner.id
+        if isinstance(owner, ast.Name)
+        else owner.attr
+        if isinstance(owner, ast.Attribute)
+        else None
+    )
+    if owner_name != "URL":
+        return None
+    value = call.args[0] if call.args else None
+    if value is None:
+        value = next((kw.value for kw in call.keywords if kw.arg == "drivername"), None)
+    if isinstance(value, ast.Constant) and isinstance(value.value, str):
+        return value.value
+    return None
+
+
+def _collect_source_usage(
+    py_files: Iterable[Path],
+) -> tuple[set[str], set[str], set[str]]:
+    """Return ``(top-level imports, dialect drivers, dialect entry-point names)``.
+
+    Each source file is read and parsed once.
+
+    Dialect entry-point names come from ``scheme://`` in any string literal
+    (f-string literal parts and config-mapping values included) and from a
+    literal ``URL.create(drivername=…)``. Like _collect_dialect_drivers this is
+    a literal scan, not data-flow analysis, and deliberately biased toward
+    matching (WARN-tier): a scheme only ever clears the finding for a
+    dependency that registers a ``sqlalchemy.dialects`` entry point under that
+    exact name. Two sound exclusions bound it: docstrings are not evidence, and
+    no name is credited unless the repo imports ``sqlalchemy`` or references an
+    SDK SQL client class (``_SQLALCHEMY_LOADER_CLASSES``) somewhere — without
+    SQLAlchemy nothing loads a dialect entry point. The gate is repo-wide
+    because a URL constant often lives in a config module that never imports
+    SQLAlchemy itself.
+    """
+    modules: set[str] = set()
     drivers: set[str] = set()
+    dialect_names: set[str] = set()
+    loads_sqlalchemy = False
     for path in py_files:
         try:
             raw = path.read_bytes()
         except OSError:
             continue
         try:
+            # Parse from bytes so ``ast`` honours a PEP 263 coding cookie; a
+            # legacy non-UTF-8 source (e.g. ``# -*- coding: latin-1 -*-``) is
+            # decoded correctly instead of crashing on a UTF-8 decode.
             tree = ast.parse(raw)
         except (SyntaxError, ValueError):
             continue
+        docstrings = _docstring_ids(tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    modules.add(alias.name.split(".", 1)[0])
+            elif isinstance(node, ast.ImportFrom):
+                if node.level == 0 and node.module:
+                    modules.add(node.module.split(".", 1)[0])
+            elif isinstance(node, ast.Call):
+                drivername = _url_create_drivername(node)
+                match = (
+                    _SQLALCHEMY_DRIVERNAME_RE.fullmatch(drivername)
+                    if drivername is not None
+                    else None
+                )
+                if match is not None:
+                    dialect_names.add(_dialect_entry_point_name(*match.groups()))
+            elif isinstance(node, ast.Constant) and isinstance(node.value, str):
                 for match in _SQLALCHEMY_DIALECT_RE.finditer(node.value):
                     drivers.add(match.group(1))
-    return drivers
+                if id(node) in docstrings:
+                    continue
+                for match in _SQLALCHEMY_URL_SCHEME_RE.finditer(node.value):
+                    dialect_names.add(_dialect_entry_point_name(*match.groups()))
+        loads_sqlalchemy = loads_sqlalchemy or _references_sdk_sql_client(tree)
+    if "sqlalchemy" not in modules and not loads_sqlalchemy:
+        dialect_names = set()
+    return modules, drivers, dialect_names
+
+
+def _references_sdk_sql_client(tree: ast.AST) -> bool:
+    """Whether *tree* uses an SDK SQL client class, not merely imports it.
+
+    A use is ``BaseSQLClient``/``AsyncBaseSQLClient`` as a class base or as the
+    callee of a call — reached by a name ``from <loader module> import …``
+    bound, or by an attribute access such as ``sql.BaseSQLClient`` whose owner
+    resolves to a loader module through the file's imports. An import alone,
+    an import under ``if TYPE_CHECKING:``, and a type annotation never count,
+    because none of them runs ``BaseSQLClient.load()``, the only place the SDK
+    imports SQLAlchemy.
+    """
+    type_only = _type_checking_ids(tree)
+    class_names: set[str] = set()
+    bound_modules: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if id(node) in type_only:
+            continue
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    bound_modules[alias.asname] = alias.name
+                else:
+                    top = alias.name.split(".", 1)[0]
+                    bound_modules[top] = top
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if (
+                    node.module in _SQLALCHEMY_LOADER_MODULES
+                    and alias.name in _SQLALCHEMY_LOADER_CLASSES
+                ):
+                    class_names.add(local)
+                else:
+                    bound_modules[local] = f"{node.module}.{alias.name}"
+    # A name the file also binds some other way may not be the SDK's class or
+    # module where it is used; the scan is file-wide, so drop it outright.
+    rebound = _non_import_bindings(tree)
+    class_names -= rebound | bound_modules.keys()
+    for name in rebound:
+        bound_modules.pop(name, None)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            runtime_refs: list[ast.expr] = node.bases
+        elif isinstance(node, ast.Call):
+            runtime_refs = [node.func]
+        else:
+            continue
+        for ref in runtime_refs:
+            if isinstance(ref, ast.Name) and ref.id in class_names:
+                return True
+            if (
+                isinstance(ref, ast.Attribute)
+                and ref.attr in _SQLALCHEMY_LOADER_CLASSES
+                and _resolve_dotted(ref.value, bound_modules)
+                in _SQLALCHEMY_LOADER_MODULES
+            ):
+                return True
+    return False
+
+
+def _non_import_bindings(tree: ast.AST) -> set[str]:
+    """Return every name *tree* binds other than by an import statement."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Name) and not isinstance(node.ctx, ast.Load):
+            names.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.ExceptHandler) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+    return names
+
+
+def _type_checking_ids(tree: ast.AST) -> set[int]:
+    """Return ``id()`` of every node inside an ``if TYPE_CHECKING:`` body."""
+    ids: set[int] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.If):
+            continue
+        test = node.test
+        name = (
+            test.id
+            if isinstance(test, ast.Name)
+            else test.attr
+            if isinstance(test, ast.Attribute)
+            else None
+        )
+        if name != "TYPE_CHECKING":
+            continue
+        for stmt in node.body:
+            ids.update(id(child) for child in ast.walk(stmt))
+    return ids
+
+
+def _resolve_dotted(node: ast.expr, bound_modules: dict[str, str]) -> str | None:
+    """Resolve ``a.b.c`` to a dotted module path through the file's imports."""
+    parts: list[str] = []
+    while isinstance(node, ast.Attribute):
+        parts.append(node.attr)
+        node = node.value
+    if not isinstance(node, ast.Name) or node.id not in bound_modules:
+        return None
+    return ".".join([bound_modules[node.id], *reversed(parts)])
+
+
+def _collect_dialect_names(py_files: Iterable[Path]) -> set[str]:
+    """Return dialect entry-point names selected by SQLAlchemy URL schemes."""
+    return _collect_source_usage(py_files)[2]
 
 
 def _repo_site_packages(root: Path) -> list[str]:
@@ -1553,23 +1783,42 @@ def _repo_site_packages(root: Path) -> list[str]:
 
 
 def _env_import_names(search_path: list[str]) -> dict[str, set[str]]:
-    """Map normalised distribution name -> provided import names for every
-    distribution installed under *search_path*.
+    """Map each installed target distribution to its provided import names."""
+    return _env_distribution_metadata(
+        search_path, include_imports=True, include_dialects=False
+    )[0]
 
-    One pass over the environment, rather than a lookup per dependency, so the
-    cost does not scale with the dependency count. Empty dict when
-    *search_path* is empty — callers then fall back to the running interpreter.
+
+def _env_distribution_metadata(
+    search_path: list[str],
+    *,
+    include_imports: bool,
+    include_dialects: bool,
+    dialect_names_for: Collection[str] | None = None,
+) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    """Read requested metadata maps in one target distribution inventory.
+
+    Empty entry-point sets are retained so a target distribution with no
+    registration cannot fall back to a different version in the invoking
+    interpreter. *dialect_names_for* (normalised names) limits the entry-point
+    read to those distributions — D003 only asks about declared dependencies.
     """
     if not search_path:
-        return {}
-    out: dict[str, set[str]] = {}
+        return {}, {}
+    imports: dict[str, set[str]] = {}
+    dialects: dict[str, set[str]] = {}
     for dist in importlib_metadata.distributions(path=search_path):
-        # Broken/partial metadata directories can yield a nameless dist.
         name = dist.metadata["Name"] if dist.metadata else None
         if not name:
             continue
-        out[_normalise_name(name)] = _provided_import_names(dist)
-    return out
+        normalised = _normalise_name(name)
+        if include_imports:
+            imports[normalised] = _provided_import_names(dist)
+        if include_dialects and (
+            dialect_names_for is None or normalised in dialect_names_for
+        ):
+            dialects[normalised] = _dialect_entry_point_names(dist)
+    return imports, dialects
 
 
 def _dist_import_names(
@@ -1595,6 +1844,39 @@ def _dist_import_names(
     except importlib_metadata.PackageNotFoundError:
         return None
     return _provided_import_names(dist)
+
+
+def _env_dialect_entry_points(search_path: list[str]) -> dict[str, set[str]]:
+    """Map every target distribution to its dialect entry points, including none."""
+    return _env_distribution_metadata(
+        search_path, include_imports=False, include_dialects=True
+    )[1]
+
+
+def _dist_dialect_entry_points(
+    dist_name: str, *, env_map: Mapping[str, set[str]] | None = None
+) -> set[str]:
+    """Return the ``sqlalchemy.dialects`` entry points *dist_name* registers.
+
+    Same resolution order as :func:`_dist_import_names`: the target repo's
+    environment first, then the running interpreter. Empty when neither has it
+    — the dependency then falls through to the ordinary unused check.
+    """
+    if env_map is not None:
+        normalised = _normalise_name(dist_name)
+        if normalised in env_map:
+            return env_map[normalised]
+    try:
+        dist = importlib_metadata.distribution(dist_name)
+    except importlib_metadata.PackageNotFoundError:
+        return set()
+    return _dialect_entry_point_names(dist)
+
+
+def _dialect_entry_point_names(dist: importlib_metadata.Distribution) -> set[str]:
+    return {
+        ep.name for ep in dist.entry_points if ep.group == _SQLALCHEMY_DIALECTS_GROUP
+    }
 
 
 def _provided_import_names(dist: importlib_metadata.Distribution) -> set[str]:
@@ -1641,12 +1923,17 @@ def _scan_unused_dependencies(
     *,
     dist_import_map: Mapping[str, set[str] | None],
     dialect_drivers: set[str],
+    dialect_names: set[str],
+    dialect_entry_points: Mapping[str, set[str]],
 ) -> tuple[list[Finding], list[str]]:
     """Return (D003 findings, names of dependencies skipped as unresolvable).
 
     A dependency is flagged when the import names it provides are all absent
     from *imported_modules* AND it is not referenced as a SQLAlchemy
-    ``dialect+driver`` (``dialect_drivers``).  A dependency whose
+    ``dialect+driver`` (``dialect_drivers``) AND none of the
+    ``sqlalchemy.dialects`` entry points it registers
+    (``dialect_entry_points``) is selected by a URL scheme in source
+    (``dialect_names``).  A dependency whose
     ``dist_import_map`` value is ``None`` (not importable in this environment) is
     skipped and returned in the second list so the caller can surface it — never
     silently dropped.
@@ -1667,6 +1954,8 @@ def _scan_unused_dependencies(
             continue  # at least one provided module is imported -> used
         if entry.name in dialect_drivers or provided & dialect_drivers:
             continue  # loaded dynamically by SQLAlchemy via a dialect+driver string
+        if dialect_entry_points.get(entry.name, set()) & dialect_names:
+            continue  # its registered SQLAlchemy dialect is selected by a URL scheme
         provided_list = ", ".join(sorted(provided))
         findings.append(
             _make_finding(
@@ -1688,6 +1977,70 @@ def _scan_unused_dependencies(
         )
 
     return findings, unresolved
+
+
+def _constraint_entry_lines(text: str) -> Iterator[tuple[str, int, int]]:
+    """Yield ``(raw, line, column)`` for each ``[tool.uv] constraint-dependencies``
+    array entry, preserving source positions (tomllib discards them)."""
+    table_re = re.compile(r"^\s*\[([^\[\]]+)\]\s*(?:#.*)?$")
+    entry_re = re.compile(r"""(["'])([^"']+)\1""")
+    section: str | None = None
+    in_array = False
+    for ln, line in enumerate(text.splitlines(), start=1):
+        stripped = line.split("#", 1)[0]
+        table = table_re.match(line)
+        if table is not None:
+            section = table.group(1).strip()
+            in_array = False
+            continue
+        if section != "tool.uv":
+            continue
+        if not in_array:
+            key, sep, rest = stripped.partition("=")
+            if sep and key.strip() == "constraint-dependencies":
+                in_array = "[" in rest
+                stripped = rest.split("[", 1)[-1]
+            else:
+                continue
+        for match in entry_re.finditer(stripped):
+            yield match.group(2), ln, match.start(2) + 1
+        if "]" in stripped:
+            in_array = False
+
+
+def _scan_constraint_floors(text: str, rel_pyproject: str) -> list[Finding]:
+    """D003: an app's ``[tool.uv] constraint-dependencies`` floors.
+
+    A floor on a package the app does not declare is a second place for a
+    transitive version to be decided.  Transitive floors belong to the SDK,
+    whose dependency ranges the app resolves through; an app-local copy goes
+    stale the moment the SDK's own floor moves, and nothing reports it.  App
+    repos only — the SDK's own pyproject is where these floors live.
+    """
+    suppressions = parse_toml_suppressions(text)
+    findings: list[Finding] = []
+    for raw, line, column in _constraint_entry_lines(text):
+        parsed = _parse_requirement(raw)
+        name = parsed[0] if parsed else raw
+        findings.append(
+            _make_finding(
+                rule_id=RULE_D003,
+                file=rel_pyproject,
+                line=line,
+                column=column,
+                message=(
+                    f"'{name}' is floored in [tool.uv] constraint-dependencies "
+                    f"('{raw}'). An app does not carry transitive security floors: "
+                    f"remove the entry. If a CVE fix is needed, it belongs in "
+                    f"atlan-application-sdk's dependency ranges and reaches the app "
+                    f"by upgrading the SDK. Note uv does not propagate an SDK's own "
+                    f"[tool.uv] constraints to dependents, so the lock's resolved "
+                    f"version and CI's vulnerability scan are what guard it."
+                ),
+                suppressions=suppressions,
+            )
+        )
+    return findings
 
 
 def _scan_conformance_dependency(
@@ -1980,8 +2333,8 @@ def _scan_default_index(text: str, rel_pyproject: str) -> list[Finding]:
                     "lock makes CI fail at dependency install with 401 "
                     f"Unauthorized. Add:\n{canonical}\nPut it in pyproject.toml, "
                     "not in a project-level uv.toml: a uv.toml suppresses "
-                    "[tool.uv] here entirely and would silently drop any "
-                    "constraint-dependencies CVE floors declared in it."
+                    "[tool.uv] here entirely and would silently drop every "
+                    "setting declared in it."
                 ),
                 suppressions=suppressions,
             )
@@ -2368,6 +2721,8 @@ def scan_all(
     dist_import_map: Mapping[str, set[str] | None] | None = None,
     imported_modules: set[str] | None = None,
     dialect_drivers: set[str] | None = None,
+    dialect_names: set[str] | None = None,
+    dialect_entry_points: Mapping[str, set[str]] | None = None,
 ) -> list[Finding]:
     """Run the full D-series over *paths*: per-file D001/D002 + cross-file D003.
 
@@ -2383,6 +2738,8 @@ def scan_all(
     Test seams: ``dist_import_map`` injects the dependency -> import-name map
     (default: resolved from installed metadata) and ``imported_modules`` injects
     the set of imported top-levels (default: parsed from the discovered sources).
+    ``dialect_names`` and ``dialect_entry_points`` inject the URL-scheme dialect
+    names and each dependency's ``sqlalchemy.dialects`` entry points.
     """
     pyprojects = [p for p in paths if p.name == "pyproject.toml"]
     py_files = [p for p in paths if p.suffix == ".py"]
@@ -2410,6 +2767,8 @@ def scan_all(
         findings.extend(
             _scan_query_transformer_duckdb(py_files, root, text, rel_pyproject)
         )
+        # ── D003 constraint floors (app-only: the SDK is where floors live) ──
+        findings.extend(_scan_constraint_floors(text, rel_pyproject))
 
     # ── D011 (repo-level: a property of the root pyproject, not of each) ────
     findings.extend(_scan_conformance_dependency(text, rel_pyproject, root))
@@ -2437,18 +2796,43 @@ def scan_all(
     if not dep_entries:
         return findings
 
-    if imported_modules is None:
-        imported_modules = _collect_top_level_imports(py_files)
+    if imported_modules is None or dialect_drivers is None or dialect_names is None:
+        source_imports, source_drivers, source_dialect_names = _collect_source_usage(
+            py_files
+        )
+        if imported_modules is None:
+            imported_modules = source_imports
+        if dialect_drivers is None:
+            dialect_drivers = source_drivers
+        if dialect_names is None:
+            dialect_names = source_dialect_names
+    # Resolve against the repo under test first (see _repo_site_packages), so
+    # the finding set belongs to the repo and not to whichever interpreter
+    # happened to invoke the suite.
+    site_packages = _repo_site_packages(root)
+    need_imports = dist_import_map is None
+    need_dialects = dialect_entry_points is None and bool(dialect_names)
+    if need_imports or need_dialects:
+        env_imports, env_dialects = _env_distribution_metadata(
+            site_packages,
+            include_imports=need_imports,
+            include_dialects=need_dialects,
+            dialect_names_for={_normalise_name(e.name) for e in dep_entries},
+        )
+    else:
+        env_imports, env_dialects = {}, {}
     if dist_import_map is None:
-        # Resolve against the repo under test first (see _repo_site_packages),
-        # so the finding set belongs to the repo and not to whichever
-        # interpreter happened to invoke the suite.
-        env_map = _env_import_names(_repo_site_packages(root))
         dist_import_map = {
-            e.name: _dist_import_names(e.name, env_map=env_map) for e in dep_entries
+            e.name: _dist_import_names(e.name, env_map=env_imports) for e in dep_entries
         }
-    if dialect_drivers is None:
-        dialect_drivers = _collect_dialect_drivers(py_files)
+    if dialect_entry_points is None:
+        if dialect_names:
+            dialect_entry_points = {
+                e.name: _dist_dialect_entry_points(e.name, env_map=env_dialects)
+                for e in dep_entries
+            }
+        else:
+            dialect_entry_points = {}
 
     try:
         rel = root_pyproject.relative_to(root)
@@ -2462,6 +2846,8 @@ def scan_all(
         str(rel),
         dist_import_map=dist_import_map,
         dialect_drivers=dialect_drivers,
+        dialect_names=dialect_names,
+        dialect_entry_points=dialect_entry_points,
     )
     findings.extend(d003_findings)
 

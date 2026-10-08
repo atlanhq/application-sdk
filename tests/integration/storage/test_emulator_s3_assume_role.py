@@ -1,7 +1,8 @@
 """Hermetic integration test: the S3 ``assumeRoleArn`` path, via MinIO's own STS.
 
 Covers the one S3 auth mode with no non-mock coverage anywhere else: the Dapr
-binding's ``assumeRoleArn``, which routes through
+binding's ``assumeRoleArn`` and ``CloudStore.from_credentials``'s
+``extra.aws_role_arn``, which both route through
 ``make_s3_assume_role_provider`` → ``StsCredentialProvider`` → botocore's
 ``sts:AssumeRole``.
 
@@ -23,9 +24,11 @@ not override the STS endpoint itself.
 Marked ``storage_emulator`` (deselected by default; run in CI with a MinIO
 sidecar). Local:
 
+    # One-time: `docker login ghcr.io` as an account with Read on the private
+    # MinIO mirror (docs/standards/build-security.md, "CI test images").
     docker run -d --rm -p 9000:9000 \\
         -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \\
-        quay.io/minio/minio server /data
+        ghcr.io/atlanhq/ci-mirror/minio:RELEASE.2026-09-22T19-25-18Z@sha256:bd014394a80898e68c149f2311fdf8d5a2c2f3bb2c33b9327ae6d02b4b065ae1 server /data
     AWS_ACCESS_KEY_ID=minioadmin AWS_SECRET_ACCESS_KEY=minioadmin \\
         aws --endpoint-url http://localhost:9000 s3 mb s3://sdk-emulator-test
     AWS_ENDPOINT_URL=http://localhost:9000 uv run pytest \\
@@ -117,6 +120,63 @@ async def test_assume_role_binding_roundtrips_via_sdk(tmp_path):
     payload = b"hello-from-sdk-s3-assume-role-test"
     assert await cs.upload_bytes(key, payload) == len(payload)
     assert key in await cs.list(prefix="sdk-emulator-sts/")
+    assert await cs.get_bytes(key) == payload
+
+    from application_sdk.storage import ops
+
+    await ops.delete(key, store=cs.store, normalize=False)
+
+
+async def test_assume_role_from_credentials_roundtrips_via_sdk(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+):
+    """``CloudStore.from_credentials`` assume-role round-trips through real STS.
+
+    The binding test above covers ``create_store_from_binding``; this covers the
+    other entry point, the credential-dict path apps use (``extra.aws_role_arn``
+    + ``extra.aws_external_id``). It shares the provider but not the wiring, so
+    a regression in ``_create_s3_store`` that drops or miswires the provider
+    fails here and nowhere else non-mocked.
+
+    MinIO ignores ``ExternalId``, so this can't prove a trust-policy condition
+    is honoured, nor that the value is trimmed — the unit tests pin both. It
+    does prove a real botocore ``AssumeRole`` accepts the request the SDK
+    builds with one set.
+    """
+    # from_credentials has no endpoint field, so point obstore at MinIO the way
+    # it reads one from the environment. Plain HTTP is a client option, and the
+    # SDK's explicit client options outrank obstore's ``AWS_ALLOW_HTTP`` env
+    # var, so add ``allow_http`` to them. Only transport is touched: the
+    # credential wiring and the STS exchange under test stay real.
+    from application_sdk.storage import _obstore_config
+
+    monkeypatch.setenv("AWS_ENDPOINT_URL", _ENDPOINT)
+    sdk_client_options = _obstore_config.obstore_client_options
+    monkeypatch.setattr(
+        _obstore_config,
+        "obstore_client_options",
+        lambda: {**sdk_client_options(), "allow_http": True},
+    )
+
+    cs = CloudStore.from_credentials(
+        {
+            "authType": "s3",
+            # Base credentials for the STS call itself.
+            "username": _USER,
+            "password": _PASS,
+            "extra": {
+                "s3_bucket": _BUCKET,
+                "region": "us-east-1",
+                "aws_role_arn": _ROLE_ARN,
+                "aws_external_id": "sdk-emulator-external-id",
+            },
+        }
+    )
+
+    key = "sdk-emulator-sts-creds/roundtrip.txt"
+    payload = b"hello-from-sdk-s3-from-credentials-assume-role-test"
+    assert await cs.upload_bytes(key, payload) == len(payload)
+    assert key in await cs.list(prefix="sdk-emulator-sts-creds/")
     assert await cs.get_bytes(key) == payload
 
     from application_sdk.storage import ops

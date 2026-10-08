@@ -9,9 +9,17 @@ code — the second half of the user's async-correctness ask.  Two patterns:
   inside a running one is an error; ``await`` the coroutine directly.  Flagged in
   any ``async def``.
 
-* **Blocking sync I/O** — a synchronous library call (``requests.*``,
-  ``urllib.request.*``, ``time.sleep``) that blocks the event loop instead of
-  awaiting an async equivalent / offloading via ``App.run_in_thread()``.  Flagged
+* **Blocking sync I/O** — a synchronous call that sends a request or sleeps
+  (``requests.get``/``post``/…/``request``, ``urllib.request.urlopen``/
+  ``urlretrieve``, ``time.sleep``, and a send on a client — a
+  ``requests.Session()`` or a urllib ``build_opener()`` / ``OpenerDirector()``
+  — built inline, bound to a name in the same or an enclosing function, or
+  bound to a ``self.<attr>`` in the same class) and blocks the event loop
+  instead of awaiting an async equivalent / offloading via
+  ``App.run_in_thread()``.  Constructors that do no I/O —
+  ``requests.Session()``, ``requests.adapters.HTTPAdapter()``,
+  ``urllib.request.Request()``, ``build_opener()`` — and lookups such as
+  ``requests.codes.get`` are not flagged.  Flagged
   in ``async def`` bodies **outside** workflow context — inside workflow methods
   the same calls are already owned by P020 (sleep) and P021 (network), so they are
   skipped here to avoid double-reporting.
@@ -82,7 +90,93 @@ RULE_ID = "P023"
 _BRIDGE_EXACT = frozenset({"asyncio.run"})
 _BRIDGE_ATTR = "run_until_complete"
 _BLOCKING_EXACT = frozenset({"time.sleep"})
-_BLOCKING_PREFIXES = ("requests.", "urllib.request.")
+# Only the calls that send a request. Constructors (`requests.Session`,
+# `requests.adapters.HTTPAdapter`, `urllib.request.Request`, ...) do no I/O:
+# connections open lazily on the first send. Targets resolve against
+# `_module_bindings`, so `import requests.api` does not repeat the submodule.
+_REQUESTS_VERBS = frozenset(
+    {"get", "post", "put", "patch", "delete", "head", "options", "request"}
+)
+_REQUESTS_VERB_TARGETS = frozenset(
+    f"{module}.{verb}"
+    for module in ("requests", "requests.api")
+    for verb in _REQUESTS_VERBS
+)
+_URLLIB_BLOCKING = frozenset({"urlopen", "urlretrieve"})
+# A client whose construction does no I/O, and the methods that send on it.
+_SESSION_FACTORIES = frozenset({"Session", "session"})
+_OPENER_FACTORIES = frozenset({"build_opener", "OpenerDirector"})
+_CLIENT_SENDS = {
+    "session": _REQUESTS_VERBS | {"send"},
+    "opener": frozenset({"open"}),
+}
+_CLIENT_LABEL = {
+    "session": "requests.Session()",
+    "opener": "urllib.request.build_opener()",
+}
+
+
+def _is_blocking_network(target: str) -> bool:
+    return target in _REQUESTS_VERB_TARGETS or (
+        target.startswith("urllib.request.")
+        and target.rsplit(".", 1)[-1] in _URLLIB_BLOCKING
+    )
+
+
+def _module_bindings(tree: ast.AST) -> dict[str, str]:
+    """Import bindings with a plain ``import a.b`` bound the way Python binds it.
+
+    The shared ``collect_import_bindings`` maps ``a`` to ``a.b``, so the call
+    ``a.b.f()`` resolves to ``a.b.b.f`` and ``a.f()`` to ``a.b.f`` — neither is
+    the function called. ``import a.b`` binds ``a`` to the package ``a``.
+    Only a name whose final binding is that dotted import is rewritten, so a
+    later ``from x import a`` keeps its own origin.
+    """
+    bindings = collect_import_bindings(tree)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root = alias.name.split(".")[0]
+                if alias.asname is None and bindings.get(root) == alias.name != root:
+                    bindings[root] = root
+    return bindings
+
+
+def _client_kind(target: str | None) -> str | None:
+    if target is None:
+        return None
+    last = target.rsplit(".", 1)[-1]
+    if target.startswith("requests.") and last in _SESSION_FACTORIES:
+        return "session"
+    if target.startswith("urllib.request.") and last in _OPENER_FACTORIES:
+        return "opener"
+    return None
+
+
+def _assignment_pairs(stmt: ast.AST) -> list[tuple[ast.expr, ast.expr | None]]:
+    if isinstance(stmt, ast.Assign):
+        return [(target, stmt.value) for target in stmt.targets]
+    if isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+        return [(stmt.target, stmt.value)]
+    if isinstance(stmt, ast.With):
+        return [
+            (item.optional_vars, item.context_expr)
+            for item in stmt.items
+            if item.optional_vars is not None
+        ]
+    return []
+
+
+def _walk_same_class(node: ast.AST):
+    """``ast.walk`` that does not descend into a nested class."""
+    pending = list(ast.iter_child_nodes(node))
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.ClassDef):
+            continue
+        yield current
+        pending.extend(ast.iter_child_nodes(current))
+
 
 # Tree-scale filesystem work: duration scales with the tree, not with a fixed
 # syscall cost. Single-inode ops (os.remove / os.unlink / os.rmdir) are
@@ -176,6 +270,22 @@ _SUBPROCESS_EXACT = frozenset(
     }
 )
 
+
+def is_data_scale_io(target: str) -> bool:
+    """True if *target* is data-scale I/O (P023 outside workflow context, P021 inside)."""
+    return (
+        target in _TREE_FS_EXACT
+        or target.endswith(_TREE_FS_WRAPPER_SUFFIXES)
+        or target in _TREE_FS_WRAPPER_BARE
+        or target in _SERIALIZE_EXACT
+        or target in _DATA_IO_EXACT
+        or target in _TRAVERSAL_EXACT
+        or target.endswith(_DATA_IO_SUFFIXES)
+        or target.endswith(_WHOLE_FILE_SUFFIXES)
+        or target.endswith(_TRAVERSAL_SUFFIXES)
+    )
+
+
 _BRIDGE_HINT = (
     "Running an event loop from inside an async function re-enters the loop and "
     "deadlocks/raises. Await the coroutine directly instead."
@@ -238,6 +348,11 @@ class _Visitor(ast.NodeVisitor):
         self.bindings = bindings
         self.workflow_ids = workflow_ids
         self._async_stack: list[bool] = []
+        self._scopes: list[dict[str, str | None]] = []
+        self._class_clients: list[dict[str, str]] = []
+        self._class_floors: list[int] = []
+        self._class_bodies: set[int] = set()
+        self._comprehensions: set[int] = set()
         self._wf_depth = 0
         self._awaited: set[int] = set()
         self.findings: list[Finding] = []
@@ -256,7 +371,25 @@ class _Visitor(ast.NodeVisitor):
         # is never an Await operand.
         if isinstance(node.iter, ast.Call):
             self._awaited.add(id(node.iter))
-        self.generic_visit(node)
+        self._visit_loop(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        self._visit_loop(node)
+
+    # Loops and comprehension clauses visit the iterable before the target: it
+    # is evaluated first, so `for s in s.get(u)` resolves `s` against the
+    # session, not the loop variable. `generic_visit` would go target-first.
+    def _visit_loop(self, node: ast.For | ast.AsyncFor) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for stmt in [*node.body, *node.orelse]:
+            self.visit(stmt)
+
+    def visit_comprehension(self, node: ast.comprehension) -> None:
+        self.visit(node.iter)
+        self.visit(node.target)
+        for condition in node.ifs:
+            self.visit(condition)
 
     # No `visit_AsyncWith`: nothing in the inventory is plausible as an async
     # context expression. The idiom that would need one is
@@ -275,21 +408,176 @@ class _Visitor(ast.NodeVisitor):
         # flagged, which would make the rule un-satisfiable.
         self._visit_func(node, is_async=False)
 
-    def _visit_func(self, node: ast.AST, is_async: bool) -> None:
+    def _visit_func(
+        self,
+        node: ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda,
+        is_async: bool,
+    ) -> None:
         in_wf = id(node) in self.workflow_ids
         self._async_stack.append(is_async)
+        args = node.args
+        params = [*args.posonlyargs, *args.args, *args.kwonlyargs]
+        params += [arg for arg in (args.vararg, args.kwarg) if arg is not None]
+        self._scopes.append({param.arg: None for param in params})
         if in_wf:
             self._wf_depth += 1
         self.generic_visit(node)
         if in_wf:
             self._wf_depth -= 1
+        self._scopes.pop()
         self._async_stack.pop()
+
+    def visit_ClassDef(self, node: ast.ClassDef) -> None:
+        self._class_clients.append(self._self_clients(node))
+        self._class_floors.append(len(self._scopes))
+        body_scope: dict[str, str | None] = {}
+        self._class_bodies.add(id(body_scope))
+        self._scopes.append(body_scope)
+        self.generic_visit(node)
+        self._scopes.pop()
+        self._class_bodies.discard(id(body_scope))
+        self._class_floors.pop()
+        self._class_clients.pop()
+
+    def _visit_comprehension(
+        self, node: ast.ListComp | ast.SetComp | ast.DictComp | ast.GeneratorExp
+    ) -> None:
+        scope: dict[str, str | None] = {}
+        self._comprehensions.add(id(scope))
+        self._scopes.append(scope)
+        for generator in node.generators:
+            self.visit(generator)
+        results = (
+            [node.key, node.value] if isinstance(node, ast.DictComp) else [node.elt]
+        )
+        for result in results:
+            self.visit(result)
+        self._scopes.pop()
+        self._comprehensions.discard(id(scope))
+
+    visit_ListComp = visit_SetComp = visit_DictComp = visit_GeneratorExp = (
+        _visit_comprehension
+    )
+
+    def visit_Name(self, node: ast.Name) -> None:
+        if isinstance(node.ctx, ast.Store) and self._scopes:
+            self._scopes[-1][node.id] = None
+
+    # Assignments visit the value before the target: the RHS runs first, so
+    # `s = s.get(u)` must resolve `s` against the session, not the new binding.
+    # A walrus target binds in the scope containing any comprehensions it sits
+    # in, not in the comprehension (PEP 572), so `s` from
+    # `[(s := requests.Session()) for _ in xs]` outlives the comprehension.
+    def visit_NamedExpr(self, node: ast.NamedExpr) -> None:
+        self.visit(node.value)
+        scope = next(
+            (s for s in reversed(self._scopes) if id(s) not in self._comprehensions),
+            None,
+        )
+        key = self._binding_key(node.target)
+        if scope is not None and key is not None:
+            scope[key] = self._client_call(node.value)
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name and self._scopes:
+            self._scopes[-1][node.name] = None
+        self.generic_visit(node)
+
+    def _self_clients(self, node: ast.ClassDef) -> dict[str, str]:
+        """``self.<attr>`` names bound only to one kind of client in this class.
+
+        A name also bound to anything else (``None`` aside, the lazy-init idiom)
+        is dropped: the class does not say which value a send reaches.
+        """
+        kinds: dict[str, set[str | None]] = {}
+        for method in node.body:
+            if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for stmt in _walk_same_class(method):
+                for target, value in _assignment_pairs(stmt):
+                    key = self._binding_key(target)
+                    if not key or not key.startswith("self."):
+                        continue
+                    if isinstance(value, ast.Constant) and value.value is None:
+                        continue
+                    kinds.setdefault(key, set()).add(self._client_call(value))
+        clients: dict[str, str] = {}
+        for key, found in kinds.items():
+            kind = next(iter(found)) if len(found) == 1 else None
+            if kind is not None:
+                clients[key] = kind
+        return clients
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:
         self._visit_func(node, is_async=False)
 
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:
         self._visit_func(node, is_async=True)
+
+    def _client_call(self, value: ast.expr | None) -> str | None:
+        if not isinstance(value, ast.Call):
+            return None
+        return _client_kind(resolve_call_target(value.func, self.bindings))
+
+    def _binding_key(self, target: ast.expr) -> str | None:
+        if not isinstance(target, (ast.Name, ast.Attribute)):
+            return None
+        return resolve_call_target(target, self.bindings)
+
+    def _bind(self, target: ast.expr, value: ast.expr | None) -> None:
+        key = self._binding_key(target)
+        if self._scopes and key is not None:
+            self._scopes[-1][key] = self._client_call(value)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        self.visit(node.value)
+        for target in node.targets:
+            self.visit(target)
+        for target in node.targets:
+            self._bind(target, node.value)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:
+        self.visit(node.annotation)
+        if node.value is not None:
+            self.visit(node.value)
+        self.visit(node.target)
+        if node.value is not None:
+            self._bind(node.target, node.value)
+
+    def visit_With(self, node: ast.With) -> None:
+        for item in node.items:
+            self.visit(item.context_expr)
+            if item.optional_vars is not None:
+                self.visit(item.optional_vars)
+                self._bind(item.optional_vars, item.context_expr)
+        for stmt in node.body:
+            self.visit(stmt)
+
+    def _receiver_kind(self, receiver: str) -> str | None:
+        """The client bound to ``receiver``, innermost scope first, then the class.
+
+        A plain name follows Python's closures through every enclosing function,
+        skipping class bodies, which a method cannot see. A ``self.<attr>``
+        stops at the nearest class: its ``self`` is that class's instance, not
+        the one an enclosing method bound.
+        """
+        floor = 0
+        if receiver.startswith("self.") and self._class_floors:
+            floor = self._class_floors[-1]
+        innermost = self._scopes[-1] if self._scopes else None
+        for scope in reversed(self._scopes[floor:]):
+            if id(scope) in self._class_bodies and scope is not innermost:
+                continue
+            if receiver in scope:
+                return scope[receiver]
+        if self._class_clients:
+            return self._class_clients[-1].get(receiver)
+        return None
+
+    def _is_named_client_send(self, target: str) -> bool:
+        receiver, _, attr = target.rpartition(".")
+        kind = self._receiver_kind(receiver)
+        return kind is not None and attr in _CLIENT_SENDS[kind]
 
     def _in_async(self) -> bool:
         return bool(self._async_stack) and self._async_stack[-1]
@@ -306,6 +594,9 @@ class _Visitor(ast.NodeVisitor):
             return
         target = resolve_call_target(node.func, self.bindings)
         if target is None:
+            label = self._inline_client_send(node)
+            if self._wf_depth == 0 and label is not None:
+                self._add(node, label, _BLOCKING_HINT)
             return
         if target in _BRIDGE_EXACT:
             self._add(node, f"{target}()", _BRIDGE_HINT)
@@ -313,7 +604,8 @@ class _Visitor(ast.NodeVisitor):
         # Blocking sync I/O — skip inside workflow context (P020/P021 own it).
         if self._wf_depth == 0 and (
             target in _BLOCKING_EXACT
-            or any(target.startswith(p) for p in _BLOCKING_PREFIXES)
+            or _is_blocking_network(target)
+            or self._is_named_client_send(target)
         ):
             self._add(node, f"{target}()", _BLOCKING_HINT)
             return
@@ -363,6 +655,15 @@ class _Visitor(ast.NodeVisitor):
         if target.endswith(_TRAVERSAL_SUFFIXES):
             self._add(node, f"{target}()", _TRAVERSAL_HINT)
 
+    def _inline_client_send(self, node: ast.Call) -> str | None:
+        func = node.func
+        if not isinstance(func, ast.Attribute):
+            return None
+        kind = self._client_call(func.value)
+        if kind is None or func.attr not in _CLIENT_SENDS[kind]:
+            return None
+        return f"{_CLIENT_LABEL[kind]}.{func.attr}()"
+
     def _add(self, node: ast.Call, label: str, hint: str) -> None:
         self.findings.append(
             make_finding(
@@ -379,7 +680,7 @@ def check_p023(
     tree: ast.AST, filename: str, directives: dict[int, _IgnoreDirective]
 ) -> list[Finding]:
     """Emit P023 findings for event-loop bridges and blocking sync I/O in async defs."""
-    bindings = collect_import_bindings(tree)
+    bindings = _module_bindings(tree)
     workflow_ids = frozenset(id(n) for n in workflow_method_nodes(tree))
     visitor = _Visitor(filename, directives, bindings, workflow_ids)
     visitor.visit(tree)

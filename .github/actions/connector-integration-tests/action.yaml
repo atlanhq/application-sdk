@@ -49,7 +49,7 @@ description: |
   steps:
     - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
     - uses: ./.github/actions/mssql-native-deps   # connector-local action
-    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.36.3
+    - uses: atlanhq/application-sdk/.github/actions/connector-integration-tests@v3.44.0
       with:
         app-name: mssql
   ```
@@ -460,7 +460,7 @@ runs:
       id: upload-integration-results
       if: always()
       continue-on-error: true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         name: integration-test-results
         # coverage.json is written at the repo root by --cov-report=json; include
@@ -488,7 +488,7 @@ runs:
     - name: Upload test results (retry)
       if: steps.upload-integration-results.outcome == 'failure'
       continue-on-error: true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         # A DISTINCT name, never the first attempt's: a FinalizeArtifact
         # failure leaves an unfinalized record holding that name for the whole

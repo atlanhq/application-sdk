@@ -48,6 +48,16 @@ values instead, so a caller that has not adopted the tenant matrix keeps the
 pre-FND-6 single-tenant behaviour exactly. The fallback values come in as flags
 rather than being read from the environment so that both modes see identical
 inputs and the mask pass cannot diverge from the write pass.
+
+Tenant pools (FND-3542)
+-----------------------
+System apps test on their own tenants, kept apart from the ones connectors test
+on. Their map arrives as ``--system-matrix-json`` (``E2E_SYSTEM_TENANT_MATRIX_JSON``,
+same shape as above). When it is non-empty it is the **only** source: neither the
+connector matrix nor the single-tenant fallback is consulted, so a system-app leg
+can never land on a connector tenant. Every resolution also writes
+``E2E_TENANT_POOL`` (``system`` or ``connector``), which the e2e harness checks
+against the kind of suite it is running.
 """
 
 from __future__ import annotations
@@ -97,15 +107,28 @@ _TENANT_ID_ENV = "E2E_TENANT_ID"
 # masker does substring replacement, so registering it redacts every unrelated
 # occurrence in the log — including the queue names an operator reads to work out
 # where a leg's activities went.
-_UNMASKED_ENV = frozenset({_DEPLOYMENT_NAME_ENV})
+#
+# The pool is one of two fixed words, so it is not a credential either, and
+# masking "system" would redact every unrelated occurrence of it in the log.
+_TENANT_POOL_ENV = "E2E_TENANT_POOL"
+TENANT_POOL_SYSTEM = "system"
+TENANT_POOL_CONNECTOR = "connector"
+_UNMASKED_ENV = frozenset({_DEPLOYMENT_NAME_ENV, _TENANT_POOL_ENV})
+
+_CONNECTOR_SECRET = "E2E_TENANT_MATRIX_JSON"
+_SYSTEM_SECRET = "E2E_SYSTEM_TENANT_MATRIX_JSON"
 
 
 class TenantMatrixError(ValueError):
     """The tenant matrix payload or the requested cloud is not usable."""
 
 
-def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
+def _entry(
+    matrix_json: str, cloud: str, secret: str = _CONNECTOR_SECRET
+) -> dict[str, str]:
     """Return the credential fields for *cloud* from the *matrix_json* map.
+
+    *secret* names the secret the map came from, for the error messages only.
 
     Every error message names cloud KEYS only, never a value: these strings are
     printed to the CI log, and the values are credentials.
@@ -114,20 +137,20 @@ def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
         parsed = json.loads(matrix_json)
     except json.JSONDecodeError as exc:
         raise TenantMatrixError(
-            f"E2E_TENANT_MATRIX_JSON is not valid JSON ({exc}). Expected an "
+            f"{secret} is not valid JSON ({exc}). Expected an "
             'object of {"<cloud>": {"tenant": …, "client_id": …, '
             '"client_secret": …, "api_key": …}}.'
         ) from exc
     if not isinstance(parsed, dict):
         raise TenantMatrixError(
-            "E2E_TENANT_MATRIX_JSON must be a JSON object keyed by cloud, got "
+            f"{secret} must be a JSON object keyed by cloud, got "
             f"{type(parsed).__name__}."
         )
 
     if cloud not in parsed:
         available = ", ".join(sorted(parsed)) or "none"
         raise TenantMatrixError(
-            f"cloud {cloud!r} is not in E2E_TENANT_MATRIX_JSON (available: "
+            f"cloud {cloud!r} is not in {secret} (available: "
             f"{available}). A cloud named in the workflow's e2e-clouds input "
             "but missing from the secret is a coverage hole, not a leg to skip. "
             "Since FND-354 the DEFAULTED cloud list is narrowed to the secret's "
@@ -140,8 +163,7 @@ def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
     entry = parsed[cloud]
     if not isinstance(entry, dict):
         raise TenantMatrixError(
-            f"E2E_TENANT_MATRIX_JSON[{cloud!r}] must be an object, got "
-            f"{type(entry).__name__}."
+            f"{secret}[{cloud!r}] must be an object, got " f"{type(entry).__name__}."
         )
 
     missing = [
@@ -149,8 +171,7 @@ def _entry(matrix_json: str, cloud: str) -> dict[str, str]:
     ]
     if missing:
         raise TenantMatrixError(
-            f"E2E_TENANT_MATRIX_JSON[{cloud!r}] is missing or blank for: "
-            f"{', '.join(missing)}."
+            f"{secret}[{cloud!r}] is missing or blank for: " f"{', '.join(missing)}."
         )
 
     resolved = {env: str(entry[field]) for field, env in _FIELD_TO_ENV.items()}
@@ -167,22 +188,38 @@ def resolve(
     matrix_json: str,
     cloud: str,
     fallback: dict[str, str] | None = None,
+    system_matrix_json: str = "",
 ) -> dict[str, str]:
     """Return the environment map for one matrix leg.
 
-    Takes the tenant matrix when both *matrix_json* and *cloud* are set, and the
-    *fallback* single-tenant values otherwise. ``ATLAN_BASE_URL`` is derived from
-    the resolved tenant in both paths, so it is always the same tenant as
-    ``SDR_TEST_TENANT`` — the property the pre-FND-6 job-level ``env:`` block
-    guaranteed by string-interpolating one from the other.
+    A non-empty *system_matrix_json* wins outright and requires *cloud*: the
+    system pool has no fallback, so a leg that cannot be placed in it fails
+    rather than landing on a connector tenant. Otherwise takes the tenant matrix
+    when both *matrix_json* and *cloud* are set, and the *fallback* single-tenant
+    values when not. ``ATLAN_BASE_URL`` is derived from the resolved tenant in
+    every path, so it is always the same tenant as ``SDR_TEST_TENANT`` — the
+    property the pre-FND-6 job-level ``env:`` block guaranteed by
+    string-interpolating one from the other.
     """
     matrix_json = matrix_json.strip()
+    system_matrix_json = system_matrix_json.strip()
     cloud = cloud.strip()
 
-    if matrix_json and cloud:
+    if system_matrix_json:
+        if not cloud:
+            raise TenantMatrixError(
+                f"{_SYSTEM_SECRET} is shared with this repo, but this leg has no "
+                "cloud. System-app legs only ever run on the system tenant pool, "
+                "which has no single-tenant fallback; run the leg with a cloud."
+            )
+        resolved = _entry(system_matrix_json, cloud, _SYSTEM_SECRET)
+        pool = TENANT_POOL_SYSTEM
+    elif matrix_json and cloud:
         resolved = _entry(matrix_json, cloud)
+        pool = TENANT_POOL_CONNECTOR
     else:
         resolved = {k: v for k, v in (fallback or {}).items() if v}
+        pool = TENANT_POOL_CONNECTOR
 
     tenant = resolved.get("SDR_TEST_TENANT", "").strip()
     if not tenant:
@@ -193,6 +230,7 @@ def resolve(
             "single-tenant secrets."
         )
     resolved["ATLAN_BASE_URL"] = f"https://{tenant}"
+    resolved[_TENANT_POOL_ENV] = pool
     return resolved
 
 
@@ -202,6 +240,14 @@ def main(argv: list[str] | None = None) -> int:
         "--matrix-json",
         default="",
         help="E2E_TENANT_MATRIX_JSON: cloud -> credential map. Empty = fallback.",
+    )
+    parser.add_argument(
+        "--system-matrix-json",
+        default="",
+        help=(
+            "E2E_SYSTEM_TENANT_MATRIX_JSON: the system-app tenant pool, same "
+            "shape as --matrix-json. Non-empty = used exclusively, no fallback."
+        ),
     )
     parser.add_argument(
         "--cloud",
@@ -232,7 +278,12 @@ def main(argv: list[str] | None = None) -> int:
     }
 
     try:
-        resolved = resolve(args.matrix_json, args.cloud, fallback)
+        resolved = resolve(
+            args.matrix_json,
+            args.cloud,
+            fallback,
+            system_matrix_json=args.system_matrix_json,
+        )
     except TenantMatrixError as exc:
         print(f"::error::{exc}", file=sys.stderr)
         return 1

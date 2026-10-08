@@ -11,7 +11,7 @@ from conformance.suite.checks.prescriptions._decorator_provenance import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._common import Registry, Source, find_preflight_check_sites
+from ._common import SCENARIO_COVERAGE, Registry, Source, find_preflight_check_sites
 
 Function = ast.FunctionDef | ast.AsyncFunctionDef
 _UNKNOWN = object()
@@ -31,6 +31,94 @@ def _origins(tree: ast.Module) -> dict[str, str]:
                 result[alias.asname or alias.name.split(".")[0]] = (
                     alias.name if alias.asname else alias.name.split(".")[0]
                 )
+    return result
+
+
+_SDK_ERRORS = "application_sdk.errors."
+_SDK_ERROR_BASES: dict[str, tuple[str, ...]] = {
+    "AppError": (),
+    "TaskStalledError": ("AppTimeoutError",),
+    "InvalidInputValueError": ("InvalidInputError", "ValueError"),
+    "ColdStartRaceError": ("DependencyUnavailableError",),
+    "DaprSidecarUnreachableError": ("ColdStartRaceError",),
+    "ObjectStoreReadError": ("DependencyUnavailableError",),
+    "ObjectStoreDownloadError": ("DependencyUnavailableError",),
+    "DiskFullError": ("ResourceExhaustedError",),
+    "LocalVolumeUnwritableError": ("ResourceExhaustedError",),
+    "SourceWarmupExhaustedError": ("SourceUnavailableError",),
+}
+_SDK_AUDIENCE: dict[str, str] = {
+    "AppError": "APP_OWNER",
+    "CancelledError": "APP_OWNER",
+    "AppTimeoutError": "APP_OWNER",
+    "RateLimitedError": "USER",
+    "AuthError": "USER",
+    "AppPermissionDeniedError": "USER",
+    "NotFoundError": "USER",
+    "AlreadyExistsError": "USER",
+    "InvalidInputError": "USER",
+    "PreconditionError": "USER",
+    "DependencyUnavailableError": "PLATFORM",
+    "SourceUnavailableError": "USER",
+    "ResourceExhaustedError": "PLATFORM",
+    "DataIntegrityError": "APP_OWNER",
+    "InternalError": "APP_OWNER",
+    "UnimplementedError": "APP_OWNER",
+}
+_VOICE = {
+    "USER": "write a customer-facing next step the customer can take",
+    "APP_OWNER": "write an engineer-facing remediation for the connector owners",
+    "PLATFORM": "write an operator hint for platform on-call",
+}
+_BUILTIN_ERROR_BASES = frozenset({"ValueError", "Exception", "BaseException"})
+
+
+def _sdk_error_leaf(name: str) -> str | None:
+    leaf = name.rsplit(".", 1)[-1]
+    if name.startswith(_SDK_ERRORS) and leaf.endswith("Error"):
+        return leaf
+    return None
+
+
+def _canonical_error(name: str) -> str:
+    leaf = _sdk_error_leaf(name)
+    return _SDK_ERRORS + leaf if leaf is not None else name
+
+
+def sdk_error_audience(name: str) -> str | None:
+    """Return the ``Audience`` value an SDK error class declares.
+
+    Tabled like the ancestry above and pinned to the runtime ``audience``
+    ClassVar by a drift test.
+    """
+    pending = [name.rsplit(".", 1)[-1]]
+    while pending:
+        leaf = pending.pop(0)
+        if leaf in _SDK_AUDIENCE:
+            return _SDK_AUDIENCE[leaf]
+        pending.extend(
+            base
+            for base in _SDK_ERROR_BASES.get(leaf, ("AppError",))
+            if base not in _BUILTIN_ERROR_BASES
+        )
+    return None
+
+
+def sdk_error_ancestry(name: str) -> set[str]:
+    """Return the SDK error's MRO names: SDK classes canonicalised, builtins bare.
+
+    The suite runs without SDK source, so the non-``AppError`` parents are
+    tabled here and pinned to the runtime ``__mro__`` by a drift test.
+    """
+    result = {"Exception", "BaseException"}
+    pending = [name.rsplit(".", 1)[-1]]
+    while pending:
+        leaf = pending.pop()
+        if leaf in _BUILTIN_ERROR_BASES:
+            result.add(leaf)
+            continue
+        result.add(_SDK_ERRORS + leaf)
+        pending.extend(_SDK_ERROR_BASES.get(leaf, ("AppError",)))
     return result
 
 
@@ -68,6 +156,11 @@ def _kwargs(node: ast.Call) -> dict[str, ast.expr]:
     return {kw.arg: kw.value for kw in node.keywords if kw.arg is not None}
 
 
+def _describe(node: ast.AST) -> str:
+    text = " ".join(ast.unparse(node).split())
+    return text if len(text) <= 60 else text[:57] + "..."
+
+
 def _nodes(node: ast.AST):
     yield node
     for child in ast.iter_child_nodes(node):
@@ -75,14 +168,30 @@ def _nodes(node: ast.AST):
             yield from _nodes(child)
 
 
+def _audience_value(node: ast.AST | None) -> str | None:
+    """An ``Audience`` member or its string value, as the enum coerces both."""
+    if isinstance(node, ast.Attribute) and node.attr in _VOICE:
+        return node.attr
+    if isinstance(node, ast.Constant) and node.value in _VOICE:
+        return node.value
+    return None
+
+
 class _Checker:
     def __init__(self, reg: Registry):
         self.reg = reg
         self.findings: list[Finding] = []
-        self.seen: set[tuple[str, int, str]] = set()
+        self.seen: set[tuple[str, int, int, str]] = set()
 
-    def emit(self, src: Source, node: ast.AST, rule: str, message: str) -> None:
-        key = (src.rel, node.lineno, rule)
+    def emit(
+        self,
+        src: Source,
+        node: ast.AST,
+        rule: str,
+        message: str,
+        cleared_by: frozenset[str] = frozenset(),
+    ) -> None:
+        key = (src.rel, node.lineno, node.col_offset, rule)
         if key not in self.seen:
             self.seen.add(key)
             self.findings.append(
@@ -92,6 +201,7 @@ class _Checker:
                     node=node,
                     message=message,
                     directives=src.directives,
+                    cleared_by=cleared_by,
                 )
             )
 
@@ -126,10 +236,8 @@ class _Checker:
 
     def error_names(self, src: Source, node: ast.AST, visited=frozenset()) -> set[str]:
         name = _qualified(src, node)
-        if name.startswith("application_sdk.errors.") and name.rsplit(".", 1)[
-            -1
-        ].endswith("Error"):
-            return {name, "Exception", "BaseException"}
+        if _sdk_error_leaf(name) is not None:
+            return sdk_error_ancestry(name) | {name}
         resolved = self.symbol(src, node)
         if resolved is None:
             return set()
@@ -140,6 +248,33 @@ class _Checker:
             *(self.error_names(owner, base, visited | {id(cls)}) for base in cls.bases)
         )
         return bases | {name} if bases else set()
+
+    def audience(self, src: Source, node: ast.AST, visited=frozenset()) -> str | None:
+        name = _qualified(src, node)
+        if _sdk_error_leaf(name) is not None:
+            return sdk_error_audience(name)
+        resolved = self.symbol(src, node)
+        if resolved is None:
+            return None
+        owner, cls = resolved
+        if not isinstance(cls, ast.ClassDef) or id(cls) in visited:
+            return None
+        for stmt in cls.body:
+            target: ast.expr | None = None
+            value: ast.expr | None = None
+            if isinstance(stmt, ast.AnnAssign):
+                target, value = stmt.target, stmt.value
+            elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+                target, value = stmt.targets[0], stmt.value
+            if isinstance(target, ast.Name) and target.id == "audience":
+                found = _audience_value(value)
+                if found is not None:
+                    return found
+        for base in cls.bases:
+            found = self.audience(owner, base, visited | {id(cls)})
+            if found is not None:
+                return found
+        return None
 
     def typed_error(self, src: Source, node: ast.AST) -> bool:
         return bool(self.error_names(src, node))
@@ -208,11 +343,19 @@ class _Checker:
                 src,
                 error,
                 "F019",
-                "Expanded failure constructor arguments are unresolved; verify message and suggested_action in an executed failed-check scenario.",
+                "Expanded failure constructor arguments are unresolved; define the F016 scenarios, whose assert_preflight_result checks message and suggested_action on every failed check.",
+                SCENARIO_COVERAGE,
             )
             return
         values = self.defaults(src, error.func)
         values.update(_kwargs(error))
+        audience = self.audience(src, error.func)
+        if details:
+            audience = _audience_value(values.get("audience")) or "APP_OWNER"
+        subject = _qualified(src, error.func).rsplit(".", 1)[-1]
+        if audience is not None:
+            subject = f"{subject}, audience {audience}"
+        missing: list[str] = []
         for field in ("message", "suggested_action"):
             value = _literal(values.get(field))
             if field == "suggested_action" and value is _UNKNOWN and field in values:
@@ -220,7 +363,8 @@ class _Checker:
                     src,
                     error,
                     "F019",
-                    "Computed suggested_action is unresolved; verify the final failed-check action is nonblank and appropriate in an executed scenario.",
+                    "Computed suggested_action is unresolved; define the F016 scenarios, whose assert_preflight_result checks the final failed-check action is nonblank.",
+                    SCENARIO_COVERAGE,
                 )
             if (
                 value is None
@@ -229,14 +373,81 @@ class _Checker:
                 or details
                 and field not in values
             ):
-                self.emit(
-                    src,
-                    error,
-                    "F007",
-                    f"Preflight failure has missing or blank {field}; provide a meaningful explanation and audience-appropriate next action. Unresolved factory values require behavioral validation.",
-                )
+                missing.append(field)
+        if missing:
+            self.emit(src, error, "F007", _f007_message(subject, missing, audience))
 
-    def result(self, src: Source, call: ast.Call) -> None:
+    def row(
+        self,
+        src: Source,
+        func: Function,
+        node: ast.AST,
+        visited: frozenset[int] = frozenset(),
+    ) -> bool:
+        """Whether one element of a ``checks=`` display resolves to a check row.
+
+        The element gate is resolvability, not node type. A list display whose
+        elements the analysis cannot read is exactly as opaque as the variable
+        it was built from, so ``checks=[*checks]`` must report what
+        ``checks=checks`` reports rather than clear it.
+        """
+        if id(node) in visited or len(visited) > 64:
+            return False
+        visited = visited | {id(node)}
+        if isinstance(node, ast.Await):
+            return self.row(src, func, node.value, visited)
+        if isinstance(node, ast.IfExp):
+            return all(
+                self.row(src, func, branch, visited)
+                for branch in (node.body, node.orelse)
+            )
+        if isinstance(node, ast.Starred):
+            return isinstance(node.value, (ast.List, ast.Tuple)) and all(
+                self.row(src, func, element, visited) for element in node.value.elts
+            )
+        if isinstance(node, ast.Name):
+            return self.binding(src, func, node, visited)
+        if not isinstance(node, ast.Call):
+            return False
+        if _sdk(src, node.func, "PreflightCheck"):
+            return True
+        helper = self.helper(src, func, node)
+        if helper is None:
+            return False
+        owner, target = helper
+        returns = [n for n in _nodes(target) if isinstance(n, ast.Return)]
+        return bool(returns) and all(
+            n.value is not None and self.row(owner, target, n.value, visited)
+            for n in returns
+        )
+
+    def binding(
+        self, src: Source, func: Function, node: ast.Name, visited: frozenset[int]
+    ) -> bool:
+        """Resolve a name to its one preceding assignment, or report it opaque.
+
+        More than one assignment, or none, leaves the value unknown: the row
+        the list carries at runtime is then not the one the analysis would read.
+        """
+        bound: list[ast.expr] = []
+        for stmt in _nodes(func):
+            if getattr(stmt, "lineno", node.lineno) >= node.lineno:
+                continue
+            if isinstance(stmt, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == node.id
+                for target in stmt.targets
+            ):
+                bound.append(stmt.value)
+            elif (
+                isinstance(stmt, ast.AnnAssign)
+                and isinstance(stmt.target, ast.Name)
+                and stmt.target.id == node.id
+                and stmt.value is not None
+            ):
+                bound.append(stmt.value)
+        return len(bound) == 1 and self.row(src, func, bound[0], visited)
+
+    def result(self, src: Source, func: Function, call: ast.Call) -> None:
         kwargs = _kwargs(call)
         if _sdk(src, call.func, "PreflightCheck") and "status" in kwargs:
             self.emit(
@@ -260,7 +471,8 @@ class _Checker:
                     src,
                     call,
                     "F019",
-                    "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need executed handler scenarios. This is not a proven verdict violation.",
+                    "Computed preflight aggregation is unresolved: mandatory/advisory roles, short-circuiting, and retry/fallback semantics need the F016 real-handler scenarios defined. This is not a proven verdict violation.",
+                    SCENARIO_COVERAGE,
                 )
             return
         if not checks.elts:
@@ -272,6 +484,20 @@ class _Checker:
                     "Handler NOT_READY result has no failed check evidence; include the evaluated blocking check.",
                 )
             return
+        for element in checks.elts:
+            if not self.row(src, func, element):
+                self.emit(
+                    src,
+                    element,
+                    "F019",
+                    f"Preflight check row `{_describe(element)}` does not resolve to a "
+                    "PreflightCheck construction, so its mandatory/advisory role and "
+                    "verdict cannot be read from the list; wrapping an opaque "
+                    "aggregation in a list display does not resolve it. Build the row "
+                    "inline or in a resolvable helper, or define the F016 real-handler "
+                    "scenarios that assert it.",
+                    SCENARIO_COVERAGE,
+                )
         passed = [
             _literal(_kwargs(c).get("passed"))
             if isinstance(c, ast.Call) and _sdk(src, c.func, "PreflightCheck")
@@ -343,7 +569,9 @@ class _Checker:
                         else [handler.type]
                     )
                     handled.update(
-                        _qualified(src, t) if t is not None else "BaseException"
+                        _canonical_error(_qualified(src, t))
+                        if t is not None
+                        else "BaseException"
                         for t in types
                     )
                 for stmt in node.body:
@@ -396,7 +624,7 @@ class _Checker:
                         "Expected typed preflight failure escapes the handler. Return a typed PreflightOutput verdict; the strict gate does not preserve the legacy raised-error fail-open behavior.",
                     )
             if isinstance(node, ast.Call):
-                self.result(src, node)
+                self.result(src, func, node)
                 helper = self.helper(src, func, node)
                 if helper is not None:
                     self.body(helper[0], helper[1], visited, caught)
@@ -471,6 +699,20 @@ class _Checker:
                             "F010",
                             "Workflow-constructed PreflightInput does not preserve its known entrypoint; pass the selected entrypoint and resolve credentials before the SDK gate. Interactive inputs may omit entrypoint.",
                         )
+
+
+def _f007_message(subject: str, missing: list[str], audience: str | None) -> str:
+    asks = []
+    if "message" in missing:
+        asks.append("provide a meaningful explanation of what failed")
+    if "suggested_action" in missing:
+        asks.append(
+            _VOICE.get(audience or "", "write an audience-appropriate next step")
+        )
+    return (
+        f"Preflight failure ({subject}) has missing or blank {' and '.join(missing)}; "
+        f"{', and '.join(asks)}. Keep internal file paths and exception text out of it."
+    )
 
 
 def scan(reg: Registry) -> list[Finding]:

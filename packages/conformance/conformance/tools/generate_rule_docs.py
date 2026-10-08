@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.rules import _ALL_SERIES, assert_registry_consistent
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import RemediationKind, RuleDefinition
 from conformance.suite.schema.disposition import EnforcementTier
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,7 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/entrypoint_alignment.py, "
             "conformance/suite/rules/entrypoint.py, "
             "conformance/suite/rules/client_seam.py, "
+            "conformance/suite/rules/credential_seam.py, "
             "conformance/suite/rules/error_seam.py, "
             "conformance/suite/rules/determinism.py, "
             "conformance/suite/rules/app_name_alignment.py, "
@@ -160,12 +161,13 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.entrypoint` (P017–P018, scans test files too), "
             "`suite.checks.client_seam` (P019), "
             "`suite.checks.error_seam` (P043/P045, scans test files too), "
-            "`suite.checks.determinism` (P020–P024, P031), "
+            "`suite.checks.determinism` (P020–P024, P031, P036, P054), "
             "`suite.checks.app_name_alignment` (P025), "
             "`suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), "
             "`suite.checks.transform_templates` (P040, scans template YAML), "
             "`suite.checks.text_io_encoding` (P046), "
-            "`suite.checks.atomic_publish` (P050) "
+            "`suite.checks.atomic_publish` (P050), "
+            "`suite.checks.credential_seam` (P053, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",
@@ -177,11 +179,11 @@ _SERIES_META: list[SeriesMeta] = [
         source_module="conformance/suite/rules/preflight.py",
         output_filename="preflight.md",
         checker=(
-            "`suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over "
-            "the preflight handler, its helpers and the entrypoint contracts; F015 "
-            "also reads deployment manifests) and the opt-in `--with-tests` "
-            "scenario runner (F016–F018: registered pytest scenarios executed in a "
-            "bounded subprocess via `conformance.preflight_testing`)"
+            "`suite.checks.preflight` (cross-file AST over the preflight handler, "
+            "its helpers and the entrypoint contracts; F015 also reads deployment "
+            "manifests, and F016 reads the scenario registrations under `tests/unit/`). "
+            "No rule executes tests: F016 checks the scenario matrix is defined, "
+            "and the test gate checks it passes."
         ),
         suppression_example=(
             "# conformance: ignore[F005] intentional: progress log, not a failure"
@@ -190,7 +192,8 @@ _SERIES_META: list[SeriesMeta] = [
             _ID_STABILITY_NOTE
             + " F001–F005 were published as P032–P035 and P047 and moved to this "
             "series in PR #3710 before any fleet suppression referenced them; the "
-            "vacated P-ids are retired and never reused."
+            "vacated P-ids are retired and never reused. F017–F018 were retired "
+            "in 0.39.0 and deleted in 0.40.0; their ids are never reused."
         ),
     ),
     SeriesMeta(
@@ -395,6 +398,34 @@ def _rule_anchor(rule: RuleDefinition) -> str:
     return rule.id.lower()
 
 
+_PACKAGE_BLOB = "https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/"
+
+_REMEDIATION_LABEL = {
+    RemediationKind.PRESCRIPTION: "Fix by",
+    RemediationKind.COMMAND: "Fix by",
+    RemediationKind.SKILL: "Migrate with",
+    RemediationKind.GUIDE: "Migrate with",
+    RemediationKind.DECISION: "Decision",
+}
+
+
+def _remediation_line(rule: RuleDefinition) -> tuple[str, str]:
+    ref = rule.remediation_reference
+    if ref is None:
+        return ("Fix by", "")
+    if ref.kind is RemediationKind.SKILL:
+        value = f"the ``{ref.target}`` skill (``skills-dir``)"
+    elif ref.kind is RemediationKind.DECISION:
+        value = f"{ref.target} decides"
+    elif ref.kind is RemediationKind.COMMAND:
+        value = f"``{ref.target}``"
+    else:
+        value = f"[`{ref.target}`]({_PACKAGE_BLOB}{ref.target})"
+    if ref.note:
+        value = f"{value} — {ref.note}"
+    return (_REMEDIATION_LABEL[ref.kind], value)
+
+
 def _render_rule_block(rule: RuleDefinition) -> list[str]:
     """One rule's full documentation block (shared by the per-series doc and
     the per-rule file, so the two can never drift)."""
@@ -444,11 +475,18 @@ def _render_rule_block(rule: RuleDefinition) -> list[str]:
     # actually do about this" block.  Deliberately ABOVE the full description:
     # it answers where the fix belongs and what "already correct" looks like,
     # which is what a reader needs before the mechanics of the check.
-    if rule.canonical_reference or rule.rule_interactions or rule.terminal_state:
+    remediation = _remediation_line(rule)
+    if (
+        rule.canonical_reference
+        or rule.rule_interactions
+        or rule.terminal_state
+        or remediation[1]
+    ):
         lines.append("### What correct looks like")
         lines.append("")
         for label, value in (
             ("Compliant example", rule.canonical_reference),
+            remediation,
             ("Interacts with", rule.rule_interactions),
             ("Already correct when", rule.terminal_state),
         ):

@@ -226,6 +226,79 @@ class TestConnectionNameInjection:
         assert "connectionName" not in out["attributes"]
 
 
+REAL_GUID = "3f8a1c2e-5b7d-4e9f-a1b2-c3d4e5f6a7b8"
+FLATTENED_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
+BOTH_ENVELOPES = pytest.mark.parametrize(
+    "envelope", [PYATLAN_ENVELOPE, FLATTENED_ENVELOPE], ids=["pyatlan", "flattened"]
+)
+
+
+class TestPlaceholderGuid:
+    """FND-2720: pyatlan's ``@init_guid`` random guid never reaches the output.
+
+    It changes on every run, so ``atlan-publish-app``'s whole-entity hash
+    classified every entity as DIFF instead of SYNCED.
+    """
+
+    @BOTH_ENVELOPES
+    def test_creator_placeholder_is_dropped_from_an_asset(self, envelope):
+        asset = _table()
+        assert asset.guid.startswith("-")  # precondition: creator set one
+
+        out = orjson.loads(entity_bytes(asset, envelope=envelope))
+
+        assert "guid" not in out
+
+    @BOTH_ENVELOPES
+    def test_two_runs_of_the_same_asset_serialise_identically(self, envelope):
+        assert entity_bytes(_table(), envelope=envelope) == entity_bytes(
+            _table(), envelope=envelope
+        )
+
+    @BOTH_ENVELOPES
+    @pytest.mark.parametrize("placeholder", ["-4838310098206119", "0"])
+    def test_placeholder_is_dropped_from_a_dict(self, envelope, placeholder):
+        payload = {
+            "typeName": "Table",
+            "guid": placeholder,
+            "attributes": {"qualifiedName": f"{SCHEMA_QN}/T1"},
+        }
+
+        out = orjson.loads(entity_bytes(payload, envelope=envelope))
+
+        assert "guid" not in out
+
+    @BOTH_ENVELOPES
+    def test_real_guid_on_an_asset_is_kept(self, envelope):
+        asset = _table()
+        asset.guid = REAL_GUID
+
+        out = orjson.loads(entity_bytes(asset, envelope=envelope))
+
+        assert out["guid"] == REAL_GUID
+
+    @BOTH_ENVELOPES
+    def test_real_guid_on_a_dict_is_kept(self, envelope):
+        payload = {"typeName": "Table", "guid": REAL_GUID, "attributes": {}}
+
+        out = orjson.loads(entity_bytes(payload, envelope=envelope))
+
+        assert out["guid"] == REAL_GUID
+
+    def test_pyatlan_path_is_the_native_encoder_minus_the_guid(self):
+        """Clearing on the asset keeps the fast path: no JSON round-trip."""
+        asset = _table()
+        expected = _table()
+        expected.guid = asset.guid = "-1"  # pin to one placeholder
+
+        out = entity_bytes(asset, envelope=PYATLAN_ENVELOPE)
+
+        expected_dict = orjson.loads(expected.to_nested_bytes())
+        del expected_dict["guid"]
+        assert orjson.loads(out) == expected_dict
+        assert out == asset.to_nested_bytes()
+
+
 class TestDispatchOrder:
     def test_nested_dict_shape(self):
         asset = NestedDictOnly(payload={"typeName": "Custom", "attributes": {}})

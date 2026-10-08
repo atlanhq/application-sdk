@@ -33,7 +33,7 @@ from collections.abc import Iterable, Mapping
 # (used in ``EnrichedPrometheusMetricReader.__init__`` below) are **private APIs**
 # of ``opentelemetry-exporter-prometheus``. The package is intentionally pinned
 # tightly in pyproject.toml; any version bump must re-verify these symbols still
-# exist and behave the same.  Verified intact through 0.62b1.
+# exist and behave the same.  Verified intact through 0.66b0.
 # ``tests/unit/observability/test_prometheus_enrichment.py`` instantiates the
 # reader for real (no mocks) and will fail fast if the symbols disappear.
 from opentelemetry.exporter.prometheus import PrometheusMetricReader, _CustomCollector
@@ -55,7 +55,7 @@ class _EnrichedCollector(_CustomCollector):
     def __init__(
         self, disable_target_info: bool, enrichment: Mapping[str, str]
     ) -> None:
-        super().__init__(disable_target_info)
+        super().__init__(disable_target_info, scope_info_enabled=False)
         self._enrichment = dict(enrichment)
 
     def collect(self) -> Iterable[_PrometheusMetric]:
@@ -99,7 +99,14 @@ class EnrichedPrometheusMetricReader(PrometheusMetricReader):
         # collector). Then swap that collector out for our enriching one.
         # Using the parent's register/unregister flow keeps us robust to
         # upstream changes in the parent's preferred_temporality dict.
-        super().__init__(disable_target_info=disable_target_info)
+        # ``scope_info_enabled=False``: since 0.63 the exporter adds
+        # ``otel_scope_{name,version,schema_url}`` labels to every series by
+        # default. The alerts and dashboards group by exact label sets, and
+        # ``otel_scope_version`` would mint new series on every release, so
+        # keep the pre-0.63 exposition.
+        super().__init__(
+            disable_target_info=disable_target_info, scope_info_enabled=False
+        )
         _PROM_REGISTRY.unregister(self._collector)
         self._collector = _EnrichedCollector(disable_target_info, enrichment)
         _PROM_REGISTRY.register(self._collector)

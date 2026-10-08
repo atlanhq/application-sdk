@@ -21,14 +21,26 @@
 #     manifest, and all history JSONL files.
 #   Single-repo (workflow_dispatch with repo=<owner/name>):
 #     Scans only the specified repo. Skips fleet.json and fleet history so a
-#     partial scan never overwrites the full-fleet aggregate. Used by the
-#     renovate-auto-approve-reusable workflow for push-based, near-real-time
-#     updates immediately after a PR gate evaluation.
+#     partial scan never overwrites the full-fleet aggregate. Manual use only.
+#
+# HOURLY, NOT PUSH-BASED. renovate-auto-approve-reusable.yml used to dispatch a
+# single-repo run after every gate evaluation. The caller fires on four
+# workflow_run completions per Renovate push, and rebaseWhen=behind-base-branch
+# re-pushes every open Renovate PR whenever one merges, so a fleet sweep turned
+# into ~770 dispatches in one hour — each one REST call plus ~2 GraphQL points
+# against the atlan-app-fleet installation, the same hourly budget the Renovate
+# sweep itself needs (a sweep ran out of it at exactly that point). One
+# full-fleet run is ~85 REST + tens of GraphQL points, a fixed cost that no
+# longer scales with PR churn. The price is up to an hour of staleness;
+# dispatch this workflow by hand when you need it fresher.
+#
+# :20 past, not :00: renovate.yaml sweeps at 0 */4 and takes ~15 minutes, so
+# :20 publishes that sweep's results instead of racing it for the budget.
 name: Update Renovate Dashboard
 
 on:
   schedule:
-    - cron: "0 */6 * * *" # every 6 hours
+    - cron: "20 * * * *" # hourly, after the 0 */4 Renovate sweep settles
   workflow_dispatch:
     inputs:
       repo:
@@ -43,6 +55,13 @@ permissions:
   contents: read
   id-token: write  # required for OIDC auth in aws-actions/configure-aws-credentials
   actions: read    # required to download workflow artifacts (parity with update-dashboard.yaml)
+
+# One run per scope at a time. A cron tick landing on a manual dispatch would
+# otherwise scan twice and race the two S3 syncs; queueing keeps the running
+# publish intact and GitHub holds only the newest pending run.
+concurrency:
+  group: renovate-dashboard-${{ inputs.repo || 'fleet' }}
+  cancel-in-progress: false
 
 jobs:
   renovate-dashboard:
@@ -61,7 +80,7 @@ jobs:
           private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
           owner: atlanhq
 
-      # Push-based single-repo mode: skip fleet discovery entirely. Split from
+      # Single-repo mode: skip fleet discovery entirely. Split from
       # the full-fleet step so the mode branch lives in `if:` rather than inside
       # a run: block, per docs/standards/ci.md.
       - name: Scope to one repo
@@ -150,9 +169,9 @@ jobs:
           echo "Merged PR files: $(ls /tmp/renovate-input/merged | wc -l)"
 
       - name: Install uv
-        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.17"
+          version: "0.12.23"
 
       - name: Run Renovate scanner
         run: |
@@ -213,13 +232,28 @@ jobs:
 
           echo "Renovate dashboard updated: https://k.atlan.dev/${PREFIX}/"
 
+      # A merge_group failure turns GitHub auto-merge off and Renovate never
+      # turns it back on, so a green PR ejected by one transient sits unmerged
+      # forever (FND-2940). Re-arm what the scanner classified automerge_not_armed.
+      # After the deploy so the dashboard shows the state that was found, and
+      # before the alarm because the alarm can fail the job. Never fails the job
+      # itself: an unarmable PR is a warning, and PRs the queue keeps ejecting
+      # are left for a human. All selection logic is in the script
+      # (docs/standards/ci.md).
+      - name: Re-arm auto-merge on green PRs that lost it
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/renovate_rearm_automerge.py \
+            --out-dir /tmp/renovate-output
+
       # Last, and deliberately after the deploy: this step can fail the job, and
       # a dashboard that stops publishing because it found something to report
       # would take out the view someone needs to act on the report.
       #
-      # Full-fleet runs only. Single-repo mode is dispatched per PR-gate
-      # evaluation by renovate-auto-approve-reusable, where a fleet-wide health
-      # verdict does not belong and would red an unrelated repo's workflow.
+      # Full-fleet runs only. A single-repo scan sees one repo's output, so a
+      # fleet-wide health verdict does not belong there.
       - name: Alarm on refusals the reaper should have cleared
         if: ${{ !inputs.repo }}
         run: |

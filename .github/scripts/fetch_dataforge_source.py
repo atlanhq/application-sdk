@@ -202,14 +202,22 @@ def _oauth_base_urls(base_url: str) -> list[str]:
     return candidates
 
 
-def _exchange_for_service_token(base_url: str, oidc_token: str) -> str:
-    """RFC 8693 token exchange: runner OIDC token -> 1h dataforge SERVICE token."""
+def _exchange_for_service_token(
+    base_url: str, oidc_token: str, scope: str = "credentials:read"
+) -> str:
+    """RFC 8693 token exchange: runner OIDC token -> 1h dataforge SERVICE token.
+
+    ``scope`` defaults to ``credentials:read`` (this fetch's read-only need); the
+    DataForge lifecycle script imports this same function and passes the wider
+    ``resource:lifecycle resource:read`` — one exchange implementation, one place
+    the host-fallback / error handling lives (FND-1992).
+    """
     body = urllib.parse.urlencode(
         {
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
             "subject_token": oidc_token,
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "scope": "credentials:read",
+            "scope": scope,
         }
     ).encode()
     last_exc: urllib.error.HTTPError | None = None

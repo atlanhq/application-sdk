@@ -26,7 +26,7 @@ includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -76,9 +76,69 @@ Consult the finding's `hint` and `message` — for the B-series the message
 carries the SDK's own migration guidance — then read the actual source lines
 around `finding.line` in `finding.file` before proposing anything.
 
+**Mechanical fixes** (`classification = "mechanical"`; the loop applies and
+gates them, and the edit is fully determined by the finding):
+
+- **B006 StaleContractLedger** (writes `contract_schema.lock.json` in the repo
+  root) — a live entrypoint contract field has no entry in the ledger, because
+  the ledger was not regenerated after the field was introduced.  The fix is the
+  command the finding message already carries, **verbatim, keeping its version
+  pin**: `uvx atlan-application-sdk-conformance==<checker version>
+  gen-contract-ledger` in a consumer app, or `uv run
+  atlan-application-sdk-conformance gen-contract-ledger` inside the SDK repo
+  itself.  Never substitute a bare `uv run` in a consumer app: it resolves that
+  repo's *locked* conformance dev dependency, and whenever the lock lags the
+  release the CI checker runs, the generator rewrites the ledger
+  byte-identically and the finding survives — the dead end FND-607 sent a
+  developer down on a BLOCK-tier rule.  Set `touched_files` to
+  `["contract_schema.lock.json"]` and commit it in the same PR; the write-scope
+  carve-out for this file is named in `remediate-finding.prose.md`.
+  **Do not delete the ledger first.**  The generator is append-only, which is
+  exactly right here — B006 means "this field is absent from the ledger", and
+  appending is what records it.  Rebuilding from empty would silently discard
+  every genuine removal the ledger records, turning a recorded history into a
+  blank one; that is a B005 question and never part of a B006 fix.
+  Measured on a connector at suite 0.34.0: two B006 findings, ledger 121 → 123
+  fields, re-detect clean with no B005 introduced.
+
 **Guided fixes** (`classification = "judgment"`; the loop applies and gates them
 with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
+
+- **B005 NonAdditiveContractChange** (app source, the contract class) — a field
+  the ledger records is absent from the live contract, or its type changed.
+  Work in this order and stop at the first step that applies:
+  1. **Suspect a false positive before proposing anything.**  The ledger keys
+     entries by **bare class name**, which is not unique, and three independent
+     families make a B005 finding noise rather than a real removal: the same
+     contract name declared in two modules, where each declaration reads the
+     other's fields as removed; a first ledger seeded from the SDK's own
+     packaged ledger, which bakes SDK template contracts in permanently because
+     the build is append-only; and a class inheriting an SDK *template*
+     contract, whose inherited fields the app-side AST scan cannot see.  On one
+     connector, all 25 B005 findings were noise of these families.  Check
+     whether the named contract is declared more than once in the repo, and
+     whether the ledger carries entries for contracts this app never declares
+     (SDK template names such as `ExtractionInput` / `QueryExtractionOutput`).
+     If either holds this is a **defect in the rule, not in the app**: take the
+     `false-positive` path in `remediate-finding` step 5 so
+     `report-rule-defect` raises it against the suite.  Never suppress it
+     silently.  A field the SDK itself retired from a template the contract
+     inherits never reaches this list: B005 excuses it when the SDK's bundled
+     ledger records it `sunset` on that template, so do not hand-edit the
+     app's ledger for it.
+  2. **Restore the field** when the removal was unintentional and the ledger
+     entry gives its type — re-declare it on the contract class with that type.
+     Report `classification = "mechanical"` only when the finding names the
+     field and the ledger type round-trips; the recheck gate confirms.
+  3. **Otherwise route to residue** proposing the owner's choice: restore the
+     field, or deprecate and sunset it.
+  **Never propose a sunset for a field still referenced anywhere in the repo.**
+  Grep the whole tree first, including `scripts/` and `*.sh` JSONPath arguments
+  such as `$.extract.outputs.<field>`: a field removed from the contract while a
+  DAG node still reads it is a live break, not a tidy-up.  And regenerating the
+  ledger is **not** a B005 fix — the generator is append-only and, in the
+  finding message's own words, "can never launder a removal".
 
 - **B001 DeprecatedSdkSymbolUsage** (app source) — the app imports, subclasses,
   calls, or reads a symbol the SDK has deprecated.  Apply the migration named in
@@ -154,14 +214,46 @@ human audit):
             return asset
         ```
       - **Transform task** — read typed records from the input JSONL, map each, and
-        write `asset.to_nested_bytes()` to a typed file output passed downstream as a
-        `FileReference` (no shared `output_path` scan, no `upload_to_atlan()`):
+        write each asset through `entity_bytes` to a typed file output passed
+        downstream as a `FileReference` (no shared `output_path` scan, no
+        `upload_to_atlan()`). Pass the app's declared envelope and the run's
+        sync details, not a bare `entity_bytes(asset)`.
+
+        **Choose the envelope before writing the task, from the connector's
+        released output — never by default.** A connector whose released output
+        has relationship refs under a top-level `relationshipAttributes` key (the
+        shape `asset.to_nested_bytes()` wrote) pins `EnvelopeShape.PYATLAN` for
+        this migration, so neither its wire format nor its publish diff cache
+        flips as a side effect. `PYATLAN` is a deprecated one-cycle lever
+        (removed in v4.0); moving to `FLATTENED` (refs in `attributes`) is a
+        separate, deliberate change. Only a connector with no released output,
+        or one already emitting the flattened shape, starts on `FLATTENED`.
+        Drop `connection_name` / `last_sync` only when the mapper already stamps
+        both on every asset.
         ```python
+        from application_sdk.common.asset_serialization import entity_bytes
+        from application_sdk.common.entity_envelope import EntityEnvelopePolicy, EnvelopeShape
+        from application_sdk.common.last_sync import resolve_last_sync_details
+
+        # Released output was nested (it wrote asset.to_nested_bytes()): keep it.
+        ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.PYATLAN)
+        # No released output, or already flattened, instead:
+        # ENTITY_ENVELOPE = EntityEnvelopePolicy(shape=EnvelopeShape.FLATTENED)
+
         @task(timeout_seconds=1800)
         async def transform(self, input: TransformInput) -> TransformOutput:
+            last_sync = resolve_last_sync_details()  # once per activity
             for record in read_jsonl(input.raw_file, RecordType):
                 asset = map_entity(record, connection_qn, workflow_id)
-                out_f.write(asset.to_nested_bytes() + b"\n")
+                out_f.write(
+                    entity_bytes(
+                        asset,
+                        connection_name=connection_name,
+                        last_sync=last_sync,
+                        envelope=ENTITY_ENVELOPE,
+                    )
+                    + b"\n"
+                )
             return TransformOutput(output_file=FileReference(local_path=str(output_file)))
         ```
       - Drop the YAML query templates, the `TransformerInterface` subclass, and any
@@ -216,6 +308,25 @@ human audit):
   `DeprecationWarning` in `__init__`/`__init_subclass__`) is a small design
   choice for the symbol's owner; record in residue with the suggestion the
   finding message already carries.
+
+- **B008 PrivateModuleImport** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app imports or uses an underscore-prefixed
+  module or name it does not own: a private segment in the module path, a
+  private name from a public module, a third-party private (`pandas._libs`),
+  or a reach-through on a module alias (`sdk.execution._temporal.x`).  The
+  app's own privates (relative imports, or imports rooted at a package inside
+  the repo) and dunders are never flagged.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: every foreign import names a public
+  module (`application_sdk.app`, `.contracts`, `.credentials`, `.errors`,
+  `.observability`, `.outputs`).  The brief names, per site, the public
+  equivalent to import, or — when the site is a test asserting on an SDK
+  private — the public behaviour to test instead.  When no public equivalent
+  exists, the brief says so and proposes
+  `# conformance: ignore[B008] no public equivalent — tracked in <id>`.  An
+  error class from `application_sdk.storage.formats` is also a P045 finding;
+  follow that prescription.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2d
+  (positive-idiom check 1).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when

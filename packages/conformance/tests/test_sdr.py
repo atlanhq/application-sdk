@@ -37,6 +37,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.sdr import discover, scan_all, scan_path
 from conformance.suite.rules import get_rule
 from conformance.suite.schema.disposition import EnforcementTier, RuleScope
@@ -185,7 +186,7 @@ def test_p029_rule_metadata() -> None:
     assert rule.name == "SdrManifestMissingAgentJson"
     assert rule.tier == EnforcementTier.BLOCK
     assert rule.scope == RuleScope.APP
-    assert rule.autofixable is False
+    assert rule.autofixable is True
     assert rule.rationale.strip()
     assert rule.since == "0.9.0"
     assert rule.category == "sdr-readiness"
@@ -816,6 +817,189 @@ def test_p037_ignores_docstring_only_mention(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
+#: Migrated onto the SDK seam P053 prescribes: route_credentials plus a named
+#: CredentialRef and a resolve_credential_raw read elsewhere — both of which
+#: P037 counts as custom resolution on their own.
+_CREDS_ROUTE_CREDENTIALS = (
+    "from application_sdk.credentials import CredentialRef, route_credentials\n"
+    "\n"
+    "def _route(input_obj):\n"
+    "    return route_credentials(input_obj)\n"
+    "\n"
+    "async def _named(context):\n"
+    '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("extra_import", "call"),
+    [
+        ("", "route_credentials(input_obj)"),
+        (
+            "from application_sdk.credentials import route_credentials as route\n",
+            "route(input_obj)",
+        ),
+        (
+            "from application_sdk import credentials\n",
+            "credentials.route_credentials(input_obj)",
+        ),
+        (
+            "import application_sdk.credentials\n",
+            "application_sdk.credentials.route_credentials(input_obj)",
+        ),
+    ],
+    ids=["bare", "aliased", "module-qualified", "fully-qualified"],
+)
+def test_p037_silent_when_route_credentials_used(
+    tmp_path: Path, extra_import: str, call: str
+) -> None:
+    # route_credentials routes through CredentialRef.resolve, so an app that has
+    # migrated onto it is agent-aware — P037 must not send it back to a
+    # hand-rolled CredentialRef.resolve, which P053 then flags.
+    src = extra_import + _CREDS_ROUTE_CREDENTIALS.replace(
+        "route_credentials(input_obj)", call
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A local helper that happens to share the name.
+        "from application_sdk.credentials import CredentialRef\n"
+        "def route_credentials(x):\n"
+        "    return None\n"
+        "def _route(input_obj):\n"
+        "    return route_credentials(input_obj)\n"
+        "async def _named(context):\n"
+        '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n',
+        # An attribute on something that is not an SDK module.
+        "from application_sdk.credentials import CredentialRef\n"
+        "from app import helpers\n"
+        "def _route(input_obj):\n"
+        "    return helpers.route_credentials(input_obj)\n"
+        "async def _named(context):\n"
+        '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n',
+    ],
+    ids=["local-function", "non-sdk-module"],
+)
+def test_p037_ignores_a_same_named_non_sdk_callable(tmp_path: Path, src: str) -> None:
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+_SDK_ROUTE_ALIAS = (
+    "from application_sdk.credentials import CredentialRef\n"
+    "from application_sdk.credentials import route_credentials as route\n"
+)
+_GUID_ONLY_READ = (
+    "async def _named(context):\n"
+    '    return await context.resolve_credential_raw(CredentialRef(name="x"))\n'
+)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A helper's own parameter shadows the imported alias.
+        "def _call(route, input_obj):\n    return route(input_obj)\n",
+        # ... and so does a local assignment.
+        "def _call(input_obj):\n"
+        "    route = input_obj.router\n"
+        "    return route(input_obj)\n",
+        # A lambda parameter.
+        "_call = lambda route, input_obj: route(input_obj)\n",
+        # The module rebinds the alias, so it may not be the SDK's at the call.
+        "route = object()\ndef _call(input_obj):\n    return route(input_obj)\n",
+    ],
+    ids=["parameter", "local-assignment", "lambda-parameter", "module-rebinding"],
+)
+def test_p037_ignores_a_shadowed_router_alias(tmp_path: Path, body: str) -> None:
+    src = _SDK_ROUTE_ALIAS + body + _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # A nested function sees the module import.
+        "def _outer(input_obj):\n"
+        "    def _inner():\n"
+        "        return route(input_obj)\n"
+        "    return _inner()\n",
+        # A method: the class body does not shadow for the functions in it.
+        "class Connector:\n"
+        "    route = None\n"
+        "    def run(self, input_obj):\n"
+        "        return route(input_obj)\n",
+        # `global` refers the name back to the module import.
+        "def _call(input_obj):\n" "    global route\n" "    return route(input_obj)\n",
+    ],
+    ids=["nested-function", "method-skips-class-scope", "global-declaration"],
+)
+def test_p037_trusts_an_unshadowed_router_alias(tmp_path: Path, body: str) -> None:
+    src = _SDK_ROUTE_ALIAS + body + _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_trusts_a_function_local_sdk_import(tmp_path: Path) -> None:
+    src = (
+        "from application_sdk.credentials import CredentialRef\n"
+        "def _call(input_obj):\n"
+        "    from application_sdk.credentials import route_credentials\n"
+        "    return route_credentials(input_obj)\n" + _GUID_ONLY_READ
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+#: Required keyword-only parameters: ast stores ``None`` in ``kw_defaults`` for
+#: each, which the scope walk must skip rather than descend into.
+_REQUIRED_KWONLY = {
+    "function": "def _f(*, x):\n    return x\n",
+    "async-function": "async def _g(*, y):\n    return y\n",
+    "lambda": "_h = lambda *, z: z\n",
+    "mixed-defaults": "def _m(*, a, b=1, c):\n    return a\n",
+}
+
+
+@pytest.mark.parametrize(
+    "shape", list(_REQUIRED_KWONLY.values()), ids=list(_REQUIRED_KWONLY)
+)
+def test_p037_scans_required_keyword_only_parameters(
+    tmp_path: Path, shape: str
+) -> None:
+    # Fires on the GUID-only read: the scan completes rather than crashing.
+    src = "from application_sdk.credentials import CredentialRef\n" + shape
+    src += _GUID_ONLY_READ
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_trusts_router_alias_inside_required_keyword_only_function(
+    tmp_path: Path,
+) -> None:
+    src = (
+        _SDK_ROUTE_ALIAS
+        + "def _call(*, input_obj):\n    return route(input_obj)\n"
+        + _GUID_ONLY_READ
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+def test_p037_still_fires_without_route_credentials(tmp_path: Path) -> None:
+    # Red leg for the exemption above: the same module minus the seam call.
+    src = _CREDS_ROUTE_CREDENTIALS.replace(
+        "    return route_credentials(input_obj)\n", "    return None\n"
+    )
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
 def test_p037_agent_aware_in_any_file_exempts(tmp_path: Path) -> None:
     # GUID-only in one file, agent-aware resolve in another → app-level exempt.
     _write(
@@ -1024,6 +1208,36 @@ def test_p039_fires_on_closed_bare_input_contract(tmp_path: Path) -> None:
     assert len(p039) == 1
     assert "agent_json" in p039[0].message
     assert p039[0].file == "app/generated/_input.py"
+
+
+@pytest.mark.parametrize(
+    ("name", "fires"),
+    [
+        ("CrawlerAppInputContract", True),
+        ("QueryMinerAppInputContract", True),
+        ("CrawlerInputContract", False),
+        ("appInputContract", False),
+    ],
+)
+def test_p039_matches_per_entrypoint_bundle_class_names(
+    tmp_path: Path, name: str, fires: bool
+) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/generated/crawler/manifest.json": _MANIFEST_AGENT_TOPLEVEL,
+            "app/generated/crawler/_input.py": _INPUT_BARE_CLOSED.replace(
+                "class AppInputContract(", f"class {name}("
+            )
+            + f"\n\nAppInputContract = {name}\n",
+        },
+    )
+    p039 = [f for f in _run(tmp_path) if f.rule_id == "P039"]
+    assert len(p039) == (1 if fires else 0)
+    if fires:
+        assert p039[0].file == "app/generated/crawler/_input.py"
+        assert f"'{name}'" in p039[0].message
 
 
 def test_p039_silent_when_contract_allows_unbounded(tmp_path: Path) -> None:
@@ -1822,3 +2036,51 @@ def test_p051_silent_on_unparseable_lock(tmp_path: Path) -> None:
         {"atlan.yaml": _SDR_ATLAN_YAML, "uv.lock": "this is : not valid = toml ["},
     )
     assert not any(f.rule_id == "P051" for f in _run(tmp_path))
+
+
+def test_p030_absence_message_names_working_bridge_shapes(tmp_path: Path) -> None:
+    _write(
+        tmp_path,
+        {
+            "atlan.yaml": _SDR_ATLAN_YAML,
+            "app/connector.py": "class Connector:\n    async def run(self):\n        pass\n",
+        },
+    )
+    (p030,) = [f for f in _run(tmp_path) if f.rule_id == "P030"]
+    assert "storage.transfer.upload" in p030.message
+    assert "inherited upload_to_atlan" in p030.message
+    assert "baseline" in p030.message
+    assert "storage_path" in p030.message
+
+
+def test_p030_full_description_gives_the_conversion_recipe() -> None:
+    rule = get_rule("P030")
+    for needle in (
+        "storage.transfer.upload",
+        "inherited",
+        "storage_path",
+        "from the entrypoint",
+        "baseline",
+    ):
+        assert needle in rule.full_description, needle
+
+
+def test_p030_remediation_prose_covers_working_bridges() -> None:
+    import conformance
+
+    prose = (
+        Path(conformance.__file__).parent
+        / "programs"
+        / "areas"
+        / "prescriptions.prose.md"
+    ).read_text(encoding="utf-8")
+    section = prose[
+        prose.index("- **P030 SdrUploadNotCalled**") : prose.index("- **P042 ")
+    ]
+    for needle in (
+        "storage.transfer.upload",
+        "storage_path",
+        "baseline",
+        "resolvable/",
+    ):
+        assert needle in section, needle

@@ -16,6 +16,7 @@ class Category(str, Enum):
     CONTRACT_TOOLKIT = "contract-toolkit"
     CONFORMANCE_PACKAGE = "conformance-package"
     SDK_PACKAGE = "sdk-package"
+    ATLAN_PLATFORM = "atlan-platform"
     PYTHON_DEP = "python-dep"
     UNKNOWN = "unknown"
 
@@ -181,8 +182,10 @@ class AutoMergeStats:
     """Auto-merge counts over a trailing time window."""
 
     window_days: int
-    auto_merged: int  # merged + atlan-ci auto-approval signature detected
-    human_merged: int  # merged without that signature
+    auto_merged: (
+        int  # merged by a bot, or carrying the atlan-ci auto-approval signature
+    )
+    human_merged: int  # merged by a person without that signature
     total_merged: int
 
 

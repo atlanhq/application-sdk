@@ -74,6 +74,7 @@ if TYPE_CHECKING:
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.common.atomic import disk_full_guard, ensure_free_space
 from application_sdk.observability.logger_adaptor import get_logger
 
 # Transfer integrity validation (FND-306). ``integrity`` holds no top-level
@@ -740,7 +741,15 @@ async def _list_items(
 
     if include_markers:
         return all_items
+    # Offloaded: two passes over the whole listing with no await in between,
+    # which at 100k keys holds the event loop (and the activity heartbeat).
+    return await run_in_thread(_drop_directory_markers, all_items)
 
+
+def _drop_directory_markers(
+    all_items: list[tuple[str, int, str | None]],
+) -> list[tuple[str, int, str | None]]:
+    """Drop zero-byte objects whose path is an ancestor of another listed key."""
     parent_dirs: set[str] = set()
     for path, _, _ in all_items:
         parts = path.split("/")
@@ -1149,8 +1158,12 @@ async def download_file(
 
     Raises:
         StorageNotFoundError: If *key* does not exist in the store.
-        StorageError: If the download or write fails, or fewer bytes reached
-            disk than the store declared for the object.
+        StorageDiskFullError: If the local volume is out of space
+            (``ENOSPC`` / ``EDQUOT``) for the object, or already has less free
+            space than the store declared for it. A ``DiskFullError``
+            (``RESOURCE_EXHAUSTED_DISK_FULL``) that is also a ``StorageError``.
+        StorageError: If the download or write fails for any other reason, or
+            fewer bytes reached disk than the store declared for the object.
         StorageIntegrityError: If the downloaded content does not match the
             digest its producer recorded.
         ObjectStoreNotProvidedError: If *store* is ``None`` and no infrastructure store is set.
@@ -1160,7 +1173,6 @@ async def download_file(
         key = normalize_key(key)
 
     path = Path(local_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
 
     verifying = integrity.verification_enabled(verify)
     # Hash while streaming whenever verification is on: the bytes are already
@@ -1209,48 +1221,61 @@ async def download_file(
     published = False
     try:
         try:
-            staging_dir = path.parent / PARTIAL_DIRNAME
-            # mode hardens only the first creation (ignored when the directory
-            # exists) — it keeps a staging dir under a shared temp root private.
-            os.makedirs(staging_dir, mode=0o700, exist_ok=True)
-            fd, tmp_name = tempfile.mkstemp(
-                dir=str(staging_dir), prefix=path.name + "."
-            )
-            from application_sdk.constants import (  # noqa: PLC0415
-                STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
-            )
+            # A full volume is its own failure, not a generic storage one: it
+            # names the volume to resize, where StorageError reads as the store.
+            # The declared size is known before the first byte arrives, so a
+            # volume that plainly cannot hold the object fails here, in seconds,
+            # and the message can say what was needed.
+            declared = result.meta["size"]
+            ensure_free_space(path, declared, operation="download")
+            with disk_full_guard(path, operation="download", required_bytes=declared):
+                # Inside the guard: a missing parent needs room for its own
+                # directory entry, and a full volume there is the same failure.
+                path.parent.mkdir(parents=True, exist_ok=True)
+                staging_dir = path.parent / PARTIAL_DIRNAME
+                # mode hardens only the first creation (ignored when the directory
+                # exists) — it keeps a staging dir under a shared temp root private.
+                os.makedirs(staging_dir, mode=0o700, exist_ok=True)
+                fd, tmp_name = tempfile.mkstemp(
+                    dir=str(staging_dir), prefix=path.name + "."
+                )
+                from application_sdk.constants import (  # noqa: PLC0415
+                    STORAGE_PROGRESS_LOG_INTERVAL_SECONDS as _progress_interval,
+                )
 
-            last_progress = started
-            with os.fdopen(fd, "wb") as fh:
-                async for chunk in result.stream(min_chunk_size=min_chunk_size):
-                    raw = bytes(chunk)
-                    fh.write(raw)
-                    bytes_written += len(raw)
-                    if h is not None:
-                        h.update(raw)
-                    # One streamed chunk landed on disk — see the matching mark in
-                    # upload_file for why this is per chunk and ungated.
-                    current_progress_tracker().mark_progress("storage.download_chunk")
-                    if _progress_interval > 0:
-                        now = time.monotonic()
-                        if now - last_progress >= _progress_interval:
-                            _log_transfer_progress(
-                                "download",
-                                key,
-                                bytes_so_far=bytes_written,
-                                elapsed_ms=(now - started) * 1000.0,
-                            )
-                            last_progress = now
-                # fsync before the publish: on a delayed-allocation filesystem
-                # ENOSPC can surface only at writeback, and without this a
-                # short file would be published as complete (the FND-318
-                # argument). Offloaded so a large flush does not hold the
-                # event loop and the activity heartbeat with it.
-                fh.flush()
-                await run_in_thread(os.fsync, fh.fileno())
-            os.replace(tmp_name, path)
-            published = True
-        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and exception is re-raised via StorageError chain
+                last_progress = started
+                with os.fdopen(fd, "wb") as fh:
+                    async for chunk in result.stream(min_chunk_size=min_chunk_size):
+                        raw = bytes(chunk)
+                        fh.write(raw)
+                        bytes_written += len(raw)
+                        if h is not None:
+                            h.update(raw)
+                        # One streamed chunk landed on disk — see the matching mark in
+                        # upload_file for why this is per chunk and ungated.
+                        current_progress_tracker().mark_progress(
+                            "storage.download_chunk"
+                        )
+                        if _progress_interval > 0:
+                            now = time.monotonic()
+                            if now - last_progress >= _progress_interval:
+                                _log_transfer_progress(
+                                    "download",
+                                    key,
+                                    bytes_so_far=bytes_written,
+                                    elapsed_ms=(now - started) * 1000.0,
+                                )
+                                last_progress = now
+                    # fsync before the publish: on a delayed-allocation filesystem
+                    # ENOSPC can surface only at writeback, and without this a
+                    # short file would be published as complete (the FND-318
+                    # argument). Offloaded so a large flush does not hold the
+                    # event loop and the activity heartbeat with it.
+                    fh.flush()
+                    await run_in_thread(os.fsync, fh.fileno())
+                os.replace(tmp_name, path)
+                published = True
+        # conformance: ignore[E004] file-write error handler; _log_storage_event records error_class and the exception is re-raised as StorageDiskFullError or StorageError
         except Exception as exc:
             elapsed_ms = (time.monotonic() - started) * 1000.0
             _log_storage_event(
@@ -1262,6 +1287,18 @@ async def download_file(
                 size_bytes=bytes_written,
                 error_class=_exc_class_name(exc),
             )
+            from application_sdk.errors import DiskFullError  # noqa: PLC0415
+
+            if isinstance(exc, DiskFullError):
+                # Also a StorageError, so `except StorageError:` and the
+                # fan-out unwrapping in `_run_bounded` still see it.
+                from application_sdk.storage.errors import (  # noqa: PLC0415
+                    StorageDiskFullError,
+                )
+
+                raise StorageDiskFullError.from_disk_full(exc, key=key) from (
+                    exc.__cause__ or exc
+                )
             from application_sdk.storage.errors import StorageError  # noqa: PLC0415
 
             raise StorageError(

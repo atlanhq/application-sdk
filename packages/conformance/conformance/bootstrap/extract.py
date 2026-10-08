@@ -239,6 +239,7 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("dataforge_env_tier", "dataforge-env-tier", "plain"),
     ("dataforge_output_prefix", "dataforge-output-prefix", "plain"),
     ("dataforge_hermetic_fallback", "dataforge-hermetic-fallback", "bool"),
+    ("dataforge_lifecycle", "dataforge-lifecycle", "bool"),
 )
 
 # The two inputs whose real-world spelling is a ``>-`` folded scalar — a list of
@@ -966,6 +967,29 @@ def extract_use_ghcr_base(text: str) -> str:
     return "true" if extract_field(text, "use_ghcr_base") == "true" else ""
 
 
+# The line ``conformance-upload-sarif.yaml`` carries once a repo has opted in
+# with ``bootstrap --sarif-upload true`` (FND-3336). Every repo bootstrapped
+# before then holds a copy *without* it, so the marker — not the file's mere
+# presence — is what tells a public repo's opt-in apart from the copy a
+# private repo was given by default and should now lose.
+SARIF_UPLOAD_OPT_IN_MARKER = (
+    "# Installed by `bootstrap --sarif-upload true`: public repos only (FND-3336)."
+)
+
+
+def extract_sarif_upload(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``conformance-upload-sarif.yaml``) is an
+    opted-in copy, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base``: ``bootstrap``'s
+    autodetection reads it so a bare re-run keeps a public repo's upload, and
+    C002 reads it so an unmarked copy is reported for removal while a marked
+    one is compared against the canonical like any managed shim.
+    """
+    marker = SARIF_UPLOAD_OPT_IN_MARKER
+    return "true" if any(line.strip() == marker for line in text.splitlines()) else ""
+
+
 def extract_vulnerability_scan_lfs(text: str) -> str:
     """Return ``"true"`` when *text* (a ``vulnerability-scan.yml``) opts into the
     LFS checkout on the scan's image build, else ``""``.
@@ -996,7 +1020,8 @@ def extract_vulnerability_scan_lfs(text: str) -> str:
     Read file-wide via ``extract_field`` rather than through
     ``reusable_job_with_block``: that scope is keyed on the job calling
     ``tests-reusable.yaml`` and so does not apply here, and this shim is a
-    17-line file with exactly one job — the same reasoning that lets
+    short file whose two jobs (the bump PR's release-candidate build and the
+    scan, FND-3328) take the same value — the same reasoning that lets
     ``extract_use_ghcr_base`` read ``build-and-publish.yaml`` file-wide.
     """
     return "true" if extract_field(text, "lfs") == "true" else ""
@@ -1025,6 +1050,77 @@ def extract_build_publish_lfs(text: str) -> str:
     repo that spells it by saying nothing.
     """
     return "true" if extract_field(text, "lfs") == "true" else ""
+
+
+def extract_conformance_private_git_deps(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``conformance.yaml``) opts the suite
+    into resolving private ``atlanhq`` git dependencies, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base`` and the ``lfs``
+    extractors above — a per-repo choice on an *always-overwrite* shim, so it
+    needs both halves or it cannot survive — but with the loudest failure of
+    the set.
+
+    A repo that pins a private ``atlanhq`` package via ``ssh://`` in
+    ``pyproject.toml`` needs this: the D-series leg materialises the
+    environment with ``uv sync``, and an unauthenticated runner can only clone
+    that dep off a warm ``uv`` cache. On a cache miss the leg dies with
+    ``Permission denied (publickey)`` and takes ``Conformance Gate`` — a
+    REQUIRED check — down with it. Soft mode does not save it either:
+    ``exit-zero`` suppresses rule *violations*, and this is an environment
+    crash before ``detect`` ever runs.
+
+    The opt-in is two lines, not one: the input itself, and ``secrets:
+    inherit``, without which the reusable cannot see ``ORG_PAT_GITHUB``. One
+    value renders both, because half the opt-in is not an opt-in.
+
+    Only a literal ``true`` is preserved, for the same reason as every
+    extractor above: an explicit ``false`` restates the reusable's own default
+    and would read as drift on every repo that spells it by saying nothing.
+    """
+    return "true" if extract_field(text, "private-git-deps") == "true" else ""
+
+
+def extract_release_private_git_auth(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``release.yaml``) opts the version-bump
+    job into private ``atlanhq`` git auth, else ``""``.
+
+    The ``release.yaml`` half of the case documented one function up, and it
+    fails the way ``extract_build_publish_lfs`` does: quietly, and late. The
+    bump step runs ``uv lock``, which re-resolves the private ``ssh://`` dep;
+    without auth it dies on ``Permission denied (publickey)``, so no bump PR
+    opens, no ``release`` label lands, and no tag, GitHub Release or
+    marketplace publish can follow. Every PR check stays green throughout —
+    the first symptom is a release that never happens.
+
+    Same value semantics as the rest: only a literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private_git_auth") == "true" else ""
+
+
+def extract_build_publish_private_git_auth(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``build-and-publish.yaml``) opts the
+    release image build into private ``atlanhq`` git auth, else ``""``.
+
+    The certify job's ``uv sync`` re-resolves the private ``ssh://`` dep the
+    same way the release bump's ``uv lock`` does, and dies the same way
+    without auth. ``secrets: inherit`` is already unconditional on this shim,
+    so the opt-in is the one input line. Only a literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private_git_auth") == "true" else ""
+
+
+def extract_checks_private_git_deps(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``checks.yml``) opts pre-commit into
+    private ``atlanhq`` git auth, else ``""``.
+
+    ``setup-deps`` runs ``uv sync`` before any hook, so a repo pinning a
+    private ``ssh://`` dep fails pre-commit on ``Permission denied
+    (publickey)`` without it. Two lines, like ``conformance.yaml``: the input
+    and the ``secrets: inherit`` feeding it ``ORG_PAT_GITHUB``. Only a
+    literal ``true`` survives.
+    """
+    return "true" if extract_field(text, "private-git-deps") == "true" else ""
 
 
 def extract_field(text: str, field: str) -> str:

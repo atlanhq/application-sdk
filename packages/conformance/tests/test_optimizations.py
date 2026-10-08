@@ -160,3 +160,81 @@ def test_o001_sarif_output_validates(tmp_path: Path) -> None:
     )
     report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
     validate_sarif(report)
+
+
+# ── O001 exact-bytes carve-out ──────────────────────────────────────────────────
+
+
+def test_o001_terminal_state_licenses_stdlib_only_for_a_named_external_consumer() -> (
+    None
+):
+    """orjson cannot reproduce stdlib ``json.dumps``'s default bytes.
+
+    It has no separators option, no ``ensure_ascii`` option and no >64-bit
+    ints. So a ``dumps`` whose string is published as an asset attribute, hashed
+    or byte-compared outside the app has no compliant swap: the only end state
+    is a justified directive, and the reason must name that consumer. Without a
+    ``terminal_state`` saying so, a remediation lane strips the directive and
+    re-applies a swap that churns every published asset (FND-2509).
+    """
+    terminal_state = " ".join(get_rule("O001").terminal_state.split())
+    for needle in (
+        "# conformance: ignore[O001] <reason>",
+        "one attribute or field value",
+        "hashes or byte-compares that value as text",
+        "outside the app",
+        "names the attribute key or field and the location (repo and file:line)",
+        "serializes a whole entity or document does not qualify",
+        "parses the document before it diffs it",
+    ):
+        assert (
+            needle in terminal_state
+        ), f"O001's terminal_state does not state {needle!r}"
+
+
+def test_o001_terminal_state_sends_a_byte_identical_call_to_the_swap() -> None:
+    """A ``dumps`` already passing ``separators=(",", ":")`` and
+    ``ensure_ascii=False`` is byte-identical under orjson, so an external
+    text hash is unchanged and the site has a compliant swap. The terminal
+    state must not license stdlib for it just because its consumer is external.
+    """
+    terminal_state = " ".join(get_rule("O001").terminal_state.split())
+    for needle in (
+        '`separators=(",", ":")`',
+        "`ensure_ascii=False`",
+        "integer above 64 bits",
+        "byte-identical to `orjson.dumps(...).decode()` and makes the swap",
+    ):
+        assert (
+            needle in terminal_state
+        ), f"O001's terminal_state does not state {needle!r}"
+
+
+def test_o001_exact_bytes_site_is_still_reported_and_suppressed_only_with_directive(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "m.py").write_text(
+        "import json\n\n\n"
+        "def published(fields):\n"
+        "    return json.dumps(fields)  # conformance: ignore[O001] rawDataTypeDefinition, "
+        "hashed as text at example-consumer/diff.py:22\n\n\n"
+        "def plain(fields):\n"
+        "    return json.dumps(fields)\n"
+    )
+    sarif_file = tmp_path / "out.sarif"
+    main(
+        [
+            "--root",
+            str(tmp_path),
+            str(tmp_path / "m.py"),
+            "--sarif-output",
+            str(sarif_file),
+        ]
+    )
+    report = SarifReport.model_validate(json.loads(sarif_file.read_text()))
+    results = report.runs[0].results
+    assert [r.rule_id for r in results] == ["O001", "O001"]
+    assert [derive_disposition(r) for r in results] == [
+        Disposition.SUPPRESSED,
+        Disposition.WARNING,
+    ]

@@ -273,6 +273,19 @@ For each bullet, incl. every nit:
   disagreement, and never argues a point more than once.
 - Genuinely ambiguous design fork with no clear winner **and no concrete `Path:`
   fix** → leave it, note it for human, keep going with the rest.
+- **Disproportionate or non-converging** — "apply the `Path:` fix" is the default,
+  not an obligation to build whatever it names. Do NOT implement a fix that
+  would (a) turn a syntactic/heuristic check into data-flow, name-binding, or
+  whole-program analysis, or add a new cache/clock/registry layer to close a
+  hypothetical input; (b) contradict the code's documented contract (e.g. a
+  detector declared "biased toward matching"); or (c) be the 2nd+ round on the
+  same finding class (same root question, narrower construct), or push the lines
+  added since round 1 past ~3× the PR's original diff. Instead, reply on the
+  thread **once** with the rationale and the proportionate alternative — pin the
+  current behaviour with a test and a docstring note, which you MAY apply — then
+  end the run at `NEEDS_HUMAN` (`stopped_reason: non-converging`) with the class
+  and your rationale in the Phase 4 summary. The reviewer's §2e″ applies the
+  same bound from its side; a human settles the fork.
 
 ### 3e. Commit, push, re-green CI (best-effort)
 `uv run pre-commit run --files <changed>` → relevant tests → commit specific
@@ -336,7 +349,7 @@ step 2 regardless, and do it before you exit.
    ci: <green|red|noted-preexisting>
    final_verdict: <READY_TO_MERGE|NEEDS_HUMAN|NEEDS_FIXES|...>
    merge_ready: <yes|no>
-   stopped_reason: <converged|round-cap|re-raised-after-dismiss|ci-stuck|fork|review-timeout>
+   stopped_reason: <converged|round-cap|re-raised-after-dismiss|non-converging|ci-stuck|fork|review-timeout>
    === END SUMMARY ===
    ```
 

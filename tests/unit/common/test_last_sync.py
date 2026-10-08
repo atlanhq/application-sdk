@@ -56,7 +56,8 @@ def test_resolve_empty_context_returns_empty_strings_and_current_epoch():
 def test_resolve_top_level_workflow_uses_workflow_id():
     """Top-level workflow → no parent → workflow_name == workflow_id.
 
-    Fixture uses a realistic AE Temporal workflow_id (a UUID, run-unique).
+    Fixture uses a realistic AE Temporal workflow_id (the workflow version
+    GUID, shared by every run of that version).
     """
     set_execution_context(
         ExecutionContext(
@@ -80,7 +81,7 @@ def test_resolve_child_workflow_prefers_parent_workflow_id():
     Fixture mirrors the BLDX-1229 scenario observed against a real BigQuery
     extract run on a dev tenant: the connector activity runs inside an
     AE-spawned child workflow whose Temporal id is ``<correlation>-extract``;
-    the parent is the AE workflow whose id is a fresh UUID per AE run.  The
+    the parent is the AE workflow whose id is its version GUID.  The
     v2 pattern (stamp ``input.workflow_id``) produced the child id on assets,
     so operators could not click back to the AE run from an asset.  The
     resolver instead reads ``parent_workflow_id`` and stamps the AE id.
@@ -101,6 +102,46 @@ def test_resolve_child_workflow_prefers_parent_workflow_id():
     details = resolve_last_sync_details()
     assert details.workflow_name == "4b9eade4-de53-4b69-9010-2446e0a8f85c"
     assert details.run == "d637c39c-81a0-48b5-bf36-312108e4615c"
+
+
+def test_resolve_ae_runs_share_workflow_name_and_differ_by_run():
+    """Two AE runs of one workflow version: same ``workflow_name``, distinct ``run``.
+
+    Pins the premise the module docstring rests on (FND-2974).  AE sets the
+    correlation id to the WorkflowRun GUID — the ``runId`` the UI's native
+    runs page links by — so ``run`` must be that id and never the Temporal
+    run id.  ``workflow_name`` is the version GUID and does not identify a
+    run on its own.
+    """
+    version_guid = "4b9eade4-de53-4b69-9010-2446e0a8f85c"
+    runs = [
+        (
+            "d637c39c-81a0-48b5-bf36-312108e4615c",
+            "019e2498-87d6-7d99-b345-e00a6dfa8fe2",
+        ),
+        (
+            "7a1f0e52-3c9b-4d8e-a6f4-0b2c9d1e8f37",
+            "019e24a1-0c11-7f3a-9d42-5be6a7c0d913",
+        ),
+    ]
+    resolved = []
+    for workflow_run_guid, temporal_run_id in runs:
+        set_execution_context(
+            ExecutionContext(
+                execution_type="workflow",
+                workflow_id=f"{workflow_run_guid}-extract",
+                workflow_run_id=temporal_run_id,
+                parent_workflow_id=version_guid,
+            )
+        )
+        set_correlation_context(CorrelationContext(correlation_id=workflow_run_guid))
+        details = resolve_last_sync_details()
+        assert details.run == workflow_run_guid
+        assert details.run != temporal_run_id
+        resolved.append(details)
+
+    assert {d.workflow_name for d in resolved} == {version_guid}
+    assert len({d.run for d in resolved}) == 2
 
 
 def test_resolve_explicit_overrides_beat_context():

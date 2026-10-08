@@ -8,7 +8,11 @@ earns mandatory status graduates into a category series or the P-series.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -19,16 +23,17 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="O001",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — JSONL is written and read with "
-            "`orjson.dumps` / `orjson.loads`. orjson is a core SDK dependency, so there is "
-            "no install cost to paying for the speed."
+            "atlan-metabase-app app/utils.py — `write_jsonl` and `read_jsonl` "
+            "serialise with `orjson.dumps` / `orjson.loads`, and the stdlib json "
+            "module is imported nowhere under app/. orjson is a core SDK dependency, "
+            "so there is no install cost to paying for the speed."
         ),
         scope=RuleScope.BOTH,
         name="OrjsonOverStdlibJson",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="canonical-dependency",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -52,20 +57,62 @@ RULES: tuple[RuleDefinition, ...] = (
             "APIs orjson does not provide), and custom ``JSONEncoder`` subclasses are\n"
             "out of scope.\n"
             "\n"
-            "NOT autofixable: ``orjson`` is not a drop-in replacement.  ``orjson.dumps``\n"
+            "Autofixable per-site, not mechanically: ``orjson`` is not a drop-in\n"
+            "replacement.  ``orjson.dumps``\n"
             "returns ``bytes`` (not ``str``), has no ``indent=`` / ``sort_keys=`` /\n"
             "``default=`` keyword surface (use ``option=orjson.OPT_INDENT_2 |\n"
             "orjson.OPT_SORT_KEYS`` and the ``default`` positional), and rejects some\n"
             "inputs stdlib accepts.  A blind ``json.``→``orjson.`` swap silently changes\n"
             "``str``→``bytes`` and breaks callers — each site needs human judgement.\n"
+            "The encoded bytes also change on any call that does not already pass\n"
+            '``separators=(",", ":")`` and ``ensure_ascii=False``: orjson is always\n'
+            "compact and always writes non-ASCII as UTF-8, with no option for\n"
+            "either.  The parsed value is identical, so tests that compare parsed\n"
+            "JSON pass; a consumer that hashes, commits or byte-compares the output\n"
+            "sees the difference.\n"
+            "\n"
+            "No orjson call reproduces stdlib's default bytes: there is no separators\n"
+            "option, no ``ensure_ascii`` option, ``orjson.dumps`` cannot serialize an\n"
+            "integer above 64 bits, and\n"
+            'rewriting orjson\'s text corrupts string values that contain ``", "``.\n'
+            "So a ``json.dumps`` whose output orjson cannot reproduce, and whose\n"
+            "string is stored as one attribute or field value and hashed or\n"
+            "byte-compared as text outside the app, stays on stdlib ``json`` behind\n"
+            "a directive naming that attribute and where it is compared; see\n"
+            "*Already correct when*.  A ``dumps`` that serializes a whole entity or\n"
+            "document does not qualify.\n"
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[O001] <reason>` IS the correct "
+            "end state for a `json.dumps` only when all three hold. (1) orjson cannot "
+            "reproduce the call's output: the call does not already pass both "
+            '`separators=(",", ":")` and `ensure_ascii=False`, or its input can hold an '
+            "integer above 64 bits. A call that passes both on 64-bit-safe input is "
+            "byte-identical to `orjson.dumps(...).decode()` and makes the swap. (2) The "
+            "encoded string is stored as one attribute or field value, and a consumer "
+            "outside the app hashes or byte-compares that value as text. (3) The reason "
+            "names the attribute key or field and the location (repo and file:line) "
+            "where that consumer hashes or compares it as text. A `dumps` that "
+            "serializes a whole entity or document does not qualify, even when the "
+            "document is later hashed: the publish app parses the document before it "
+            "diffs it, and there is no single attribute key to cite, so that site makes "
+            "the swap. A directive whose reason names no attribute key or no comparison "
+            "location, or names a consumer that only parses the JSON or sits inside the "
+            "app, is unremediated: make the swap."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O002",
         canonical_reference=(
-            "atlan-mysql-app app/mysql.py — assets are serialised through "
-            "`asset.to_nested_bytes()`, the v9 wire shape, rather than through `.dict()`."
+            "atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each "
+            "asset through `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than "
+            "through `.dict()`, then decodes that output to merge in the custom "
+            "attributes pyatlan_v9 does not model."
         ),
         scope=RuleScope.APP,
         name="LegacyAssetSerialization",
@@ -76,23 +123,31 @@ RULES: tuple[RuleDefinition, ...] = (
         orthogonal_gate="tests",
         since="0.8.0",
         rationale=(
-            "The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 "
-            "API — asset.to_nested_bytes() — which emits the nested-entity wire shape "
-            "the platform expects. Serialising an asset with the pydantic .dict() "
+            "The asset-mapper pattern serialises pyatlan assets to JSONL through the "
+            "SDK's entity_bytes seam, which emits the nested-entity wire shape the "
+            "platform expects. Serialising an asset with the pydantic .dict() "
             "method produces a flat dict that still needs hand-conversion and drifts "
             "from the SDK's recommended pipeline (BLDX-1492; docs/upgrade-guide-v3.md). "
             "WARN/recommendation because .dict() is name-anchored — it can also belong "
             "to a non-asset pydantic model — so the call needs a human glance."
         ),
         short_description=(
-            "Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API"
+            "Asset serialised with .dict() — serialize through the SDK's entity_bytes"
         ),
         full_description=(
             "Flags a ``.dict()`` method call in a module that imports pyatlan asset\n"
-            "models.  The asset-mapper pattern writes assets with the v9 serialisation\n"
-            "API — ``asset.to_nested_bytes()`` — not the pydantic ``.dict()`` form\n"
-            "(``docs/upgrade-guide-v3.md`` explicitly says 'use the v9 serialisation\n"
-            "API instead of .dict()').\n"
+            "models.  The asset-mapper pattern writes assets through\n"
+            "``application_sdk.common.asset_serialization.entity_bytes`` — not the\n"
+            "pydantic ``.dict()`` form (``docs/upgrade-guide-v3.md`` explicitly says\n"
+            "'use the v9 serialisation API instead of .dict()').  Do not swap in\n"
+            "``asset.to_nested_bytes()``: that bypasses the seam and trips P052.\n"
+            "\n"
+            "Legacy ``pyatlan.model.assets`` models: migrate the model to\n"
+            "``pyatlan_v9.model.assets`` first (O004), then switch serialization.\n"
+            "A v1 model handed to ``entity_bytes`` falls through to\n"
+            "``model_dump()``, whose snake_case field names are not the Atlas wire\n"
+            "shape, so the serialization switch alone emits malformed entities.\n"
+            "The finding message says which case applies.\n"
             "\n"
             "Coverage limits (biased to low false-positives at WARN): only ``.dict()``\n"
             "is matched (not ``.json()``, which is overwhelmingly ``response.json()``\n"
@@ -101,12 +156,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "false-positive — suppress with ``# conformance: ignore[O002] <reason>``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
     ),
     RuleDefinition(
         id="O003",
         canonical_reference=(
-            "atlan-openapi-app app/asset_mapper.py — `map_connection` is annotated `-> "
-            "Connection`, the pyatlan type it actually builds, so a wrong asset type is a "
+            "atlan-metabase-app app/asset_mapper.py — `map_collection` is annotated `-> "
+            "MetabaseCollection`, the pyatlan_v9 type it constructs and returns "
+            "(`map_dashboard` and `map_bi_process` likewise), so a wrong asset type is a "
             "type error rather than a runtime surprise in the payload."
         ),
         scope=RuleScope.APP,
@@ -122,7 +182,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "constructs a pyatlan asset and returns it, so the return annotation "
             "documents which asset it produces and lets pyright check the call site. "
             "A mapper that builds an asset but declares no return type loses that "
-            "guarantee (BLDX-1492; reference app atlan-openapi-app). WARN/recommendation "
+            "guarantee (BLDX-1492; reference app atlan-metabase-app). WARN/recommendation "
             "because adding the annotation is a safe, mechanical nudge."
         ),
         short_description=(
@@ -134,7 +194,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "imported from ``pyatlan_v9.model.assets`` / ``pyatlan.model.assets``) and\n"
             "**returns that asset**, but carries no ``-> <Asset>`` return annotation.\n"
             "The asset-mapper pattern is typed end-to-end — each ``map_<entity>``\n"
-            "function declares the pyatlan asset it produces (see ``atlan-openapi-app``).\n"
+            "function declares the pyatlan asset it produces (see ``atlan-metabase-app``).\n"
             "\n"
             "Keyed on actually returning the constructed asset (``return Table(...)`` or\n"
             "``asset = Table(...); ... return asset``), not just a ``map_`` name — so a\n"
@@ -145,13 +205,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "intentional.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
     ),
     RuleDefinition(
         id="O004",
         canonical_reference=(
             "atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, "
             "Database, Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets "
-            "path appears in none of the four reference apps."
+            "path appears nowhere under the three reference apps' app/ directories."
         ),
         scope=RuleScope.APP,
         name="LegacyPyatlanAssetImport",
@@ -168,7 +232,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "still on the built-in AtlasTransformer (which B001 steers off). pyatlan_v9 "
             "ships inside the existing pyatlan>=9 dependency, so the switch adds nothing "
             "to resolve. A below-the-bar recommendation (O-series, WARN): the v9 models "
-            "differ in attributes and serialization (to_nested_bytes vs .dict()), so "
+            "differ in attributes and serialization (entity_bytes vs .dict()), so "
             "each site needs human judgement — never a blind name swap."
         ),
         short_description=(
@@ -191,13 +255,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "no v9 equivalent (e.g. ``from pyatlan.model.enums import\n"
             "AtlanConnectorType``) are out of scope.\n"
             "\n"
-            "NOT autofixable: the v9 models are not a drop-in rename — attribute\n"
-            "names and the serialization API differ (use ``asset.to_nested_bytes()``\n"
-            "rather than ``.dict()``), so each construction site needs review.\n"
+            "Not a mechanical rewrite: the v9 models are not a drop-in rename —\n"
+            "attribute\n"
+            "names and the serialization API differ (serialize through\n"
+            "``entity_bytes`` rather than ``.dict()``), so each construction site\n"
+            "needs review.\n"
             "Suppress with ``# conformance: ignore[O004] <reason>`` when a connector\n"
             "is intentionally pinned to the legacy ``AtlasTransformer`` surface.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
     ),
     RuleDefinition(
         id="O006",
@@ -255,7 +325,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "hand-rolled wrapper was calling anything the SDK had a fleet-wide "
             "signal for at the time; this rule is that signal going forward.\n"
             "\n"
-            "NOT autofixable: ``SpillableDict``'s key type is restricted to "
+            "Not a mechanical rewrite: ``SpillableDict``'s key type is restricted to "
             "``str | int | float | bool | bytes`` and it has no equivalent to a "
             "custom ``rocksdict.Options`` tuning surface, so each call site needs "
             "review before migrating.  Suppress with ``# conformance: "
@@ -265,12 +335,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "does not provide).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
     RuleDefinition(
         id="O005",
         canonical_reference=(
-            "atlan-hello-world-app app/connector.py — the App declares `name = "
-            '"hello-world"` and atlan.yaml carries the same literal. The name is '
+            "atlan-metabase-app app/connector.py — `MetabaseApp` declares `name = "
+            '"metabase"` and atlan.yaml carries `name: metabase`; even the upload '
+            "prefix built in `extract_metadata` spells the name out. The name is "
             "resolved once, at declaration; a `{app_name}` left in a plain string is a "
             "substitution nothing will ever perform."
         ),
@@ -279,7 +354,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="dag-write-path",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.18.0",
         rationale=(
@@ -344,12 +419,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "``resolve_manifest_tokens``) lands in the SDK release that ships\n"
             "FND-195 and is the canonical target once available.\n"
             "\n"
-            "NOT autofixable: the correct fix depends on where ``app_name`` is\n"
+            "Not a mechanical rewrite: the correct fix depends on where\n"
+            "``app_name`` is\n"
             "actually available in scope — sometimes an f-string is right, sometimes\n"
             "the value needs threading in from a caller first. Suppress with\n"
             "``# conformance: ignore[O005] <reason>`` for a template resolved by a\n"
             "caller in a different file than the one being scanned.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/optimizations.md#o005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/optimizations.prose.md",
+        ),
     ),
 )

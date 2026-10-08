@@ -35,6 +35,8 @@ class AppInputContract(ExtractionInput):
     """Verbosity for the extraction run."""
     asset_types: Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)
     """Which asset kinds to ingest; leave as-is to ingest all three."""
+    tag_keys: Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)
+    """Source tag keys to sync; leave empty to sync none."""
     lineage_depth: int = 3
     """How many hops of upstream lineage to resolve (required when lineage is on)."""
     table_prefix: str = ""
@@ -51,6 +53,7 @@ class AppInputContract(ExtractionInput):
     )
     """Sunset: no longer consumed by the extractor."""
     schemas: Annotated[dict[str, str], MaxItems(1000)] = Field(default_factory=dict)
+    preflight_check: str = ""
 
     @field_validator("schemas", mode="before")
     @classmethod

@@ -36,6 +36,7 @@ from application_sdk.app.task import task
 from application_sdk.common.sql_filters import (
     normalize_filters,
     safe_substitute_placeholders,
+    strip_sql_block_comments,
 )
 from application_sdk.contracts.storage import UploadInput
 from application_sdk.contracts.types import StorageTier
@@ -253,7 +254,7 @@ class SqlMetadataExtractor(BaseMetadataExtractor):
                 else self.extract_temp_table_regex_table_sql
             )
             if fragment:
-                temp_table_sql = fragment.replace(
+                temp_table_sql = strip_sql_block_comments(fragment).replace(
                     "{exclude_table_regex}", input.temp_table_regex
                 )
 

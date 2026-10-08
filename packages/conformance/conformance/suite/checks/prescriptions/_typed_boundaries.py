@@ -20,9 +20,12 @@ FP-avoidance: a class name that is *not* in the scanned tree and is *not* a
 clearly-untyped annotation is assumed OK (third-party / generated code we cannot
 follow). Only names resolvable within the scanned universe are flagged.
 
-P013 also covers the **implicit ``run()`` entrypoint**: a method named ``run``
-on a class whose base chain transitively reaches ``App`` is treated as an
-implicit entrypoint and checked under P013.
+P013 also covers the **implicit ``run()`` entrypoint**: an ``async def run``
+on a class whose base chain, across files, reaches ``App`` or an SDK App
+template (``SqlApp``, ``BaseMetadataExtractor``, ...) imported from
+``application_sdk`` is treated as an implicit entrypoint and checked under P013.
+Detection is ``_boundary_methods.classify_boundary_method``, shared with the
+K-, B- and F-series contract scans.
 
 Decorator provenance
 --------------------
@@ -56,13 +59,9 @@ from typing import Iterator
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
+from ._boundary_methods import BoundaryScope, classify_boundary_method
 from ._contract_common import _terminal_name, _unwrap_annotated, _unwrap_optional_node
-from ._decorator_provenance import (
-    ImportProvenance,
-    collect_import_provenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
-)
+from ._decorator_provenance import ImportProvenance, collect_import_provenance
 from ._error_code_prefix import ClassRecord, collect_import_aliases, resolve_ancestor
 
 # ── Constants ──────────────────────────────────────────────────────────────────
@@ -247,6 +246,7 @@ def _check_one_annotation(
     sdk_contract_module_aliases: frozenset[str],
     aliases: dict[str, str],
     cache: dict[str, bool | None],
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> Finding | None:
     """Return a finding for *annotation* when it is not a valid contract, else ``None``."""
     # ── Case 1: missing annotation ────────────────────────────────────────────
@@ -330,6 +330,7 @@ def _check_one_annotation(
         set(),
         known_sdk_contracts,
         _KNOWN_SDK_CONTRACT_ANCESTORS,
+        by_name_all,
     )
     if result is False:
         # Found in scanned universe but does not reach Input/Output.
@@ -384,6 +385,10 @@ def check_p013_p014(
     input_cache: dict[str, bool | None] = {}
     output_cache: dict[str, bool | None] = {}
     app_cache: dict[str, bool | None] = {}
+    by_name_all: dict[str, list[ClassRecord]] = {}
+    for records in file_records.values():
+        for rec in records:
+            by_name_all.setdefault(rec.name, []).append(rec)
     sdk_contract_names = frozenset(
         name
         for tree in file_trees.values()
@@ -413,50 +418,23 @@ def check_p013_p014(
         in_cache = {} if shadows else input_cache
         out_cache = {} if shadows else output_cache
         this_app_cache = {} if shadows else app_cache
+        scope = BoundaryScope.for_module(
+            tree,
+            prov=prov,
+            aliases=aliases,
+            by_name=registry,
+            app_cache=this_app_cache,
+        )
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
 
             for func in _iter_class_body_methods(class_node):
-                # ── Determine which rule applies ──────────────────────────────
-                rule_id: str | None = None
-
-                if any(
-                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
-                ):
-                    rule_id = "P013"
-
-                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
-                    rule_id = "P014"
-
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    # Implicit entrypoint: async run() on an App subclass.
-                    # Only async — App.run() is defined as async-only; a sync
-                    # def run() would be rejected by the runtime before P013
-                    # has any value, so we intentionally skip it here.
-                    for base in class_node.bases:
-                        base_name: str | None = None
-                        if isinstance(base, ast.Name):
-                            base_name = base.id
-                        elif isinstance(base, ast.Attribute):
-                            base_name = base.attr
-                        if base_name is None:
-                            continue
-                        # De-alias before comparing: handles `App as BaseApp`.
-                        base_name = aliases.get(base_name, base_name)
-                        if (
-                            base_name == "App"
-                            or resolve_ancestor(
-                                base_name, "App", registry, this_app_cache, set()
-                            )
-                            is True
-                        ):
-                            rule_id = "P013"
-                            break
-
-                if rule_id is None:
+                boundary = classify_boundary_method(class_node, func, scope)
+                if boundary is None:
                     continue
+                rule_id = "P014" if boundary.kind == "task" else "P013"
 
                 # ── Get the non-self input parameter ─────────────────────────
                 non_self = _get_non_self_params(func)
@@ -480,6 +458,7 @@ def check_p013_p014(
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
                     cache=in_cache,
+                    by_name_all=by_name_all,
                 )
                 if finding is not None:
                     findings.append(finding)
@@ -499,6 +478,7 @@ def check_p013_p014(
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
                     cache=out_cache,
+                    by_name_all=by_name_all,
                 )
                 if finding is not None:
                     findings.append(finding)

@@ -7,9 +7,12 @@ list, and None. SQL injection is guarded by rejecting single quotes.
 from typing import Annotated
 
 import pytest
-from pydantic import Field
+from pydantic import Field, ValidationError
 
 from application_sdk.contracts.types import MaxItems
+from application_sdk.templates.contracts.incremental_sql import (
+    IncrementalExtractionInput,
+)
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
@@ -401,3 +404,130 @@ class TestLegacyQuotedCsvNormalisation:
         result = ExtractionTaskInput.model_validate(payload)
         assert result.exclude_filter == "temp_a|temp_b"
         assert isinstance(result.exclude_filter, str)
+
+
+# The generated connector contract, verbatim (fields only) from
+# atlanhq/atlan-mysql-app ``app/generated/_input.py`` (origin/main): the
+# contract toolkit redeclares ``exclude_table_regex`` as a plain ``str`` on every
+# SQL app's ``AppInputContract(ExtractionInput)``.
+class _GeneratedAppInputContract(ExtractionInput):
+    exclude_table_regex: str = ""
+    """Regular expression to exclude temporary tables and views."""
+    preflight_check: str = ""
+    output_dir: str = ""
+    checkpoint_dir: str = ""
+    load_to_atlan: bool = True
+    publish_dry_run: bool = False
+
+
+# The mysql form's placeholder for "Exclude regex for tables & views".
+_MYSQL_FORM_PLACEHOLDER = ".*_TMP|.*_TEMP|TMP:*|TEMP:*"
+
+_INPUT_TYPES = [ExtractionInput, _GeneratedAppInputContract]
+
+
+class TestExcludeTableRegexRouting:
+    """The form's ``exclude_table_regex`` reaches ``temp_table_regex`` (FND-2733).
+
+    The toolkit emits the form key ``exclude-table-regex`` as the workflow arg
+    ``exclude_table_regex``; the SDK only ever renders ``temp_table_regex``
+    into the table/column SQL. Before the fix the key was dropped as unknown
+    on ``ExtractionInput`` and ignored on the generated subclass.
+    """
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_flat_arg_is_routed(self, input_type: type[ExtractionInput]) -> None:
+        result = input_type.model_validate({"exclude_table_regex": "^tmp_"})
+        assert result.temp_table_regex == "^tmp_"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize("key", ["exclude-table-regex", "exclude_table_regex"])
+    def test_nested_metadata_is_routed(
+        self, input_type: type[ExtractionInput], key: str
+    ) -> None:
+        result = input_type.model_validate({"metadata": {key: "^tmp_"}})
+        assert result.temp_table_regex == "^tmp_"
+
+    def test_top_level_kebab_key_is_routed(self) -> None:
+        result = ExtractionInput.model_validate({"exclude-table-regex": "^tmp_"})
+        assert result.temp_table_regex == "^tmp_"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_explicit_temp_table_regex_wins(
+        self, input_type: type[ExtractionInput]
+    ) -> None:
+        result = input_type.model_validate(
+            {"temp_table_regex": "^explicit$", "exclude_table_regex": "^form$"}
+        )
+        assert result.temp_table_regex == "^explicit$"
+
+    def test_explicit_nested_temp_table_regex_wins(self) -> None:
+        result = ExtractionInput.model_validate(
+            {
+                "metadata": {
+                    "temp-table-regex": "^explicit$",
+                    "exclude-table-regex": "^form$",
+                }
+            }
+        )
+        assert result.temp_table_regex == "^explicit$"
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize("value", ["", None])
+    def test_empty_or_null_leaves_filter_off(
+        self, input_type: type[ExtractionInput], value: str | None
+    ) -> None:
+        result = input_type.model_validate({"exclude_table_regex": value})
+        assert result.temp_table_regex == ""
+        assert result.exclude_table_regex == ""
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    def test_mysql_form_placeholder_accepted(
+        self, input_type: type[ExtractionInput]
+    ) -> None:
+        result = input_type.model_validate(
+            {"exclude_table_regex": _MYSQL_FORM_PLACEHOLDER}
+        )
+        assert result.temp_table_regex == _MYSQL_FORM_PLACEHOLDER
+
+    @pytest.mark.parametrize("input_type", _INPUT_TYPES)
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"exclude_table_regex": "x' OR '1'='1"},
+            {"metadata": {"exclude-table-regex": "x' OR '1'='1"}},
+            {"exclude_table_regex": "tmp_--"},
+            {"exclude_table_regex": "tmp_*/ OR 1=1 /*"},
+        ],
+    )
+    def test_injection_payload_rejected(
+        self, input_type: type[ExtractionInput], payload: dict
+    ) -> None:
+        with pytest.raises(ValidationError):
+            input_type.model_validate(payload)
+
+    def test_injection_in_ignored_form_value_still_rejected(self) -> None:
+        # An explicit temp_table_regex wins, but the form value is still a
+        # declared field with the same deny-list, so a subclass that reads it
+        # directly never sees an unsafe string.
+        with pytest.raises(ValidationError):
+            _GeneratedAppInputContract.model_validate(
+                {"temp_table_regex": "^ok$", "exclude_table_regex": "x' OR '1'='1"}
+            )
+
+    def test_legacy_quoted_csv_is_normalised(self) -> None:
+        result = ExtractionInput.model_validate(
+            {"exclude_table_regex": '"TMP_A","TMP_B"'}
+        )
+        assert result.temp_table_regex == "TMP_A|TMP_B"
+
+    def test_incremental_input_inherits_routing(self) -> None:
+        result = IncrementalExtractionInput.model_validate(
+            {"exclude_table_regex": "^tmp_"}
+        )
+        assert result.temp_table_regex == "^tmp_"
+
+    def test_declared_so_not_an_unknown_key(self) -> None:
+        # Declared on the SDK contract, so the unknown-key warning no longer
+        # names it and schema consumers see it as SDK-provided.
+        assert "exclude_table_regex" in ExtractionInput.model_fields

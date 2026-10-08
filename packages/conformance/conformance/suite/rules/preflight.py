@@ -26,7 +26,11 @@ retired and never reused. From here on the rule-id stability policy in
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -43,7 +47,7 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
         id="F001",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — the preflight logic is the Handler's own "
-            "`preflight_check` method. No @task in the four reference apps registers the "
+            "`preflight_check` method. No @task in the three reference apps registers the "
             "activity name 'preflight'; that name belongs to the SDK gate, and registering it "
             "shadows the gate itself."
         ),
@@ -82,6 +86,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``@task(name=<expr>)`` is not statically resolvable and is not flagged."
         ),
         help_uri=f"{_HELP_BASE}#f001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F002",
@@ -120,14 +128,20 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``Handler.preflight_check`` implementation the gate calls."
         ),
         help_uri=f"{_HELP_BASE}#f002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F003",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — a failing check is "
-            "`PreflightCheck(passed=False, error=AuthError(message=..., suggested_action=..., "
-            "cause=e))`. A `passed=False` with no typed error gives the customer a red row "
-            "and no reason for it."
+            "atlan-mysql-app app/handler.py — the failed auth probe in "
+            '`_run_preflight_probes` is `PreflightCheck(name="auth", passed=False, '
+            "error=PreflightAuthError(cause=e).to_failure_details())`, where "
+            "PreflightAuthError (app/failures.py) is an AuthError subclass that declares "
+            "message and suggested_action as class defaults. A `passed=False` with no typed "
+            "error gives the customer a red row and no reason for it."
         ),
         scope=RuleScope.APP,
         name="UntypedPreflightCheckFailure",
@@ -161,14 +175,20 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "A locally-defined non-SDK class named ``PreflightCheck`` is not flagged."
         ),
         help_uri=f"{_HELP_BASE}#f003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F004",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — `preflight_check` reads only fields the "
-            "entrypoint's Input contract declares. A metadata key the contract does not carry "
-            "is one the orchestrator has no way to send, so the check silently evaluates an "
-            "absent value."
+            "atlan-openapi-app app/handler.py — `preflight_check` reads no `input.metadata` "
+            "key at all: its configuration comes from `input.connection_config` "
+            '(`cfg.get("import_type")`, `cfg.get("spec_url")`), so there is no metadata '
+            "read for the gate path to drop. A metadata key the entrypoint's Input contract "
+            "does not carry is one the orchestrator has no way to send, so the check silently "
+            "evaluates an absent value."
         ),
         scope=RuleScope.APP,
         name="PreflightMetadataContractParity",
@@ -211,6 +231,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             '``ConfigDict(extra="allow")`` or ``{"extra": "allow"}``.'
         ),
         help_uri=f"{_HELP_BASE}#f004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F005",
@@ -256,7 +280,21 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``logging``). Supported class handlers, module callbacks, and directly "
             "resolvable helpers are scanned; dynamic dispatch requires behavioral evidence."
         ),
+        rule_interactions=(
+            "Meets E004 on a broad catch inside the gate's reach. A best-effort "
+            "cleanup helper called from preflight_check (close a client, release a "
+            "session) that catches Exception cannot log at WARNING (this rule), and "
+            "DEBUG does not clear E004 even through a redaction helper. Use "
+            "logger.error (or logger.critical) with the exception routed through a redaction helper "
+            "(safe_traceback, sanitize_cause_repr), or return the failure as typed "
+            "data. A probe arm that already returns a typed PreflightCheck clears "
+            "E004 with no log at all (FND-2628). Found in FND-2569."
+        ),
         help_uri=f"{_HELP_BASE}#f005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
 )
 
@@ -281,6 +319,10 @@ _CONTRACT_RULES = (
         full_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         rationale="Customer impact: Missing types and legacy output dictionaries hide contract drift from both UI and workflow consumers.",
         help_uri=f"{_HELP_BASE}#f006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F007",
@@ -299,9 +341,27 @@ _CONTRACT_RULES = (
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
-        full_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
+        full_description=(
+            "Every error that reaches a failed preflight check carries a nonblank "
+            "``message`` and ``suggested_action``.  The SDK's generic leaves (for "
+            "example ``RateLimitedError``, ``SourceUnavailableError``, "
+            "``DependencyUnavailableError``, ``InternalError``) ship no default "
+            "action, so the app supplies it — as a class default on its own "
+            "subclass or at the construction site.\n"
+            "\n"
+            "Write the action for the error's ``audience`` (ADR 0013): customer-facing "
+            "text the customer can act on for ``USER``; an engineer-facing remediation "
+            "for the connector owners for ``APP_OWNER``; an operator hint for platform "
+            "on-call for ``PLATFORM``.  The finding message names the resolved class "
+            "and its audience.  Some surfaces forward the action without filtering by "
+            "audience, so keep internal file paths and exception text out of it."
+        ),
         rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
         help_uri=f"{_HELP_BASE}#f007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F008",
@@ -322,14 +382,19 @@ _CONTRACT_RULES = (
         full_description="Return expected typed preflight failures rather than letting them escape.",
         rationale="The target origin-based gate applies hard mode to handler raises; a raised transient is no longer a fail-open request.",
         help_uri=f"{_HELP_BASE}#f008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F009",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — the verdict is derived from the same check "
-            "list that is returned: any failed name in `_MANDATORY_CHECKS` gives NOT_READY, "
-            "otherwise the advisory rows stay visible without flipping the status, so status "
-            "and rows cannot contradict each other."
+            "atlan-mysql-app app/handler.py — `_run_preflight_probes` writes each verdict "
+            "next to the rows that justify it: NOT_READY carries the failed mandatory `auth` "
+            "row (`checks=[auth_check]`), and READY carries the passed `auth` row plus the "
+            "advisory connectivity row, which may fail without flipping the status. Status "
+            "and rows are spelled together, so they cannot contradict each other."
         ),
         name="PreflightVerdictAggregation",
         scope=RuleScope.APP,
@@ -342,14 +407,20 @@ _CONTRACT_RULES = (
         full_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         rationale="Advisory failures must not become mandatory blocks and a successful status must not hide failed checks.",
         help_uri=f"{_HELP_BASE}#f009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F010",
         canonical_reference=(
-            "atlan-mysql-app tests/unit/test_handler.py — "
-            "`test_gate_path_input_gives_the_same_verdict` builds the PreflightInput the gate "
-            "builds (credentials, credentials_by_name, entrypoint, timeout_seconds) and "
-            "asserts the handler reaches the same verdict as the setup-form path."
+            "atlan-metabase-app app/connector.py — the `extract_metadata` @entrypoint "
+            "constructs no PreflightInput of its own and leaves preflight to the SDK gate, so "
+            "on the workflow path the gate's input (the selected entrypoint plus resolved "
+            "credentials) is the only PreflightInput the handler receives. None of the three "
+            "reference apps builds a PreflightInput "
+            "inside an @entrypoint."
         ),
         name="PreflightGateInputParity",
         scope=RuleScope.APP,
@@ -362,6 +433,10 @@ _CONTRACT_RULES = (
         full_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         rationale="The injected gate runs before workflow-body normalization, so a UI check can succeed while the gate sees different inputs.",
         help_uri=f"{_HELP_BASE}#f010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F011",
@@ -381,15 +456,36 @@ _CONTRACT_RULES = (
         short_description="Keep source probes awaitable and bounded across every connection phase.",
         full_description="Keep source probes awaitable and bounded across every connection phase.",
         rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
+        rule_interactions=(
+            "Applied together with P031. P031 moves asyncio.to_thread / "
+            "run_in_executor(None, ...) onto the SDK's run_in_thread; on a preflight "
+            "path that is the module-level "
+            "application_sdk.execution.heartbeat.run_in_thread, because Handler has "
+            "no run_in_thread and App.run_in_thread raises outside a @task. "
+            "run_in_thread "
+            "carries no deadline of its own, so the swapped call is still an "
+            "executor wait in F011's view. On a preflight path, add the deadline "
+            "when moving: wrap the run_in_thread await in asyncio.wait_for(..., "
+            "timeout=...) or async with asyncio.timeout(...) sized from the "
+            "remaining preflight budget. Swapping without the deadline leaves F011 "
+            "firing on the new line."
+        ),
         help_uri=f"{_HELP_BASE}#f011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F012",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — `_probe_timeout` returns `max(1.0, min(30.0, "
-            "budget * 0.8))`, so the probe's own timeout stays strictly inside the enforced "
-            "gate budget; the module comment explains that a floor above the budget makes the "
-            "deadline decorative."
+            "atlan-mysql-app app/handler.py — `preflight_check` bounds the probes with "
+            "`asyncio.wait_for(self._run_preflight_probes(input, deadline), "
+            "timeout=deadline)`, where `deadline = _probe_deadline(input.timeout_seconds)` is "
+            "80% of the budget the gate hands in (no deadline when the gate supplies none). "
+            "No floor or margin is added on top of "
+            "`input.timeout_seconds`, so the probe gives up before the gate cancels it; that "
+            "timeout argument is the site F012 grades."
         ),
         name="PreflightBudgetOverride",
         scope=RuleScope.APP,
@@ -402,13 +498,18 @@ _CONTRACT_RULES = (
         full_description="Keep probe and retry deadlines inside the remaining gate budget.",
         rationale="Floors, extra margins and equal nested timeout boundaries turn healthy probes into timeout races.",
         help_uri=f"{_HELP_BASE}#f012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F013",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — `preflight_check` closes its SQLClient in a "
-            "`finally: await client.close()`, so cleanup is awaited, bounded and runs on "
-            "every exit path, including the typed-failure early return."
+            "atlan-mysql-app app/handler.py — `_run_preflight_probes` (which "
+            "`preflight_check` runs under `asyncio.wait_for`) closes its SQLClient in a "
+            "`finally: await client.close()`, so cleanup is awaited and runs on every exit "
+            "path, including the typed-failure early return."
         ),
         name="PreflightCancellationCleanup",
         scope=RuleScope.APP,
@@ -421,6 +522,10 @@ _CONTRACT_RULES = (
         full_description="Release owned preflight resources without blocking the event loop.",
         rationale="Cancellation of an await does not terminate a driver thread or release its resources.",
         help_uri=f"{_HELP_BASE}#f013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F014",
@@ -441,6 +546,10 @@ _CONTRACT_RULES = (
         full_description="Keep raw exception and credential values out of preflight outputs and logs.",
         rationale="Typed wire fields and traceback locals are independent channels through which secrets can escape.",
         help_uri=f"{_HELP_BASE}#f014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F015",
@@ -465,63 +574,65 @@ _CONTRACT_RULES = (
         full_description="Migrate the inert mode override and the renamed gate-classification helpers.",
         rationale="SDK PR #3685 renamed the old gate contract. The nine affected symbols are served as deprecated aliases until v3.40.0 and ATLAN_PREFLIGHT_GATE_MODE no longer does anything, so a hit is a migration window rather than proof of current incompatibility — WARN, not BLOCK.",
         help_uri=f"{_HELP_BASE}#f015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F016",
         canonical_reference=(
-            "atlan-openapi-app tests/unit/test_handler.py — drives the real "
-            "`OpenAPIConnectorHandler.preflight_check` per verdict: READY on a reachable URL, "
-            "NOT_READY with typed rows on 403, connect error, redirect and missing spec_url, "
-            "and no signature leak on a presigned URL. Registering those under "
-            "`pytest.mark.preflight_conformance` is what turns them into F016 coverage."
+            "atlan-openapi-app tests/unit/test_preflight_conformance.py — each required "
+            "scenario (healthy, mandatory_failure, recoverable_transient, hung_probe, "
+            "cancellation_cleanup and the rest) is a test that drives the real "
+            "`OpenAPIConnectorHandler.preflight_check` and is registered with "
+            '`@pytest.mark.preflight_conformance(rule="F016", scenario=...)`. The marker, '
+            "not the file's presence, is what counts as a defined scenario. "
+            "atlan-metabase-app registers the same matrix once per `@entrypoint` "
+            "through a module-level `entrypoint_matrix(scenario)` parametrize helper."
         ),
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        full_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.",
+        short_description="Define every required real-handler preflight scenario for each entrypoint.",
+        full_description=(
+            "Every scenario in the F016 matrix must be defined, for each "
+            "``@entrypoint`` the app declares, as a pytest-collected test under "
+            "``tests/unit/`` (the tier the test gate always runs) marked "
+            '``preflight_conformance(rule="F016", scenario=..., entrypoint=...)`` '
+            "that calls ``assert_preflight_result`` from "
+            "``conformance.preflight_testing`` (and ``assert_probe_lifetime`` for "
+            "hung_probe, cancellation_cleanup and budget_retry) as a statement of "
+            "the test body or of a top-level loop over a non-empty literal. The "
+            "reader accepts the shapes the reference apps use and reports anything "
+            "else rather than modelling it. A registration on a test that does not "
+            "run (skip, a true skipif or xfail condition, no runnable parametrized "
+            "case), a declared-unsupported one, a case whose entrypoint argument "
+            "differs from its marker, and one outside the accepted shapes do not "
+            "define the scenario. This rule checks the matrix is defined; whether the tests "
+            "pass is the test gate's measure, and conformance never executes them. "
+            "WARN while the fleet registers its scenarios; promoted to BLOCK once "
+            "it has."
+        ),
+        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime, so each scenario must exist as a test the test gate runs. A missing scenario is a behaviour nothing verifies.",
         help_uri=f"{_HELP_BASE}#f016",
-    ),
-    RuleDefinition(
-        id="F017",
-        name="PreflightWorkflowEnforcement",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        short_description="Verify gate enforcement through real Temporal workflow histories.",
-        full_description="Verify gate enforcement through real Temporal workflow histories.",
-        rationale="Customer impact: Only execution history can prove extraction was never scheduled after a hard gate failure, including activity death.",
-        help_uri=f"{_HELP_BASE}#f017",
-    ),
-    RuleDefinition(
-        id="F018",
-        name="PreflightExitEvidence",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        short_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        full_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        rationale="Customer impact: Activity and workflow failures must preserve cause and status, and logging must not silently discard the evidence.",
-        help_uri=f"{_HELP_BASE}#f018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F019",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — `preflight_check` is an async method on the "
-            "Handler subclass, calls helpers defined in the same module, and builds "
-            "PreflightCheck rows with literal names: the shape static analysis resolves "
-            "fully, so nothing on it is reported as unresolved."
+            "atlan-mysql-app app/handler.py — every PreflightOutput in "
+            "`_run_preflight_probes` spells its checks list inline, from PreflightCheck "
+            "constructions or a same-class helper (`_check_connectivity`), never an "
+            "accumulator, so static analysis resolves every row and its mandatory/advisory "
+            "role. The comment above the NOT_READY return cites F019 as the reason."
         ),
         name="PreflightAnalysisCoverage",
         scope=RuleScope.APP,
@@ -531,16 +642,36 @@ _CONTRACT_RULES = (
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
-        full_description="Report unresolved preflight dispatch and contracts instead of a clean result.",
+        full_description=(
+            "Report unresolved preflight dispatch and contracts instead of a clean "
+            "result. Two kinds of gap are reported, and only one of them is "
+            "clearable by executing tests. A *value-level* gap — a computed "
+            "aggregation or an unresolvable row inside one, an expanded failure "
+            "constructor, an unresolved error expression, a dynamic ``passed`` — "
+            "names a property every F016 scenario asserts through "
+            "``assert_preflight_result``, so it is dropped once the F016 matrix is "
+            "fully defined; the test gate proves those assertions hold. A "
+            "*structural* gap — an unparsed "
+            "file, a preflight_check the analysis never resolved, a dynamically "
+            "bound callback, an input contract class that is not in the registry — "
+            "stands regardless of how many scenarios are defined, because a test "
+            "does not tell the analysis what it failed to read; clear those by making "
+            "the code statically resolvable."
+        ),
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
         help_uri=f"{_HELP_BASE}#f019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F020",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — its inline directives cite live ids "
-            "(E004) with a named owner and a review date. A directive that cited P034 "
-            "now cites F003 the same way; the id is the only part that changes."
+            "atlan-metabase-app app/qualified_names.py — its inline conformance "
+            "directives name a live rule id (P028) and carry a written "
+            "justification. A directive that cited P034 now cites F003 the same way, "
+            "justification kept; the id is the only part that changes."
         ),
         name="RetiredPreflightSuppression",
         scope=RuleScope.APP,
@@ -549,14 +680,16 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.32.0",
-        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047).",
+        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047, F017, F018).",
         full_description=(
             "The preflight rules moved from the P-series to the F-series: P032-P035 "
-            "became F001-F004 and P047 became F005. The suppression parser matches "
+            "became F001-F004 and P047 became F005. F017 and F018 were retired "
+            "with no replacement. The suppression parser matches "
             "ids as plain strings, so a ``# conformance: ignore[...]`` directive that "
             "still cites a retired id suppresses nothing and the renamed rule fires "
             "with no hint why. Cite the new id named in the message, keeping the "
-            "justification, or delete the directive if the finding it covered is gone."
+            "justification, or delete the directive if the finding it covered is "
+            "gone or its rule was retired."
         ),
         rationale=(
             "Customer impact: a reviewed, justified carve-out silently turns into an "
@@ -564,6 +697,10 @@ _CONTRACT_RULES = (
             "no signal that the stale directive is the cause."
         ),
         help_uri=f"{_HELP_BASE}#f020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
 )
 

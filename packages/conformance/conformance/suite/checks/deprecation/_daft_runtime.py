@@ -14,13 +14,25 @@ a repo that never touches the SDK is not consuming SDK reader frames):
 
 * ``frame.count_rows()`` — daft-only; pandas: ``len(frame)``.
 * ``frame.to_pylist()`` — daft-only on reader frames; pandas:
-  ``frame.to_dict("records")``.  Exempt when the receiver is demonstrably a
-  pyarrow Table (a name bound from ``pa.Table.from_*`` / ``pa.table(...)`` /
-  ``*.to_arrow_table()`` / ``*.combine_chunks()``, or such a call chained
-  directly) — ``pyarrow.Table.to_pylist()`` is a real API the SDK itself uses.
+  ``frame.to_dict("records")``.  Exempt when the receiver provably comes from
+  pyarrow — ``pyarrow.Table.to_pylist()`` is a real API the SDK itself uses.
+  A receiver comes from pyarrow when it is a call to a pyarrow import alias
+  (``pa.table(...)``, ``pq.ParquetFile(...)``) or to a producer method
+  (``from_pandas``, ``read_table``, ``to_arrow_table``, ``to_arrow`` …); a
+  method chain on such a value (``table.column("a")``,
+  ``file.iter_batches()``), stopping at ``to_pandas`` / ``to_polars``; a name
+  whose binding in effect at the use is one of these; or a parameter
+  annotated with a pyarrow type (``pa.Table``, ``pa.Table | None``,
+  ``Optional[pa.Table]``).  Imports are bindings like any other, scoped to
+  where they sit: an ``import pyarrow as frame`` inside one function does not
+  make a ``frame`` elsewhere pyarrow, and a local binding shadows a pyarrow
+  import of the same name.  Collection elements count too: iterating
+  ``[table.column("x") for ...]`` yields pyarrow columns.  Anything unresolved
+  still fires.
 * ``frame.names`` — daft-only; pandas: ``frame.columns``.  Only
-  simple-variable receivers are matched: ``df.schema.names`` (pyarrow) and
-  ``df.index.names`` (pandas) are legitimate attribute chains and never flag.
+  simple-variable receivers are matched (``df.schema.names`` and
+  ``df.index.names`` are legitimate attribute chains), with the same pyarrow
+  exemption.
 
 ``DataframeType.daft`` is deliberately **not** here.  It is the SDK's own
 symbol, and it was only ever hand-coded in this checker because nothing marked
@@ -39,6 +51,7 @@ genuinely not an SDK reader frame.
 from __future__ import annotations
 
 import ast
+from collections.abc import Callable
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -53,8 +66,10 @@ _DAFT_ONLY_METHODS: dict[str, str] = {
     "to_pylist": 'use frame.to_dict("records") on the pandas frame',
 }
 
-#: Callee attribute names whose result is a pyarrow Table — receivers bound
-#: from these are exempt from the ``to_pylist`` match.
+#: Callee attribute names whose result is a pyarrow object whatever the
+#: receiver — receivers bound from these are exempt from the ``to_pylist`` match.
+#: Methods such as ``column`` or ``iter_batches`` are not here: they return
+#: pyarrow only when their receiver is pyarrow, which the chain walk decides.
 _PYARROW_PRODUCER_ATTRS = frozenset(
     {
         "from_pandas",
@@ -65,8 +80,39 @@ _PYARROW_PRODUCER_ATTRS = frozenset(
         "to_arrow_table",
         "combine_chunks",
         "read_table",
+        "to_arrow",
     }
 )
+
+#: Methods whose result leaves pyarrow for a frame library, so derivation
+#: through them stops: ``table.to_pandas().to_pylist()`` is a real violation.
+_PYARROW_EXIT_ATTRS = frozenset({"to_pandas", "to_polars"})
+
+_PYARROW_ROOT = "pyarrow"
+
+
+def _is_pyarrow_module(name: str) -> bool:
+    return name == _PYARROW_ROOT or name.startswith(_PYARROW_ROOT + ".")
+
+
+def _import_bindings(node: ast.Import | ast.ImportFrom) -> list[tuple[str, bool]]:
+    """The ``(local name, is_pyarrow)`` of each name an import statement binds.
+
+    Every import is returned, not only pyarrow ones: ``from fixtures import pa``
+    in a function shadows a module-level ``import pyarrow as pa`` there.
+    ``from x import *`` binds nothing nameable and is skipped.
+    """
+    if isinstance(node, ast.Import):
+        return [
+            (alias.asname or alias.name.split(".")[0], _is_pyarrow_module(alias.name))
+            for alias in node.names
+        ]
+    from_pyarrow = node.level == 0 and _is_pyarrow_module(node.module or "")
+    return [
+        (alias.asname or alias.name, from_pyarrow)
+        for alias in node.names
+        if alias.name != "*"
+    ]
 
 
 def _imports_sdk(tree: ast.Module) -> bool:
@@ -157,23 +203,105 @@ class _ScopeMap:
         return self._parent.get(scope)
 
 
-def _yields_pyarrow(value: ast.expr | None) -> bool:
-    """Whether *value* is, or is a collection of, pyarrow Tables.
+def _annotation_is_pyarrow(annotation: ast.expr, at: ast.AST, ctx: "_Ctx") -> bool:
+    """``pa.Table`` / a name imported from pyarrow, alone or made optional.
 
-    A producer call directly (``pa.table({})``), or a literal/comprehension whose
-    elements are producer calls (``[pa.table({}) for _ in range(3)]``).  The
-    collection case matters because the elements are what get iterated into a
-    later comprehension target, and ``to_pylist()`` on a real Table is the
-    *non*-deprecated API this rule must leave alone.
+    ``X | None``, ``Optional[X]`` and ``Union[X, None]`` count when every
+    non-``None`` member is a pyarrow type.
+    """
+    if isinstance(annotation, ast.BinOp) and isinstance(annotation.op, ast.BitOr):
+        members = [annotation.left, annotation.right]
+    elif isinstance(annotation, ast.Subscript) and _subscript_name(annotation) in (
+        "Optional",
+        "Union",
+    ):
+        inner = annotation.slice
+        members = list(inner.elts) if isinstance(inner, ast.Tuple) else [inner]
+    else:
+        base = annotation
+        while isinstance(base, ast.Attribute):
+            base = base.value
+        return isinstance(base, ast.Name) and ctx.bound(base.id, at) is True
+    typed = [
+        m for m in members if not (isinstance(m, ast.Constant) and m.value is None)
+    ]
+    return bool(typed) and all(_annotation_is_pyarrow(m, at, ctx) for m in typed)
+
+
+def _subscript_name(node: ast.Subscript) -> str:
+    value = node.value
+    if isinstance(value, ast.Attribute):
+        return value.attr
+    return value.id if isinstance(value, ast.Name) else ""
+
+
+class _Ctx:
+    __slots__ = ("bound",)
+
+    def __init__(self, bound: Callable[[str, ast.AST], bool | None]) -> None:
+        self.bound = bound
+
+
+def _derives_from_pyarrow(
+    expr: ast.expr | None, at: ast.AST, ctx: "_Ctx | None"
+) -> bool:
+    """Whether *expr* evaluates to a pyarrow object (Table, batch, array, schema)."""
+    depth = 0
+    while expr is not None and depth < 50:
+        depth += 1
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        elif isinstance(expr, ast.Call):
+            func = expr.func
+            if isinstance(func, ast.Attribute):
+                if func.attr in _PYARROW_EXIT_ATTRS:
+                    return False
+                if func.attr in _PYARROW_PRODUCER_ATTRS:
+                    return True
+                expr = func.value
+            elif isinstance(func, ast.Name):
+                return ctx is not None and ctx.bound(func.id, at) is True
+            else:
+                return False
+        elif isinstance(expr, ast.Attribute):
+            if expr.attr in _PYARROW_EXIT_ATTRS:
+                return False
+            expr = expr.value
+        elif isinstance(expr, ast.Subscript):
+            expr = expr.value
+        elif isinstance(expr, ast.Name):
+            return ctx is not None and ctx.bound(expr.id, at) is True
+        else:
+            return False
+    return False
+
+
+def _yields_pyarrow(
+    value: ast.expr | None, at: ast.AST | None = None, ctx: "_Ctx | None" = None
+) -> bool:
+    """Whether *value* is, or is a collection of, pyarrow objects.
+
+    A pyarrow value directly (``pa.table({})``, ``table.column("x")``), or a
+    literal/comprehension whose elements are (``[pa.table({}) for _ in
+    range(3)]``, ``[table.column("x") for ...]``).  The collection case matters
+    because the elements are what get iterated into a later comprehension
+    target, and ``to_pylist()`` on a real Table is the *non*-deprecated API this
+    rule must leave alone.
     """
     if value is None:
         return False
-    if _is_pyarrow_producer_call(value):
+
+    def is_pyarrow(expr: ast.expr) -> bool:
+        return _is_pyarrow_producer_call(expr) or (
+            ctx is not None and _derives_from_pyarrow(expr, at, ctx)
+        )
+
+    if is_pyarrow(value):
         return True
     if isinstance(value, (ast.ListComp, ast.SetComp, ast.GeneratorExp)):
-        return _is_pyarrow_producer_call(value.elt)
+        return is_pyarrow(value.elt)
     if isinstance(value, (ast.List, ast.Tuple, ast.Set)):
-        return any(_is_pyarrow_producer_call(e) for e in value.elts)
+        return any(is_pyarrow(e) for e in value.elts)
     return False
 
 
@@ -181,7 +309,8 @@ def _iterable_element(
     iterable: ast.expr,
     node: ast.AST,
     scopes: _ScopeMap,
-    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
+    by_scope: dict[ast.AST, dict[str, list[tuple[float, bool]]]],
+    ctx: "_Ctx | None" = None,
 ) -> ast.expr | None:
     """A stand-in producer node when *iterable* yields pyarrow Tables.
 
@@ -205,7 +334,7 @@ def _iterable_element(
     walk must not reach past it to clear the call. Returning ``None`` there
     lets the shadowing scope void the exemption exactly as Python scoping does.
     """
-    if _yields_pyarrow(iterable):
+    if _yields_pyarrow(iterable, node, ctx):
         return ast.Call(
             func=ast.Attribute(value=ast.Name(id="pa"), attr="table"),
             args=[],
@@ -231,8 +360,8 @@ def _iterable_element(
 
 
 def _pyarrow_bindings_by_scope(
-    tree: ast.Module, scopes: _ScopeMap
-) -> dict[ast.AST, dict[str, list[tuple[int, bool]]]]:
+    tree: ast.Module, scopes: _ScopeMap, ctx: "_Ctx | None" = None
+) -> dict[ast.AST, dict[str, list[tuple[float, bool]]]]:
     """Per scope, per name, the ``(lineno, is_pyarrow)`` of each simple binding.
 
     Collected per scope rather than module-wide: generic receiver names
@@ -245,7 +374,7 @@ def _pyarrow_bindings_by_scope(
     order-aware: ``df = pa.table({}); df = frame; df.to_pylist()`` must flag,
     because ``df`` is a real SDK frame by the time it is used.
     """
-    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]] = {}
+    by_scope: dict[ast.AST, dict[str, list[tuple[float, bool]]]] = {}
     deferred: list[ast.AST] = []
 
     def record(node: ast.AST, target: ast.expr, value: ast.expr | None) -> None:
@@ -265,7 +394,7 @@ def _pyarrow_bindings_by_scope(
             return
         scope = scopes.scope_of(node)
         entry = by_scope.setdefault(scope, {}).setdefault(target.id, [])
-        is_pyarrow = _yields_pyarrow(value)
+        is_pyarrow = _yields_pyarrow(value, node, ctx)
         entry.append((getattr(node, "lineno", 0), is_pyarrow))
 
     for node in ast.walk(tree):
@@ -293,9 +422,24 @@ def _pyarrow_bindings_by_scope(
                 *([node.args.kwarg] if node.args.kwarg else []),
             ):
                 entry = by_scope.setdefault(node, {}).setdefault(arg.arg, [])
-                entry.append((getattr(node, "lineno", 0), False))
+                # Annotations evaluate where the `def` is, so resolve their
+                # names from the def node's own (enclosing) scope.
+                annotated = (
+                    ctx is not None
+                    and arg.annotation is not None
+                    and _annotation_is_pyarrow(arg.annotation, node, ctx)
+                )
+                entry.append((getattr(node, "lineno", 0) - 0.5, annotated))
+        # Imports bind in the scope they sit in, like any assignment: a
+        # `import pyarrow as frame` inside a helper must not make a module-level
+        # `frame` look pyarrow.
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for name, is_pyarrow in _import_bindings(node):
+                by_scope.setdefault(scopes.scope_of(node), {}).setdefault(
+                    name, []
+                ).append((getattr(node, "lineno", 0), is_pyarrow))
         # Plain assignment, including the chained form `a = df = frame`.
-        if isinstance(node, ast.Assign):
+        elif isinstance(node, ast.Assign):
             for target in node.targets:
                 record(node, target, node.value)
         # Annotated assignment with a value.
@@ -334,14 +478,16 @@ def _pyarrow_bindings_by_scope(
     for node in deferred:
         if isinstance(node, (ast.For, ast.AsyncFor)):
             record(
-                node, node.target, _iterable_element(node.iter, node, scopes, by_scope)
+                node,
+                node.target,
+                _iterable_element(node.iter, node, scopes, by_scope, ctx),
             )
         else:
             for gen in node.generators:
                 record(
                     node,
                     gen.target,
-                    _iterable_element(gen.iter, node, scopes, by_scope),
+                    _iterable_element(gen.iter, node, scopes, by_scope, ctx),
                 )
 
     return by_scope
@@ -351,9 +497,14 @@ def _is_pyarrow_bound(
     name: str,
     node: ast.AST,
     scopes: _ScopeMap,
-    by_scope: dict[ast.AST, dict[str, list[tuple[int, bool]]]],
-) -> bool:
+    by_scope: dict[ast.AST, dict[str, list[tuple[float, bool]]]],
+    strict: bool = False,
+) -> bool | None:
     """Whether *name* is pyarrow-bound at *node*, in its scope or an enclosing one.
+
+    ``None`` when no binding of *name* is in effect, so a caller can fall back
+    to the module's pyarrow import aliases without letting them shadow a local
+    binding.
 
     In the node's **own** scope the last binding before the use decides, so
     rebinding a pyarrow name to an SDK frame correctly voids the exemption.
@@ -376,14 +527,18 @@ def _is_pyarrow_bound(
         bindings = by_scope.get(scope, {}).get(name)
         if bindings:
             if scope is own_scope:
-                prior = [b for b in bindings if b[0] <= use_line]
+                prior = [
+                    b
+                    for b in bindings
+                    if (b[0] < use_line if strict else b[0] <= use_line)
+                ]
                 if prior:
                     return max(prior, key=lambda b: b[0])[1]
                 # Bound only after this point — not in effect; look outward.
             else:
                 return max(bindings, key=lambda b: b[0])[1]
         scope = scopes.parent_of(scope)
-    return False
+    return None
 
 
 def scan_daft_runtime(
@@ -397,6 +552,20 @@ def scan_daft_runtime(
 
     scopes = _ScopeMap(tree)
     pyarrow_by_scope = _pyarrow_bindings_by_scope(tree, scopes)
+    binding_count = sum(
+        len(b) for names in pyarrow_by_scope.values() for b in names.values()
+    )
+    for _ in range(binding_count + 1):
+        prev = pyarrow_by_scope
+        ctx = _Ctx(
+            lambda name, at, prev=prev: _is_pyarrow_bound(
+                name, at, scopes, prev, strict=True
+            ),
+        )
+        pyarrow_by_scope = _pyarrow_bindings_by_scope(tree, scopes, ctx)
+        if pyarrow_by_scope == prev:
+            break
+    ctx = _Ctx(lambda name, at: _is_pyarrow_bound(name, at, scopes, pyarrow_by_scope))
     findings: list[Finding] = []
 
     def _flag(node: ast.AST, surface: str, migration: str) -> None:
@@ -424,11 +593,7 @@ def scan_daft_runtime(
                 # pyarrow.Table.to_pylist() is a real API: exempt receivers
                 # demonstrably bound to / produced by a pyarrow call — but only
                 # within the scope that binding was made in.
-                if isinstance(receiver, ast.Name) and _is_pyarrow_bound(
-                    receiver.id, node, scopes, pyarrow_by_scope
-                ):
-                    continue
-                if _is_pyarrow_producer_call(receiver):
+                if _derives_from_pyarrow(receiver, node, ctx):
                     continue
             _flag(node, f".{attr}()", _DAFT_ONLY_METHODS[attr])
         elif isinstance(node, ast.Attribute) and node.attr == "names":
@@ -439,7 +604,7 @@ def scan_daft_runtime(
             if (
                 isinstance(receiver, ast.Name)
                 and receiver.id not in ("self", "cls")
-                and not _is_pyarrow_bound(receiver.id, node, scopes, pyarrow_by_scope)
+                and not _derives_from_pyarrow(receiver, node, ctx)
             ):
                 _flag(node, ".names", "use frame.columns on the pandas frame")
 

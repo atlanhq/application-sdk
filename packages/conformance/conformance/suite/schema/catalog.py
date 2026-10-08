@@ -19,6 +19,7 @@ Rule ID namespaces:
 from __future__ import annotations
 
 import re
+from enum import Enum
 from typing import Any, Literal
 
 from conformance.suite.schema.disposition import (
@@ -35,6 +36,45 @@ from pydantic import BaseModel, Field, model_validator
 #: (``"sdk >= 3.27"``, ``"P42"``) is caught at rule-definition time, the same way
 #: ``orthogonal_gate``'s ``Literal`` catches a mistyped gate name.
 _SUPERSEDED_BY_RE = re.compile(r"^(?:[A-Z]\d{3}|sdk>=\d+(?:\.\d+)*)$")
+
+
+class RemediationKind(str, Enum):
+    """What performs the fix for a rule.
+
+    ``prescription`` and ``command`` are the auto-fixable kinds: the lane applies
+    them.  ``skill``, ``guide`` and ``decision`` are the migration kinds: the
+    lane never applies them, and an interactive ``/remediate`` hands off to them.
+    """
+
+    PRESCRIPTION = "prescription"
+    COMMAND = "command"
+    SKILL = "skill"
+    GUIDE = "guide"
+    DECISION = "decision"
+
+
+_AUTOFIXABLE_KINDS = frozenset({RemediationKind.PRESCRIPTION, RemediationKind.COMMAND})
+
+
+class RemediationReference(BaseModel):
+    """How a finding for this rule is fixed, as opposed to what correct looks like.
+
+    ``target`` resolves by kind: a ``skill`` is a directory under the packaged
+    ``skills/`` (``skills-dir``); a ``guide`` or ``prescription`` is a file path
+    relative to the ``conformance`` package; a ``command`` is the command line;
+    a ``decision`` names who decides, and ``note`` states the choice.
+    """
+
+    kind: RemediationKind
+    target: str = Field(..., min_length=1)
+    note: str = ""
+
+    @model_validator(mode="after")
+    def _decision_states_the_choice(self) -> RemediationReference:
+        if self.kind is RemediationKind.DECISION and not self.note:
+            raise ValueError("a decision reference must state the choice in note")
+        return self
+
 
 # ---------------------------------------------------------------------------
 # Typed rule definition
@@ -90,11 +130,14 @@ class RuleDefinition(BaseModel):
     rules an app engineer has to act on, and "what does correct look like here"
     is the question the finding text cannot answer.
 
-    Only the four public reference apps count — ``atlan-hello-world-app``,
-    ``atlan-openapi-app``, ``atlan-mysql-app``, ``atlan-metabase-app`` — plus
-    ``application_sdk`` itself for rules about SDK-owned surfaces.  An arbitrary
-    connector may be mid-migration and is not a model of anything (see
-    ``docs/agents/canonical-apps.md``).
+    Only the three remediation reference apps count — ``atlan-openapi-app``,
+    ``atlan-mysql-app``, ``atlan-metabase-app`` — plus ``application_sdk``
+    itself for rules about SDK-owned surfaces.  An ``autofixable`` rule must
+    name one of the three apps: the lane applies it by mirroring an app, so an
+    SDK-only reference leaves it nothing to mirror.  ``atlan-hello-world-app`` is a
+    scaffold, not a reference: too minimal to be what a fix is mirrored from
+    (owner decision, FND-2477).  An arbitrary connector may be mid-migration
+    and is not a model of anything (see ``docs/agents/canonical-apps.md``).
 
     Name a path, not a sentiment: the value must carry a concrete file so a
     reader can open it.  Two rules may not share the same reference — if they
@@ -117,6 +160,13 @@ class RuleDefinition(BaseModel):
     unfixed violation."""
 
     autofixable: bool = False
+    remediation_reference: RemediationReference | None = None
+    """How the fix is performed: the skill, guide or owner decision for a
+    migration rule, or the command for an auto-fixable rule whose fix is a
+    regeneration.  Required on every app-facing migration rule
+    (``test_every_migration_rule_names_a_remediation_reference``); the kind must
+    match ``autofixable`` (:meth:`_reference_kind_matches_classification`)."""
+
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
@@ -242,6 +292,30 @@ class RuleDefinition(BaseModel):
             raise ValueError(f"{self.id}: superseded_by cannot name the rule itself")
         return self
 
+    @model_validator(mode="after")
+    def _reference_kind_matches_classification(self) -> RuleDefinition:
+        """Reject a reference whose kind contradicts ``autofixable``.
+
+        A migration rule pointing at a mechanical fix tells the lane to apply
+        something the classification says it must not; an auto-fixable rule
+        pointing at a skill hands a mechanical edit to a human.
+        """
+        ref = self.remediation_reference
+        if ref is None:
+            return self
+        if self.autofixable and ref.kind not in _AUTOFIXABLE_KINDS:
+            raise ValueError(
+                f"{self.id}: an auto-fixable rule cannot name a {ref.kind.value!r} "
+                f"remediation reference — use prescription or command, or classify "
+                f"the rule as migration."
+            )
+        if not self.autofixable and ref.kind in _AUTOFIXABLE_KINDS:
+            raise ValueError(
+                f"{self.id}: a migration rule cannot name a {ref.kind.value!r} "
+                f"remediation reference — use skill, guide or decision."
+            )
+        return self
+
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
         from conformance.suite.schema.extensions import AtlanRuleProperties
@@ -262,6 +336,8 @@ class RuleDefinition(BaseModel):
             superseded_by=self.superseded_by,
             rationale=self.rationale or None,
             forces_external_influence=self.forces_external_influence,
+            canonical_reference=self.canonical_reference or None,
+            remediation_reference=self.remediation_reference,
         )
         return ReportingDescriptor(
             id=self.id,

@@ -70,11 +70,13 @@ OPEN_PAGE_SIZE = 25
 MERGED_PAGE_SIZE = 100
 # Width of one merged-search date window (see fetch_merged_prs). Page size is a
 # cost knob; this is a CAP knob — it bounds how many results ONE query can match,
-# which pagination cannot help with. Sized from the live fleet on 2026-09-17:
-# app/atlan-app-fleet merged 1366 PRs in 30 days, ~320 in any 7, so a week sits
-# at roughly a third of the 1000-result cap and leaves room for the fleet to
-# grow before the guard fires again.
-MERGED_WINDOW_DAYS = 7
+# which pagination cannot help with. First sized at 7 days on 2026-09-17 (~320
+# merges in any 7). Re-sized 2026-10-02 after the fleet outgrew it: the guard
+# fired on every hourly run from 2026-09-28 (1871 merges in 09-16..09-22), which
+# also skipped the auto-merge re-arm step that reads this scan. Measured over
+# 09-02..10-02 the peak was 1986 in any 7 days, 884 in any 2, 471 in any 1 —
+# so only a single day keeps release fan-out days under half the cap.
+MERGED_WINDOW_DAYS = 1
 # Back-compat alias for callers/tests that predate the split.
 PAGE_SIZE = OPEN_PAGE_SIZE
 # Safety backstop, not a real ceiling: 50 pages x 100 = 5000 PRs in one search window,
@@ -93,15 +95,78 @@ MAX_LOCK_FETCHES = 25
 # a single one aborted the whole run. Every scheduled dashboard run failed this
 # way for ten days straight, all with `502 Bad Gateway` from _post_graphql.
 #
-# 5xx only. A 401/403 is a token problem and a 422 is a malformed query; both
-# would fail identically on every attempt, so retrying them only delays the
-# report of a fault that needs a human.
+# 5xx, plus rate limits (below). Any other 401/403 is a token problem and a 422
+# is a malformed query; both would fail identically on every attempt, so
+# retrying them only delays the report of a fault that needs a human.
 _RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 GRAPHQL_ATTEMPTS = 4
 # 1s, 2s, 4s between the four attempts. Bounded at ~7s added latency in the worst
 # case, against a job that already runs for minutes — cheap enough that it is not
 # worth making configurable, and short enough not to mask a sustained outage.
 _BACKOFF_BASE_SECONDS = 1.0
+
+# The one 403 that is NOT a token problem. A one-day merged window (FND-3214)
+# took the pass from 10 merged searches to 62, and from 2026-10-03 roughly two
+# runs in three died on `403 ... You have exceeded a secondary rate limit` — a
+# burst limit that clears on its own within minutes. GitHub's guidance is to
+# honour `retry-after`, else wait for `x-ratelimit-reset` when the remaining
+# quota is 0, else wait at least a minute and back off exponentially. 429 is
+# the same signal on the endpoints that use it.
+_RATE_LIMIT_STATUS = frozenset({403, 429})
+# 60s, 120s, 240s between the four attempts: ~7 min worst case, inside the job's
+# 45-minute timeout. A header hint longer than the cap is clamped rather than
+# obeyed — a primary-quota reset tens of minutes out would outlive the job anyway,
+# and the attempt cap then fails the run with the real 403 in the log.
+_RATE_LIMIT_BASE_SECONDS = 60.0
+_RATE_LIMIT_MAX_WAIT_SECONDS = 300.0
+
+
+class RateLimitedError(RuntimeError):
+    """A rate-limit refusal from GitHub, carrying its wait hint in seconds.
+
+    A RuntimeError subclass so every existing `except RuntimeError` caller —
+    fetch_lock_texts degrading one PR, main() failing the run — treats it exactly
+    as before; only the retry loop looks closer.
+    """
+
+    def __init__(self, message: str, retry_after: Optional[float]) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+def _rate_limit_hint(headers, now: float) -> Optional[float]:
+    """Seconds GitHub asked us to wait, from the response headers, or None."""
+    if headers is None:
+        return None
+    retry_after = headers.get("retry-after")
+    if retry_after is not None:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            pass
+    reset = headers.get("x-ratelimit-reset")
+    if headers.get("x-ratelimit-remaining") == "0" and reset is not None:
+        try:
+            return max(0.0, float(reset) - now)
+        except ValueError:
+            pass
+    return None
+
+
+def _is_rate_limited(status: int, headers, body: str) -> bool:
+    """403/429 that is a rate limit, as opposed to a token that lacks access."""
+    if status not in _RATE_LIMIT_STATUS:
+        return False
+    if headers is not None and (
+        headers.get("retry-after") is not None
+        or headers.get("x-ratelimit-remaining") == "0"
+    ):
+        return True
+    # GitHub's older wording for the same burst limit; _gh_refs.py and
+    # e2e_dispatch_guard.py classify it the same way.
+    lowered = body.lower()
+    return "rate limit" in lowered or "abuse detection" in lowered
+
 
 _OPEN_PR_FIELDS = """
 number
@@ -139,6 +204,7 @@ commits(last: 1) {
 _MERGED_PR_FIELDS = """
 url
 repository { nameWithOwner }
+mergedBy { __typename login }
 reviews(first: 50) {
   nodes {
     state
@@ -213,9 +279,12 @@ def _post_graphql_once(token: str, payload: dict) -> dict:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace")
-        raise RuntimeError(
-            f"GraphQL request failed: {exc.code} {exc.reason}: {body}"
-        ) from exc
+        message = f"GraphQL request failed: {exc.code} {exc.reason}: {body}"
+        if _is_rate_limited(exc.code, exc.headers, body):
+            raise RateLimitedError(
+                message, _rate_limit_hint(exc.headers, time.time())
+            ) from exc
+        raise RuntimeError(message) from exc
     # Every transport failure leaves here as a RuntimeError, so a caller that
     # wants to degrade on one — fetch_lock_texts skips the PR and lets it
     # classify as an ordinary red build — can express that with one handler.
@@ -235,12 +304,22 @@ def _is_retryable(exc: RuntimeError) -> bool:
     need a single handler. Keeping that normalisation and re-deriving the status
     here beats leaking HTTPError back out to every caller for the sake of retry.
     """
+    if isinstance(exc, RateLimitedError):
+        return True
     text = str(exc)
     if any(f"failed: {status} " in text for status in _RETRYABLE_STATUS):
         return True
     # Transport-level: connection reset, DNS blip, read timeout. None of these
     # carry a status, and all are the same kind of transient as a 502.
     return "failed: <urlopen error" in text or "timed out" in text.lower()
+
+
+def _retry_delay(exc: RuntimeError, attempt: int) -> float:
+    """Seconds to wait before attempt ``attempt + 1``."""
+    if not isinstance(exc, RateLimitedError):
+        return _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+    backoff = _RATE_LIMIT_BASE_SECONDS * (2 ** (attempt - 1))
+    return min(max(backoff, exc.retry_after or 0.0), _RATE_LIMIT_MAX_WAIT_SECONDS)
 
 
 def _post_graphql(
@@ -264,7 +343,7 @@ def _post_graphql(
             last = exc
             if attempt == attempts or not _is_retryable(exc):
                 raise
-            delay = _BACKOFF_BASE_SECONDS * (2 ** (attempt - 1))
+            delay = _retry_delay(exc, attempt)
             # Visible in the job log: a run that succeeded only after three
             # retries is healthy-but-degraded, and that is worth seeing before
             # it becomes a run that fails outright.
@@ -636,8 +715,14 @@ def normalize_open_pr(pr: dict, repo_modes: Optional[dict] = None) -> dict:
 
 def normalize_merged_pr(pr: dict) -> dict:
     """Map a GraphQL PullRequest node to the subset of `gh pr list --json ...` fields
-    `conformance.renovate.scan._auto_merge_stats` actually reads (only `reviews`)."""
+    `conformance.renovate.scan._auto_merge_stats` actually reads (`mergedBy` and
+    `reviews`). `mergedBy` keeps the `gh pr list --json mergedBy` shape's `is_bot`."""
+    merged_by = pr.get("mergedBy") or {}
     return {
+        "mergedBy": {
+            "login": merged_by.get("login"),
+            "is_bot": merged_by.get("__typename") == "Bot",
+        },
         "reviews": [
             {
                 "state": r.get("state"),

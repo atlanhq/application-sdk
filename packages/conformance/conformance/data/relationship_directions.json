@@ -1,0 +1,6863 @@
+{
+ "other_list_fields": [
+  "adf_activities",
+  "adf_dataflows",
+  "adf_datasets",
+  "adf_linkedservices",
+  "adf_pipelines",
+  "agent_agents",
+  "agent_skills",
+  "anaplan_column_dimensions",
+  "anaplan_column_views",
+  "anaplan_dimensions",
+  "anaplan_line_items",
+  "anaplan_lists",
+  "anaplan_models",
+  "anaplan_page_dimensions",
+  "anaplan_page_views",
+  "anaplan_pages",
+  "anaplan_row_dimensions",
+  "anaplan_row_views",
+  "antonyms",
+  "applications",
+  "assets",
+  "assigned_entities",
+  "azure_service_bus_schemas",
+  "azure_service_bus_topics",
+  "bigquery_processes",
+  "bigquery_routines",
+  "calculated_fields",
+  "categories",
+  "classifies",
+  "column_dbt_model_columns",
+  "columns",
+  "context_input_assets",
+  "context_repositories",
+  "custom_related_from_entities",
+  "custom_related_to_entities",
+  "dashboards",
+  "data_mesh_data_products",
+  "data_mesh_datasets",
+  "data_quality_metric_dimensions",
+  "dataflows",
+  "datasets",
+  "datasource_fields",
+  "datasources",
+  "dbt_metric_filter_columns",
+  "dbt_metrics",
+  "dbt_model_column_sql_columns",
+  "dbt_model_columns",
+  "dbt_model_sql_assets",
+  "dbt_models",
+  "dbt_seed_assets",
+  "dbt_seed_sql_assets",
+  "dbt_sources",
+  "dbt_tests",
+  "dimensions",
+  "domo_cards",
+  "domo_dashboards",
+  "dq_reference_column_rules",
+  "dq_reference_dataset_rules",
+  "dq_rule_reference_columns",
+  "dq_rule_reference_datasets",
+  "facts",
+  "flow_predecessors",
+  "flow_successors",
+  "gcp_dataplex_aspect_type_entries",
+  "gcp_dataplex_aspect_type_metadata_entities",
+  "input_port_data_products",
+  "input_ports",
+  "input_to_airflow_tasks",
+  "input_to_processes",
+  "input_to_spark_jobs",
+  "inputs",
+  "is_a",
+  "kafka_consumer_groups",
+  "kafka_topics",
+  "knowledge_files",
+  "knowledge_folders",
+  "knowledge_linked_assets",
+  "knowledge_linked_files",
+  "looker_child_projects",
+  "looker_parent_projects",
+  "lookup_fields",
+  "lookup_objects",
+  "mc_incident_assets",
+  "mc_incidents",
+  "mc_monitor_assets",
+  "mc_monitors",
+  "meanings",
+  "metabase_dashboards",
+  "metabase_questions",
+  "metric_dimension_columns",
+  "metrics",
+  "micro_strategy_attributes",
+  "micro_strategy_cubes",
+  "micro_strategy_facts",
+  "micro_strategy_metric_children",
+  "micro_strategy_metric_parents",
+  "micro_strategy_metrics",
+  "micro_strategy_reports",
+  "mode_collections",
+  "mode_reports",
+  "model_attribute_entities",
+  "model_attribute_implemented_by_assets",
+  "model_attribute_mapped_from_attributes",
+  "model_attribute_mapped_to_attributes",
+  "model_entity_attributes",
+  "model_entity_implemented_by_assets",
+  "model_entity_mapped_from_entities",
+  "model_entity_mapped_to_entities",
+  "model_implemented_attributes",
+  "model_implemented_entities",
+  "model_version_entities",
+  "model_versions",
+  "models",
+  "output_from_airflow_tasks",
+  "output_from_processes",
+  "output_from_spark_jobs",
+  "output_port_data_products",
+  "output_ports",
+  "outputs",
+  "partial_child_fields",
+  "partial_child_objects",
+  "policies",
+  "power_bi_apps",
+  "power_bi_columns",
+  "power_bi_dashboards",
+  "power_bi_dataflow_children",
+  "power_bi_dataflow_parents",
+  "power_bi_dataflows",
+  "power_bi_datasources",
+  "power_bi_measures",
+  "power_bi_reports",
+  "preferred_terms",
+  "preferred_to_terms",
+  "queries",
+  "quick_sight_analyses",
+  "quick_sight_analysis_folders",
+  "quick_sight_dashboard_folders",
+  "quick_sight_dashboards",
+  "quick_sight_dataset_folders",
+  "quick_sight_datasets",
+  "related_business_policies",
+  "replaced_by",
+  "replacement_terms",
+  "reports",
+  "sap_bw_adsos",
+  "sap_bw_column_processes",
+  "sap_bw_dtps",
+  "sap_bw_info_objects",
+  "sap_bw_mapped_adso_fields",
+  "sap_bw_mapped_composite_provider_fields",
+  "sap_bw_mapped_data_source_fields",
+  "sap_bw_mapped_info_source_fields",
+  "sap_bw_mapped_query_elements",
+  "sap_bw_member_of_composite_providers",
+  "sap_bw_processes",
+  "sap_bw_related_info_objects",
+  "sap_bw_transformations",
+  "sap_erp_related_tables",
+  "schema_registry_subjects",
+  "see_also",
+  "sisense_dashboards",
+  "sisense_datamodel_tables",
+  "sisense_datamodels",
+  "sisense_widgets",
+  "snowflake_dynamic_tables",
+  "soda_check_assets",
+  "soda_check_columns",
+  "soda_checks",
+  "spark_orchestrated_assets",
+  "spark_orchestrated_by_airflow_assets",
+  "sql_assets",
+  "sql_databases",
+  "sql_dbt_models",
+  "sql_dbt_sources",
+  "sql_functions",
+  "sql_procedures",
+  "sql_processes",
+  "sql_schemas",
+  "ssrs_linked_from_reports",
+  "ssrs_linked_reports",
+  "synonyms",
+  "tableau_embedded_dashboards",
+  "tableau_parent_dashboards",
+  "tables",
+  "terms",
+  "translated_terms",
+  "translation_terms",
+  "user_def_relationship_from",
+  "user_def_relationship_to",
+  "valid_values",
+  "valid_values_for",
+  "views",
+  "worksheets"
+ ],
+ "set_ends": {
+  "adf_activities": [
+   {
+    "attribute": "adfActivities",
+    "inverse": "adf_dataflow",
+    "inverse_attribute": "adfDataflow",
+    "owners": [
+     "AdfDataflow"
+    ],
+    "target_type": "AdfActivity"
+   },
+   {
+    "attribute": "adfActivities",
+    "inverse": "adf_pipeline",
+    "inverse_attribute": "adfPipeline",
+    "owners": [
+     "AdfPipeline"
+    ],
+    "target_type": "AdfActivity"
+   }
+  ],
+  "adf_datasets": [
+   {
+    "attribute": "adfDatasets",
+    "inverse": "adf_linkedservice",
+    "inverse_attribute": "adfLinkedservice",
+    "owners": [
+     "AdfLinkedservice"
+    ],
+    "target_type": "AdfDataset"
+   }
+  ],
+  "adls_containers": [
+   {
+    "attribute": "adlsContainers",
+    "inverse": "adls_account",
+    "inverse_attribute": "adlsAccount",
+    "owners": [
+     "ADLSAccount"
+    ],
+    "target_type": "ADLSContainer"
+   }
+  ],
+  "adls_objects": [
+   {
+    "attribute": "adlsObjects",
+    "inverse": "adls_container",
+    "inverse_attribute": "adlsContainer",
+    "owners": [
+     "ADLSContainer"
+    ],
+    "target_type": "ADLSObject"
+   }
+  ],
+  "ai_model_versions": [
+   {
+    "attribute": "aiModelVersions",
+    "inverse": "ai_model",
+    "inverse_attribute": "aiModel",
+    "owners": [
+     "AIModel",
+     "DatabricksAIModelContext",
+     "SageMakerModelGroup",
+     "SnowflakeAIModelContext"
+    ],
+    "target_type": "AIModelVersion"
+   }
+  ],
+  "airflow_tasks": [
+   {
+    "attribute": "airflowTasks",
+    "inverse": "airflow_dag",
+    "inverse_attribute": "airflowDag",
+    "owners": [
+     "AirflowDag"
+    ],
+    "target_type": "AirflowTask"
+   },
+   {
+    "attribute": "airflowTasks",
+    "inverse": "process",
+    "inverse_attribute": "process",
+    "owners": [
+     "BIProcess",
+     "ColumnProcess",
+     "DbtColumnProcess",
+     "DbtProcess",
+     "FlowDatasetOperation",
+     "FlowFieldOperation",
+     "Process",
+     "SAPColumnProcess",
+     "SAPProcess"
+    ],
+    "target_type": "AirflowTask"
+   }
+  ],
+  "anaplan_dimensions": [
+   {
+    "attribute": "anaplanDimensions",
+    "inverse": "anaplan_model",
+    "inverse_attribute": "anaplanModel",
+    "owners": [
+     "AnaplanModel"
+    ],
+    "target_type": "AnaplanDimension"
+   }
+  ],
+  "anaplan_line_items": [
+   {
+    "attribute": "anaplanLineItems",
+    "inverse": "anaplan_module",
+    "inverse_attribute": "anaplanModule",
+    "owners": [
+     "AnaplanModule"
+    ],
+    "target_type": "AnaplanLineItem"
+   }
+  ],
+  "anaplan_lists": [
+   {
+    "attribute": "anaplanLists",
+    "inverse": "anaplan_model",
+    "inverse_attribute": "anaplanModel",
+    "owners": [
+     "AnaplanModel"
+    ],
+    "target_type": "AnaplanList"
+   }
+  ],
+  "anaplan_models": [
+   {
+    "attribute": "anaplanModels",
+    "inverse": "anaplan_workspace",
+    "inverse_attribute": "anaplanWorkspace",
+    "owners": [
+     "AnaplanWorkspace"
+    ],
+    "target_type": "AnaplanModel"
+   }
+  ],
+  "anaplan_modules": [
+   {
+    "attribute": "anaplanModules",
+    "inverse": "anaplan_model",
+    "inverse_attribute": "anaplanModel",
+    "owners": [
+     "AnaplanModel"
+    ],
+    "target_type": "AnaplanModule"
+   }
+  ],
+  "anaplan_pages": [
+   {
+    "attribute": "anaplanPages",
+    "inverse": "anaplan_app",
+    "inverse_attribute": "anaplanApp",
+    "owners": [
+     "AnaplanApp"
+    ],
+    "target_type": "AnaplanPage"
+   }
+  ],
+  "anaplan_views": [
+   {
+    "attribute": "anaplanViews",
+    "inverse": "anaplan_module",
+    "inverse_attribute": "anaplanModule",
+    "owners": [
+     "AnaplanModule"
+    ],
+    "target_type": "AnaplanView"
+   }
+  ],
+  "anomalo_checks": [
+   {
+    "attribute": "anomaloChecks",
+    "inverse": "anomalo_check_asset",
+    "inverse_attribute": "anomaloCheckAsset",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AWS",
+     "AccessControl",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "Asset",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AtlasGlossary",
+     "AtlasGlossaryCategory",
+     "AtlasGlossaryTerm",
+     "AuthPolicy",
+     "AuthService",
+     "Azure",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BIProcess",
+     "Badge",
+     "BigqueryRoutine",
+     "BusinessPolicy",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cloud",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Collection",
+     "Column",
+     "ColumnProcess",
+     "Connection",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataSet",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "Flow",
+     "FlowControlOperation",
+     "FlowDataset",
+     "FlowDatasetOperation",
+     "FlowField",
+     "FlowFieldOperation",
+     "FlowFolder",
+     "FlowProject",
+     "FlowReusableUnit",
+     "Folder",
+     "Form",
+     "Function",
+     "GCPDataplex",
+     "GCPDataplexAspectType",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Google",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Incident",
+     "Infrastructure",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "Namespace",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "Persona",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Process",
+     "ProcessExecution",
+     "Purpose",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapDatasphereReplicationFlow",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Task",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View",
+     "Workflow"
+    ],
+    "target_type": "AnomaloCheck"
+   }
+  ],
+  "api_fields": [
+   {
+    "attribute": "apiFields",
+    "inverse": "api_object",
+    "inverse_attribute": "apiObject",
+    "owners": [
+     "APIObject"
+    ],
+    "target_type": "APIField"
+   },
+   {
+    "attribute": "apiFields",
+    "inverse": "api_query",
+    "inverse_attribute": "apiQuery",
+    "owners": [
+     "APIQuery"
+    ],
+    "target_type": "APIField"
+   }
+  ],
+  "api_paths": [
+   {
+    "attribute": "apiPaths",
+    "inverse": "api_spec",
+    "inverse_attribute": "apiSpec",
+    "owners": [
+     "APISpec"
+    ],
+    "target_type": "APIPath"
+   }
+  ],
+  "application_child_fields": [
+   {
+    "attribute": "applicationChildFields",
+    "inverse": "application_parent",
+    "inverse_attribute": "applicationParent",
+    "owners": [
+     "Application"
+    ],
+    "target_type": "ApplicationField"
+   }
+  ],
+  "application_field_owned_assets": [
+   {
+    "attribute": "applicationFieldOwnedAssets",
+    "inverse": "application_field",
+    "inverse_attribute": "applicationField",
+    "owners": [
+     "ApplicationField"
+    ],
+    "target_type": "Asset"
+   }
+  ],
+  "application_owned_assets": [
+   {
+    "attribute": "applicationOwnedAssets",
+    "inverse": "application",
+    "inverse_attribute": "application",
+    "owners": [
+     "Application"
+    ],
+    "target_type": "Asset"
+   }
+  ],
+  "asset_grouping_collections": [
+   {
+    "attribute": "assetGroupingCollections",
+    "inverse": "asset_grouping_strategy",
+    "inverse_attribute": "assetGroupingStrategy",
+    "owners": [
+     "AssetGroupingStrategy"
+    ],
+    "target_type": "AssetGroupingCollection"
+   }
+  ],
+  "atlan_app_tools": [
+   {
+    "attribute": "atlanAppTools",
+    "inverse": "atlan_app",
+    "inverse_attribute": "atlanApp",
+    "owners": [
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow"
+    ],
+    "target_type": "AtlanAppTool"
+   }
+  ],
+  "atlan_app_workflow_runs": [
+   {
+    "attribute": "atlanAppWorkflowRuns",
+    "inverse": "atlan_app_workflow",
+    "inverse_attribute": "atlanAppWorkflow",
+    "owners": [
+     "AtlanAppWorkflow"
+    ],
+    "target_type": "AppWorkflowRun"
+   }
+  ],
+  "atlan_app_workflows": [
+   {
+    "attribute": "atlanAppWorkflows",
+    "inverse": "atlan_app",
+    "inverse_attribute": "atlanApp",
+    "owners": [
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow"
+    ],
+    "target_type": "AtlanAppWorkflow"
+   }
+  ],
+  "azure_service_bus_topics": [
+   {
+    "attribute": "azureServiceBusTopics",
+    "inverse": "azure_service_bus_namespace",
+    "inverse_attribute": "azureServiceBusNamespace",
+    "owners": [
+     "AzureServiceBusNamespace"
+    ],
+    "target_type": "AzureServiceBusTopic"
+   }
+  ],
+  "bigquery_routines": [
+   {
+    "attribute": "bigqueryRoutines",
+    "inverse": "bigquery_atlan_schema",
+    "inverse_attribute": "bigqueryAtlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "BigqueryRoutine"
+   }
+  ],
+  "calculation_views": [
+   {
+    "attribute": "calculationViews",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "CalculationView"
+   }
+  ],
+  "cassandra_columns": [
+   {
+    "attribute": "cassandraColumns",
+    "inverse": "cassandra_table",
+    "inverse_attribute": "cassandraTable",
+    "owners": [
+     "CassandraTable"
+    ],
+    "target_type": "CassandraColumn"
+   },
+   {
+    "attribute": "cassandraColumns",
+    "inverse": "cassandra_view",
+    "inverse_attribute": "cassandraView",
+    "owners": [
+     "CassandraView"
+    ],
+    "target_type": "CassandraColumn"
+   }
+  ],
+  "cassandra_indexes": [
+   {
+    "attribute": "cassandraIndexes",
+    "inverse": "cassandra_table",
+    "inverse_attribute": "cassandraTable",
+    "owners": [
+     "CassandraTable"
+    ],
+    "target_type": "CassandraIndex"
+   }
+  ],
+  "cassandra_tables": [
+   {
+    "attribute": "cassandraTables",
+    "inverse": "cassandra_keyspace",
+    "inverse_attribute": "cassandraKeyspace",
+    "owners": [
+     "CassandraKeyspace"
+    ],
+    "target_type": "CassandraTable"
+   }
+  ],
+  "cassandra_views": [
+   {
+    "attribute": "cassandraViews",
+    "inverse": "cassandra_keyspace",
+    "inverse_attribute": "cassandraKeyspace",
+    "owners": [
+     "CassandraKeyspace"
+    ],
+    "target_type": "CassandraView"
+   }
+  ],
+  "categories": [
+   {
+    "attribute": "categories",
+    "inverse": "anchor",
+    "inverse_attribute": "anchor",
+    "owners": [
+     "AtlasGlossary"
+    ],
+    "target_type": "AtlasGlossaryCategory"
+   }
+  ],
+  "child_components": [
+   {
+    "attribute": "childComponents",
+    "inverse": "parent_component",
+    "inverse_attribute": "parentComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpComponent"
+   }
+  ],
+  "child_projects": [
+   {
+    "attribute": "childProjects",
+    "inverse": "parent_project",
+    "inverse_attribute": "parentProject",
+    "owners": [
+     "TableauProject"
+    ],
+    "target_type": "TableauProject"
+   }
+  ],
+  "child_table_partitions": [
+   {
+    "attribute": "childTablePartitions",
+    "inverse": "parent_table_partition",
+    "inverse_attribute": "parentTablePartition",
+    "owners": [
+     "TablePartition"
+    ],
+    "target_type": "TablePartition"
+   }
+  ],
+  "children_categories": [
+   {
+    "attribute": "childrenCategories",
+    "inverse": "parent_category",
+    "inverse_attribute": "parentCategory",
+    "owners": [
+     "AtlasGlossaryCategory"
+    ],
+    "target_type": "AtlasGlossaryCategory"
+   }
+  ],
+  "children_folders": [
+   {
+    "attribute": "childrenFolders",
+    "inverse": "parent",
+    "inverse_attribute": "parent",
+    "owners": [
+     "Collection",
+     "Folder",
+     "Namespace"
+    ],
+    "target_type": "Folder"
+   }
+  ],
+  "children_queries": [
+   {
+    "attribute": "childrenQueries",
+    "inverse": "parent",
+    "inverse_attribute": "parent",
+    "owners": [
+     "Collection",
+     "Folder",
+     "Namespace"
+    ],
+    "target_type": "Query"
+   }
+  ],
+  "cognite3dmodels": [
+   {
+    "attribute": "cognite3dmodels",
+    "inverse": "cognite_asset",
+    "inverse_attribute": "cogniteAsset",
+    "owners": [
+     "CogniteAsset"
+    ],
+    "target_type": "Cognite3DModel"
+   }
+  ],
+  "cognite_events": [
+   {
+    "attribute": "cogniteEvents",
+    "inverse": "cognite_asset",
+    "inverse_attribute": "cogniteAsset",
+    "owners": [
+     "CogniteAsset"
+    ],
+    "target_type": "CogniteEvent"
+   }
+  ],
+  "cognite_files": [
+   {
+    "attribute": "cogniteFiles",
+    "inverse": "cognite_asset",
+    "inverse_attribute": "cogniteAsset",
+    "owners": [
+     "CogniteAsset"
+    ],
+    "target_type": "CogniteFile"
+   }
+  ],
+  "cognite_sequences": [
+   {
+    "attribute": "cogniteSequences",
+    "inverse": "cognite_asset",
+    "inverse_attribute": "cogniteAsset",
+    "owners": [
+     "CogniteAsset"
+    ],
+    "target_type": "CogniteSequence"
+   }
+  ],
+  "cognite_timeseries": [
+   {
+    "attribute": "cogniteTimeseries",
+    "inverse": "cognite_asset",
+    "inverse_attribute": "cogniteAsset",
+    "owners": [
+     "CogniteAsset"
+    ],
+    "target_type": "CogniteTimeSeries"
+   }
+  ],
+  "cognos_columns": [
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_dashboard",
+    "inverse_attribute": "cognosDashboard",
+    "owners": [
+     "CognosDashboard"
+    ],
+    "target_type": "CognosColumn"
+   },
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_dataset",
+    "inverse_attribute": "cognosDataset",
+    "owners": [
+     "CognosDataset"
+    ],
+    "target_type": "CognosColumn"
+   },
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_exploration",
+    "inverse_attribute": "cognosExploration",
+    "owners": [
+     "CognosExploration"
+    ],
+    "target_type": "CognosColumn"
+   },
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_file",
+    "inverse_attribute": "cognosFile",
+    "owners": [
+     "CognosFile"
+    ],
+    "target_type": "CognosColumn"
+   },
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_module",
+    "inverse_attribute": "cognosModule",
+    "owners": [
+     "CognosModule"
+    ],
+    "target_type": "CognosColumn"
+   },
+   {
+    "attribute": "cognosColumns",
+    "inverse": "cognos_package",
+    "inverse_attribute": "cognosPackage",
+    "owners": [
+     "CognosPackage"
+    ],
+    "target_type": "CognosColumn"
+   }
+  ],
+  "cognos_dashboards": [
+   {
+    "attribute": "cognosDashboards",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosDashboard"
+   }
+  ],
+  "cognos_datasets": [
+   {
+    "attribute": "cognosDatasets",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosDataset"
+   }
+  ],
+  "cognos_explorations": [
+   {
+    "attribute": "cognosExplorations",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosExploration"
+   }
+  ],
+  "cognos_files": [
+   {
+    "attribute": "cognosFiles",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosFile"
+   }
+  ],
+  "cognos_modules": [
+   {
+    "attribute": "cognosModules",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosModule"
+   }
+  ],
+  "cognos_packages": [
+   {
+    "attribute": "cognosPackages",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosPackage"
+   }
+  ],
+  "cognos_reports": [
+   {
+    "attribute": "cognosReports",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosReport"
+   }
+  ],
+  "cognos_sub_folders": [
+   {
+    "attribute": "cognosSubFolders",
+    "inverse": "cognos_folder",
+    "inverse_attribute": "cognosFolder",
+    "owners": [
+     "CognosFolder"
+    ],
+    "target_type": "CognosFolder"
+   }
+  ],
+  "column_processes": [
+   {
+    "attribute": "columnProcesses",
+    "inverse": "process",
+    "inverse_attribute": "process",
+    "owners": [
+     "BIProcess",
+     "ColumnProcess",
+     "DbtColumnProcess",
+     "DbtProcess",
+     "FlowDatasetOperation",
+     "FlowFieldOperation",
+     "Process",
+     "SAPColumnProcess",
+     "SAPProcess"
+    ],
+    "target_type": "ColumnProcess"
+   }
+  ],
+  "columns": [
+   {
+    "attribute": "columns",
+    "inverse": "calculation_view",
+    "inverse_attribute": "calculationView",
+    "owners": [
+     "CalculationView"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "cosmos_mongo_db_collection",
+    "inverse_attribute": "cosmosMongoDBCollection",
+    "owners": [
+     "CosmosMongoDBCollection"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "materialised_view",
+    "inverse_attribute": "materialisedView",
+    "owners": [
+     "MaterialisedView"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "table",
+    "inverse_attribute": "table",
+    "owners": [
+     "DocumentDBCollection",
+     "DremioPhysicalDataset",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "IcebergTable",
+     "MongoDBCollection",
+     "StarburstDataset",
+     "Table"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "table_partition",
+    "inverse_attribute": "tablePartition",
+    "owners": [
+     "TablePartition"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "view",
+    "inverse_attribute": "view",
+    "owners": [
+     "DatabricksMetricView",
+     "DremioVirtualDataset",
+     "View"
+    ],
+    "target_type": "Column"
+   },
+   {
+    "attribute": "columns",
+    "inverse": "table",
+    "inverse_attribute": "table",
+    "owners": [
+     "PowerBITable"
+    ],
+    "target_type": "PowerBIColumn"
+   }
+  ],
+  "context_artifacts": [
+   {
+    "attribute": "contextArtifacts",
+    "inverse": "context_repository",
+    "inverse_attribute": "contextRepository",
+    "owners": [
+     "ContextRepository"
+    ],
+    "target_type": "ContextArtifact"
+   }
+  ],
+  "context_output_agents": [
+   {
+    "attribute": "contextOutputAgents",
+    "inverse": "context_source_repository",
+    "inverse_attribute": "contextSourceRepository",
+    "owners": [
+     "ContextRepository"
+    ],
+    "target_type": "Agent"
+   }
+  ],
+  "cosmos_mongo_db_collections": [
+   {
+    "attribute": "cosmosMongoDBCollections",
+    "inverse": "cosmos_mongo_db_database",
+    "inverse_attribute": "cosmosMongoDBDatabase",
+    "owners": [
+     "CosmosMongoDBDatabase"
+    ],
+    "target_type": "CosmosMongoDBCollection"
+   }
+  ],
+  "cosmos_mongo_db_databases": [
+   {
+    "attribute": "cosmosMongoDBDatabases",
+    "inverse": "cosmos_mongo_db_account",
+    "inverse_attribute": "cosmosMongoDBAccount",
+    "owners": [
+     "CosmosMongoDBAccount"
+    ],
+    "target_type": "CosmosMongoDBDatabase"
+   }
+  ],
+  "cosmos_mongo_db_functions": [
+   {
+    "attribute": "cosmosMongoDBFunctions",
+    "inverse": "cosmos_mongo_db_collection",
+    "inverse_attribute": "cosmosMongoDBCollection",
+    "owners": [
+     "CosmosMongoDBCollection"
+    ],
+    "target_type": "Function"
+   }
+  ],
+  "cosmos_mongo_db_stored_procedures": [
+   {
+    "attribute": "cosmosMongoDBStoredProcedures",
+    "inverse": "cosmos_mongo_db_collection",
+    "inverse_attribute": "cosmosMongoDBCollection",
+    "owners": [
+     "CosmosMongoDBCollection"
+    ],
+    "target_type": "Procedure"
+   }
+  ],
+  "cube_dimensions": [
+   {
+    "attribute": "cubeDimensions",
+    "inverse": "cube",
+    "inverse_attribute": "cube",
+    "owners": [
+     "Cube"
+    ],
+    "target_type": "CubeDimension"
+   }
+  ],
+  "cube_fields": [
+   {
+    "attribute": "cubeFields",
+    "inverse": "cube_hierarchy",
+    "inverse_attribute": "cubeHierarchy",
+    "owners": [
+     "CubeHierarchy"
+    ],
+    "target_type": "CubeField"
+   }
+  ],
+  "cube_hierarchies": [
+   {
+    "attribute": "cubeHierarchies",
+    "inverse": "cube_dimension",
+    "inverse_attribute": "cubeDimension",
+    "owners": [
+     "CubeDimension"
+    ],
+    "target_type": "CubeHierarchy"
+   }
+  ],
+  "cube_nested_fields": [
+   {
+    "attribute": "cubeNestedFields",
+    "inverse": "cube_parent_field",
+    "inverse_attribute": "cubeParentField",
+    "owners": [
+     "CubeField"
+    ],
+    "target_type": "CubeField"
+   }
+  ],
+  "custom_child_entities": [
+   {
+    "attribute": "customChildEntities",
+    "inverse": "custom_parent_entity",
+    "inverse_attribute": "customParentEntity",
+    "owners": [
+     "CustomEntity"
+    ],
+    "target_type": "CustomEntity"
+   }
+  ],
+  "dashboards": [
+   {
+    "attribute": "dashboards",
+    "inverse": "folder",
+    "inverse_attribute": "folder",
+    "owners": [
+     "LookerFolder"
+    ],
+    "target_type": "LookerDashboard"
+   },
+   {
+    "attribute": "dashboards",
+    "inverse": "workspace",
+    "inverse_attribute": "workspace",
+    "owners": [
+     "PowerBIWorkspace"
+    ],
+    "target_type": "PowerBIDashboard"
+   },
+   {
+    "attribute": "dashboards",
+    "inverse": "organization",
+    "inverse_attribute": "organization",
+    "owners": [
+     "SalesforceOrganization"
+    ],
+    "target_type": "SalesforceDashboard"
+   },
+   {
+    "attribute": "dashboards",
+    "inverse": "workbook",
+    "inverse_attribute": "workbook",
+    "owners": [
+     "TableauWorkbook"
+    ],
+    "target_type": "TableauDashboard"
+   }
+  ],
+  "data_products": [
+   {
+    "attribute": "dataProducts",
+    "inverse": "data_domain",
+    "inverse_attribute": "dataDomain",
+    "owners": [
+     "DataDomain"
+    ],
+    "target_type": "DataProduct"
+   }
+  ],
+  "databricks_ai_model_contexts": [
+   {
+    "attribute": "databricksAIModelContexts",
+    "inverse": "databricks_ai_model_schema",
+    "inverse_attribute": "databricksAIModelSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "DatabricksAIModelContext"
+   }
+  ],
+  "databricks_ai_model_versions": [
+   {
+    "attribute": "databricksAIModelVersions",
+    "inverse": "databricks_ai_model_context",
+    "inverse_attribute": "databricksAIModelContext",
+    "owners": [
+     "DatabricksAIModelContext"
+    ],
+    "target_type": "DatabricksAIModelVersion"
+   }
+  ],
+  "databricks_external_location_paths": [
+   {
+    "attribute": "databricksExternalLocationPaths",
+    "inverse": "databricks_external_location",
+    "inverse_attribute": "databricksExternalLocation",
+    "owners": [
+     "DatabricksExternalLocation"
+    ],
+    "target_type": "DatabricksExternalLocationPath"
+   }
+  ],
+  "databricks_volume_paths": [
+   {
+    "attribute": "databricksVolumePaths",
+    "inverse": "databricks_volume",
+    "inverse_attribute": "databricksVolume",
+    "owners": [
+     "DatabricksVolume"
+    ],
+    "target_type": "DatabricksVolumePath"
+   }
+  ],
+  "databricks_volumes": [
+   {
+    "attribute": "databricksVolumes",
+    "inverse": "databricks_volume_schema",
+    "inverse_attribute": "databricksVolumeSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "DatabricksVolume"
+   }
+  ],
+  "dataflows": [
+   {
+    "attribute": "dataflows",
+    "inverse": "workspace",
+    "inverse_attribute": "workspace",
+    "owners": [
+     "PowerBIWorkspace"
+    ],
+    "target_type": "PowerBIDataflow"
+   }
+  ],
+  "datasets": [
+   {
+    "attribute": "datasets",
+    "inverse": "workspace",
+    "inverse_attribute": "workspace",
+    "owners": [
+     "PowerBIWorkspace"
+    ],
+    "target_type": "PowerBIDataset"
+   }
+  ],
+  "datasources": [
+   {
+    "attribute": "datasources",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "TableauProject"
+    ],
+    "target_type": "TableauDatasource"
+   },
+   {
+    "attribute": "datasources",
+    "inverse": "workbook",
+    "inverse_attribute": "workbook",
+    "owners": [
+     "TableauWorkbook"
+    ],
+    "target_type": "TableauDatasource"
+   }
+  ],
+  "dataverse_attributes": [
+   {
+    "attribute": "dataverseAttributes",
+    "inverse": "dataverse_entity",
+    "inverse_attribute": "dataverseEntity",
+    "owners": [
+     "DataverseEntity"
+    ],
+    "target_type": "DataverseAttribute"
+   }
+  ],
+  "dbt_metrics": [
+   {
+    "attribute": "dbtMetrics",
+    "inverse": "dbt_model",
+    "inverse_attribute": "dbtModel",
+    "owners": [
+     "DbtModel"
+    ],
+    "target_type": "DbtMetric"
+   }
+  ],
+  "dbt_model_columns": [
+   {
+    "attribute": "dbtModelColumns",
+    "inverse": "dbt_model",
+    "inverse_attribute": "dbtModel",
+    "owners": [
+     "DbtModel"
+    ],
+    "target_type": "DbtModelColumn"
+   },
+   {
+    "attribute": "dbtModelColumns",
+    "inverse": "dbt_seed",
+    "inverse_attribute": "dbtSeed",
+    "owners": [
+     "DbtSeed"
+    ],
+    "target_type": "DbtModelColumn"
+   },
+   {
+    "attribute": "dbtModelColumns",
+    "inverse": "sql_column",
+    "inverse_attribute": "sqlColumn",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "DbtModelColumn"
+   }
+  ],
+  "dbt_models": [
+   {
+    "attribute": "dbtModels",
+    "inverse": "sql_asset",
+    "inverse_attribute": "sqlAsset",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "DbtModel"
+   }
+  ],
+  "dbt_sources": [
+   {
+    "attribute": "dbtSources",
+    "inverse": "sql_asset",
+    "inverse_attribute": "sqlAsset",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "DbtSource"
+   }
+  ],
+  "document_db_collections": [
+   {
+    "attribute": "documentDBCollections",
+    "inverse": "document_db_database",
+    "inverse_attribute": "documentDBDatabase",
+    "owners": [
+     "DocumentDBDatabase"
+    ],
+    "target_type": "DocumentDBCollection"
+   }
+  ],
+  "domo_cards": [
+   {
+    "attribute": "domoCards",
+    "inverse": "domo_dataset",
+    "inverse_attribute": "domoDataset",
+    "owners": [
+     "DomoDataset"
+    ],
+    "target_type": "DomoCard"
+   }
+  ],
+  "domo_dashboard_children": [
+   {
+    "attribute": "domoDashboardChildren",
+    "inverse": "domo_dashboard_parent",
+    "inverse_attribute": "domoDashboardParent",
+    "owners": [
+     "DomoDashboard"
+    ],
+    "target_type": "DomoDashboard"
+   }
+  ],
+  "domo_dataset_columns": [
+   {
+    "attribute": "domoDatasetColumns",
+    "inverse": "domo_dataset",
+    "inverse_attribute": "domoDataset",
+    "owners": [
+     "DomoDataset"
+    ],
+    "target_type": "DomoDatasetColumn"
+   }
+  ],
+  "dq_base_column_rules": [
+   {
+    "attribute": "dqBaseColumnRules",
+    "inverse": "dq_rule_base_column",
+    "inverse_attribute": "dqRuleBaseColumn",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "DataQualityRule"
+   }
+  ],
+  "dq_base_dataset_rules": [
+   {
+    "attribute": "dqBaseDatasetRules",
+    "inverse": "dq_rule_base_dataset",
+    "inverse_attribute": "dqRuleBaseDataset",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AWS",
+     "AccessControl",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "Asset",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AtlasGlossary",
+     "AtlasGlossaryCategory",
+     "AtlasGlossaryTerm",
+     "AuthPolicy",
+     "AuthService",
+     "Azure",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BIProcess",
+     "Badge",
+     "BigqueryRoutine",
+     "BusinessPolicy",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cloud",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Collection",
+     "Column",
+     "ColumnProcess",
+     "Connection",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataSet",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "Flow",
+     "FlowControlOperation",
+     "FlowDataset",
+     "FlowDatasetOperation",
+     "FlowField",
+     "FlowFieldOperation",
+     "FlowFolder",
+     "FlowProject",
+     "FlowReusableUnit",
+     "Folder",
+     "Form",
+     "Function",
+     "GCPDataplex",
+     "GCPDataplexAspectType",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Google",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Incident",
+     "Infrastructure",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "Namespace",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "Persona",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Process",
+     "ProcessExecution",
+     "Purpose",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapDatasphereReplicationFlow",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Task",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View",
+     "Workflow"
+    ],
+    "target_type": "DataQualityRule"
+   }
+  ],
+  "dq_rules": [
+   {
+    "attribute": "dqRules",
+    "inverse": "dq_rule_template",
+    "inverse_attribute": "dqRuleTemplate",
+    "owners": [
+     "DataQualityRuleTemplate"
+    ],
+    "target_type": "DataQualityRule"
+   }
+  ],
+  "dremio_folders": [
+   {
+    "attribute": "dremioFolders",
+    "inverse": "dremio_source",
+    "inverse_attribute": "dremioSource",
+    "owners": [
+     "DremioSource"
+    ],
+    "target_type": "DremioFolder"
+   },
+   {
+    "attribute": "dremioFolders",
+    "inverse": "dremio_space",
+    "inverse_attribute": "dremioSpace",
+    "owners": [
+     "DremioSpace"
+    ],
+    "target_type": "DremioFolder"
+   }
+  ],
+  "dremio_physical_datasets": [
+   {
+    "attribute": "dremioPhysicalDatasets",
+    "inverse": "dremio_folder",
+    "inverse_attribute": "dremioFolder",
+    "owners": [
+     "DremioFolder"
+    ],
+    "target_type": "DremioPhysicalDataset"
+   },
+   {
+    "attribute": "dremioPhysicalDatasets",
+    "inverse": "dremio_source",
+    "inverse_attribute": "dremioSource",
+    "owners": [
+     "DremioSource"
+    ],
+    "target_type": "DremioPhysicalDataset"
+   }
+  ],
+  "dremio_sub_folders": [
+   {
+    "attribute": "dremioSubFolders",
+    "inverse": "dremio_parent_folder",
+    "inverse_attribute": "dremioParentFolder",
+    "owners": [
+     "DremioFolder"
+    ],
+    "target_type": "DremioFolder"
+   }
+  ],
+  "dremio_virtual_datasets": [
+   {
+    "attribute": "dremioVirtualDatasets",
+    "inverse": "dremio_folder",
+    "inverse_attribute": "dremioFolder",
+    "owners": [
+     "DremioFolder"
+    ],
+    "target_type": "DremioVirtualDataset"
+   },
+   {
+    "attribute": "dremioVirtualDatasets",
+    "inverse": "dremio_space",
+    "inverse_attribute": "dremioSpace",
+    "owners": [
+     "DremioSpace"
+    ],
+    "target_type": "DremioVirtualDataset"
+   }
+  ],
+  "dynamo_db_columns": [
+   {
+    "attribute": "dynamoDBColumns",
+    "inverse": "dynamo_db_table",
+    "inverse_attribute": "dynamoDBTable",
+    "owners": [
+     "DynamoDBTable"
+    ],
+    "target_type": "DynamoDBAttribute"
+   }
+  ],
+  "explores": [
+   {
+    "attribute": "explores",
+    "inverse": "model",
+    "inverse_attribute": "model",
+    "owners": [
+     "LookerModel"
+    ],
+    "target_type": "LookerExplore"
+   },
+   {
+    "attribute": "explores",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "LookerProject"
+    ],
+    "target_type": "LookerExplore"
+   }
+  ],
+  "fabric_activities": [
+   {
+    "attribute": "fabricActivities",
+    "inverse": "fabric_data_pipeline",
+    "inverse_attribute": "fabricDataPipeline",
+    "owners": [
+     "FabricDataPipeline"
+    ],
+    "target_type": "FabricActivity"
+   },
+   {
+    "attribute": "fabricActivities",
+    "inverse": "fabric_process",
+    "inverse_attribute": "fabricProcess",
+    "owners": [
+     "BIProcess",
+     "ColumnProcess",
+     "DbtColumnProcess",
+     "DbtProcess",
+     "FlowDatasetOperation",
+     "FlowFieldOperation",
+     "Process",
+     "SAPColumnProcess",
+     "SAPProcess"
+    ],
+    "target_type": "FabricActivity"
+   }
+  ],
+  "fabric_dashboards": [
+   {
+    "attribute": "fabricDashboards",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "FabricDashboard"
+   }
+  ],
+  "fabric_data_pipelines": [
+   {
+    "attribute": "fabricDataPipelines",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "FabricDataPipeline"
+   }
+  ],
+  "fabric_databases": [
+   {
+    "attribute": "fabricDatabases",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "Database"
+   }
+  ],
+  "fabric_dataflow_entity_columns": [
+   {
+    "attribute": "fabricDataflowEntityColumns",
+    "inverse": "fabric_dataflow",
+    "inverse_attribute": "fabricDataflow",
+    "owners": [
+     "FabricDataflow"
+    ],
+    "target_type": "FabricDataflowEntityColumn"
+   }
+  ],
+  "fabric_dataflows": [
+   {
+    "attribute": "fabricDataflows",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "FabricDataflow"
+   }
+  ],
+  "fabric_pages": [
+   {
+    "attribute": "fabricPages",
+    "inverse": "fabric_report",
+    "inverse_attribute": "fabricReport",
+    "owners": [
+     "FabricReport"
+    ],
+    "target_type": "FabricPage"
+   }
+  ],
+  "fabric_reports": [
+   {
+    "attribute": "fabricReports",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "FabricReport"
+   }
+  ],
+  "fabric_semantic_model_table_columns": [
+   {
+    "attribute": "fabricSemanticModelTableColumns",
+    "inverse": "fabric_semantic_model_table",
+    "inverse_attribute": "fabricSemanticModelTable",
+    "owners": [
+     "FabricSemanticModelTable"
+    ],
+    "target_type": "FabricSemanticModelTableColumn"
+   }
+  ],
+  "fabric_semantic_model_tables": [
+   {
+    "attribute": "fabricSemanticModelTables",
+    "inverse": "fabric_semantic_model",
+    "inverse_attribute": "fabricSemanticModel",
+    "owners": [
+     "FabricSemanticModel"
+    ],
+    "target_type": "FabricSemanticModelTable"
+   }
+  ],
+  "fabric_semantic_models": [
+   {
+    "attribute": "fabricSemanticModels",
+    "inverse": "fabric_workspace",
+    "inverse_attribute": "fabricWorkspace",
+    "owners": [
+     "FabricWorkspace"
+    ],
+    "target_type": "FabricSemanticModel"
+   }
+  ],
+  "fabric_visuals": [
+   {
+    "attribute": "fabricVisuals",
+    "inverse": "fabric_page",
+    "inverse_attribute": "fabricPage",
+    "owners": [
+     "FabricPage"
+    ],
+    "target_type": "FabricVisual"
+   }
+  ],
+  "fields": [
+   {
+    "attribute": "fields",
+    "inverse": "dashboard",
+    "inverse_attribute": "dashboard",
+    "owners": [
+     "LookerDashboard"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "explore",
+    "inverse_attribute": "explore",
+    "owners": [
+     "LookerExplore"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "look",
+    "inverse_attribute": "look",
+    "owners": [
+     "LookerLook"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "model",
+    "inverse_attribute": "model",
+    "owners": [
+     "LookerModel"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "LookerProject"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "tile",
+    "inverse_attribute": "tile",
+    "owners": [
+     "LookerTile"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "view",
+    "inverse_attribute": "view",
+    "owners": [
+     "LookerView"
+    ],
+    "target_type": "LookerField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "object",
+    "inverse_attribute": "object",
+    "owners": [
+     "SalesforceObject"
+    ],
+    "target_type": "SalesforceField"
+   },
+   {
+    "attribute": "fields",
+    "inverse": "datasource",
+    "inverse_attribute": "datasource",
+    "owners": [
+     "TableauDatasource"
+    ],
+    "target_type": "TableauDatasourceField"
+   }
+  ],
+  "files": [
+   {
+    "attribute": "files",
+    "inverse": "file_assets",
+    "inverse_attribute": "fileAssets",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AWS",
+     "AccessControl",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "Asset",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AtlasGlossary",
+     "AtlasGlossaryCategory",
+     "AtlasGlossaryTerm",
+     "AuthPolicy",
+     "AuthService",
+     "Azure",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BIProcess",
+     "Badge",
+     "BigqueryRoutine",
+     "BusinessPolicy",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cloud",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Collection",
+     "Column",
+     "ColumnProcess",
+     "Connection",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataSet",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "Flow",
+     "FlowControlOperation",
+     "FlowDataset",
+     "FlowDatasetOperation",
+     "FlowField",
+     "FlowFieldOperation",
+     "FlowFolder",
+     "FlowProject",
+     "FlowReusableUnit",
+     "Folder",
+     "Form",
+     "Function",
+     "GCPDataplex",
+     "GCPDataplexAspectType",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Google",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Incident",
+     "Infrastructure",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "Namespace",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "Persona",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Process",
+     "ProcessExecution",
+     "Purpose",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapDatasphereReplicationFlow",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Task",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View",
+     "Workflow"
+    ],
+    "target_type": "File"
+   }
+  ],
+  "flow_abstracts": [
+   {
+    "attribute": "flowAbstracts",
+    "inverse": "flow_detailed_by",
+    "inverse_attribute": "flowDetailedBy",
+    "owners": [
+     "FlowReusableUnit"
+    ],
+    "target_type": "FlowDataset"
+   }
+  ],
+  "flow_controlled_operations": [
+   {
+    "attribute": "flowControlledOperations",
+    "inverse": "flow_controlled_by",
+    "inverse_attribute": "flowControlledBy",
+    "owners": [
+     "FlowControlOperation",
+     "SapDatasphereReplicationFlow"
+    ],
+    "target_type": "FlowControlOperation"
+   }
+  ],
+  "flow_data_flows": [
+   {
+    "attribute": "flowDataFlows",
+    "inverse": "flow_reusable_unit",
+    "inverse_attribute": "flowReusableUnit",
+    "owners": [
+     "FlowReusableUnit"
+    ],
+    "target_type": "FlowDatasetOperation"
+   }
+  ],
+  "flow_data_results": [
+   {
+    "attribute": "flowDataResults",
+    "inverse": "flow_orchestrated_by",
+    "inverse_attribute": "flowOrchestratedBy",
+    "owners": [
+     "FlowControlOperation",
+     "SapDatasphereReplicationFlow"
+    ],
+    "target_type": "Process"
+   }
+  ],
+  "flow_datasets": [
+   {
+    "attribute": "flowDatasets",
+    "inverse": "flow_parent_unit",
+    "inverse_attribute": "flowParentUnit",
+    "owners": [
+     "FlowReusableUnit"
+    ],
+    "target_type": "FlowDataset"
+   }
+  ],
+  "flow_fields": [
+   {
+    "attribute": "flowFields",
+    "inverse": "flow_dataset",
+    "inverse_attribute": "flowDataset",
+    "owners": [
+     "FlowDataset"
+    ],
+    "target_type": "FlowField"
+   }
+  ],
+  "flow_sub_folders": [
+   {
+    "attribute": "flowSubFolders",
+    "inverse": "flow_parent_folder",
+    "inverse_attribute": "flowParentFolder",
+    "owners": [
+     "FlowFolder"
+    ],
+    "target_type": "FlowFolder"
+   }
+  ],
+  "flows": [
+   {
+    "attribute": "flows",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "TableauProject"
+    ],
+    "target_type": "TableauFlow"
+   }
+  ],
+  "foreign_key_to": [
+   {
+    "attribute": "foreignKeyTo",
+    "inverse": "foreign_key_from",
+    "inverse_attribute": "foreignKeyFrom",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "Column"
+   }
+  ],
+  "functions": [
+   {
+    "attribute": "functions",
+    "inverse": "function_schema",
+    "inverse_attribute": "functionSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "Function"
+   }
+  ],
+  "gcs_objects": [
+   {
+    "attribute": "gcsObjects",
+    "inverse": "gcs_bucket",
+    "inverse_attribute": "gcsBucket",
+    "owners": [
+     "GCSBucket"
+    ],
+    "target_type": "GCSObject"
+   }
+  ],
+  "iceberg_sub_namespaces": [
+   {
+    "attribute": "icebergSubNamespaces",
+    "inverse": "iceberg_parent_namespace",
+    "inverse_attribute": "icebergParentNamespace",
+    "owners": [
+     "IcebergNamespace"
+    ],
+    "target_type": "IcebergNamespace"
+   }
+  ],
+  "kafka_fields": [
+   {
+    "attribute": "kafkaFields",
+    "inverse": "kafka_topic",
+    "inverse_attribute": "kafkaTopic",
+    "owners": [
+     "AzureEventHub",
+     "KafkaTopic"
+    ],
+    "target_type": "KafkaField"
+   }
+  ],
+  "kafka_nested_fields": [
+   {
+    "attribute": "kafkaNestedFields",
+    "inverse": "kafka_parent_field",
+    "inverse_attribute": "kafkaParentField",
+    "owners": [
+     "KafkaField"
+    ],
+    "target_type": "KafkaField"
+   }
+  ],
+  "kafka_topics": [
+   {
+    "attribute": "kafkaTopics",
+    "inverse": "kafka_cluster",
+    "inverse_attribute": "kafkaCluster",
+    "owners": [
+     "KafkaCluster"
+    ],
+    "target_type": "KafkaTopic"
+   }
+  ],
+  "links": [
+   {
+    "attribute": "links",
+    "inverse": "asset",
+    "inverse_attribute": "asset",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AWS",
+     "AccessControl",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "Asset",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AtlasGlossary",
+     "AtlasGlossaryCategory",
+     "AtlasGlossaryTerm",
+     "AuthPolicy",
+     "AuthService",
+     "Azure",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BIProcess",
+     "Badge",
+     "BigqueryRoutine",
+     "BusinessPolicy",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cloud",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Collection",
+     "Column",
+     "ColumnProcess",
+     "Connection",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataSet",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "Flow",
+     "FlowControlOperation",
+     "FlowDataset",
+     "FlowDatasetOperation",
+     "FlowField",
+     "FlowFieldOperation",
+     "FlowFolder",
+     "FlowProject",
+     "FlowReusableUnit",
+     "Folder",
+     "Form",
+     "Function",
+     "GCPDataplex",
+     "GCPDataplexAspectType",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Google",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Incident",
+     "Infrastructure",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "Namespace",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "Persona",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Process",
+     "ProcessExecution",
+     "Purpose",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapDatasphereReplicationFlow",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeDynamicTable",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Task",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View",
+     "Workflow"
+    ],
+    "target_type": "Link"
+   }
+  ],
+  "looker_sub_folders": [
+   {
+    "attribute": "lookerSubFolders",
+    "inverse": "looker_parent_folder",
+    "inverse_attribute": "lookerParentFolder",
+    "owners": [
+     "LookerFolder"
+    ],
+    "target_type": "LookerFolder"
+   }
+  ],
+  "looks": [
+   {
+    "attribute": "looks",
+    "inverse": "dashboard",
+    "inverse_attribute": "dashboard",
+    "owners": [
+     "LookerDashboard"
+    ],
+    "target_type": "LookerLook"
+   },
+   {
+    "attribute": "looks",
+    "inverse": "folder",
+    "inverse_attribute": "folder",
+    "owners": [
+     "LookerFolder"
+    ],
+    "target_type": "LookerLook"
+   },
+   {
+    "attribute": "looks",
+    "inverse": "query",
+    "inverse_attribute": "query",
+    "owners": [
+     "LookerQuery"
+    ],
+    "target_type": "LookerLook"
+   }
+  ],
+  "materialised_views": [
+   {
+    "attribute": "materialisedViews",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "MaterialisedView"
+   }
+  ],
+  "matillion_components": [
+   {
+    "attribute": "matillionComponents",
+    "inverse": "matillion_job",
+    "inverse_attribute": "matillionJob",
+    "owners": [
+     "MatillionJob"
+    ],
+    "target_type": "MatillionComponent"
+   }
+  ],
+  "matillion_jobs": [
+   {
+    "attribute": "matillionJobs",
+    "inverse": "matillion_project",
+    "inverse_attribute": "matillionProject",
+    "owners": [
+     "MatillionProject"
+    ],
+    "target_type": "MatillionJob"
+   }
+  ],
+  "matillion_projects": [
+   {
+    "attribute": "matillionProjects",
+    "inverse": "matillion_group",
+    "inverse_attribute": "matillionGroup",
+    "owners": [
+     "MatillionGroup"
+    ],
+    "target_type": "MatillionProject"
+   }
+  ],
+  "mc_incidents": [
+   {
+    "attribute": "mcIncidents",
+    "inverse": "mc_monitor",
+    "inverse_attribute": "mcMonitor",
+    "owners": [
+     "MCMonitor"
+    ],
+    "target_type": "MCIncident"
+   }
+  ],
+  "measures": [
+   {
+    "attribute": "measures",
+    "inverse": "table",
+    "inverse_attribute": "table",
+    "owners": [
+     "PowerBITable"
+    ],
+    "target_type": "PowerBIMeasure"
+   }
+  ],
+  "metabase_dashboards": [
+   {
+    "attribute": "metabaseDashboards",
+    "inverse": "metabase_collection",
+    "inverse_attribute": "metabaseCollection",
+    "owners": [
+     "MetabaseCollection"
+    ],
+    "target_type": "MetabaseDashboard"
+   }
+  ],
+  "metabase_questions": [
+   {
+    "attribute": "metabaseQuestions",
+    "inverse": "metabase_collection",
+    "inverse_attribute": "metabaseCollection",
+    "owners": [
+     "MetabaseCollection"
+    ],
+    "target_type": "MetabaseQuestion"
+   }
+  ],
+  "metric_timestamps": [
+   {
+    "attribute": "metricTimestamps",
+    "inverse": "metric_timestamp_column",
+    "inverse_attribute": "metricTimestampColumn",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "Metric"
+   }
+  ],
+  "micro_strategy_attributes": [
+   {
+    "attribute": "microStrategyAttributes",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyAttribute"
+   }
+  ],
+  "micro_strategy_columns": [
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_attribute",
+    "inverse_attribute": "microStrategyAttribute",
+    "owners": [
+     "MicroStrategyAttribute"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_cube",
+    "inverse_attribute": "microStrategyCube",
+    "owners": [
+     "MicroStrategyCube"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_document",
+    "inverse_attribute": "microStrategyDocument",
+    "owners": [
+     "MicroStrategyDocument"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_dossier",
+    "inverse_attribute": "microStrategyDossier",
+    "owners": [
+     "MicroStrategyDossier"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_fact",
+    "inverse_attribute": "microStrategyFact",
+    "owners": [
+     "MicroStrategyFact"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_metric",
+    "inverse_attribute": "microStrategyMetric",
+    "owners": [
+     "MicroStrategyMetric"
+    ],
+    "target_type": "MicroStrategyColumn"
+   },
+   {
+    "attribute": "microStrategyColumns",
+    "inverse": "micro_strategy_report",
+    "inverse_attribute": "microStrategyReport",
+    "owners": [
+     "MicroStrategyReport"
+    ],
+    "target_type": "MicroStrategyColumn"
+   }
+  ],
+  "micro_strategy_cubes": [
+   {
+    "attribute": "microStrategyCubes",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyCube"
+   }
+  ],
+  "micro_strategy_documents": [
+   {
+    "attribute": "microStrategyDocuments",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyDocument"
+   }
+  ],
+  "micro_strategy_dossiers": [
+   {
+    "attribute": "microStrategyDossiers",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyDossier"
+   }
+  ],
+  "micro_strategy_facts": [
+   {
+    "attribute": "microStrategyFacts",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyFact"
+   }
+  ],
+  "micro_strategy_metrics": [
+   {
+    "attribute": "microStrategyMetrics",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyMetric"
+   }
+  ],
+  "micro_strategy_reports": [
+   {
+    "attribute": "microStrategyReports",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyReport"
+   }
+  ],
+  "micro_strategy_visualizations": [
+   {
+    "attribute": "microStrategyVisualizations",
+    "inverse": "micro_strategy_dossier",
+    "inverse_attribute": "microStrategyDossier",
+    "owners": [
+     "MicroStrategyDossier"
+    ],
+    "target_type": "MicroStrategyVisualization"
+   },
+   {
+    "attribute": "microStrategyVisualizations",
+    "inverse": "micro_strategy_project",
+    "inverse_attribute": "microStrategyProject",
+    "owners": [
+     "MicroStrategyProject"
+    ],
+    "target_type": "MicroStrategyVisualization"
+   }
+  ],
+  "mode_charts": [
+   {
+    "attribute": "modeCharts",
+    "inverse": "mode_query",
+    "inverse_attribute": "modeQuery",
+    "owners": [
+     "ModeQuery"
+    ],
+    "target_type": "ModeChart"
+   }
+  ],
+  "mode_collections": [
+   {
+    "attribute": "modeCollections",
+    "inverse": "mode_workspace",
+    "inverse_attribute": "modeWorkspace",
+    "owners": [
+     "ModeWorkspace"
+    ],
+    "target_type": "ModeCollection"
+   }
+  ],
+  "mode_queries": [
+   {
+    "attribute": "modeQueries",
+    "inverse": "mode_report",
+    "inverse_attribute": "modeReport",
+    "owners": [
+     "ModeReport"
+    ],
+    "target_type": "ModeQuery"
+   }
+  ],
+  "model_attribute_related_from_attributes": [
+   {
+    "attribute": "modelAttributeRelatedFromAttributes",
+    "inverse": "model_attribute_association_to",
+    "inverse_attribute": "modelAttributeAssociationTo",
+    "owners": [
+     "ModelAttribute"
+    ],
+    "target_type": "ModelAttributeAssociation"
+   }
+  ],
+  "model_attribute_related_to_attributes": [
+   {
+    "attribute": "modelAttributeRelatedToAttributes",
+    "inverse": "model_attribute_association_from",
+    "inverse_attribute": "modelAttributeAssociationFrom",
+    "owners": [
+     "ModelAttribute"
+    ],
+    "target_type": "ModelAttributeAssociation"
+   }
+  ],
+  "model_entity_related_from_entities": [
+   {
+    "attribute": "modelEntityRelatedFromEntities",
+    "inverse": "model_entity_association_to",
+    "inverse_attribute": "modelEntityAssociationTo",
+    "owners": [
+     "ModelEntity"
+    ],
+    "target_type": "ModelEntityAssociation"
+   }
+  ],
+  "model_entity_related_to_entities": [
+   {
+    "attribute": "modelEntityRelatedToEntities",
+    "inverse": "model_entity_association_from",
+    "inverse_attribute": "modelEntityAssociationFrom",
+    "owners": [
+     "ModelEntity"
+    ],
+    "target_type": "ModelEntityAssociation"
+   }
+  ],
+  "model_entity_specialization_entities": [
+   {
+    "attribute": "modelEntitySpecializationEntities",
+    "inverse": "model_entity_generalization_entity",
+    "inverse_attribute": "modelEntityGeneralizationEntity",
+    "owners": [
+     "ModelEntity"
+    ],
+    "target_type": "ModelEntity"
+   }
+  ],
+  "model_versions": [
+   {
+    "attribute": "modelVersions",
+    "inverse": "model_data_model",
+    "inverse_attribute": "modelDataModel",
+    "owners": [
+     "ModelDataModel"
+    ],
+    "target_type": "ModelVersion"
+   }
+  ],
+  "models": [
+   {
+    "attribute": "models",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "LookerProject"
+    ],
+    "target_type": "LookerModel"
+   }
+  ],
+  "mongo_db_collections": [
+   {
+    "attribute": "mongoDBCollections",
+    "inverse": "mongo_db_database",
+    "inverse_attribute": "mongoDBDatabase",
+    "owners": [
+     "CosmosMongoDBDatabase",
+     "MongoDBDatabase"
+    ],
+    "target_type": "MongoDBCollection"
+   }
+  ],
+  "mongo_db_columns": [
+   {
+    "attribute": "mongoDBColumns",
+    "inverse": "mongo_db_collection",
+    "inverse_attribute": "mongoDBCollection",
+    "owners": [
+     "CosmosMongoDBCollection",
+     "MongoDBCollection"
+    ],
+    "target_type": "Column"
+   }
+  ],
+  "nested_columns": [
+   {
+    "attribute": "nestedColumns",
+    "inverse": "parent_column",
+    "inverse_attribute": "parentColumn",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "Column"
+   }
+  ],
+  "objects": [
+   {
+    "attribute": "objects",
+    "inverse": "bucket",
+    "inverse_attribute": "bucket",
+    "owners": [
+     "S3Bucket"
+    ],
+    "target_type": "S3Object"
+   },
+   {
+    "attribute": "objects",
+    "inverse": "organization",
+    "inverse_attribute": "organization",
+    "owners": [
+     "SalesforceOrganization"
+    ],
+    "target_type": "SalesforceObject"
+   }
+  ],
+  "pages": [
+   {
+    "attribute": "pages",
+    "inverse": "report",
+    "inverse_attribute": "report",
+    "owners": [
+     "PowerBIReport"
+    ],
+    "target_type": "PowerBIPage"
+   }
+  ],
+  "partial_child_fields": [
+   {
+    "attribute": "partialChildFields",
+    "inverse": "partial_parent_asset",
+    "inverse_attribute": "partialParentAsset",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BigqueryRoutine",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Column",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "FlowDataset",
+     "FlowField",
+     "Function",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View"
+    ],
+    "target_type": "PartialField"
+   }
+  ],
+  "partial_child_objects": [
+   {
+    "attribute": "partialChildObjects",
+    "inverse": "partial_parent_asset",
+    "inverse_attribute": "partialParentAsset",
+    "owners": [
+     "ADF",
+     "ADLS",
+     "ADLSAccount",
+     "ADLSContainer",
+     "ADLSObject",
+     "AI",
+     "AIApplication",
+     "AIModel",
+     "AIModelVersion",
+     "API",
+     "APIField",
+     "APIObject",
+     "APIPath",
+     "APIQuery",
+     "APISpec",
+     "AdfActivity",
+     "AdfDataflow",
+     "AdfDataset",
+     "AdfLinkedservice",
+     "AdfPipeline",
+     "Agent",
+     "Agentic",
+     "Airflow",
+     "AirflowDag",
+     "AirflowTask",
+     "Anaplan",
+     "AnaplanApp",
+     "AnaplanDimension",
+     "AnaplanLineItem",
+     "AnaplanList",
+     "AnaplanModel",
+     "AnaplanModule",
+     "AnaplanPage",
+     "AnaplanSystemDimension",
+     "AnaplanView",
+     "AnaplanWorkspace",
+     "Anomalo",
+     "AnomaloCheck",
+     "App",
+     "AppWorkflowRun",
+     "Application",
+     "ApplicationField",
+     "Artifact",
+     "AssetGrouping",
+     "AssetGroupingCollection",
+     "AssetGroupingStrategy",
+     "AtlanApp",
+     "AtlanAppDeployment",
+     "AtlanAppInstalled",
+     "AtlanAppTool",
+     "AtlanAppWorkflow",
+     "AzureEventHub",
+     "AzureEventHubConsumerGroup",
+     "AzureServiceBus",
+     "AzureServiceBusNamespace",
+     "AzureServiceBusSchema",
+     "AzureServiceBusTopic",
+     "BI",
+     "BigqueryRoutine",
+     "CalculationView",
+     "Cassandra",
+     "CassandraColumn",
+     "CassandraIndex",
+     "CassandraKeyspace",
+     "CassandraTable",
+     "CassandraView",
+     "Catalog",
+     "Cognite",
+     "Cognite3DModel",
+     "CogniteAsset",
+     "CogniteEvent",
+     "CogniteFile",
+     "CogniteSequence",
+     "CogniteTimeSeries",
+     "Cognos",
+     "CognosColumn",
+     "CognosDashboard",
+     "CognosDataset",
+     "CognosDatasource",
+     "CognosExploration",
+     "CognosFile",
+     "CognosFolder",
+     "CognosModule",
+     "CognosPackage",
+     "CognosReport",
+     "Column",
+     "Context",
+     "ContextArtifact",
+     "ContextRepository",
+     "CosmosMongoDB",
+     "CosmosMongoDBAccount",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Cube",
+     "CubeDimension",
+     "CubeField",
+     "CubeHierarchy",
+     "Custom",
+     "CustomEntity",
+     "DataContract",
+     "DataDomain",
+     "DataMesh",
+     "DataMeshDataset",
+     "DataProduct",
+     "DataQuality",
+     "DataQualityRule",
+     "DataQualityRuleTemplate",
+     "DataStudio",
+     "DataStudioAsset",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "Dataverse",
+     "DataverseAttribute",
+     "DataverseEntity",
+     "Dbt",
+     "DbtColumnProcess",
+     "DbtDimension",
+     "DbtEntity",
+     "DbtMeasure",
+     "DbtMetric",
+     "DbtModel",
+     "DbtModelColumn",
+     "DbtProcess",
+     "DbtSeed",
+     "DbtSemanticModel",
+     "DbtSource",
+     "DbtTag",
+     "DbtTest",
+     "DocumentDB",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Domo",
+     "DomoCard",
+     "DomoDashboard",
+     "DomoDataset",
+     "DomoDatasetColumn",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDB",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "EventStore",
+     "Fabric",
+     "FabricActivity",
+     "FabricDashboard",
+     "FabricDataPipeline",
+     "FabricDataflow",
+     "FabricDataflowEntityColumn",
+     "FabricPage",
+     "FabricReport",
+     "FabricSemanticModel",
+     "FabricSemanticModelTable",
+     "FabricSemanticModelTableColumn",
+     "FabricVisual",
+     "FabricWorkspace",
+     "File",
+     "Fivetran",
+     "FivetranConnector",
+     "FlowDataset",
+     "FlowField",
+     "Function",
+     "GCS",
+     "GCSBucket",
+     "GCSObject",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "Insight",
+     "Kafka",
+     "KafkaCluster",
+     "KafkaConsumerGroup",
+     "KafkaField",
+     "KafkaTopic",
+     "Knowledge",
+     "KnowledgeFile",
+     "KnowledgeFolder",
+     "Link",
+     "Looker",
+     "LookerDashboard",
+     "LookerExplore",
+     "LookerField",
+     "LookerFolder",
+     "LookerLook",
+     "LookerModel",
+     "LookerProject",
+     "LookerQuery",
+     "LookerTile",
+     "LookerView",
+     "MCIncident",
+     "MCMonitor",
+     "MaterialisedView",
+     "Matillion",
+     "MatillionComponent",
+     "MatillionGroup",
+     "MatillionJob",
+     "MatillionProject",
+     "Metabase",
+     "MetabaseCollection",
+     "MetabaseDashboard",
+     "MetabaseQuestion",
+     "Metric",
+     "MicroStrategy",
+     "MicroStrategyAttribute",
+     "MicroStrategyColumn",
+     "MicroStrategyCube",
+     "MicroStrategyDocument",
+     "MicroStrategyDossier",
+     "MicroStrategyFact",
+     "MicroStrategyMetric",
+     "MicroStrategyProject",
+     "MicroStrategyReport",
+     "MicroStrategyVisualization",
+     "Mode",
+     "ModeChart",
+     "ModeCollection",
+     "ModeQuery",
+     "ModeReport",
+     "ModeWorkspace",
+     "Model",
+     "ModelAttribute",
+     "ModelAttributeAssociation",
+     "ModelDataModel",
+     "ModelEntity",
+     "ModelEntityAssociation",
+     "ModelVersion",
+     "MongoDB",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "MonteCarlo",
+     "MultiDimensionalDataset",
+     "NoSQL",
+     "Notebook",
+     "ObjectStore",
+     "Partial",
+     "PartialField",
+     "PartialObject",
+     "PowerBI",
+     "PowerBIApp",
+     "PowerBIColumn",
+     "PowerBIDashboard",
+     "PowerBIDataflow",
+     "PowerBIDataflowEntityColumn",
+     "PowerBIDataset",
+     "PowerBIDatasource",
+     "PowerBIMeasure",
+     "PowerBIPage",
+     "PowerBIReport",
+     "PowerBITable",
+     "PowerBITile",
+     "PowerBIWorkspace",
+     "Preset",
+     "PresetChart",
+     "PresetDashboard",
+     "PresetDataset",
+     "PresetWorkspace",
+     "Procedure",
+     "Qlik",
+     "QlikApp",
+     "QlikChart",
+     "QlikColumn",
+     "QlikDataset",
+     "QlikSheet",
+     "QlikSpace",
+     "Query",
+     "QuickSight",
+     "QuickSightAnalysis",
+     "QuickSightAnalysisVisual",
+     "QuickSightDashboard",
+     "QuickSightDashboardVisual",
+     "QuickSightDataset",
+     "QuickSightDatasetField",
+     "QuickSightFolder",
+     "Readme",
+     "ReadmeTemplate",
+     "Redash",
+     "RedashDashboard",
+     "RedashQuery",
+     "RedashVisualization",
+     "Resource",
+     "S3",
+     "S3Bucket",
+     "S3Object",
+     "S3Prefix",
+     "SAP",
+     "SAPBW",
+     "SAPBWADSO",
+     "SAPBWADSOField",
+     "SAPBWCompositeProvider",
+     "SAPBWCompositeProviderField",
+     "SAPBWDTP",
+     "SAPBWDataSource",
+     "SAPBWDataSourceField",
+     "SAPBWInfoArea",
+     "SAPBWInfoObject",
+     "SAPBWInfoSource",
+     "SAPBWInfoSourceField",
+     "SAPBWQuery",
+     "SAPBWQueryElement",
+     "SAPBWTransformation",
+     "SAPColumnProcess",
+     "SAPProcess",
+     "SQL",
+     "SSRS",
+     "SSRSDataSet",
+     "SSRSField",
+     "SSRSFolder",
+     "SSRSReport",
+     "SaaS",
+     "SageMaker",
+     "SageMakerFeature",
+     "SageMakerFeatureGroup",
+     "SageMakerModel",
+     "SageMakerModelDeployment",
+     "SageMakerModelGroup",
+     "SageMakerUnifiedStudio",
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioAssetSchema",
+     "SageMakerUnifiedStudioProject",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset",
+     "Salesforce",
+     "SalesforceDashboard",
+     "SalesforceField",
+     "SalesforceObject",
+     "SalesforceOrganization",
+     "SalesforceReport",
+     "SapErpAbapProgram",
+     "SapErpCdsView",
+     "SapErpColumn",
+     "SapErpComponent",
+     "SapErpFioriApp",
+     "SapErpFunctionModule",
+     "SapErpTable",
+     "SapErpTransactionCode",
+     "SapErpView",
+     "Schema",
+     "SchemaRegistry",
+     "SchemaRegistrySubject",
+     "SchemaRegistryVersion",
+     "Semantic",
+     "SemanticDimension",
+     "SemanticEntity",
+     "SemanticField",
+     "SemanticMeasure",
+     "SemanticModel",
+     "Sigma",
+     "SigmaDataElement",
+     "SigmaDataElementField",
+     "SigmaDataModel",
+     "SigmaDataModelColumn",
+     "SigmaDataset",
+     "SigmaDatasetColumn",
+     "SigmaPage",
+     "SigmaWorkbook",
+     "Sisense",
+     "SisenseDashboard",
+     "SisenseDatamodel",
+     "SisenseDatamodelTable",
+     "SisenseFolder",
+     "SisenseWidget",
+     "Skill",
+     "SkillArtifact",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Soda",
+     "SodaCheck",
+     "SourceTag",
+     "Spark",
+     "SparkJob",
+     "SqlInsight",
+     "SqlInsightBusinessQuestion",
+     "SqlInsightFilter",
+     "SqlInsightJoin",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Superset",
+     "SupersetChart",
+     "SupersetDashboard",
+     "SupersetDataset",
+     "Table",
+     "TablePartition",
+     "Tableau",
+     "TableauCalculatedField",
+     "TableauDashboard",
+     "TableauDashboardField",
+     "TableauDatasource",
+     "TableauDatasourceField",
+     "TableauFlow",
+     "TableauMetric",
+     "TableauProject",
+     "TableauSite",
+     "TableauWorkbook",
+     "TableauWorksheet",
+     "TableauWorksheetField",
+     "Tag",
+     "Thoughtspot",
+     "ThoughtspotAnswer",
+     "ThoughtspotColumn",
+     "ThoughtspotDashlet",
+     "ThoughtspotLiveboard",
+     "ThoughtspotTable",
+     "ThoughtspotView",
+     "ThoughtspotWorksheet",
+     "Unstructured",
+     "UnstructuredContainer",
+     "UnstructuredFolder",
+     "UnstructuredObject",
+     "View"
+    ],
+    "target_type": "PartialObject"
+   }
+  ],
+  "partitions": [
+   {
+    "attribute": "partitions",
+    "inverse": "parent_table",
+    "inverse_attribute": "parentTable",
+    "owners": [
+     "CosmosMongoDBCollection",
+     "DocumentDBCollection",
+     "DremioPhysicalDataset",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "IcebergTable",
+     "MongoDBCollection",
+     "StarburstDataset",
+     "Table"
+    ],
+    "target_type": "TablePartition"
+   }
+  ],
+  "policies": [
+   {
+    "attribute": "policies",
+    "inverse": "access_control",
+    "inverse_attribute": "accessControl",
+    "owners": [
+     "AccessControl",
+     "Persona",
+     "Purpose"
+    ],
+    "target_type": "AuthPolicy"
+   }
+  ],
+  "power_bi_dataflow_entity_columns": [
+   {
+    "attribute": "powerBIDataflowEntityColumns",
+    "inverse": "power_bi_dataflow",
+    "inverse_attribute": "powerBIDataflow",
+    "owners": [
+     "PowerBIDataflow"
+    ],
+    "target_type": "PowerBIDataflowEntityColumn"
+   }
+  ],
+  "power_bi_processes": [
+   {
+    "attribute": "powerBIProcesses",
+    "inverse": "power_bi_dataflow",
+    "inverse_attribute": "powerBIDataflow",
+    "owners": [
+     "PowerBIDataflow"
+    ],
+    "target_type": "Process"
+   }
+  ],
+  "preset_charts": [
+   {
+    "attribute": "presetCharts",
+    "inverse": "preset_dashboard",
+    "inverse_attribute": "presetDashboard",
+    "owners": [
+     "PresetDashboard"
+    ],
+    "target_type": "PresetChart"
+   }
+  ],
+  "preset_dashboards": [
+   {
+    "attribute": "presetDashboards",
+    "inverse": "preset_workspace",
+    "inverse_attribute": "presetWorkspace",
+    "owners": [
+     "PresetWorkspace"
+    ],
+    "target_type": "PresetDashboard"
+   }
+  ],
+  "preset_datasets": [
+   {
+    "attribute": "presetDatasets",
+    "inverse": "preset_dashboard",
+    "inverse_attribute": "presetDashboard",
+    "owners": [
+     "PresetDashboard"
+    ],
+    "target_type": "PresetDataset"
+   }
+  ],
+  "procedures": [
+   {
+    "attribute": "procedures",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "Procedure"
+   }
+  ],
+  "processes": [
+   {
+    "attribute": "processes",
+    "inverse": "adf_activity",
+    "inverse_attribute": "adfActivity",
+    "owners": [
+     "AdfActivity"
+    ],
+    "target_type": "Process"
+   },
+   {
+    "attribute": "processes",
+    "inverse": "fivetran_connector",
+    "inverse_attribute": "fivetranConnector",
+    "owners": [
+     "FivetranConnector"
+    ],
+    "target_type": "Process"
+   }
+  ],
+  "projects": [
+   {
+    "attribute": "projects",
+    "inverse": "site",
+    "inverse_attribute": "site",
+    "owners": [
+     "TableauSite"
+    ],
+    "target_type": "TableauProject"
+   }
+  ],
+  "qlik_apps": [
+   {
+    "attribute": "qlikApps",
+    "inverse": "qlik_space",
+    "inverse_attribute": "qlikSpace",
+    "owners": [
+     "QlikSpace"
+    ],
+    "target_type": "QlikApp"
+   }
+  ],
+  "qlik_charts": [
+   {
+    "attribute": "qlikCharts",
+    "inverse": "qlik_sheet",
+    "inverse_attribute": "qlikSheet",
+    "owners": [
+     "QlikSheet"
+    ],
+    "target_type": "QlikChart"
+   }
+  ],
+  "qlik_columns": [
+   {
+    "attribute": "qlikColumns",
+    "inverse": "qlik_chart",
+    "inverse_attribute": "qlikChart",
+    "owners": [
+     "QlikChart"
+    ],
+    "target_type": "QlikColumn"
+   },
+   {
+    "attribute": "qlikColumns",
+    "inverse": "qlik_dataset",
+    "inverse_attribute": "qlikDataset",
+    "owners": [
+     "QlikDataset"
+    ],
+    "target_type": "QlikColumn"
+   },
+   {
+    "attribute": "qlikColumns",
+    "inverse": "qlik_sheet",
+    "inverse_attribute": "qlikSheet",
+    "owners": [
+     "QlikSheet"
+    ],
+    "target_type": "QlikColumn"
+   }
+  ],
+  "qlik_datasets": [
+   {
+    "attribute": "qlikDatasets",
+    "inverse": "qlik_space",
+    "inverse_attribute": "qlikSpace",
+    "owners": [
+     "QlikSpace"
+    ],
+    "target_type": "QlikDataset"
+   }
+  ],
+  "qlik_sheets": [
+   {
+    "attribute": "qlikSheets",
+    "inverse": "qlik_app",
+    "inverse_attribute": "qlikApp",
+    "owners": [
+     "QlikApp"
+    ],
+    "target_type": "QlikSheet"
+   }
+  ],
+  "queries": [
+   {
+    "attribute": "queries",
+    "inverse": "model",
+    "inverse_attribute": "model",
+    "owners": [
+     "LookerModel"
+    ],
+    "target_type": "LookerQuery"
+   }
+  ],
+  "quick_sight_analysis_visuals": [
+   {
+    "attribute": "quickSightAnalysisVisuals",
+    "inverse": "quick_sight_analysis",
+    "inverse_attribute": "quickSightAnalysis",
+    "owners": [
+     "QuickSightAnalysis"
+    ],
+    "target_type": "QuickSightAnalysisVisual"
+   }
+  ],
+  "quick_sight_dashboard_visuals": [
+   {
+    "attribute": "quickSightDashboardVisuals",
+    "inverse": "quick_sight_dashboard",
+    "inverse_attribute": "quickSightDashboard",
+    "owners": [
+     "QuickSightDashboard"
+    ],
+    "target_type": "QuickSightDashboardVisual"
+   }
+  ],
+  "quick_sight_dataset_fields": [
+   {
+    "attribute": "quickSightDatasetFields",
+    "inverse": "quick_sight_dataset",
+    "inverse_attribute": "quickSightDataset",
+    "owners": [
+     "QuickSightDataset"
+    ],
+    "target_type": "QuickSightDatasetField"
+   }
+  ],
+  "redash_visualizations": [
+   {
+    "attribute": "redashVisualizations",
+    "inverse": "redash_query",
+    "inverse_attribute": "redashQuery",
+    "owners": [
+     "RedashQuery"
+    ],
+    "target_type": "RedashVisualization"
+   }
+  ],
+  "reports": [
+   {
+    "attribute": "reports",
+    "inverse": "dataset",
+    "inverse_attribute": "dataset",
+    "owners": [
+     "PowerBIDataset"
+    ],
+    "target_type": "PowerBIReport"
+   },
+   {
+    "attribute": "reports",
+    "inverse": "workspace",
+    "inverse_attribute": "workspace",
+    "owners": [
+     "PowerBIWorkspace"
+    ],
+    "target_type": "PowerBIReport"
+   },
+   {
+    "attribute": "reports",
+    "inverse": "organization",
+    "inverse_attribute": "organization",
+    "owners": [
+     "SalesforceOrganization"
+    ],
+    "target_type": "SalesforceReport"
+   }
+  ],
+  "s3_child_prefixes": [
+   {
+    "attribute": "s3ChildPrefixes",
+    "inverse": "s3_parent_prefix",
+    "inverse_attribute": "s3ParentPrefix",
+    "owners": [
+     "S3Prefix"
+    ],
+    "target_type": "S3Prefix"
+   }
+  ],
+  "s3_objects": [
+   {
+    "attribute": "s3Objects",
+    "inverse": "s3_prefix",
+    "inverse_attribute": "s3Prefix",
+    "owners": [
+     "S3Prefix"
+    ],
+    "target_type": "S3Object"
+   }
+  ],
+  "s3_prefixes": [
+   {
+    "attribute": "s3Prefixes",
+    "inverse": "s3_bucket",
+    "inverse_attribute": "s3Bucket",
+    "owners": [
+     "S3Bucket"
+    ],
+    "target_type": "S3Prefix"
+   }
+  ],
+  "sage_maker_features": [
+   {
+    "attribute": "sageMakerFeatures",
+    "inverse": "sage_maker_feature_group",
+    "inverse_attribute": "sageMakerFeatureGroup",
+    "owners": [
+     "SageMakerFeatureGroup"
+    ],
+    "target_type": "SageMakerFeature"
+   }
+  ],
+  "sage_maker_model_deployments": [
+   {
+    "attribute": "sageMakerModelDeployments",
+    "inverse": "sage_maker_model",
+    "inverse_attribute": "sageMakerModel",
+    "owners": [
+     "SageMakerModel"
+    ],
+    "target_type": "SageMakerModelDeployment"
+   }
+  ],
+  "sage_maker_models": [
+   {
+    "attribute": "sageMakerModels",
+    "inverse": "sage_maker_model_group",
+    "inverse_attribute": "sageMakerModelGroup",
+    "owners": [
+     "SageMakerModelGroup"
+    ],
+    "target_type": "SageMakerModel"
+   }
+  ],
+  "sap_bw_adso_fields": [
+   {
+    "attribute": "sapBwAdsoFields",
+    "inverse": "sap_bw_adso",
+    "inverse_attribute": "sapBwAdso",
+    "owners": [
+     "SAPBWADSO"
+    ],
+    "target_type": "SAPBWADSOField"
+   }
+  ],
+  "sap_bw_adsos": [
+   {
+    "attribute": "sapBwAdsos",
+    "inverse": "sap_bw_info_area",
+    "inverse_attribute": "sapBwInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWADSO"
+   }
+  ],
+  "sap_bw_child_info_areas": [
+   {
+    "attribute": "sapBwChildInfoAreas",
+    "inverse": "sap_bw_parent_info_area",
+    "inverse_attribute": "sapBwParentInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWInfoArea"
+   }
+  ],
+  "sap_bw_composite_provider_fields": [
+   {
+    "attribute": "sapBwCompositeProviderFields",
+    "inverse": "sap_bw_composite_provider",
+    "inverse_attribute": "sapBwCompositeProvider",
+    "owners": [
+     "SAPBWCompositeProvider"
+    ],
+    "target_type": "SAPBWCompositeProviderField"
+   }
+  ],
+  "sap_bw_composite_providers": [
+   {
+    "attribute": "sapBwCompositeProviders",
+    "inverse": "sap_bw_info_area",
+    "inverse_attribute": "sapBwInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWCompositeProvider"
+   }
+  ],
+  "sap_bw_data_source_fields": [
+   {
+    "attribute": "sapBwDataSourceFields",
+    "inverse": "sap_bw_data_source",
+    "inverse_attribute": "sapBwDataSource",
+    "owners": [
+     "SAPBWDataSource"
+    ],
+    "target_type": "SAPBWDataSourceField"
+   }
+  ],
+  "sap_bw_info_objects": [
+   {
+    "attribute": "sapBwInfoObjects",
+    "inverse": "sap_bw_info_area",
+    "inverse_attribute": "sapBwInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWInfoObject"
+   }
+  ],
+  "sap_bw_info_source_fields": [
+   {
+    "attribute": "sapBwInfoSourceFields",
+    "inverse": "sap_bw_info_source",
+    "inverse_attribute": "sapBwInfoSource",
+    "owners": [
+     "SAPBWInfoSource"
+    ],
+    "target_type": "SAPBWInfoSourceField"
+   }
+  ],
+  "sap_bw_info_sources": [
+   {
+    "attribute": "sapBwInfoSources",
+    "inverse": "sap_bw_info_area",
+    "inverse_attribute": "sapBwInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWInfoSource"
+   }
+  ],
+  "sap_bw_queries": [
+   {
+    "attribute": "sapBwQueries",
+    "inverse": "sap_bw_info_area",
+    "inverse_attribute": "sapBwInfoArea",
+    "owners": [
+     "SAPBWInfoArea"
+    ],
+    "target_type": "SAPBWQuery"
+   }
+  ],
+  "sap_bw_query_elements": [
+   {
+    "attribute": "sapBwQueryElements",
+    "inverse": "sap_bw_query",
+    "inverse_attribute": "sapBwQuery",
+    "owners": [
+     "SAPBWQuery"
+    ],
+    "target_type": "SAPBWQueryElement"
+   }
+  ],
+  "sap_datasphere_replication_flows": [
+   {
+    "attribute": "sapDatasphereReplicationFlows",
+    "inverse": "sap_datasphere_schema",
+    "inverse_attribute": "sapDatasphereSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SapDatasphereReplicationFlow"
+   }
+  ],
+  "sap_erp_abap_programs": [
+   {
+    "attribute": "sapErpAbapPrograms",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpAbapProgram"
+   }
+  ],
+  "sap_erp_cds_views": [
+   {
+    "attribute": "sapErpCdsViews",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpCdsView"
+   }
+  ],
+  "sap_erp_columns": [
+   {
+    "attribute": "sapErpColumns",
+    "inverse": "sap_erp_cds_view",
+    "inverse_attribute": "sapErpCdsView",
+    "owners": [
+     "SapErpCdsView"
+    ],
+    "target_type": "SapErpColumn"
+   },
+   {
+    "attribute": "sapErpColumns",
+    "inverse": "sap_erp_table",
+    "inverse_attribute": "sapErpTable",
+    "owners": [
+     "SapErpTable"
+    ],
+    "target_type": "SapErpColumn"
+   },
+   {
+    "attribute": "sapErpColumns",
+    "inverse": "sap_erp_view",
+    "inverse_attribute": "sapErpView",
+    "owners": [
+     "SapErpView"
+    ],
+    "target_type": "SapErpColumn"
+   }
+  ],
+  "sap_erp_fiori_apps": [
+   {
+    "attribute": "sapErpFioriApps",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpFioriApp"
+   }
+  ],
+  "sap_erp_function_modules": [
+   {
+    "attribute": "sapErpFunctionModules",
+    "inverse": "sap_erp_abap_program",
+    "inverse_attribute": "sapErpAbapProgram",
+    "owners": [
+     "SapErpAbapProgram"
+    ],
+    "target_type": "SapErpFunctionModule"
+   },
+   {
+    "attribute": "sapErpFunctionModules",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpFunctionModule"
+   }
+  ],
+  "sap_erp_tables": [
+   {
+    "attribute": "sapErpTables",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpTable"
+   }
+  ],
+  "sap_erp_transaction_codes": [
+   {
+    "attribute": "sapErpTransactionCodes",
+    "inverse": "sap_erp_abap_program",
+    "inverse_attribute": "sapErpAbapProgram",
+    "owners": [
+     "SapErpAbapProgram"
+    ],
+    "target_type": "SapErpTransactionCode"
+   },
+   {
+    "attribute": "sapErpTransactionCodes",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpTransactionCode"
+   }
+  ],
+  "sap_erp_views": [
+   {
+    "attribute": "sapErpViews",
+    "inverse": "sap_erp_component",
+    "inverse_attribute": "sapErpComponent",
+    "owners": [
+     "SapErpComponent"
+    ],
+    "target_type": "SapErpView"
+   }
+  ],
+  "schema_registry_versions": [
+   {
+    "attribute": "schemaRegistryVersions",
+    "inverse": "schema_registry_subject",
+    "inverse_attribute": "schemaRegistrySubject",
+    "owners": [
+     "SchemaRegistrySubject"
+    ],
+    "target_type": "SchemaRegistryVersion"
+   }
+  ],
+  "schemas": [
+   {
+    "attribute": "schemas",
+    "inverse": "database",
+    "inverse_attribute": "database",
+    "owners": [
+     "CosmosMongoDBDatabase",
+     "Database",
+     "DocumentDBDatabase",
+     "IcebergCatalog",
+     "MongoDBDatabase"
+    ],
+    "target_type": "Schema"
+   }
+  ],
+  "semantic_dimensions": [
+   {
+    "attribute": "semanticDimensions",
+    "inverse": "semantic_model",
+    "inverse_attribute": "semanticModel",
+    "owners": [
+     "DbtSemanticModel",
+     "SemanticModel",
+     "SnowflakeSemanticView"
+    ],
+    "target_type": "SemanticDimension"
+   }
+  ],
+  "semantic_entities": [
+   {
+    "attribute": "semanticEntities",
+    "inverse": "semantic_model",
+    "inverse_attribute": "semanticModel",
+    "owners": [
+     "DbtSemanticModel",
+     "SemanticModel",
+     "SnowflakeSemanticView"
+    ],
+    "target_type": "SemanticEntity"
+   }
+  ],
+  "semantic_measures": [
+   {
+    "attribute": "semanticMeasures",
+    "inverse": "semantic_model",
+    "inverse_attribute": "semanticModel",
+    "owners": [
+     "DbtSemanticModel",
+     "SemanticModel",
+     "SnowflakeSemanticView"
+    ],
+    "target_type": "SemanticMeasure"
+   }
+  ],
+  "sigma_data_element_fields": [
+   {
+    "attribute": "sigmaDataElementFields",
+    "inverse": "sigma_data_element",
+    "inverse_attribute": "sigmaDataElement",
+    "owners": [
+     "SigmaDataElement"
+    ],
+    "target_type": "SigmaDataElementField"
+   }
+  ],
+  "sigma_data_elements": [
+   {
+    "attribute": "sigmaDataElements",
+    "inverse": "sigma_page",
+    "inverse_attribute": "sigmaPage",
+    "owners": [
+     "SigmaPage"
+    ],
+    "target_type": "SigmaDataElement"
+   }
+  ],
+  "sigma_data_model_columns": [
+   {
+    "attribute": "sigmaDataModelColumns",
+    "inverse": "sigma_data_model",
+    "inverse_attribute": "sigmaDataModel",
+    "owners": [
+     "SigmaDataModel"
+    ],
+    "target_type": "SigmaDataModelColumn"
+   }
+  ],
+  "sigma_dataset_columns": [
+   {
+    "attribute": "sigmaDatasetColumns",
+    "inverse": "sigma_dataset",
+    "inverse_attribute": "sigmaDataset",
+    "owners": [
+     "SigmaDataset"
+    ],
+    "target_type": "SigmaDatasetColumn"
+   }
+  ],
+  "sigma_pages": [
+   {
+    "attribute": "sigmaPages",
+    "inverse": "sigma_workbook",
+    "inverse_attribute": "sigmaWorkbook",
+    "owners": [
+     "SigmaWorkbook"
+    ],
+    "target_type": "SigmaPage"
+   }
+  ],
+  "sisense_child_folders": [
+   {
+    "attribute": "sisenseChildFolders",
+    "inverse": "sisense_parent_folder",
+    "inverse_attribute": "sisenseParentFolder",
+    "owners": [
+     "SisenseFolder"
+    ],
+    "target_type": "SisenseFolder"
+   }
+  ],
+  "sisense_dashboards": [
+   {
+    "attribute": "sisenseDashboards",
+    "inverse": "sisense_folder",
+    "inverse_attribute": "sisenseFolder",
+    "owners": [
+     "SisenseFolder"
+    ],
+    "target_type": "SisenseDashboard"
+   }
+  ],
+  "sisense_datamodel_tables": [
+   {
+    "attribute": "sisenseDatamodelTables",
+    "inverse": "sisense_datamodel",
+    "inverse_attribute": "sisenseDatamodel",
+    "owners": [
+     "SisenseDatamodel"
+    ],
+    "target_type": "SisenseDatamodelTable"
+   }
+  ],
+  "sisense_widgets": [
+   {
+    "attribute": "sisenseWidgets",
+    "inverse": "sisense_dashboard",
+    "inverse_attribute": "sisenseDashboard",
+    "owners": [
+     "SisenseDashboard"
+    ],
+    "target_type": "SisenseWidget"
+   },
+   {
+    "attribute": "sisenseWidgets",
+    "inverse": "sisense_folder",
+    "inverse_attribute": "sisenseFolder",
+    "owners": [
+     "SisenseFolder"
+    ],
+    "target_type": "SisenseWidget"
+   }
+  ],
+  "skill_artifacts": [
+   {
+    "attribute": "skillArtifacts",
+    "inverse": "skill_source",
+    "inverse_attribute": "skillSource",
+    "owners": [
+     "Skill"
+    ],
+    "target_type": "SkillArtifact"
+   }
+  ],
+  "smus_asset_schemas": [
+   {
+    "attribute": "smusAssetSchemas",
+    "inverse": "smus_asset",
+    "inverse_attribute": "smusAsset",
+    "owners": [
+     "SageMakerUnifiedStudioAsset",
+     "SageMakerUnifiedStudioPublishedAsset",
+     "SageMakerUnifiedStudioSubscribedAsset"
+    ],
+    "target_type": "SageMakerUnifiedStudioAssetSchema"
+   }
+  ],
+  "smus_published_assets": [
+   {
+    "attribute": "smusPublishedAssets",
+    "inverse": "smus_project",
+    "inverse_attribute": "smusProject",
+    "owners": [
+     "SageMakerUnifiedStudioProject"
+    ],
+    "target_type": "SageMakerUnifiedStudioPublishedAsset"
+   }
+  ],
+  "smus_subscribed_assets": [
+   {
+    "attribute": "smusSubscribedAssets",
+    "inverse": "smus_project",
+    "inverse_attribute": "smusProject",
+    "owners": [
+     "SageMakerUnifiedStudioProject"
+    ],
+    "target_type": "SageMakerUnifiedStudioSubscribedAsset"
+   },
+   {
+    "attribute": "smusSubscribedAssets",
+    "inverse": "smus_published_asset",
+    "inverse_attribute": "smusPublishedAsset",
+    "owners": [
+     "SageMakerUnifiedStudioPublishedAsset"
+    ],
+    "target_type": "SageMakerUnifiedStudioSubscribedAsset"
+   }
+  ],
+  "snowflake_ai_model_contexts": [
+   {
+    "attribute": "snowflakeAIModelContexts",
+    "inverse": "snowflake_ai_model_schema",
+    "inverse_attribute": "snowflakeAIModelSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeAIModelContext"
+   }
+  ],
+  "snowflake_ai_model_versions": [
+   {
+    "attribute": "snowflakeAIModelVersions",
+    "inverse": "snowflake_ai_model_context",
+    "inverse_attribute": "snowflakeAIModelContext",
+    "owners": [
+     "SnowflakeAIModelContext"
+    ],
+    "target_type": "SnowflakeAIModelVersion"
+   }
+  ],
+  "snowflake_semantic_dimensions": [
+   {
+    "attribute": "snowflakeSemanticDimensions",
+    "inverse": "snowflake_semantic_logical_table",
+    "inverse_attribute": "snowflakeSemanticLogicalTable",
+    "owners": [
+     "SnowflakeSemanticLogicalTable"
+    ],
+    "target_type": "SnowflakeSemanticDimension"
+   }
+  ],
+  "snowflake_semantic_facts": [
+   {
+    "attribute": "snowflakeSemanticFacts",
+    "inverse": "snowflake_semantic_logical_table",
+    "inverse_attribute": "snowflakeSemanticLogicalTable",
+    "owners": [
+     "SnowflakeSemanticLogicalTable"
+    ],
+    "target_type": "SnowflakeSemanticFact"
+   }
+  ],
+  "snowflake_semantic_logical_tables": [
+   {
+    "attribute": "snowflakeSemanticLogicalTables",
+    "inverse": "snowflake_base_table",
+    "inverse_attribute": "snowflakeBaseTable",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "SnowflakeSemanticLogicalTable"
+   },
+   {
+    "attribute": "snowflakeSemanticLogicalTables",
+    "inverse": "snowflake_semantic_view",
+    "inverse_attribute": "snowflakeSemanticView",
+    "owners": [
+     "SnowflakeSemanticView"
+    ],
+    "target_type": "SnowflakeSemanticLogicalTable"
+   }
+  ],
+  "snowflake_semantic_metrics": [
+   {
+    "attribute": "snowflakeSemanticMetrics",
+    "inverse": "snowflake_semantic_logical_table",
+    "inverse_attribute": "snowflakeSemanticLogicalTable",
+    "owners": [
+     "SnowflakeSemanticLogicalTable"
+    ],
+    "target_type": "SnowflakeSemanticMetric"
+   }
+  ],
+  "snowflake_semantic_views": [
+   {
+    "attribute": "snowflakeSemanticViews",
+    "inverse": "snowflake_semantic_view_schema",
+    "inverse_attribute": "snowflakeSemanticViewSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "SnowflakeSemanticView"
+   }
+  ],
+  "snowflake_shares": [
+   {
+    "attribute": "snowflakeShares",
+    "inverse": "snowflake_listing",
+    "inverse_attribute": "snowflakeListing",
+    "owners": [
+     "SnowflakeListing"
+    ],
+    "target_type": "SnowflakeShare"
+   }
+  ],
+  "spark_jobs": [
+   {
+    "attribute": "sparkJobs",
+    "inverse": "process",
+    "inverse_attribute": "process",
+    "owners": [
+     "BIProcess",
+     "ColumnProcess",
+     "DbtColumnProcess",
+     "DbtProcess",
+     "FlowDatasetOperation",
+     "FlowFieldOperation",
+     "Process",
+     "SAPColumnProcess",
+     "SAPProcess"
+    ],
+    "target_type": "SparkJob"
+   }
+  ],
+  "sql_insight_business_questions": [
+   {
+    "attribute": "sqlInsightBusinessQuestions",
+    "inverse": "sql_insight_dataset",
+    "inverse_attribute": "sqlInsightDataset",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "SqlInsightBusinessQuestion"
+   }
+  ],
+  "sql_insight_filters": [
+   {
+    "attribute": "sqlInsightFilters",
+    "inverse": "sql_insight_column",
+    "inverse_attribute": "sqlInsightColumn",
+    "owners": [
+     "Column",
+     "DremioColumn",
+     "DynamoDBAttribute",
+     "IcebergColumn",
+     "StarburstDatasetColumn"
+    ],
+    "target_type": "SqlInsightFilter"
+   }
+  ],
+  "sql_insight_incoming_joins": [
+   {
+    "attribute": "sqlInsightIncomingJoins",
+    "inverse": "sql_insight_joined_dataset",
+    "inverse_attribute": "sqlInsightJoinedDataset",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "SqlInsightJoin"
+   }
+  ],
+  "sql_insight_outgoing_joins": [
+   {
+    "attribute": "sqlInsightOutgoingJoins",
+    "inverse": "sql_insight_source_dataset",
+    "inverse_attribute": "sqlInsightSourceDataset",
+    "owners": [
+     "BigqueryRoutine",
+     "CalculationView",
+     "Column",
+     "CosmosMongoDBCollection",
+     "CosmosMongoDBDatabase",
+     "Database",
+     "Databricks",
+     "DatabricksAIModelContext",
+     "DatabricksAIModelVersion",
+     "DatabricksDashboard",
+     "DatabricksExternalLocation",
+     "DatabricksExternalLocationPath",
+     "DatabricksGenieAgent",
+     "DatabricksMetricView",
+     "DatabricksNotebook",
+     "DatabricksVolume",
+     "DatabricksVolumePath",
+     "DocumentDBCollection",
+     "DocumentDBDatabase",
+     "Dremio",
+     "DremioColumn",
+     "DremioFolder",
+     "DremioPhysicalDataset",
+     "DremioSource",
+     "DremioSpace",
+     "DremioVirtualDataset",
+     "DynamoDBAttribute",
+     "DynamoDBSecondaryIndex",
+     "DynamoDBTable",
+     "Function",
+     "Iceberg",
+     "IcebergCatalog",
+     "IcebergColumn",
+     "IcebergNamespace",
+     "IcebergTable",
+     "MaterialisedView",
+     "MongoDBCollection",
+     "MongoDBDatabase",
+     "Procedure",
+     "Query",
+     "SQL",
+     "SapErpColumn",
+     "Schema",
+     "Snowflake",
+     "SnowflakeAIModelContext",
+     "SnowflakeAIModelVersion",
+     "SnowflakeListing",
+     "SnowflakeSemanticDimension",
+     "SnowflakeSemanticFact",
+     "SnowflakeSemanticLogicalTable",
+     "SnowflakeSemanticMetric",
+     "SnowflakeSemanticView",
+     "SnowflakeShare",
+     "Starburst",
+     "StarburstDataset",
+     "StarburstDatasetColumn",
+     "Table",
+     "TablePartition",
+     "View"
+    ],
+    "target_type": "SqlInsightJoin"
+   }
+  ],
+  "ssrs_data_sets": [
+   {
+    "attribute": "ssrsDataSets",
+    "inverse": "ssrs_report",
+    "inverse_attribute": "ssrsReport",
+    "owners": [
+     "SSRSReport"
+    ],
+    "target_type": "SSRSDataSet"
+   }
+  ],
+  "ssrs_fields": [
+   {
+    "attribute": "ssrsFields",
+    "inverse": "ssrs_data_set",
+    "inverse_attribute": "ssrsDataSet",
+    "owners": [
+     "SSRSDataSet"
+    ],
+    "target_type": "SSRSField"
+   }
+  ],
+  "ssrs_reports": [
+   {
+    "attribute": "ssrsReports",
+    "inverse": "ssrs_folder",
+    "inverse_attribute": "ssrsFolder",
+    "owners": [
+     "SSRSFolder"
+    ],
+    "target_type": "SSRSReport"
+   }
+  ],
+  "ssrs_sub_folders": [
+   {
+    "attribute": "ssrsSubFolders",
+    "inverse": "ssrs_parent_folder",
+    "inverse_attribute": "ssrsParentFolder",
+    "owners": [
+     "SSRSFolder"
+    ],
+    "target_type": "SSRSFolder"
+   }
+  ],
+  "starburst_dataset_columns": [
+   {
+    "attribute": "starburstDatasetColumns",
+    "inverse": "starburst_dataset",
+    "inverse_attribute": "starburstDataset",
+    "owners": [
+     "StarburstDataset"
+    ],
+    "target_type": "StarburstDatasetColumn"
+   }
+  ],
+  "starburst_datasets": [
+   {
+    "attribute": "starburstDatasets",
+    "inverse": "starburst_data_product",
+    "inverse_attribute": "starburstDataProduct",
+    "owners": [
+     "DataProduct"
+    ],
+    "target_type": "StarburstDataset"
+   }
+  ],
+  "sub_domains": [
+   {
+    "attribute": "subDomains",
+    "inverse": "parent_domain",
+    "inverse_attribute": "parentDomain",
+    "owners": [
+     "DataDomain"
+    ],
+    "target_type": "DataDomain"
+   }
+  ],
+  "superset_charts": [
+   {
+    "attribute": "supersetCharts",
+    "inverse": "superset_dashboard",
+    "inverse_attribute": "supersetDashboard",
+    "owners": [
+     "SupersetDashboard"
+    ],
+    "target_type": "SupersetChart"
+   }
+  ],
+  "superset_datasets": [
+   {
+    "attribute": "supersetDatasets",
+    "inverse": "superset_dashboard",
+    "inverse_attribute": "supersetDashboard",
+    "owners": [
+     "SupersetDashboard"
+    ],
+    "target_type": "SupersetDataset"
+   }
+  ],
+  "tableau_dashboard_fields": [
+   {
+    "attribute": "tableauDashboardFields",
+    "inverse": "tableau_dashboard",
+    "inverse_attribute": "tableauDashboard",
+    "owners": [
+     "TableauDashboard"
+    ],
+    "target_type": "TableauDashboardField"
+   }
+  ],
+  "tableau_worksheet_fields": [
+   {
+    "attribute": "tableauWorksheetFields",
+    "inverse": "tableau_worksheet",
+    "inverse_attribute": "tableauWorksheet",
+    "owners": [
+     "TableauWorksheet"
+    ],
+    "target_type": "TableauWorksheetField"
+   }
+  ],
+  "tables": [
+   {
+    "attribute": "tables",
+    "inverse": "dataset",
+    "inverse_attribute": "dataset",
+    "owners": [
+     "PowerBIDataset"
+    ],
+    "target_type": "PowerBITable"
+   },
+   {
+    "attribute": "tables",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "Table"
+   }
+  ],
+  "terms": [
+   {
+    "attribute": "terms",
+    "inverse": "anchor",
+    "inverse_attribute": "anchor",
+    "owners": [
+     "AtlasGlossary"
+    ],
+    "target_type": "AtlasGlossaryTerm"
+   }
+  ],
+  "thoughtspot_columns": [
+   {
+    "attribute": "thoughtspotColumns",
+    "inverse": "thoughtspot_table",
+    "inverse_attribute": "thoughtspotTable",
+    "owners": [
+     "ThoughtspotTable"
+    ],
+    "target_type": "ThoughtspotColumn"
+   },
+   {
+    "attribute": "thoughtspotColumns",
+    "inverse": "thoughtspot_view",
+    "inverse_attribute": "thoughtspotView",
+    "owners": [
+     "ThoughtspotView"
+    ],
+    "target_type": "ThoughtspotColumn"
+   },
+   {
+    "attribute": "thoughtspotColumns",
+    "inverse": "thoughtspot_worksheet",
+    "inverse_attribute": "thoughtspotWorksheet",
+    "owners": [
+     "ThoughtspotWorksheet"
+    ],
+    "target_type": "ThoughtspotColumn"
+   }
+  ],
+  "thoughtspot_dashlets": [
+   {
+    "attribute": "thoughtspotDashlets",
+    "inverse": "thoughtspot_liveboard",
+    "inverse_attribute": "thoughtspotLiveboard",
+    "owners": [
+     "ThoughtspotLiveboard"
+    ],
+    "target_type": "ThoughtspotDashlet"
+   }
+  ],
+  "tiles": [
+   {
+    "attribute": "tiles",
+    "inverse": "dashboard",
+    "inverse_attribute": "dashboard",
+    "owners": [
+     "LookerDashboard"
+    ],
+    "target_type": "LookerTile"
+   },
+   {
+    "attribute": "tiles",
+    "inverse": "query",
+    "inverse_attribute": "query",
+    "owners": [
+     "LookerQuery"
+    ],
+    "target_type": "LookerTile"
+   },
+   {
+    "attribute": "tiles",
+    "inverse": "dashboard",
+    "inverse_attribute": "dashboard",
+    "owners": [
+     "PowerBIDashboard"
+    ],
+    "target_type": "PowerBITile"
+   },
+   {
+    "attribute": "tiles",
+    "inverse": "dataset",
+    "inverse_attribute": "dataset",
+    "owners": [
+     "PowerBIDataset"
+    ],
+    "target_type": "PowerBITile"
+   },
+   {
+    "attribute": "tiles",
+    "inverse": "report",
+    "inverse_attribute": "report",
+    "owners": [
+     "PowerBIReport"
+    ],
+    "target_type": "PowerBITile"
+   }
+  ],
+  "unstructured_child_folders": [
+   {
+    "attribute": "unstructuredChildFolders",
+    "inverse": "unstructured_parent_folder",
+    "inverse_attribute": "unstructuredParentFolder",
+    "owners": [
+     "UnstructuredFolder"
+    ],
+    "target_type": "UnstructuredFolder"
+   }
+  ],
+  "unstructured_folders": [
+   {
+    "attribute": "unstructuredFolders",
+    "inverse": "unstructured_container",
+    "inverse_attribute": "unstructuredContainer",
+    "owners": [
+     "UnstructuredContainer"
+    ],
+    "target_type": "UnstructuredFolder"
+   }
+  ],
+  "unstructured_objects": [
+   {
+    "attribute": "unstructuredObjects",
+    "inverse": "unstructured_container",
+    "inverse_attribute": "unstructuredContainer",
+    "owners": [
+     "UnstructuredContainer"
+    ],
+    "target_type": "UnstructuredObject"
+   },
+   {
+    "attribute": "unstructuredObjects",
+    "inverse": "unstructured_parent_folder",
+    "inverse_attribute": "unstructuredParentFolder",
+    "owners": [
+     "UnstructuredFolder"
+    ],
+    "target_type": "UnstructuredObject"
+   }
+  ],
+  "views": [
+   {
+    "attribute": "views",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "LookerProject"
+    ],
+    "target_type": "LookerView"
+   },
+   {
+    "attribute": "views",
+    "inverse": "atlan_schema",
+    "inverse_attribute": "atlanSchema",
+    "owners": [
+     "IcebergNamespace",
+     "Schema"
+    ],
+    "target_type": "View"
+   }
+  ],
+  "workbooks": [
+   {
+    "attribute": "workbooks",
+    "inverse": "project",
+    "inverse_attribute": "project",
+    "owners": [
+     "TableauProject"
+    ],
+    "target_type": "TableauWorkbook"
+   }
+  ],
+  "worksheets": [
+   {
+    "attribute": "worksheets",
+    "inverse": "workbook",
+    "inverse_attribute": "workbook",
+    "owners": [
+     "TableauWorkbook"
+    ],
+    "target_type": "TableauWorksheet"
+   }
+  ]
+ }
+}

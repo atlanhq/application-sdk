@@ -216,6 +216,28 @@ def test_missing_integration_suite_counts_against() -> None:
     assert _gate(sc, "all-green").status == "pass"
 
 
+def test_crashed_integration_job_is_a_failing_tier_not_an_absent_one() -> None:
+    """A job that died before pytest is a present, failing tier (FND-3299).
+
+    Same empty junit as the missing-suite case above, opposite verdict: the
+    tier is present, its pass-rate names the crash, all-green fails, and
+    maturity cannot pass bronze.
+    """
+    sc = _build(
+        RawTests(
+            unit=TierTestCounts(total=10, passed=10),
+            integration=TierTestCounts(job_failed=True),
+        ),
+    )
+    it = _tier(sc, "integration")
+    assert it.present is True
+    pass_rate = next(c for c in it.checks if c.id == "integration.pass-rate")
+    assert (pass_rate.score, pass_rate.value) == (0.0, "job failed")
+    assert _gate(sc, "all-green").status == "fail"
+    assert "all-green" in sc.aggregate.capped_by
+    assert sc.aggregate.maturity == "bronze"
+
+
 def test_all_gates_always_reported() -> None:
     sc = _build(RawTests(unit=TierTestCounts(total=1, passed=1)))
     assert {g.id for g in sc.gates} == {"unit-present", "all-green", "e2e-present"}

@@ -8,6 +8,7 @@ from application_sdk.common.aws_utils_errors import (
     AwsClientCreationError,
     AwsCredentialSourceConflictError,
     AwsCredentialSourceMissingError,
+    AwsPartialCredentialsError,
     AwsRdsTokenError,
     AwsRegionNotFoundError,
 )
@@ -20,6 +21,21 @@ if TYPE_CHECKING:
 from application_sdk.observability.logger_adaptor import get_logger
 
 logger = get_logger(__name__)
+
+
+def _normalize_external_id(external_id: str | None) -> str | None:
+    """Return the STS ``ExternalId`` to send, or ``None`` to omit it.
+
+    Shared by every ``AssumeRole`` call site so they agree on what counts as
+    "set". Surrounding whitespace is stripped: STS's ExternalId pattern
+    (``[\\w+=,.@:/-]*``) admits none, so a padded value pasted into a credential
+    form can only ever fail. A blank result is ``None``, because STS rejects an
+    empty ExternalId (min length 2) and trust policies without an external-id
+    condition must not be forced to send one.
+    """
+    if external_id is None:
+        return None
+    return external_id.strip() or None
 
 
 def get_region_name_from_hostname(hostname: str) -> str:
@@ -51,6 +67,9 @@ def generate_aws_rds_token_with_iam_role(
     session_name: str = AWS_SESSION_NAME,
     port: int = 5432,
     region: str | None = None,
+    aws_access_key_id: str | None = None,
+    aws_secret_access_key: str | None = None,
+    aws_session_token: str | None = None,
 ) -> str:
     """
     Get temporary AWS credentials by assuming a role and generate RDS auth token.
@@ -63,9 +82,36 @@ def generate_aws_rds_token_with_iam_role(
         session_name (str, optional): Name of the temporary session
         port (int, optional): Database port
         region (str, optional): AWS region name
+        aws_access_key_id (str, optional): Access key for the STS ``assume_role``
+            call. Supply with ``aws_secret_access_key`` to authenticate
+            explicitly instead of via boto3's default credential chain.
+        aws_secret_access_key (str, optional): Secret key paired with
+            ``aws_access_key_id``. Both must be given, or both omitted (``None``);
+            a half-supplied pair raises ``AwsPartialCredentialsError`` rather
+            than falling through to the default chain.
+        aws_session_token (str, optional): Session token for temporary caller
+            credentials. Requires the access-key pair; omitted when using
+            long-lived keys.
     Returns:
         str: RDS authentication token
+
+    Raises:
+        AwsPartialCredentialsError: If exactly one of ``aws_access_key_id`` /
+            ``aws_secret_access_key`` is supplied, or if ``aws_session_token``
+            is supplied without the pair.
     """
+    # Fail closed on a partial pair before any AWS call: falling through to
+    # the default chain would assume the role as whatever ambient identity is
+    # present, not the account the caller meant. Default chain only when both
+    # keys are omitted (None). A session token is only valid with the pair.
+    has_access_key = aws_access_key_id is not None
+    has_secret_key = aws_secret_access_key is not None
+    has_session_token = aws_session_token is not None
+    if has_access_key != has_secret_key or (
+        has_session_token and not (has_access_key and has_secret_key)
+    ):
+        raise AwsPartialCredentialsError()
+
     from botocore.exceptions import (  # noqa: PLC0415 — optional dep: botocore
         ClientError,
     )
@@ -73,24 +119,34 @@ def generate_aws_rds_token_with_iam_role(
     try:
         from boto3 import client  # noqa: PLC0415 — optional dep: boto3
 
-        sts_client = client(
-            "sts", region_name=region or get_region_name_from_hostname(host)
-        )
-        # Only include ExternalId when set — AWS STS rejects an empty
-        # ExternalId (min length 2). Trust policies without an external-id
-        # requirement are valid and must not be forced to send one.
+        resolved_region = region or get_region_name_from_hostname(host)
+        # Take credentials explicitly when the caller has them, mirroring
+        # generate_aws_rds_token_with_iam_user above. Without this parameter a
+        # caller holding resolved credentials can only reach the default chain
+        # by staging them into os.environ and restoring them afterwards — and
+        # os.environ is process-global, so concurrent callers race: one can
+        # observe another's staged value as the "original" and restore a live
+        # credential into the ambient environment instead of clearing it.
+        sts_kwargs: dict[str, Any] = {"region_name": resolved_region}
+        if has_access_key and has_secret_key:
+            sts_kwargs["aws_access_key_id"] = aws_access_key_id
+            sts_kwargs["aws_secret_access_key"] = aws_secret_access_key
+            if has_session_token:
+                sts_kwargs["aws_session_token"] = aws_session_token
+        sts_client = client("sts", **sts_kwargs)
         assume_role_kwargs: dict[str, Any] = {
             "RoleArn": role_arn,
             "RoleSessionName": session_name,
         }
-        if external_id:
-            assume_role_kwargs["ExternalId"] = external_id
+        resolved_external_id = _normalize_external_id(external_id)
+        if resolved_external_id:
+            assume_role_kwargs["ExternalId"] = resolved_external_id
         assumed_role = sts_client.assume_role(**assume_role_kwargs)
 
         credentials = assumed_role["Credentials"]
         aws_client = create_aws_client(
             service="rds",
-            region=region or get_region_name_from_hostname(host),
+            region=resolved_region,
             temp_credentials=credentials,
         )
         token: str = aws_client.generate_db_auth_token(

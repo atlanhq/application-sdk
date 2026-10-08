@@ -71,6 +71,74 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 **zero C002 findings**. One that appears means Phase 0 did not converge, and is
 an independent check on the same property.
 
+## Reference apps — load before any fix, verify against them after
+
+Do not fix from memory. Every app-facing rule names a `canonical_reference`
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
+maintained reference apps that already has the compliant shape. Before the
+first edit of a run, make the **full checkout** of all three available:
+
+```
+REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+mkdir -p "$REFS"
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
+  if [ -d "$REFS/$app/.git" ]; then
+    git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+  fi
+done
+echo "$REFS"
+```
+
+The clones live **outside the repo** on purpose, and every later read uses the
+absolute path the snippet echoes (shell state does not carry between
+commands). Anything inside the repo is part of what `detect` scans: a
+reference app cloned under `remediation/` put its `@entrypoint`s into the F016
+matrix and produced dozens of false BLOCK failures. The reference checkouts
+are read-only — never edited, never committed, never in a fix's
+`touched_files`.
+
+For every finding, in this order (the full contract is
+`$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,
+impact analysis and verification*):
+
+1. **Read** the file the finding's `canonical_reference` names — the whole
+   file — then grep that reference app for the same pattern, and mirror it.
+   Never invent an API, kwarg or config key the reference app does not use.
+2. **Analyse the impact** across the whole repo before applying: callers and
+   importers, tests that pin the old behaviour, the contract and generated
+   tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every
+   in-scope consequence into the same edit; list the rest in `impact`.
+3. **Verify** after applying and record it in `verification`: the finding is
+   gone (`recheck-narrowest`), the orthogonal gate passed, a whole-series
+   re-detect on the touched files introduced **no new finding for any rule**,
+   and the fixed site now reads like the reference. All four true, or revert.
+4. **Review the consequences** once verified: what did the fix change
+   behaviourally (control flow, signatures, runtime surfaces the gates do not
+   exercise, new runtime dependencies), and who is affected? Fix what is in
+   scope in the same unit and re-verify; list the rest in `impact.after`. An
+   empty `after` is a claim that nothing follows from the fix.
+5. **A suppression is a rule-defect signal.** If the finding will not clear
+   and the only way out is `# conformance: ignore[<RULE>]`, classify why:
+   `site-exception` (rule is right, this site is a justified carve-out — the
+   normal strict-mode suppression), `false-positive` (code matches the
+   reference app, detector still flags it) or `prescription-defect` (the
+   prescribed edit cannot clear it). For the last two, run
+   `$PROGRAMS/functions/report-rule-defect.prose.md`: it opens a
+   `fix(conformance):` PR against `atlanhq/application-sdk` with a failing
+   reproducer test (and the checker/prescription fix when local), for the SDK
+   owners to review. Suppress only WARN-tier findings for these reasons, and
+   only citing that PR in the justification; BLOCK-tier stays in residue with
+   the PR link. Never merge that PR; never edit this repo's own gate.
+
+`autofixable = true` rules (the **auto-fixable** ruleset) are applied this
+way. `autofixable = false` rules (the **migration** ruleset) are never applied
+by the loop: steps 1–2 still run, and the result is a `migration_brief` in
+residue — target state in the reference app, files that would change, and the
+rule's `remediation_reference` — for the connector's per-rule sub-issue. See
+*After the loop — migration hand-off*.
+
 ## Phase 1+ — run the loop
 
 Only after Phase 0 has converged (or been recorded as residue):
@@ -80,6 +148,49 @@ Only after Phase 0 has converged (or been recorded as residue):
    - Anywhere else: `PROGRAMS=$(uvx atlan-application-sdk-conformance@latest programs-dir)`
 2. Read `$PROGRAMS/conformance-remediation.prose.md` and execute it as the entry contract.
 3. All gated re-checks call `atlan-application-sdk-conformance detect` — follow the .prose.md exactly.
+
+## After the loop — migration hand-off
+
+Residue entries for migration rules carry `remediation_reference`
+(`kind`, `target`, `note`). Group them by reference, then:
+
+- `kind = skill` — interactive sessions only (a developer is present).
+  Resolve the skills directory the same way as the programs directory:
+  `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
+  connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
+  anywhere else. The skills to run are every skill named by a residue
+  entry, plus every skill whose `also_clears` frontmatter list names a symbol
+  that a B001, B008 or P005 finding reports: those findings point at another
+  skill, but this one performs their migration. Run them one at a time, in
+  the order of `$SKILLS/order.txt` and never another: an earlier skill can be
+  a precondition of a later one (`migrate-off-daft` must cross the daft
+  cliff before any skill that bumps the SDK). Routed work runs wherever
+  `order.txt` places the receiving skill, before or after the sender: the
+  receiver is selected up front from the findings, not when the sender reaches
+  the site. For each skill:
+  1. Tell the developer which rule ids and how many findings it covers, and
+     ask before starting it.
+  2. Read `$SKILLS/<target>/SKILL.md` and follow it, stop points included.
+     While it runs, the skill's declared `outputs` replace this loop's write
+     scope: it may edit `tests/`, `uv.lock` and other files the loop never
+     touches. This exception to the write-scope constraint holds only while
+     the skill runs, and only because the developer reviews each step.
+  3. When it ends, run the orthogonal test gate, then
+     `atlan-application-sdk-conformance detect --rule <ids>` for the rule ids
+     it names. A cleared finding is removed from residue; a remaining one
+     stays in residue with the skill named. If the test gate fails, do not
+     revert the skill's changes: show the developer the failing tests, let
+     them decide, and keep the skill's findings in residue with the failure.
+  4. Record in residue every file the skill changed under `tests/` and any
+     `uv.lock` change, for human review.
+- `kind = guide` — apply nothing. Report the rule ids with the guide path
+  `$(dirname "$PROGRAMS")/<target>`.
+- `kind = decision` — apply nothing. Report the rule ids, who decides
+  (`target`) and the choice (`note`).
+
+Headless runs — the caller's prompt says the run is non-interactive, as in the
+remediation lane, so no developer is present — skip the hand-off: the residue
+report lists each reference and nothing is started.
 
 ## Arguments → program inputs
 

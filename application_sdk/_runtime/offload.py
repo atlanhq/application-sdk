@@ -27,19 +27,24 @@ import multiprocessing
 import os
 import re
 import threading
+import time
 from collections.abc import Callable, Iterator
 from concurrent.futures.process import BrokenProcessPool
-from typing import Any, TypeVar
+from typing import Any, Generic, ParamSpec, TypeVar
 
 from application_sdk._runtime.progress import (
+    DEFAULT_MAX_NO_PROGRESS_SECONDS,
+    ProgressTracker,
     current_progress_tracker,
     declared_hold_active,
 )
+from application_sdk.errors import InvalidInputValueError
 from application_sdk.observability.logger_adaptor import AtlanLoggerAdapter, get_logger
 
 logger = get_logger(__name__)
 
 T = TypeVar("T")
+P = ParamSpec("P")
 
 # Dedicated executor for blocking operations dispatched via run_in_thread().
 #
@@ -61,6 +66,165 @@ _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=min(32, (os.cpu_count() or 1) + 4),
     thread_name_prefix="sdk-blocking-",
 )
+
+# Executor for CancelHandle actions — a driver cancel (cursor.cancel(), a
+# statement-cancel request) fired when the task awaiting a run_in_thread call is
+# cancelled.
+#
+# Why not _BLOCKING_EXECUTOR?
+#   The cancel matters most when that pool is saturated by the very calls being
+#   abandoned. Queued behind them, the cancel would run only once one of them
+#   finished on its own — which is what it exists to avoid.
+#
+# Why not the loop?
+#   A driver cancel is a blocking network round trip.
+#
+# Small, because an action is one short call; created at import like the pool
+# above, and for the same reason.
+_CANCEL_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4,
+    thread_name_prefix="sdk-cancel-",
+)
+
+
+class CancelHandle:
+    """Cancel a blocking call at the driver when its awaiting task is cancelled.
+
+    ``run_in_thread`` cannot stop its worker thread: Python has no way to kill
+    one. Cancelling the awaiting task hands the loop back at once, but the
+    thread runs on, holding a pool slot, a connection and server-side compute
+    until the call returns by itself. A handle closes that gap for calls whose
+    driver *can* be told to stop::
+
+        handle = CancelHandle()
+
+        def _query() -> list[Row]:
+            cursor = connection.cursor()
+            handle.set(cursor.cancel)  # from the worker thread, once it exists
+            cursor.execute(sql)
+            return cursor.fetchall()
+
+        rows = await run_in_thread(handle.bind(_query))
+
+    :meth:`bind` attaches the handle to the callable rather than to
+    ``run_in_thread``'s own arguments, so every keyword still reaches ``func``.
+    When the awaiting task is cancelled, ``run_in_thread`` calls
+    :meth:`request`, which runs the registered action on a small dedicated
+    ``sdk-cancel-`` pool — never on the event loop, and never on the
+    ``sdk-blocking-`` pool, which is likely full of exactly the calls being
+    abandoned. The driver call then fails or returns early in its own thread,
+    and the thread and its pool slot are freed.
+
+    **The action is set from the worker thread**, because that is usually the
+    only place the driver handle exists, and often only part-way through the
+    call (a query id known only after submit). If a cancel was requested before
+    :meth:`set` is called, the action is fired as soon as it is set.
+
+    Each action fires at most once. A failing action is logged at WARNING and
+    never raised: by then the caller has already been cancelled.
+
+    Thread-safe. One handle per call; it is not reusable across calls.
+
+    **Never stop or suspend a warehouse from an action.** A cancel stops *this*
+    statement. A warehouse that the statement started resuming keeps resuming,
+    and stopping it would take it away from every other user of it.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._action: Callable[[], None] | None = None
+        self._requested = False
+
+    @property
+    def requested(self) -> bool:
+        """Whether a cancel has been requested.
+
+        Worker code checks this between steps (a ``fetchmany`` loop, a batch of
+        statements) to stop work nobody is waiting for.
+        """
+        return self._requested
+
+    def bind(self, func: Callable[P, T]) -> Callable[P, T]:
+        """*func*, carrying this handle to :func:`run_in_thread`.
+
+        The returned callable calls *func* with whatever it is given, so
+        ``run_in_thread(handle.bind(func), *args, **kwargs)`` passes every
+        argument through unchanged; ``run_in_thread`` only reads the handle off
+        it. Called directly, it behaves exactly like *func*.
+        """
+        return _BoundCall(func, self)
+
+    def set(self, action: Callable[[], None]) -> None:
+        """Register the driver-level cancel for the call in progress.
+
+        Call this from the worker thread as soon as the driver handle exists.
+        A later ``set`` replaces an action that has not fired. If a cancel was
+        already requested, ``action`` is fired immediately instead of stored.
+
+        Args:
+            action: Zero-argument callable that tells the driver to stop, e.g.
+                ``cursor.cancel``. Must not stop or suspend a warehouse.
+        """
+        with self._lock:
+            if not self._requested:
+                self._action = action
+                return
+        _fire_cancel_action(action)
+
+    def request(self) -> None:
+        """Request a cancel: fire the registered action, if any, at most once.
+
+        Called by ``run_in_thread`` when its awaiting task is cancelled. Returns
+        without waiting for the action, which runs on the ``sdk-cancel-`` pool.
+        """
+        with self._lock:
+            self._requested = True
+            action, self._action = self._action, None
+        if action is not None:
+            _fire_cancel_action(action)
+
+
+class _BoundCall(Generic[P, T]):
+    """A callable carrying the :class:`CancelHandle` it was bound to."""
+
+    __slots__ = ("func", "handle")
+
+    def __init__(self, func: Callable[P, T], handle: CancelHandle) -> None:
+        self.func = func
+        self.handle = handle
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> T:
+        return self.func(*args, **kwargs)
+
+
+def _bound_handle(func: Callable[..., Any]) -> CancelHandle | None:
+    """The handle *func* was bound to, looking through ``functools.partial``."""
+    target: Any = func
+    while isinstance(target, functools.partial):
+        target = target.func
+    return target.handle if isinstance(target, _BoundCall) else None
+
+
+def _fire_cancel_action(action: Callable[[], None]) -> None:
+    """Run a cancel action on the cancel pool; log, never raise, a failure."""
+    try:
+        _CANCEL_EXECUTOR.submit(_run_cancel_action, action)
+    except RuntimeError:
+        # Shut down at interpreter exit; the process is going, and its
+        # connections with it.
+        logger.debug("Cancel pool is shut down; skipped cancel action", exc_info=True)
+
+
+def _run_cancel_action(action: Callable[[], None]) -> None:
+    try:
+        action()
+    except Exception:
+        logger.warning(
+            "Cancel action %s failed; the blocking call it was meant to stop "
+            "may run to completion",
+            _offloaded_callable_name(action),
+            exc_info=True,
+        )
 
 
 #: Label prefixes for the auto-holds on the two offload seams (ADR-0018 →
@@ -118,7 +282,7 @@ def _offloaded_callable_name(func: Callable[..., Any]) -> str:
     advertises is cheap to actually enforce.
     """
     target: Any = func
-    while isinstance(target, functools.partial):
+    while isinstance(target, (functools.partial, _BoundCall)):
         target = target.func
     for attribute in ("__qualname__", "__name__"):
         name = getattr(target, attribute, None)
@@ -190,7 +354,11 @@ def _auto_hold(label: str, timeout: float | None) -> Iterator[None]:
         tracker.exit_hold(hold)
 
 
-async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
+async def run_in_thread(
+    func: Callable[..., T],
+    *args: Any,
+    **kwargs: Any,
+) -> T:
     """Last-resort escape hatch: run a blocking function in a thread pool.
 
     .. warning::
@@ -263,10 +431,20 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     forever, the thread runs forever — this orphans state and consumes
     pool slots even after the activity is retried.
 
+    **Cancelling at the driver.** Cancelling the awaiting task returns control
+    at once, but the thread runs on. If the driver can stop the call from
+    another thread, bind a :class:`CancelHandle` to ``func``
+    (``run_in_thread(handle.bind(func), ...)``) and register the driver's
+    cancel on it from inside ``func``; the handle is fired when the awaiting
+    task is cancelled, and ``CancelledError`` is re-raised as usual. The handle
+    travels on the callable, never in ``**kwargs``, so every keyword argument
+    still reaches ``func`` — no name is reserved.
+
     Args:
         func: Blocking function to run. MUST have internal timeout handling.
+            A :meth:`CancelHandle.bind` result is cancelled at the driver too.
         *args: Positional arguments for ``func``.
-        **kwargs: Keyword arguments for ``func``.
+        **kwargs: Keyword arguments for ``func``, all passed through.
 
     Returns:
         Result of ``func(*args, **kwargs)``.
@@ -291,11 +469,188 @@ async def run_in_thread(func: Callable[..., T], *args: Any, **kwargs: Any) -> T:
     # inactive for the call's duration, the duration backstop owns it, and warn
     # mode reports every closed hold with its observed duration. That residual
     # is accepted and surfaced, not closed.
-    with _auto_hold(_THREAD_HOLD_PREFIX + _offloaded_callable_name(func), None):
-        return await loop.run_in_executor(
-            _BLOCKING_EXECUTOR,
-            functools.partial(ctx.run, functools.partial(func, *args, **kwargs)),
+    call: Callable[[], T] = functools.partial(
+        ctx.run, functools.partial(func, *args, **kwargs)
+    )
+    label = _offloaded_callable_name(func)
+    scopes = _OFFLOAD_SCOPES.get()
+    if scopes:
+        call = _tracked_offload(call, scopes, label)
+    cancel_handle = _bound_handle(func)
+    with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
+        if cancel_handle is None:
+            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+        try:
+            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+        except asyncio.CancelledError:
+            # Non-blocking: the action is handed to the cancel pool.
+            cancel_handle.request()
+            raise
+
+
+#: The open :func:`tracking_offloads` scopes, innermost last. A tuple rather
+#: than one set so a nested scope does not hide its calls from an enclosing one:
+#: each ``run_in_thread`` records its marker in every open scope. Tasks copy the
+#: context when they are created, so a ``TaskGroup`` opened inside a scope hands
+#: the same sets to every child.
+_OFFLOAD_SCOPES: contextvars.ContextVar[tuple[set["_OffloadMarker"], ...]] = (
+    contextvars.ContextVar("_OFFLOAD_SCOPES", default=())
+)
+
+
+class _OffloadMarker(concurrent.futures.Future[None]):
+    """A tracked call's marker, carrying the callable's name for the drain's log."""
+
+    def __init__(self, label: str) -> None:
+        super().__init__()
+        self.label = label
+
+
+def _tracked_offload(
+    call: Callable[[], T],
+    scopes: tuple[set[_OffloadMarker], ...],
+    label: str,
+) -> Callable[[], T]:
+    """Wrap *call* so the open scopes can see whether its thread is still running.
+
+    The asyncio future ``run_in_executor`` returns cannot answer that: cancelling
+    the awaiting task cancels it at once, while the thread it stood for runs on.
+    The marker is a separate ``concurrent.futures.Future`` the thread itself
+    drives — ``RUNNING`` for exactly as long as *call* is executing — so a drain
+    waits on the work, not on the task that stopped waiting for it.
+    """
+    marker = _OffloadMarker(label)
+    for pending in scopes:
+        pending.add(marker)
+
+    def _forget(done: "concurrent.futures.Future[None]") -> None:
+        for pending in scopes:
+            pending.discard(done)
+
+    marker.add_done_callback(_forget)
+
+    def _run() -> T:
+        # A drain cancels markers still PENDING — calls queued behind a full
+        # pool whose caller has already gone — so they never start, rather
+        # than being waited on to run work nobody wants.
+        if not marker.set_running_or_notify_cancel():
+            raise concurrent.futures.CancelledError
+        try:
+            return call()
+        finally:
+            marker.set_result(None)
+
+    return _run
+
+
+@contextlib.contextmanager
+def tracking_offloads() -> Iterator[set[_OffloadMarker]]:
+    """Record every ``run_in_thread`` call made under this block, in any task.
+
+    Yields the live set of markers for calls that have not finished; pass it to
+    :func:`drain_offloads` to wait for them. Calls made in tasks created inside
+    the block are recorded too, because a task inherits the context it was
+    created in.
+    """
+    pending: set[_OffloadMarker] = set()
+    token = _OFFLOAD_SCOPES.set((*_OFFLOAD_SCOPES.get(), pending))
+    try:
+        yield pending
+    finally:
+        _OFFLOAD_SCOPES.reset(token)
+
+
+async def drain_offloads(
+    pending: set[_OffloadMarker],
+    *,
+    max_no_progress_seconds: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Wait until no thread recorded in *pending* is still running, or none is progressing.
+
+    For the unwind path of a fan-out that was cancelled or failed: its tasks
+    have stopped awaiting their threads, but the threads have not stopped, and
+    whatever they write can land after the caller has moved on — a retry
+    included. Calls still queued are cancelled so they never start.
+
+    A cancellation arriving *during* the drain does not cut it short — that
+    would reopen the gap being closed — but it is not lost: it is re-raised once
+    the drain ends.
+
+    **The drain waits only while it is getting somewhere.** It keeps its own
+    stall clock, re-armed each time one of its threads finishes, and gives up
+    once that clock reaches the no-progress allowance — the attempt's resolved
+    ``max_no_progress_seconds``, the number the stall watchdog applies, or
+    :data:`DEFAULT_MAX_NO_PROGRESS_SECONDS` outside an activity. This is
+    enforced whatever ``ATLAN_PROGRESS_WATCHDOG`` says, because the alternative
+    is not "wait a little longer": the calls drained here (an ``fsync``, a file
+    read) take no timeout, so one wedged volume would hold the drain, the
+    cancellation it is holding back, and the worker's shutdown behind it
+    forever.
+
+    It is deliberately not the attempt's own tracker. That one is re-armed by
+    any work in the attempt and vouched for by every other offload's unbounded
+    hold, so it cannot say whether *these* threads are moving; only their
+    finishing can.
+
+    Giving up is logged at WARNING with the calls still running, and then the
+    drain returns — or re-raises the cancellation it was holding — so the
+    caller's own failure propagates unchanged. Those threads are not stopped
+    (a thread cannot be); a call that later completes can still write.
+
+    Args:
+        pending: The live marker set from :func:`tracking_offloads`.
+        max_no_progress_seconds: Override for the allowance; tests use it.
+        clock: Monotonic time source for the drain's stall clock.
+    """
+    # list() snapshots under the GIL; worker threads discard as they finish.
+    running = [
+        marker for marker in list(pending) if not marker.cancel() and not marker.done()
+    ]
+    if not running:
+        return
+    budget = max_no_progress_seconds
+    if budget is None:
+        budget = current_progress_tracker().max_no_progress_seconds
+    if budget is None:
+        budget = DEFAULT_MAX_NO_PROGRESS_SECONDS
+
+    # Only a drained thread finishing is progress here; see the docstring.
+    progress = ProgressTracker(clock=clock)
+    waiting = {asyncio.wrap_future(marker): marker for marker in running}
+    for marker in running:
+        marker.add_done_callback(
+            lambda _done, label=marker.label: progress.mark_progress(label)
         )
+
+    cancelled = False
+    while True:
+        remaining = [w for w, marker in waiting.items() if not marker.done()]
+        if not remaining:
+            break
+        quiet = progress.stalled_for()
+        if quiet >= budget:
+            logger.warning(
+                "Stopped waiting for %d offloaded call(s) that made no progress "
+                "for %.0fs: %s. They are still running and may write after the "
+                "caller has moved on",
+                len(remaining),
+                quiet,
+                ", ".join(sorted(waiting[w].label for w in remaining)),
+            )
+            break
+        try:
+            # Not wait_for: asyncio.wait never cancels what it waits on, so a
+            # timeout or a cancellation here leaves the markers untouched.
+            await asyncio.wait(
+                remaining,
+                timeout=budget - quiet,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        except asyncio.CancelledError:
+            cancelled = True
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 def submit_in_thread(
@@ -494,11 +849,16 @@ async def run_fault_isolated(
             width gets a fresh child.
         TimeoutError: ``timeout`` elapsed. The child is killed and the pool
             discarded.
-        ValueError: ``max_workers`` is < 1.
+        InvalidInputValueError: ``max_workers`` is < 1 (also a ``ValueError``).
     """
     workers = _DEFAULT_PROCESS_POOL_MAX_WORKERS if max_workers is None else max_workers
     if workers < 1:
-        raise ValueError(f"max_workers must be >= 1, got {workers}")
+        raise InvalidInputValueError(
+            message=f"max_workers must be >= 1, got {workers}",
+            field="max_workers",
+            constraint=">= 1",
+            value_summary=str(workers),
+        )
     loop = asyncio.get_running_loop()
     # Auto-hold, bounded by this call's own `timeout` (ADR-0018 → *Feeding the
     # tracker*, mechanism 2 — the same treatment as `run_in_thread`, since this

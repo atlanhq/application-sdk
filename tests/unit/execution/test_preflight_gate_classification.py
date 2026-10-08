@@ -6,7 +6,7 @@ reach a verdict at all.
 
 The load-bearing rule: a failure the *source* or the handler caused (probe overran
 the budget, handler raised, credential absent) is ``source_unverifiable`` and is
-subject to gate mode; a failure the *gate's own plumbing* caused (secret-store
+subject to gate mode (hard blocks only on ``GATE_BLOCKING_CATEGORIES``); a failure the *gate's own plumbing* caused (secret-store
 outage, store probe, no worker) is ``gate_broken`` and always fails open, in both
 modes. The line is drawn by who raised, never by the error's category.
 """
@@ -14,6 +14,7 @@ modes. The line is drawn by who raised, never by the error's category.
 from __future__ import annotations
 
 import asyncio
+import warnings
 from datetime import timedelta
 from unittest import mock
 
@@ -25,12 +26,21 @@ from application_sdk.credentials.errors import CredentialNotFoundError
 from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import Audience, FailureCategory
 from application_sdk.errors.leaves import (
+    AlreadyExistsError,
+    AppPermissionDeniedError,
+    AppTimeoutError,
     AuthError,
     CancelledError,
+    DataIntegrityError,
     DependencyUnavailableError,
+    InternalError,
+    InvalidInputError,
+    NotFoundError,
+    PreconditionError,
     RateLimitedError,
     ResourceExhaustedError,
     SourceUnavailableError,
+    UnimplementedError,
 )
 from application_sdk.execution._temporal.preflight_gate import (
     DEPRECATED_FAIL_OPEN_CATEGORIES,
@@ -39,6 +49,7 @@ from application_sdk.execution._temporal.preflight_gate import (
     GATE_ATTEMPTS_DEFAULT,
     GATE_ATTEMPTS_MAX,
     GATE_ATTEMPTS_MIN,
+    GATE_BLOCKING_CATEGORIES,
     GATE_OUTCOME_ROW_KEYS,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     GATE_TIMEOUT_MAX_SECONDS,
@@ -268,29 +279,33 @@ class TestRemainingBudget:
 
 
 class TestSourceUnverifiableAppliesMode:
-    """Budget overrun / crash / missing credential — mode decides."""
+    """Budget overrun / crash / missing credential — mode and category decide.
 
-    async def test_budget_overrun_blocks_in_hard_mode(self) -> None:
+    Hard mode blocks only on a category the customer can act on (FND-3040); an
+    overrun (TIMEOUT) or an untyped crash (INTERNAL) is reported there exactly
+    as in soft, and the run proceeds.
+    """
+
+    async def test_budget_overrun_is_reported_not_blocked_in_hard_mode(self) -> None:
         handler = _SlowHandler()
         gate = _gate(handler, mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(Exception) as excinfo:
-                await gate(PreflightGateInput())
+            result = await gate(PreflightGateInput())
 
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert result.status is PreflightStatus.NOT_READY
         event = _outcome(mock_logger)
-        assert event["outcome"] == "blocked"
+        assert event["outcome"] == "would_block"
         assert (
             event[GATE_CLASSIFICATION_KEY]
             == PreflightClassification.SOURCE_UNVERIFIABLE
         )
         assert event[GATE_MODE_KEY] == "hard"
         assert handler.completed is False  # actually cancelled, not just timed out
-        # The overrun must stay attributed as a timeout. _no_verdict raises in
-        # hard mode, so calling it from inside the guarded try re-caught its own
+        # The overrun must stay attributed as a timeout. _no_verdict raises when
+        # it blocks, so calling it from inside the guarded try re-caught its own
         # raise and re-classified TIMEOUT -> INTERNAL, losing the budget message.
         assert event["reason"] == "TIMEOUT"
-        assert "budget" in str(excinfo.value)
+        assert "budget" in result.checks[0].resolved_message
         # One record for the whole event (FND-901): the outcome row itself is
         # the ERROR, carrying the diagnostic exception and who must act.
         assert mock_logger.error.call_count == 1
@@ -317,16 +332,17 @@ class TestSourceUnverifiableAppliesMode:
         assert mock_logger.error.call_count == 1
         assert mock_logger.info.call_count == 0
 
-    async def test_handler_crash_blocks_in_hard_mode(self) -> None:
+    async def test_handler_crash_is_reported_not_blocked_in_hard_mode(self) -> None:
         gate = _gate(_RaisingHandler(RuntimeError("boom")), mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(Exception) as excinfo:
-                await gate(PreflightGateInput())
+            result = await gate(PreflightGateInput())
 
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert result.status is PreflightStatus.NOT_READY
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
         assert (
-            _outcome(mock_logger)[GATE_CLASSIFICATION_KEY]
-            == PreflightClassification.SOURCE_UNVERIFIABLE
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
 
     async def test_handler_crash_proceeds_in_soft_mode(self) -> None:
@@ -403,11 +419,13 @@ class TestUncooperativeHandlerCannotDefeatTheBudget:
             budget=0.3,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(Exception) as excinfo:
-                await gate(PreflightGateInput())
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+            result = await gate(PreflightGateInput())
+        # The handler's READY never reaches the caller: the overrun is the
+        # verdict. TIMEOUT is reported, not blocked, in hard mode (FND-3040).
+        assert result.status is PreflightStatus.NOT_READY
         event = _outcome(mock_logger)
-        assert event["outcome"] == "blocked"
+        assert event["outcome"] == "would_block"
+        assert event["reason"] == "TIMEOUT"
         assert (
             event[GATE_CLASSIFICATION_KEY]
             == PreflightClassification.SOURCE_UNVERIFIABLE
@@ -423,11 +441,11 @@ class TestUncooperativeHandlerCannotDefeatTheBudget:
         )
         loop = asyncio.get_running_loop()
         started = loop.time()
-        with mock.patch(f"{_GATE}.logger"):
-            with pytest.raises(Exception) as excinfo:
-                await gate(PreflightGateInput())
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
         elapsed = loop.time() - started
-        assert getattr(excinfo.value, "type", None) == PREFLIGHT_FAILED_ERROR_TYPE
+        assert result.status is PreflightStatus.NOT_READY
+        assert _outcome(mock_logger)["reason"] == "TIMEOUT"
         assert elapsed < 2.0, f"gate waited {elapsed:.1f}s for an uncooperative handler"
 
 
@@ -491,29 +509,48 @@ class TestHandlerRaisedBlockPassesThrough:
         assert _outcome_rows(mock_logger) == []
 
 
+# One leaf per category outside the deprecated fail-open train: each is a
+# typed handler-origin failure the mode must apply to. A hard gate blocks on the
+# first list (GATE_BLOCKING_CATEGORIES) and reports the second (FND-3040).
+_HARD_BLOCKING_TYPED_LEAVES: list[AppError] = [
+    AuthError(message="bad"),
+    AppPermissionDeniedError(message="no grant"),
+    NotFoundError(message="no such database"),
+    InvalidInputError(message="bad host"),
+    PreconditionError(message="wrong state"),
+]
+_HARD_REPORTED_TYPED_LEAVES: list[AppError] = [
+    SourceUnavailableError(message="no answer"),
+    AlreadyExistsError(message="exists"),
+    AppTimeoutError(message="source read timed out"),
+    DataIntegrityError(message="corrupt catalog"),
+    InternalError(message="invariant broken"),
+    UnimplementedError(message="not built"),
+]
+_SOURCE_SIDE_TYPED_LEAVES: list[AppError] = (
+    _HARD_BLOCKING_TYPED_LEAVES + _HARD_REPORTED_TYPED_LEAVES
+)
+
+
+def _leaf_id(exc: AppError) -> str:
+    return exc.category.value
+
+
 class TestHandlerRaisedPlumbingIsSourceSide:
     """Plumbing is decided by who raised it, not by the error's category.
 
     A handler cannot declare its source to be gate plumbing. Whatever escapes
     ``preflight_check`` is the handler's statement about the source if typed, or
-    an app fault if not, and the mode applies to both. The only fail-open left
-    is the gate's own frames: credential resolution and the store probes, plus
-    the deprecated train pinned by the next class.
+    an app fault if not, and the mode applies to both: hard blocks when the
+    category is one the customer can act on and reports ``would_block``
+    otherwise. The only fail-open left is the gate's own frames: credential
+    resolution and the store probes, plus the deprecated train pinned by the
+    next class.
     """
 
-    @pytest.mark.parametrize(
-        ("exc", "category", "audience"),
-        [
-            (
-                SourceUnavailableError(message="no answer"),
-                FailureCategory.SOURCE_UNAVAILABLE,
-                Audience.USER,
-            ),
-            (AuthError(message="bad"), FailureCategory.AUTH, Audience.USER),
-        ],
-    )
+    @pytest.mark.parametrize("exc", _HARD_BLOCKING_TYPED_LEAVES, ids=_leaf_id)
     async def test_hard_mode_blocks_with_the_handlers_own_details(
-        self, exc: Exception, category: FailureCategory, audience: Audience
+        self, exc: AppError
     ) -> None:
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
@@ -521,19 +558,37 @@ class TestHandlerRaisedPlumbingIsSourceSide:
                 await gate(PreflightGateInput())
         err = excinfo.value
         assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
-        assert _primary_details(err).category is category
-        assert _primary_details(err).audience is audience
+        assert _primary_details(err).category is exc.category
+        assert _primary_details(err).audience is exc.audience
         row = _outcome(mock_logger)
         assert row["outcome"] == "blocked"
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
-        assert row[FAILURE_AUDIENCE_KEY] == audience.value
+        assert row[FAILURE_AUDIENCE_KEY] == exc.audience.value
 
-    @pytest.mark.parametrize(
-        "exc", [SourceUnavailableError(message="no answer"), AuthError(message="bad")]
-    )
-    async def test_soft_mode_reports_and_proceeds(self, exc: Exception) -> None:
+    @pytest.mark.parametrize("exc", _HARD_REPORTED_TYPED_LEAVES, ids=_leaf_id)
+    async def test_hard_mode_reports_the_handlers_own_details_and_proceeds(
+        self, exc: AppError
+    ) -> None:
+        gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.HARD)
+        with mock.patch(f"{_GATE}.logger") as mock_logger:
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        (check,) = result.checks
+        assert check.error is not None
+        assert check.error.category is exc.category
+        assert check.error.audience is exc.audience
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+        assert row[FAILURE_AUDIENCE_KEY] == exc.audience.value
+
+    @pytest.mark.parametrize("exc", _SOURCE_SIDE_TYPED_LEAVES, ids=_leaf_id)
+    async def test_soft_mode_reports_and_proceeds(self, exc: AppError) -> None:
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.SOFT)
         with mock.patch(f"{_GATE}.logger") as mock_logger:
             result = await gate(PreflightGateInput())
@@ -543,6 +598,16 @@ class TestHandlerRaisedPlumbingIsSourceSide:
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
+
+    def test_every_non_train_category_is_pinned(self) -> None:
+        """A new category joins the source-side matrix or the train — never neither."""
+        pinned = {exc.category for exc in _SOURCE_SIDE_TYPED_LEAVES}
+        assert pinned | DEPRECATED_FAIL_OPEN_CATEGORIES == set(FailureCategory)
+        assert not pinned & DEPRECATED_FAIL_OPEN_CATEGORIES
+        # The hard-mode split above is the gate's own allowlist, not a copy of it.
+        assert {
+            exc.category for exc in _HARD_BLOCKING_TYPED_LEAVES
+        } == GATE_BLOCKING_CATEGORIES
 
 
 _DEPRECATED_FAIL_OPEN_LEAVES = [
@@ -564,7 +629,8 @@ class TestDeprecatedFailOpenTrain:
     Until the removal version such a raise proceeds in both modes, emits a
     ``DeprecationWarning`` naming the app, the leaf and the version, and stamps
     ``deprecated_fail_open`` on the row so the fleet can count who still relies
-    on it. Everything outside the four categories blocks as the class above pins.
+    on it. Everything outside the four categories is source-side, as the class
+    above pins.
     """
 
     @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
@@ -639,11 +705,23 @@ class TestDeprecatedFailOpenTrain:
         }
 
     async def test_an_untyped_crash_is_not_in_the_train(self) -> None:
+        # INTERNAL is reported, not blocked, in hard mode (FND-3040), so the
+        # train and the crash both proceed; the row and the warning tell them apart.
         gate = _gate(_RaisingHandler(RuntimeError("boom")), mode=PreflightGateMode.HARD)
-        with mock.patch(f"{_GATE}.logger"):
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        with (
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+            warnings.catch_warnings(record=True) as caught,
+        ):
+            warnings.simplefilter("always", DeprecationWarning)
+            await gate(PreflightGateInput())
+        assert not [
+            w for w in caught if DEPRECATED_FAIL_OPEN_REMOVED_IN in str(w.message)
+        ]
+        row = _outcome(mock_logger)
+        assert row["outcome"] == "would_block"
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
 
     @pytest.mark.parametrize("mode", [PreflightGateMode.HARD, PreflightGateMode.SOFT])
     async def test_resolution_frame_plumbing_still_fails_open(
@@ -668,27 +746,31 @@ class TestDeprecatedFailOpenTrain:
 class TestVerdictOnAnyAttempt:
     """A source fault is a verdict on the attempt it happens; nothing waits for a retry."""
 
-    async def test_first_attempt_overrun_blocks_in_hard_mode(self) -> None:
+    async def test_first_attempt_overrun_is_reported_not_blocked_in_hard_mode(
+        self,
+    ) -> None:
+        # Still a verdict on attempt 1 (no retry marker), but TIMEOUT is one a
+        # hard gate reports rather than blocks on (FND-3040).
         gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD)
         with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
-        assert excinfo.value.non_retryable is True
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
         row = _outcome(mock_logger)
-        assert row["outcome"] == "blocked"
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
         assert row[GATE_ATTEMPTS_KEY] == 1
 
     async def test_first_attempt_typed_source_fault_blocks_in_hard_mode(self) -> None:
-        exc = SourceUnavailableError(message="The source did not answer")
+        exc = AuthError(message="The source rejected the credential")
         gate = _gate(_RaisingHandler(exc), mode=PreflightGateMode.HARD)
         with _non_final_attempt(), mock.patch(f"{_GATE}.logger") as mock_logger:
             with pytest.raises(ApplicationError) as excinfo:
                 await gate(PreflightGateInput())
         err = excinfo.value
         assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert err.non_retryable is True
         details = _primary_details(err)
-        assert details.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert details.category is FailureCategory.AUTH
         assert details.audience is Audience.USER
         assert details.app_name == "myapp"
         assert err.details[1]["status"] == PreflightStatus.NOT_READY.value
@@ -740,7 +822,11 @@ class TestVerdictOnAnyAttempt:
         assert _no_outcome(mock_logger)
 
     async def test_final_attempt_applies_mode(self) -> None:
-        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD)
+        # A blocking category, so the mode shows up as a block rather than the
+        # would_block row a non-blocking one shares with soft.
+        gate = _gate(
+            _RaisingHandler(AuthError(message="bad creds")), mode=PreflightGateMode.HARD
+        )
         info = mock.MagicMock()
         info.attempt = GATE_ATTEMPTS_DEFAULT
         info.start_to_close_timeout = timedelta(seconds=30)
@@ -757,7 +843,9 @@ class TestVerdictOnAnyAttempt:
     async def test_missing_activity_context_treated_as_final(self) -> None:
         # Outside an activity (unit tests, direct calls) enforcement must not be
         # silently skipped — default to producing the verdict.
-        gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD)
+        gate = _gate(
+            _RaisingHandler(AuthError(message="bad creds")), mode=PreflightGateMode.HARD
+        )
         with (
             mock.patch(f"{_GATE}.activity.info", side_effect=RuntimeError("no ctx")),
             mock.patch(f"{_GATE}.logger") as mock_logger,
@@ -950,23 +1038,27 @@ class TestEveryExitCarriesFailureDetails:
     failure. A retry marker or a plumbing re-raise that carries only a class name
     and a message leaves them with nothing to attribute, on exactly the runs
     where attribution matters most.
+
+    An overrun and an untyped crash no longer leave a hard gate as an error
+    (FND-3040): they are reported and the run proceeds, so the same attribution
+    rides the returned verdict's failed check instead.
     """
 
     async def test_budget_overrun_carries_a_timeout_failure(self) -> None:
         gate = _gate(_SlowHandler(), mode=PreflightGateMode.HARD, budget=0.3)
         with mock.patch(f"{_GATE}.logger"):
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        details = _primary_details(excinfo.value)
+            result = await gate(PreflightGateInput())
+        details = result.checks[0].error
+        assert details is not None
         assert details.category is FailureCategory.TIMEOUT
         assert details.app_name == "myapp"
 
     async def test_untyped_crash_carries_an_internal_failure(self) -> None:
         gate = _gate(_RaisingHandler(RuntimeError("boom")), mode=PreflightGateMode.HARD)
         with mock.patch(f"{_GATE}.logger"):
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        details = _primary_details(excinfo.value)
+            result = await gate(PreflightGateInput())
+        details = result.checks[0].error
+        assert details is not None
         assert details.category is FailureCategory.INTERNAL
         assert details.audience is Audience.APP_OWNER
 
@@ -1450,6 +1542,64 @@ class TestTheRowShapeIsOne:
         row = _outcome(mock_logger)
         assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
 
+    @staticmethod
+    def _not_ready() -> PreflightOutput:
+        return PreflightOutput(
+            status=PreflightStatus.NOT_READY,
+            checks=[
+                PreflightCheck(
+                    name="auth", passed=False, error=AuthError(message="bad password")
+                )
+            ],
+        )
+
+    @pytest.mark.parametrize(
+        ("handler", "mode", "outcome"),
+        [
+            (
+                lambda: _ReturningHandler(TestTheRowShapeIsOne._not_ready()),
+                PreflightGateMode.HARD,
+                "blocked",
+            ),
+            (
+                lambda: _ReturningHandler(TestTheRowShapeIsOne._not_ready()),
+                PreflightGateMode.SOFT,
+                "would_block",
+            ),
+            (
+                lambda: _RaisingHandler(AuthError(message="bad password")),
+                PreflightGateMode.HARD,
+                "blocked",
+            ),
+            (
+                lambda: _RaisingHandler(RateLimitedError(message="429")),
+                PreflightGateMode.HARD,
+                "no_verdict",
+            ),
+        ],
+        ids=["returned_block", "would_block", "raised_block", "deprecated_train"],
+    )
+    async def test_every_other_exit_row_has_every_declared_key(
+        self, handler, mode: PreflightGateMode, outcome: str
+    ) -> None:
+        """Rows that stop or flag a run are parsed like the proceed row, so a
+        consumer filtering on any declared key never drops the rows that matter."""
+        gate = _gate(handler(), mode=mode)
+        with (
+            mock.patch(f"{_GATE}.logger") as mock_logger,
+            warnings.catch_warnings(),
+        ):
+            warnings.simplefilter("ignore", DeprecationWarning)
+            if outcome == "blocked":
+                with pytest.raises(ApplicationError) as excinfo:
+                    await gate(PreflightGateInput())
+                assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+            else:
+                await gate(PreflightGateInput())
+        row = _outcome(mock_logger)
+        assert row["outcome"] == outcome
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+
 
 class TestTheRowReportsTheBudgetTheHandlerGot:
     """``gate_timeout`` on the row is the enforced budget, not the declared one.
@@ -1475,33 +1625,35 @@ class TestTheRowReportsTheBudgetTheHandlerGot:
         assert _outcome(mock_logger)[GATE_TIMEOUT_KEY] == 5
 
 
-class TestALeafThatCannotSerialiseStillBlocks:
+class TestALeafThatCannotSerialiseIsStillASourceFault:
     """A typed leaf whose ``FailureDetails`` cannot be built is still a source fault.
 
     The shared result builder used to call ``to_failure_details()`` unguarded;
     a raise there escaped the activity untyped, the workflow read ``gate_broken``
-    and hard mode proceeded. The leaf now degrades to the untyped branch, an
-    ``INTERNAL`` fault with ``classification_pending``, and the mode applies.
+    and the row said the gate itself broke. The leaf now degrades to the untyped
+    branch, an ``INTERNAL`` fault with ``classification_pending``, and the mode
+    applies: INTERNAL is reported, not blocked, by a hard gate (FND-3040).
     """
 
     class _UnserialisableSource(SourceUnavailableError):
         def to_failure_details(self):
             raise ValueError("evidence keys may not use secret-named fields")
 
-    async def test_hard_mode_blocks_as_an_app_fault(self) -> None:
+    async def test_hard_mode_reports_it_as_an_app_fault_not_blocked(self) -> None:
         gate = _gate(
             _RaisingHandler(self._UnserialisableSource(message="x")),
             mode=PreflightGateMode.HARD,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
-            with pytest.raises(ApplicationError) as excinfo:
-                await gate(PreflightGateInput())
-        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
-        primary = _primary_details(excinfo.value)
+            result = await gate(PreflightGateInput())
+        assert result.status is PreflightStatus.NOT_READY
+        primary = result.checks[0].error
+        assert primary is not None
         assert primary.category is FailureCategory.INTERNAL
         assert primary.evidence["classification_pending"] is True
         row = _outcome(mock_logger)
-        assert row["outcome"] == "blocked"
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )

@@ -27,15 +27,26 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
-**Why suggest-only, not auto-applied (not an oversight):** P001
-`UnboundedContractFields` is suppress-only, and its only fix that clears the
-detector is adding `Annotated[..., MaxItems(N)]` or an inline suppression.
-`MaxItems` is a **declarative marker — not runtime-enforced** — so (a)
-`recheck-narrowest` is satisfied by *any* bound, including an absurd one, and
-(b) the orthogonal test gate is structurally blind: no behaviour changes with
-the bound, so no test can catch a hollow fix.  Per design §6.1, a rule whose
+**Why suggest-only, not auto-applied (not an oversight):** P001 is a
+migration. Removing an opt-out changes what a contract accepts on the wire, so
+each site needs the app owner's decision on the payload shape. It has real
+non-suppression fixes, in the order the P001 prescription below gives: remove
+an opt-out that guards no unsafe field, drop an app override of an SDK base
+field, use the SDK's own types in the same outer shape, bound safe collections,
+move source-sized data by `FileReference`, retire dead fields, and fix
+generated contracts at their source. Keep an opt-out with a justified inline
+suppression only as the owner's last resort after those fail.
+
+`MaxItems` is a **declarative marker — not runtime-enforced**. Adding it alone
+neither makes `Any` acceptable nor clears an active opt-out finding. For a
+payload-safe collection, (a) `recheck-narrowest` is satisfied by *any* bound,
+including an absurd one, and (b) the orthogonal test gate is structurally blind
+to whether the chosen bound is adequate: runtime behaviour does not change with
+the bound, so no test can catch a hollow limit. Replacing a field's type also
+changes the payload shapes the contract accepts, which must be reviewed against
+actual producers and consumers as detailed below. Per design §6.1, a rule whose
 gaming move no gate can catch must **not** be auto-applied — that would
-normalise exactly the gaming the gate exists to prevent.  The safe form is
+normalise exactly the gaming the gate exists to prevent. The safe form is
 **propose, don't apply**: the model drafts a concrete diff, a human is the gate.
 When a gate that validates the bound exists (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check), this area can graduate to the full
@@ -94,6 +105,17 @@ deliberate is the developer's call.  Both draft a proposal for human review and
 never auto-apply.  (These rules are backed by a separate
 `suite.checks.persistence_seam` check — see its module docs.)
 
+The credential-seam rule (P053, FND-2949) is also P-series and suggest-only:
+the fix replaces an app's own credential router with
+`application_sdk.credentials.route_credentials`, which can change which
+credential a given input resolves to (the local copy may have skipped agent
+routing, resolved leniently, or flattened inline pairs differently), so whether
+the app's tests still describe the intended behaviour is the developer's call.
+It drafts a proposal for human review and never auto-applies.  (This rule is
+backed by a separate `suite.checks.credential_seam` check, which is silent
+unless the app's `uv.lock` resolves `atlan-application-sdk` >= 3.40.0 — see its
+module docs.)
+
 The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
 P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
 has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
@@ -103,9 +125,31 @@ populating writer) describes a structural fix — route the data through the typ
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
 constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
-gated on the SDK exposing a qualifiedName seam.  All three draft a proposal for
+performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
+the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
+
+P052 (pyatlan asset serialized in app code — `to_nested_bytes()`,
+`to_nested_dict()`, `pyatlan_v9` `to_atlas_format()` or the SDK's internal
+`to_atlas_format_dict()`, called directly or through a saved local alias —
+instead of through `entity_bytes`) is suggest-only too.  The proposal replaces
+the call with `entity_bytes(asset, envelope=...)` from
+`application_sdk.common.asset_serialization`, passing the app's declared
+envelope and, unless the mapper already stamps them, `connection_name` and
+`last_sync`.  The envelope must preserve the connector's released wire shape:
+the call being replaced decides it.  `to_nested_bytes()` / `to_nested_dict()`
+wrote relationship refs under `relationshipAttributes`, so that site pins
+`EnvelopeShape.PYATLAN` (a deprecated one-cycle lever) rather than silently
+flipping to the default `FLATTENED`; `to_atlas_format()` already wrote the
+flattened shape, so `FLATTENED` preserves it.  Where the line needs a key the
+model cannot hold, decode what `entity_bytes` produced and decorate that (the
+`atlan-mysql-app` `map_table` shape).  The output still changes —
+`connectionName` and the placeholder-guid strip now apply — so it is always
+`"judgment"`.  A site whose
+output is not an entity line at all (a `ConnectionRef` built from
+`to_atlas_format`) gets an inline `# conformance: ignore[P052] <reason>`
+instead.
 
 ### Requires
 
@@ -197,37 +241,207 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   class-definition time and the app will not import.  That is the edit that
   broke nine apps; do not draft it.
 
-  Then draft, in order of preference:
+  **The opt-out does not govern unknown keys.**  `Input` drops keys the
+  contract does not declare (logging which ones, once) whether or not
+  `allow_unbounded_fields` is set — the flag only skips the payload-safety
+  type check.  A contract that receives more args than it reads (an AE DAG
+  node's `credential` / `credential_guid`) does **not** need the opt-out to
+  tolerate them.  A justification that says it does is wrong; once every
+  declared field is concretely typed, the opt-out comes off with nothing
+  else changed.  Do not draft "keep the opt-out" for extra AE node args.
 
-  1. **Type the field concretely (preferred)** — replace `Any` (and
-     `dict[str, Any]` / `list[Any]`) with a concrete bounded type.  For
-     filter maps use `FilterMap` from
-     `application_sdk.templates.contracts` (a bounded
-     `dict[str, list[str]]`).  Only after every field would pass
-     `validate_payload_safety`, remove `allow_unbounded_fields=True`.
-     Return `outcome = "fix"`.
+  **Narrowing a value type is a DATA change — diff the payloads, not just the
+  types.**  `ledger-guard`, `validate_payload_safety` and an import check are
+  all *structural*: they prove the retype is permitted, that the annotation is
+  a legal payload type, and that the class defines.  **None of them proves
+  that a payload the app receives today still validates.**  Replacing
+  `dict[str, Any]` with `dict[str, str | int | bool | None]` silently rejects
+  every inbound payload carrying a nested value, and that failure surfaces at
+  submission or mid-run — never in a gate, and never in the re-detect.  A fix
+  can clear the finding, keep the ledger byte-identical, import cleanly, pass
+  the whole test suite, and still break every tenant whose stored credential
+  has one nested key.
 
-  2. **Bound an otherwise-legal unbounded collection** — wrap an unbounded
-     `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
-     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]` **only when `T` /
-     `V` is already a legal payload type** (not `Any`).  Choose `N` from
-     the field's realistic cardinality and **state that assumption** in the
-     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).
-     A scalar-only contract needs only the opt-out removed.  Add
-     `from typing import Annotated` and
+  So before drafting, enumerate the shapes the field actually carries, read
+  out of the code rather than imagined:
+
+  - **the field's parser / normalizer.**  The branches it takes
+    (`isinstance(x, dict)`, `isinstance(x, str)`, a JSON-decode fallback) *are*
+    the supported shapes, and its docstring usually lists them outright.
+  - **its producers** — the generated `manifest.json` args, the handler, the
+    integration and e2e fixtures, the local-dev payload.
+  - **the sibling contracts on the same hop.**  If the `@task` contracts
+    downstream already declare the narrow type, then a payload the entrypoint
+    accepts is already dying one hop later, inside an activity, after the
+    workflow has started.  The narrowing is then *aligning* the boundary, not
+    restricting it — which is the strongest argument for the fix and is
+    invisible unless you look for it.
+
+  Then diff accept/reject across the change and put the result in the
+  proposal, one row per shape.  A shape that goes from working to rejected is
+  a **blocker** — widen the annotation until it passes, or the fix is wrong.
+  A shape that moves from "fails mid-run" to "fails at submission" is an
+  improvement, and saying so is what tells a reviewer the narrowing is safe.
+  Writing "non-scalar values are now correctly rejected" without that table is
+  an assumption wearing the costume of a verification.
+
+  **Classify the class first.**  Generated (`app/generated/`) classes are
+  fixed at their source; see step 7.  `@entrypoint` contracts are recorded in
+  the contract ledger, so a retype there is B005-guarded.  Task contracts are
+  not in the ledger and can be narrowed freely.  The finding lists the fields
+  this class declares that block removing the opt-out, those the check
+  accepts that still bound nothing, and any whose type it cannot resolve;
+  start from them.
+
+  Then propose, in this order (cheapest wire-preserving fix first):
+
+  1. **Nothing to fix: remove the opt-out.**  When the finding says every
+     declared field is already payload-safe, deleting `allow_unbounded_fields`
+     (or the `_allow_unbounded_fields` class attribute, here or on the mixin
+     it comes from) is the whole fix.  This is the most common case, and suppressions often
+     hide it behind a reason that is wrong ("the base's FilterMap is
+     unbounded", "AE sends extra keys").  Import the module afterwards: a
+     base or mixin outside this file may still carry an `Any`.
+
+  2. **Drop an app-level override of an SDK base field.**  `connection`
+     re-declared as `dict[str, Any]` over the base's `ConnectionRef`, or
+     `include_filter` / `exclude_filter` as `dict[str, Any]` over
+     `FilterMap | str`, is how most `Any` arrives.  Deleting the override
+     inherits the safe type, keeps the wire shape, and is compatible under
+     B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
+     legacy string, and a one-level `APITree` tree.
+
+  3. **Use the SDK's own types, in the same outer shape.**
+     | Field carries | Type it as |
+     |---|---|
+     | a connection | `ConnectionRef` (inherit it) |
+     | credentials | `credential_guid` / `CredentialRef`: by reference, never inline across tasks |
+     | `agent_json` | `AgentCredentialSpec` |
+     | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
+     | filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | a dict with known keys | a small `BaseModel` with those fields |
+
+     Absorb legacy wire shapes with a `@field_validator(..., mode="before")`
+     normaliser rather than widening the annotation, and diff accept/reject
+     (above) before proposing.
+
+  4. **Bound a collection of safe values** with
+     `Annotated[list[T], MaxItems(N)]` / `Annotated[dict[K, V], MaxItems(N)]`,
+     only when `T` / `V` is already a legal payload type.  Every nested
+     `dict` or `list` needs its own bound (a set or tuple of safe values
+     passes the check as it is).  Choose `N` from the field's realistic
+     cardinality and **state that assumption** in the proposal (for example,
+     ~10000 entries ≈ ~1MB of JSON).  Add `from typing import Annotated` and
      `from application_sdk.contracts.types import MaxItems` if missing.
-     Remove the opt-out last.  Return `outcome = "fix"`.
 
-  3. **Keep the opt-out with a justified suppression** — if a field cannot
-     be concretely typed (an `@entrypoint` contract field: B005 forbids
-     changing its recorded type and `ledger-guard` is append-only), draft
-     an inline `# conformance: ignore[P001] <concise justification>` on
-     the declaration line, where the justification explains *why* unbounded
-     fields are unavoidable here (not merely that the rule is suppressed).
-     Do **not** remove `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+  5. **Move data that grows with the source system by reference.**  File
+     lists, event batches and per-object results scale with the customer's
+     data, so no `MaxItems` holds at 2MB for every tenant.  Write them to the
+     object store and pass a `FileReference` (or a list of them, bounded), so
+     only keys and counts cross the task boundary.
+
+  6. **Retire a field nothing populates** — before concluding that an
+     `@entrypoint` field is immovable, check whether it is *live*.  Grep the
+     generated `manifest.json` `dag.<node>.inputs.args` for the field name and
+     grep the repo for constructions of the contract.  A field absent from the
+     manifest and constructed nowhere is dead weight (a defensive
+     `getattr(input, "x", {})` at the read site is the usual tell).
+     Retirement is **two steps, in order**: mark it
+     `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
+     regenerate the ledger, **then remove the field from source**.  B005 skips a
+     sunset field only when it is *absent* from source, so marking it alone
+     changes nothing, and an **unmarked** removal fires B005 at BLOCK tier.
+
+  7. **Generated contract with `Any`: fix the source, never the file.**  The
+     `contract/*.pkl` widget decides the shape, and the toolkit emits
+     `dict[str, Any]` for widgets such as `APITree`.  Change the widget, or
+     fix the toolkit's emission, and regenerate.  Do not hand-edit
+     `app/generated/`, and do not keep a `post-generate` hook that re-inserts
+     the opt-out.  When only the toolkit can fix it, say so in the proposal:
+     the app cannot.
+
+  **Not fixes, whatever the gate says.**  `object`, `JsonValue`, a bare
+  `dict` / `list`, a recursive `TypeAliasType`, and a nested
+  `BaseModel(extra="allow")` all pass `validate_payload_safety` while
+  bounding nothing.  Propose one only as an owner's decision, named as such.
+  A hand-rolled JSON union capped at a fixed nesting depth rejects any deeper
+  live payload; prefer a JSON `str` the consumer parses when the shape is
+  genuinely open.
+
+  **Verify before proposing:** import the module; for an `@entrypoint` field
+  run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
+  re-detect; and run
+  `tools/migrate_v3/check_migration.py`, which fails on any remaining
+  `allow_unbounded_fields=True`.  A proposal from steps 1–7 returns
+  `outcome = "fix"`.
+
+  8. **Keep the opt-out with a justified suppression** — the owner's call,
+     reached only when 1–7 were tried and refused.
+
+     **Do not assume a recorded field is frozen in source.**  `ledger-guard`
+     refuses a change to a *recorded* `type`; `gen-contract-ledger` never
+     deletes an entry and never rewrites a recorded type, so **narrowing the
+     annotation in source leaves the ledger entry untouched and the guard
+     passes**.  Verify, do not infer:
+
+     ```bash
+     uv run atlan-application-sdk-conformance gen-contract-ledger
+     uv run atlan-application-sdk-conformance ledger-guard \
+       --base-ref origin/main --ledger-path contract_schema.lock.json
+     ```
+
+     Only then propose `# conformance: ignore[P001] <reason>` on the
+     declaration line, naming which steps were tried and what refused each.
+     The directive keeps the gate green, but `check_migration` still fails on
+     the opt-out, so the proposal must say it stays an open migration item for
+     the owner.  Do **not** remove `allow_unbounded_fields`.  Return
+     `outcome = "suppress"`.
+
+  **Before returning `outcome = "fix"`: trace the field to its wire and to its
+  consumers.**  A contract field is an interface with three sides, and the type
+  is only one of them.  Narrowing it changes what the app *accepts* and what
+  downstream code *receives*, neither of which the conformance gates observe —
+  `recheck-narrowest` sees the finding clear and the test suite passes if
+  nothing happens to cover the boundary.  Record each of these in `impact`:
+
+  1. **What the wire sends.**  Find the field in the generated
+     `manifest.json` (`dag.<node>.inputs.args`), then find the input that feeds
+     it in `contract/app.pkl`.  The **widget class decides the shape** — e.g.
+     `APITree` is declared `fixed type = "object"` in the contract toolkit, so
+     it sends a nested JSON object, and a narrowed annotation that only accepts
+     a flat mapping would reject a live payload.  The repo does not control this
+     shape and cannot change it from the Python side.
+  2. **What already normalises it.**  A `@field_validator(..., mode="before")`
+     runs *before* validation, so it can absorb a shape difference the
+     annotation would otherwise reject.  Widening that validator is usually how
+     a field gets narrowed safely without touching the wire contract.  Say so
+     in the proposal rather than leaving the reader to infer it.
+  3. **Every consumer, and what it does with the value.**  Grep the field name
+     across the repo.  Ask what each consumer *actually requires* — iteration
+     and truth-testing (`if not x`, `for k in x`) behave identically for a dict
+     and a list, whereas indexing or `.items()` does not.  A narrowing that
+     preserves the operations the consumers perform is safe even when the
+     concrete type changes.
+  4. **Equivalence, demonstrated rather than argued.**  Run the pre-change and
+     post-change paths over every shape the wire has carried — the widget's own
+     output, a JSON string of it, an empty value, a malformed value, and any
+     legacy shape the old validator explicitly handled — and compare the
+     *consumer's* result, not the field's value.  Anything that decides scope
+     (a filter deciding which assets a crawl covers) must produce an identical
+     selection, because a silent change there widens or narrows a customer's
+     crawl without failing anything.  Add those cases as tests in the same unit;
+     the boundary was uncovered or the narrowing would not have been risky.
+
+  Worth expecting: **the old path may be the broken one.**  In one run the
+  pre-change validator turned a bare list into `{name: True}`, which the
+  consumer then iterated — `TypeError: 'bool' object is not iterable`, raised in
+  the task rather than as a validation error.  The narrowing fixed it as a side
+  effect, and the old unit test had pinned the broken intermediate value without
+  ever feeding it to the consumer.  If a shape crashes the legacy path, that is
+  a finding to report in the proposal, not a mismatch to reconcile.
 
 - **P002 CategoryFieldOverride** — a non-canonical subclass of `AppError` (or
-  any of its 15 categorical leaves) redeclares the `category` ClassVar in its
+  any of its categorical leaves) redeclares the `category` ClassVar in its
   own body.  Read the class definition around `finding.line`, then:
 
   1. Verify that the class inherits from a canonical leaf and that the parent's
@@ -279,11 +493,11 @@ is always `"judgment"`:
   - `temporalio.converter` data-converter use →
     `from application_sdk.execution import create_data_converter`.
 
-  **Annotation hole — route to residue, do not fabricate a fix:** if the only
-  use of a `temporalio` symbol is to *annotate* a value the public seam returns
-  (e.g. `Client` for the result of `create_temporal_client`), there is no public
-  opaque type to swap to yet — this is the P007 leak the SDK must close first.
-  Note the P007 dependency in residue rather than inventing an import.
+  **Annotation:** if the only use of a `temporalio` symbol is to *annotate* a
+  value the public seam returns (e.g. `Client` for the result of
+  `create_temporal_client`), use `from application_sdk.execution import TemporalClient`
+  (SDK 3.20.0). It is an alias of the temporalio type, not an opaque one, so
+  the P007 leak stays open SDK-side; the app import is clean.
 
 - **P005 PrivateOrchestrationInternalImport** (app) — the app reaches into an
   SDK-private module. Draft a rewrite to the public re-export when one exists:
@@ -294,10 +508,13 @@ is always `"judgment"`:
   - `application_sdk.execution._temporal.converter.create_data_converter` →
     `application_sdk.execution.create_data_converter`.
 
+  `create_data_converter_for_app` and `TemporalExecutorBackend` are public in
+  `application_sdk.execution` since SDK 3.20.0.
+
   **No public twin — route to residue:** some internals have no public
-  equivalent today (e.g. `create_data_converter_for_app`,
-  `TemporalExecutorBackend`). Do **not** invent a public import; note that the
-  SDK must expose a public equivalent (or the app must drop the dependency).
+  equivalent today (e.g. `PreflightGateInput`, `_resolve_gate_enforcement`).
+  Do **not** invent a public import; note that the SDK must expose a public
+  equivalent (or the app must drop the dependency).
 
 - **P006 TemporalImportOutsideAdapter** (sdk) — `temporalio` is imported outside
   the `execution/_temporal/` adapter. The fix is a structural relocation of the
@@ -334,7 +551,7 @@ around `finding.line` before drafting any proposal.
   object store directly: `boto3.client(...)`, `S3Store(...)`, `GCSStore(...)`,
   `AzureStore(...)`, or any `create_store_from_binding*(...)` call.  The SDK
   provides a correctly routed store (including SDR mode) via
-  `get_infrastructure().storage` (import from `application_sdk.framework`).
+  `get_infrastructure().storage` (import from `application_sdk.infrastructure.context`).
   Draft a replacement that obtains the store through the SDK seam.  If the
   original construction passes configuration parameters (region, endpoint,
   credentials) that may not be available through the SDK, note those in residue
@@ -395,6 +612,87 @@ around `finding.line` before drafting any proposal.
   no contract boundary exists.  Do not propose a fix that merely moves the
   prefix call to a different module — the finding is about the level of the
   abstraction, not its location.
+
+**Typed-boundary / contract-modeling rules (P013–P015)** — migration rules
+(`autofixable = false`), scope=app; `classification` is always `"judgment"`.
+The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.prescriptions`.
+
+- **P013 UntypedEntrypointBoundary** (BLOCK) — an `@entrypoint` method, or an
+  `async def run()` on an `App` subclass (the implicit entrypoint), has an
+  input parameter or return annotation that is missing, a primitive/container
+  (`dict`, `list`, `str`, `Any`, `dict[str, str]`, …), or an in-tree class that
+  does not reach `Input` / `Output` (a plain `pydantic.BaseModel`, a
+  dataclass).  A class the checker cannot find in the scanned tree is not
+  flagged.  Target shape, from `atlan-metabase-app` `app/connector.py`:
+  `async def extract_metadata(self, input: MetabaseInput) -> MetabaseOutput`,
+  both sides SDK contract subclasses.  The brief names the new (or re-based)
+  `Input` / `Output` classes and every caller that builds the old payload.  The
+  runtime decorator already rejects these at import, so a shipped violation
+  crash-loops the worker.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2b;
+  `docs/concepts/contracts.md` (Input and Output).
+
+- **P014 UntypedTaskBoundary** (BLOCK) — the same check on a `@task` method's
+  input parameter and return annotation.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: each task has its own pair, e.g.
+  `extract_spec(self, input: ExtractSpecInput) -> ExtractSpecOutput`.  The brief
+  names the per-task `Input` / `Output` pair and the call sites in `run()` /
+  the entrypoint that pass the old dict or string.  Same import-time rejection
+  and pointers as P013.
+
+- **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
+  `Output` contract is a container of primitives or `Any`, bare or bounded
+  (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
+  primitives, the bound satisfies payload safety without an opt-out, but the
+  keys and values still have no schema.  A bound never makes `Any` safe:
+  `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
+  without the opt-out and is still a P001 finding — replace the `Any` first
+  (see P001 above).  Containers of a typed class
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  `atlan-metabase-app` `app/contracts.py`:
+  `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
+  where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
+  model (its fields read off how the app uses the container) and every reader
+  and writer of the field.  Keep the `MaxItems` bound: payload safety still requires it on the
+  container.
+  When the key set is genuinely open, propose
+  `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+**Entrypoint-conformance rules (P017–P018)** — migration rules
+(`autofixable = false`), scope=app, WARN-tier; `classification` is always
+`"judgment"`.  The lane applies nothing: return `not_remediable = true` with a
+`migration_brief`.  Backed by `suite.checks.entrypoint`, which scans test files
+too.
+
+- **P017 ManualWorkerBootstrap** (WARN) — the app calls `create_worker(...)`,
+  `create_temporal_client(...)` or `AppWorker(...)` from
+  `application_sdk.execution`; imports removed v2 boot surface
+  (`application_sdk.worker`, `application_sdk.application`,
+  `application_sdk.clients.temporal`); or calls `setup_workflow` /
+  `start_workflow` / `start_worker` on `self`, `app` or an SDK-imported name.
+  Target shape, from `atlan-mysql-app` `app/run_dev.py`: `main()` is one
+  `await run_dev_combined(MySQLApp, ...)`, and nothing under `app/` builds a
+  worker or client; production boots through the base-image CLI
+  (`application-sdk --mode worker|combined --app module:ClassName`).  The brief
+  names the boot file to delete or collapse onto `run_dev_combined` and the
+  `ATLAN_APP_MODULE` / CLI wiring it needs.  Exemption: files under
+  `tests/integration/` are exempt from the construction and lifecycle calls
+  (the harness needs a worker handle), but not from the v2 imports.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `.claude/skills/upgrade-v3` Phase 2b step 3; `docs/concepts/entry-points.md`
+  (`run_dev_combined()`, Worker Auto-Discovery).
+
+- **P018 ManualServerBootstrap** (WARN) — the app constructs `FastAPI(...)`,
+  `uvicorn.Server(...)` / `uvicorn.Config(...)`, calls `uvicorn.run(...)`, or
+  calls `setup_server` / `start_server` / `include_router` on `self`, `app` or
+  an SDK-imported name.  Target shape, from `atlan-openapi-app`
+  `app/run_dev.py`: the HTTP surface comes from the same
+  `run_dev_combined(OpenAPIConnector, ...)` call as the worker; HTTP surface
+  is `@entrypoint` methods triggered by
+  `POST /workflows/v1/start?entrypoint=<name>`.  The brief lists each
+  hand-rolled route and which `@entrypoint` or SDK handler endpoint replaces
+  it.  No `tests/integration/` exemption for this rule.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
+  `docs/concepts/server.md`, `docs/concepts/entry-points.md` (HTTP dispatch).
 
 **Client-seam rule (P019)** — suggest-only, scope=both, WARN-tier;
 `classification` is always `"judgment"`.  Read the full function/class context
@@ -467,7 +765,8 @@ drafting.
   residue for human confirmation.
 
 - **P023 BlockingCallInAsyncDef** — an event-loop re-entry bridge (`asyncio.run`/
-  `run_until_complete`), a blocking sync call (`requests.*`, `time.sleep`),
+  `run_until_complete`), a blocking sync call (`requests.get`/`post`/…,
+  `urllib.request.urlopen`, `time.sleep`),
   tree-scale filesystem work (`shutil.rmtree`/`copytree`/`move`, incl. the
   `SafeFileOps.rmtree`/`SafeFileOps.move` wrappers), tree traversal (`os.walk`/
   `glob.glob`/`Path.glob`/`Path.rglob`), data-scale I/O (pandas and pyarrow
@@ -477,7 +776,13 @@ drafting.
 
   - *bridge* — `await` the coroutine directly instead of re-entering a loop.
   - *blocking network / sleep* — `await` an async equivalent, or offload via
-    `App.run_in_thread()` inside a `@task`.
+    `App.run_in_thread()` inside a `@task`.  Only the send is a finding
+    (`requests.get`, `s.get`/`s.send` on a `requests.Session()`, or `o.open`
+    on a urllib `build_opener()`, whether the client is built inline, in the
+    same or an enclosing function, or on a `self.<attr>` in the class):
+    building a `requests.Session()`, `HTTPAdapter()` or `build_opener()` does
+    no I/O and is not flagged, so never move a constructor behind a sync
+    helper to clear P023.
   - *tree op, data-scale I/O, whole-file, serialization* — offload with the
     callable *passed*, not called: `await run_in_thread(shutil.rmtree, path)`,
     `await run_in_thread(pd.read_parquet, path)`,
@@ -512,6 +817,65 @@ drafting.
   downstream calls on the client then become `await`-ed, so this is a restructure
   — route to residue with the proposed shape; do not mechanically rename the
   class.  Leave `AsyncAtlanClient` usage untouched.
+
+**Execution-seam rules (P031, P036, P054)** — suggest-only, WARN-tier;
+`classification` is always `"judgment"`.  Each replaces a hand-rolled
+concurrency primitive with a shape whose lifecycle is safe on the event loop,
+and each needs `result.evidence` citing that shape's own path plus the
+reference call site —
+the blind gate cannot tell a correct hop from a plausible one.
+
+- **P031 SharedDefaultExecutorOffload** — blocking work is offloaded onto
+  asyncio's **shared default** executor: `asyncio.to_thread(fn, ...)`, or
+  `loop.run_in_executor(None, fn, ...)` (the `None` is what makes it shared).
+  Temporal's Python SDK uses that same executor internally, so long blocking
+  calls there can exhaust it and deadlock the worker.  Draft a swap to the
+  SDK's dedicated sdk-blocking pool —
+  `await self.run_in_thread(fn, arg)` inside an `App`, otherwise
+  `from application_sdk.execution.heartbeat import run_in_thread`.  Keep the
+  callable **passed, not called** (`run_in_thread(fn, arg)`, never
+  `run_in_thread(fn(arg))`), and materialise any lazy iterator inside the
+  thread, exactly as P023 prescribes.  A `run_in_executor` whose first
+  argument is an executor other than `None` is not this rule; a `with`-scoped
+  executor is P054, and any other executor the app owns is a deliberate choice —
+  say so and route to residue rather than rewriting it.  On a
+  preflight path, F011 sees the swapped call too: use the module-level
+  `application_sdk.execution.heartbeat.run_in_thread` there (preflight runs on
+  `Handler`, and `App.run_in_thread` raises outside a `@task`); it carries no
+  deadline, so the draft must keep or add an enclosing
+  `asyncio.wait_for(..., timeout=...)` or `async with asyncio.timeout(...)`
+  sized from the remaining preflight budget; a swap without one moves F011 to
+  the new line rather than clearing it.  Mirror
+  `atlan-openapi-app app/connector.py`.  Cite as evidence
+  `application_sdk/execution/heartbeat.py` (`run_in_thread`) and that call
+  site.
+
+- **P036 HandRolledProcessIsolation** — the code builds a process-based
+  primitive directly: `ProcessPoolExecutor(...)`, `multiprocessing.Process(...)`
+  or `multiprocessing.Pool(...)`.  The SDK seam owns the pool lifecycle, the
+  timeout, and what a crashed child means for the activity — three things a
+  hand-rolled pool gets wrong silently.  Draft a swap to
+  `run_fault_isolated(...)` when a crash must fail the activity, or
+  `run_best_effort(...)` when it must not, both from
+  `application_sdk/execution/heartbeat.py`; state which semantic you assumed
+  and why, because that is the whole decision.  No reference app builds one,
+  so there is no call site to copy — cite the seam module and the two
+  functions' own contracts as evidence.  This is a restructure (the child's
+  entry function and its arguments must be picklable): route to residue with
+  the proposed shape, never a mechanical constructor swap.
+
+- **P054 ScopedExecutorJoinedOnCancel** — inside an `async def`, a `with`
+  statement builds a `ThreadPoolExecutor` and the body offloads to it with
+  `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
+  `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
+  blocking driver call freezes the whole worker, not just the cancelled task
+  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
+  seam, and it does not join on cancel); or, when the calls must stay on one
+  thread (some DB-API cursors break when `execute` and `fetchmany` run on
+  different threads), a dedicated executor created **without** `with` and
+  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
+  goes through `run_in_thread` — and the offending call site.
 
 **SDR-readiness rules (P029/P030, P037/P038/P039, P042, P051)** — all suggest-only,
 scope=app; `classification` is always `"judgment"`.  All gate on
@@ -586,6 +950,40 @@ say so.
   already calls `upload_refs`, there is no P030 finding to remedy: do not
   propose a second upload.
 
+  **Working transfers that still fire P030.**  Before drafting, check whether
+  bytes already move through a path this check does not recognise: an app
+  task that calls `storage.transfer.upload` (against
+  `create_store_from_binding` or `upstream_storage`), or a call to the
+  inherited `BaseMetadataExtractor.upload_to_atlan` shim.  The shim forwards to
+  `self.upload(local_path=output_path, tier=RETAINED)`, which writes under
+  `App.upload`'s own run prefix: it delivers only when the app hands that same
+  prefix downstream, and is the re-rooting trap above when it does not —
+  compare the two before calling it working.  Neither shape is the named
+  bridge P042 reports, so both land here.  The proposal is the conversion,
+  framed as a refactor that must not move a key:
+
+  - `App.upload` / `upload_refs` are tasks: call them from the entrypoint,
+    never inside another task;
+  - either keep the activity and have it stage a local tree mirroring the key
+    layout, returned as a directory `FileReference`, then upload it once with
+    `storage_path` pinned to the prefix the app returns (replay-safe only for
+    runs pinned to this build; an unversioned or `AUTO_UPGRADE` worker
+    replays in-flight runs against the new entrypoint, so guard the new
+    `App.upload` call with `workflow.patched(...)`); or declare the task
+    outputs to `upload_refs` with a
+    `DeclaredFile.label` per key;
+  - skip empty entities (`upload_refs` raises on an empty declared file);
+  - keep side outputs in a delivery (`resolvable/` for ARS, miner Process
+    files) — a second private write left behind is the same bridge again;
+  - upload the whole tree when downstream nodes read more than `transformed/`
+    (for example `parsed/`); for the shim, swap in its own body and pin
+    `storage_path` if the published prefix differs from the run prefix.
+
+  Evidence: run the full-DAG e2e on main first as a baseline, then on the
+  change, and compare the Atlas inventory per type; a type the inventory does
+  not list in either run is not proven by it.  Cite both runs in
+  `result.evidence`.
+
 - **P042 SdrHandRolledUploadBridge** (WARN) — a custom `upload_to_atlan` that
   **does** perform a real storage transfer, with neither `self.upload(` nor
   `self.upload_refs(` anywhere in
@@ -614,6 +1012,11 @@ say so.
   route to residue for a human to sequence against a distributed e2e.  If the
   bridge exists because `App.upload()` cannot express something the app needs,
   record that in the residue as an SDK gap rather than a suppression.
+
+  Detection is name-based: only an app method named `upload_to_atlan` is
+  graded here.  The same working shape under another name, and calls to the
+  inherited SDK shim, are reported as P030 — use the P030 conversion recipe
+  for them.
 
 - **P051 SdrPreflightUnavailable** (WARN) — an SDR app (`self_deployed_runtime:
   true` in `atlan.yaml`) locks `atlan-application-sdk` below `3.30.0` in
@@ -722,6 +1125,36 @@ which scans template YAML, not Python.
   parent, and every shipped template carries `typeName:` and `status:` as
   top-level leaf keys under `columns:`, emitted bare.  The alias-slot argument
   is the whole reason, and it stands on its own.
+
+**Error-seam rules (P043, P045)** — migration rules (`autofixable = false`),
+scope=app, WARN-tier; `classification` is always `"judgment"`.  The lane
+applies nothing: return `not_remediable = true` with a `migration_brief`.
+Backed by `suite.checks.error_seam`, which scans test files too.  Both cover
+only `Error`-suffixed classes under `application_sdk.storage.formats` today,
+bound with the `from X import Y` form.
+
+- **P043 NonPublicErrorControlFlow** (WARN) — `except X`, `except (X, Y)`,
+  `isinstance(e, X)`, `issubclass(t, X)` or `class Y(X)` depends on such a
+  class that `application_sdk.errors` does not export.  A class the public
+  surface does export is left to P045.  Target shape, from `atlan-mysql-app`
+  `app/handler.py` (`if isinstance(e, AppError): raise`) and
+  `app/failures.py` (subclasses of `AuthError`), both imported from
+  `application_sdk.errors`.  The brief replaces the branch with
+  `except AppError` plus a decision on `.code`, and names the codes the old
+  handler meant to match.  Read them off the SDK source, not the class name:
+  the old and new classes are usually siblings, so the brief must also say
+  which exception the boundary raises today.  Update test fixtures that
+  freeze the old class in the same brief.
+
+- **P045 PrivateErrorClassImport** (WARN) — the app imports an `Error`-suffixed
+  class from `application_sdk.storage.formats.*` (most often `format_errors`).
+  Target shape, from `atlan-metabase-app` `app/errors.py`: every SDK error class
+  comes from `from application_sdk.errors import (...)`.  When the class is
+  exported there (the finding message says "Import it from
+  'application_sdk.errors' instead"), the brief is the import-path change.
+  When it is not, the brief is the P043 shape — catch `AppError`, branch on
+  `.code` — and, if the app needs the typed class, a request to the SDK team
+  to promote it.  Helper functions in the same modules are not flagged.
 
 **Portability rule (P046)** — suggest-only, scope=sdk,
 `classification = "judgment"`; backed by `suite.checks.text_io_encoding`, which
@@ -867,3 +1300,66 @@ path component, and this rule governs that package's sources too).
   today.**  So a P049 finding is new code, not inherited drift: treat a
   suppression proposal as the exception it is, and never propose one without
   reading the enclosing function.
+
+- **P053 LocalCredentialRouting** (WARN) — app code turns a workflow input's
+  credential channels (a pre-built `CredentialRef` field, `credential_guid`,
+  `agent_json`, inline `credentials`) into a credential itself, or declares its
+  own copy of the credential types.  The finding names which shape fired:
+  `CredentialRef.resolve(...)` / `CredentialRef.resolve_or_none(...)`,
+  `CredentialRef(credential_guid=...)`, `inline [{key, value}] flattening`
+  (grouped per function, anchored at the first site), or a module-level
+  `CredentialValue` / `CredentialMap` / `InlineCredentials` / `Bounded*Credential*`
+  alias.  It only fires when the app's `uv.lock` resolves
+  `atlan-application-sdk` >= 3.40.0, so the seam is importable.
+
+  Draft, by shape:
+
+  1. **A local router** (`build_credential_ref(input)` and relatives) —
+     replace the body with the seam and delete the local copy::
+
+         from application_sdk.credentials import route_credentials
+
+         ref, inline = route_credentials(input)
+
+     Declare `run_credential_field: ClassVar[str] = "<app>_credential"` on the
+     input class only when it carries more than one `CredentialRef` field;
+     `route_credentials` otherwise finds the toolkit-generated one itself.  It is
+     a class declaration, not a call argument, so the preflight gate makes the
+     same choice.  On the task side, replace the
+     `resolve_credential_raw(ref)`-or-inline branch with
+     `self.context.resolve_credential_raw_or_inline(ref, inline)`.  A `SqlApp`
+     subclass that only needs the ref already has
+     `self.resolve_credential_ref(input)`.  Return `outcome = "fix"`.
+
+  2. **Inline flattening over a dict payload** (`workflow_args.get("credentials",
+     [])` iterated into a dict) — `route_credentials` reads attributes, not
+     dict keys, so propose `normalize_inline_credentials(raw)` from
+     `application_sdk.credentials` for that half, and say in the residue that
+     the dict-shaped router should move onto the typed input so the whole
+     function can become `route_credentials(input)`.  Return
+     `outcome = "fix"`.
+
+  3. **A local type alias** — replace the alias with an import of
+     `CredentialValue` / `CredentialMap` / `InlineCredentials` from
+     `application_sdk.credentials`.  The SDK's `CredentialValue` also admits
+     `float`, so a field retyped onto it accepts slightly more than a local
+     `str | int | bool | None` did; name that in the proposal.  Return
+     `outcome = "fix"`.
+
+  **Say what the migration changes.**  The local copies disagreed on
+  behaviour, not just shape: one that built `CredentialRef(credential_guid=...)`
+  directly never routed `agent_json`, so after the fix an agent-mode run
+  resolves through the agent for the first time; one that used
+  `resolve_or_none` swallowed a misrouted input that `route_credentials` now
+  raises on (`CredentialRoutingError`, naming the cause).  A proposal that does
+  not name which of these applies is not reviewable.  Never claim the edit is
+  mechanical.
+
+  **Fallback** — a second, per-source credential GUID carried in some other
+  field (`CredentialRef(credential_guid=input.cloud_source)`) never fires: the
+  rule only matches the input's own `credential_guid` channel.  What can still
+  fire outside the seam's model is `CredentialRef.resolve` over an object that
+  is not the entry-point input; for that, propose an inline
+  `# conformance: ignore[P053] <reason>` naming what is resolved, and return
+  `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
+  the tier is already WARN for that.

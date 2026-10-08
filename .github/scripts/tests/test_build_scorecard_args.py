@@ -24,6 +24,7 @@ _spec.loader.exec_module(build_scorecard_args)
 
 build_args = build_scorecard_args.build_args
 e2e_ran = build_scorecard_args.e2e_ran
+integration_failed = build_scorecard_args.integration_failed
 
 _BASE = {
     "repo": "atlanhq/atlan-openapi-app",
@@ -33,6 +34,7 @@ _BASE = {
     "unit_coverage": "unit-evidence/coverage.json",
     "integration_junit": "integration-evidence/results/test-results.xml",
     "integration_coverage": "integration-evidence/coverage.json",
+    "integration_result": "success",
     "e2e_junit_glob": "e2e-evidence/*/results/sdr-test-results.xml",
     "e2e_result": "skipped",
     "configured_clouds": "",
@@ -167,6 +169,25 @@ def test_the_last_argument_is_never_empty(overrides: dict[str, object]) -> None:
     assert _args(**overrides)[-1] != ""
 
 
+# ── A crashed integration job (FND-3299) ─────────────────────────────────────
+
+
+def test_a_failed_integration_job_is_reported_to_the_cli() -> None:
+    # Without this, a setup step dying before pytest leaves an empty junit that
+    # the scorecard reads as "no integration tier".
+    assert _value_after(
+        _args(integration_result="failure"), "--integration-result"
+    ) == ("failure")
+
+
+@pytest.mark.parametrize("result", ["success", "cancelled", "skipped", ""])
+def test_only_a_failure_passes_the_integration_result(result: str) -> None:
+    # Off the routine path on purpose: a conformance release predating the flag
+    # rejects it, and a superseded (cancelled) run is no evidence of breakage.
+    assert "--integration-result" not in _args(integration_result=result)
+    assert integration_failed(result) is False
+
+
 # ── The env-driven entrypoint ────────────────────────────────────────────────
 
 
@@ -180,6 +201,7 @@ def test_main_reads_the_environment_and_prints_one_arg_per_line(
         "UNIT_COVERAGE": "u.json",
         "INTEGRATION_JUNIT": "i.xml",
         "INTEGRATION_COVERAGE": "i.json",
+        "INTEGRATION_RESULT": "failure",
         "E2E_JUNIT_GLOB": "e2e-evidence/*/results/sdr-test-results.xml",
         "E2E_RESULT": "success",
         "CONFIGURED_CLOUDS": "aws,gcp",
@@ -193,6 +215,7 @@ def test_main_reads_the_environment_and_prints_one_arg_per_line(
     assert _value_after(lines, "--cross-cloud-configured") == "aws,gcp"
     assert _value_after(lines, "--cross-cloud-observed") == "aws"
     assert _value_after(lines, "--e2e-junit").endswith("sdr-test-results.xml")
+    assert _value_after(lines, "--integration-result") == "failure"
     # Default when OUT is unset, so a caller that forgets it still writes where
     # the upload step looks.
     assert _value_after(lines, "--out") == "results/test-readiness.json"

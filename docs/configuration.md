@@ -4,6 +4,8 @@ The Application SDK reads configuration from environment variables at startup. V
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
+This page covers **runtime** variables only. Variables starting `E2E_` configure the test harness under `application_sdk/testing/`. CI sets them, and a deployed app never reads them. See [Runtime vs test-harness variables](standards/env-vars.md#runtime-vs-test-harness-variables).
+
 ---
 
 ## Application
@@ -103,6 +105,7 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
 | `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
 | `ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE` | `3` | Consecutive definitive zero-poller readings before this worker stops emitting `token_refresh` health events. At the default 60s observer interval that is ~3 minutes of confirmed-parked polling. `unknown` / `polling` never accumulate toward this threshold. |
+| `ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS` | graceful shutdown timeout + `60` | Upper bound (seconds) on temporalio's own worker teardown after a fatal poll error. The supervisor regains control only when that teardown returns; if it has not returned within this bound the process exits with code 1 so the pod or container restart policy brings up a fresh worker. `0` or negative disables the bound. |
 | `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on the metrics payload read from the loopback endpoint when reading Temporal core's poller gauge for the poll-state diagnostic. Guards the observer against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is reported as *unknown*, never as zero. |
 
 Reading the poller gauge requires Temporal core's Prometheus exporter, bound by

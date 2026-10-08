@@ -226,6 +226,32 @@ class TestCountJsonFilesRecursive:
         """Nonexistent directory returns 0 (not an error)."""
         assert count_json_files_recursive(Path("/nonexistent/path")) == 0
 
+    def test_walk_error_part_way_through_raises(self, tmp_path):
+        """An OSError on a subdirectory surfaces instead of under-counting.
+
+        ``Path.rglob`` swallows it (cpython#146646) and returns the files it
+        reached, which reads as a smaller-but-valid state.
+        """
+        import os
+
+        (tmp_path / "a.json").write_text("{}")
+        unreadable = tmp_path / "subdir"
+        unreadable.mkdir()
+        (unreadable / "b.json").write_text("{}")
+
+        real_scandir = os.scandir
+
+        def _scandir(path):
+            if Path(path) == unreadable:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_scandir(path)
+
+        with (
+            patch("application_sdk.common._listing.os.scandir", _scandir),
+            pytest.raises(PermissionError),
+        ):
+            count_json_files_recursive(tmp_path)
+
 
 # ---------------------------------------------------------------------------
 # copy_directory_parallel

@@ -4,7 +4,8 @@ Exercises ``_run_preflight_gate`` directly with ``workflow.patched`` and
 ``workflow.execute_activity`` mocked. The activity holds the verdict and raises
 the deliberate ``PreflightFailed`` block, which the workflow re-raises unchanged.
 When the activity returns no verdict the workflow classifies the failure chain:
-surviving evidence or a lost frame is subject to the mode, and only the gate's
+surviving evidence or a lost frame is subject to the mode and to the evidence's
+category (hard blocks only on ``GATE_BLOCKING_CATEGORIES``), and only the gate's
 own plumbing fails open.
 """
 
@@ -16,20 +17,30 @@ import pytest
 
 from application_sdk.app.base import _run_preflight_gate
 from application_sdk.errors.categories import Audience, FailureCategory
-from application_sdk.errors.leaves import SourceUnavailableError
+from application_sdk.errors.leaves import (
+    AppPermissionDeniedError,
+    AuthError,
+    SourceUnavailableError,
+)
 from application_sdk.execution._temporal.preflight_gate import (
     FAILURE_AUDIENCE_KEY,
+    FAILURE_CHECK_KEY,
+    FAILURE_MESSAGE_KEY,
     GATE_OUTCOME_ROW_KEYS,
     GATE_TIMEOUT_DEFAULT_SECONDS,
     PREFLIGHT_FAILED_ERROR_TYPE,
     PREFLIGHT_NO_VERDICT_ERROR_TYPE,
     PreflightClassification,
+    WarmupPoll,
+    _plumbing_evidence,
 )
 from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.contracts import (
     PreflightGateMode,
     PreflightOutput,
     PreflightStatus,
+    WarmupObservation,
+    WarmupState,
 )
 from application_sdk.observability.logger_adaptor import (
     CHECK_MATRIX_KEY,
@@ -110,8 +121,22 @@ def _patched(value: bool):
 
 
 def _exec(return_value=None, side_effect=None):
+    """Patch ``execute_activity``; return the mock that sees only check dispatches.
+
+    The gate's first activity is its own warmup probe (``{app}:preflight_warmup``),
+    answered READY here — what every app without a warmup reports — so these
+    tests keep exercising the one check dispatch that follows it.
+    """
     m = mock.AsyncMock(return_value=return_value, side_effect=side_effect)
-    return m, mock.patch("application_sdk.app.base.workflow.execute_activity", m)
+
+    async def _route(name: str, *args: object, **kwargs: object) -> object:
+        if name.endswith(":preflight_warmup"):
+            return WarmupPoll(observation=WarmupObservation(state=WarmupState.READY))
+        return await m(name, *args, **kwargs)
+
+    return m, mock.patch(
+        "application_sdk.app.base.workflow.execute_activity", side_effect=_route
+    )
 
 
 def _rows(safe_log) -> list[dict]:
@@ -539,6 +564,25 @@ class TestEveryWorkflowRowCarriesTheFullShape:
             await _run_preflight_gate(_ResolvableInput(), "myapp", "crawl")
         assert _row(safe_log)[GATE_TIMEOUT_KEY] == GATE_TIMEOUT_DEFAULT_SECONDS
 
+    @pytest.mark.parametrize("gate_mode", ["hard", "soft"])
+    async def test_dead_frame_verdict_carries_every_key(
+        self, safe_log, gate_mode: str
+    ) -> None:
+        _, exec_patch = _exec(side_effect=_killed_attempt_after_marker())
+        with _patched(True), exec_patch:
+            if gate_mode == "hard":
+                with pytest.raises(ApplicationError):
+                    await _run_preflight_gate(
+                        _ResolvableInput(), "myapp", "crawl", gate_mode=gate_mode
+                    )
+            else:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "myapp", "crawl", gate_mode=gate_mode
+                )
+        row = _row(safe_log)
+        assert row["outcome"] == ("blocked" if gate_mode == "hard" else "would_block")
+        assert set(GATE_OUTCOME_ROW_KEYS) <= row.keys()
+
     async def test_malformed_declared_mode_reads_as_soft(self, safe_log) -> None:
         with _patched(False):
             await _run_preflight_gate(
@@ -556,9 +600,14 @@ def _temporal_timeout(timeout_type):
 
 
 def _no_verdict_marker(*, as_dict: bool = False) -> ApplicationError:
-    """The retry marker a non-final attempt raises, with a source fault as evidence."""
-    details = SourceUnavailableError(
-        message="The SQL Server did not answer in time"
+    """The retry marker a non-final attempt raises, with a source fault as evidence.
+
+    AUTH, a category a hard gate blocks on, so the tests built on this marker
+    exercise the block; a non-blocking category would read as would_block in
+    both modes (FND-3040).
+    """
+    details = AuthError(
+        message="The SQL Server rejected the login"
     ).to_failure_details()
     checks = [
         {
@@ -592,7 +641,9 @@ class TestWorkflowAppliesTheModeToADeadFrame:
     activity's own cancel and Temporal ends the frame. The workflow then reads
     the chain: the previous attempt's typed evidence, or the bare fact that a
     running attempt was killed, are both statements about the source or the
-    handler, and the mode applies. Only the gate's own plumbing still proceeds.
+    handler, and the mode applies. Hard blocks only when the evidence's category
+    is one the customer can act on; a bare kill is TIMEOUT, so it is reported
+    (FND-3040). Only the gate's own plumbing still proceeds as ``gate_broken``.
     """
 
     async def test_hard_mode_blocks_from_the_previous_attempts_evidence(
@@ -607,7 +658,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         err = excinfo.value
         assert err.type == PREFLIGHT_FAILED_ERROR_TYPE
         assert err.non_retryable is True
-        assert err.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+        assert err.details[0].category is FailureCategory.AUTH
         assert err.details[0].audience is Audience.USER
         assert err.details[0].app_name == "mssql"
         assert err.details[1]["status"] == "not_ready"
@@ -643,7 +694,7 @@ class TestWorkflowAppliesTheModeToADeadFrame:
                 await _run_preflight_gate(
                     _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
                 )
-        assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+        assert excinfo.value.details[0].category is FailureCategory.AUTH
 
     async def test_marker_as_the_final_failure_is_also_a_verdict(
         self, safe_log
@@ -657,34 +708,32 @@ class TestWorkflowAppliesTheModeToADeadFrame:
         assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
 
     @pytest.mark.parametrize("timeout_name", ["START_TO_CLOSE", "HEARTBEAT"])
-    async def test_killed_frame_without_evidence_is_frame_lost_and_hard_blocks(
+    async def test_killed_frame_without_evidence_is_frame_lost_and_hard_proceeds(
         self, safe_log, timeout_name: str
     ) -> None:
+        # A bare kill is TIMEOUT, which a hard gate reports rather than blocks on
+        # (FND-3040): the run proceeds with the same would_block row soft emits.
         from temporalio.exceptions import TimeoutType
 
         killed = _real_activity_error(_temporal_timeout(TimeoutType[timeout_name]))
         _, exec_patch = _exec(side_effect=killed)
         with _patched(True), exec_patch:
-            with pytest.raises(ApplicationError) as excinfo:
-                await _run_preflight_gate(
-                    _ResolvableInput(),
-                    "mssql",
-                    "crawler",
-                    budget_seconds=300,
-                    gate_mode="hard",
-                )
-        details = excinfo.value.details[0]
-        assert details.category is FailureCategory.TIMEOUT
-        assert details.audience is Audience.APP_OWNER
-        assert details.app_name == "mssql"
-        assert "300" in details.message
-        assert "lost worker" in details.message
-        assert excinfo.value.details[1]["status"] == "not_ready"
-        assert excinfo.value.details[1]["checks"] == []
+            result = await _run_preflight_gate(
+                _ResolvableInput(),
+                "mssql",
+                "crawler",
+                budget_seconds=300,
+                gate_mode="hard",
+            )
+        assert result is None
         (row,) = _rows(safe_log)
-        assert row["outcome"] == "blocked"
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
+        assert row["reason"] == FailureCategory.TIMEOUT.value
         assert row[FAILURE_AUDIENCE_KEY] == "APP_OWNER"
+        assert "300" in row[FAILURE_MESSAGE_KEY]
+        assert "lost worker" in row[FAILURE_MESSAGE_KEY]
         assert row[CHECK_MATRIX_KEY] == "[]"
 
     async def test_killed_frame_without_evidence_is_frame_lost_and_soft_proceeds(
@@ -853,7 +902,8 @@ class TestAnUnreadableCheckDoesNotVetoTheEvidence:
     such check emptied the whole payload and a real source block failed open.
     """
 
-    _good = SourceUnavailableError(message="no answer").to_failure_details()
+    # AUTH, so the primary alone is enough to block a hard gate (FND-3040).
+    _good = AuthError(message="bad password").to_failure_details()
 
     @pytest.fixture(
         params=["envelope_is_a_list", "check_is_not_a_dict", "check_duration_is_null"]
@@ -888,7 +938,7 @@ class TestAnUnreadableCheckDoesNotVetoTheEvidence:
                     _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
                 )
         assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
-        assert excinfo.value.details[0].category is FailureCategory.SOURCE_UNAVAILABLE
+        assert excinfo.value.details[0].category is FailureCategory.AUTH
         assert [
             c["name"] for c in excinfo.value.details[1]["checks"]
         ] == expected_checks
@@ -1005,14 +1055,15 @@ class TestWorkflowRowsAreLevelledLikeTheActivitys:
         assert self._level(safe_log) == "error"
 
 
-class TestALostStorageRetryBlocksOnTheStoreEvidence:
+class TestALostStorageRetryReportsTheStoreEvidence:
     """The storage deferral gives a flaky probe one retry, not a pass.
 
     The only producer of the ``PreflightNoVerdict`` marker is the opt-in store
-    verification: a failed probe downgrades the verdict and defers the block to
-    the next attempt. When that attempt is killed, the deferred evidence is what
+    verification: a failed probe downgrades the verdict and defers it to the
+    next attempt. When that attempt is killed, the deferred evidence is what
     the chain holds, and a store that refused the probe is a verdict on the run,
-    not gate plumbing. Hard mode blocks on it with the store's own audience.
+    not gate plumbing. It is DEPENDENCY_UNAVAILABLE, which a hard gate reports
+    rather than blocks on (FND-3040), with the store's own audience.
     """
 
     @staticmethod
@@ -1036,18 +1087,20 @@ class TestALostStorageRetryBlocksOnTheStoreEvidence:
         timeout.__cause__ = marker
         return _real_activity_error(timeout)
 
-    async def test_hard_mode_blocks_with_the_stores_audience(self, safe_log) -> None:
+    async def test_hard_mode_reports_it_with_the_stores_audience_not_blocked(
+        self, safe_log
+    ) -> None:
         _, exec_patch = _exec(side_effect=self._killed_after_storage_deferral())
         with _patched(True), exec_patch:
-            with pytest.raises(ApplicationError) as excinfo:
-                await _run_preflight_gate(
-                    _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
-                )
-        details = excinfo.value.details[0]
-        assert details.category is FailureCategory.DEPENDENCY_UNAVAILABLE
-        assert details.audience is Audience.PLATFORM
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
+            )
+        assert result is None
         row = _row(safe_log)
-        assert row["outcome"] == "blocked"
+        assert row["outcome"] == "would_block"
+        assert row[GATE_MODE_KEY] == "hard"
+        assert row["reason"] == FailureCategory.DEPENDENCY_UNAVAILABLE.value
+        assert row[FAILURE_AUDIENCE_KEY] == Audience.PLATFORM.value
         assert (
             row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
         )
@@ -1087,3 +1140,155 @@ class TestACancelledGateActivityFailsOpen:
         assert row["outcome"] == "no_verdict"
         assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
         assert row["reason"] == "CancelledError"
+
+
+def _marker_with_an_advisory_ahead_of_the_blocker() -> ApplicationError:
+    """A marker whose first failed check is NOT the one the verdict is attributed to.
+
+    Production shape: an advisory check fails, then the real fault is pinned on
+    the aggregate. The recovered checks keep advisory-first ordering, so a row
+    that names "the first failed check" names the wrong one. The blocker is
+    PERMISSION, a category a hard gate blocks on (FND-3040), and differs from the
+    advisory's so the two cannot be confused by category either.
+    """
+    blocker = AppPermissionDeniedError(
+        message="The SQL Server login lacks VIEW SERVER STATE"
+    ).to_failure_details()
+    advisory = AuthError(message="ADVISORY LINE, not the reason for the block")
+    checks = [
+        {
+            "name": "versionAdvisory",
+            "passed": False,
+            "error": advisory.to_failure_details().model_dump(mode="json"),
+        },
+        {
+            "name": "sourceReachable",
+            "passed": False,
+            "error": blocker.model_dump(mode="json"),
+        },
+    ]
+    return ApplicationError(
+        "Preflight could not reach a verdict",
+        blocker,
+        {"checks": checks},
+        type=PREFLIGHT_NO_VERDICT_ERROR_TYPE,
+    )
+
+
+class TestTheWorkflowRowNamesTheAttributedCheck:
+    """The workflow frame's row must agree with its own `reason`.
+
+    The frame recovers its evidence off the failure chain, so the objects it
+    holds crossed the wire and are no longer the ones the activity built. A row
+    that names a check by position rather than by attribution points support at
+    an unrelated advisory while `reason` names the real fault.
+    """
+
+    async def test_blocked_row_names_the_check_the_evidence_came_from(
+        self, safe_log
+    ) -> None:
+        from temporalio.exceptions import TimeoutType
+
+        timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+        timeout.__cause__ = _marker_with_an_advisory_ahead_of_the_blocker()
+        _, exec_patch = _exec(side_effect=_real_activity_error(timeout))
+        with _patched(True), exec_patch, pytest.raises(ApplicationError):
+            await _run_preflight_gate(
+                _ResolvableInput(), "mssql", "crawler", gate_mode="hard"
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row[FAILURE_MESSAGE_KEY] == (
+            "The SQL Server login lacks VIEW SERVER STATE"
+        )
+        assert row[FAILURE_CHECK_KEY] == "sourceReachable"
+
+    async def test_frame_lost_row_carries_the_message_and_no_check_name(
+        self, safe_log
+    ) -> None:
+        # A killed frame left no evidence and no checks, so there is no check to
+        # name — but the row's primary is fully populated, and this is the case a
+        # reader most needs the sentence for: the gate itself broke, and there
+        # is no handler-authored row to fall back on. A bare kill is TIMEOUT, so
+        # even a hard gate reports it as would_block (FND-3040).
+        from temporalio.exceptions import TimeoutType
+
+        killed = _real_activity_error(_temporal_timeout(TimeoutType.START_TO_CLOSE))
+        _, exec_patch = _exec(side_effect=killed)
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(
+                _ResolvableInput(),
+                "mssql",
+                "crawler",
+                budget_seconds=300,
+                gate_mode="hard",
+            )
+        row = _row(safe_log)
+        assert row["outcome"] == "would_block"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.FRAME_LOST
+        assert "lost worker" in row[FAILURE_MESSAGE_KEY]
+        assert FAILURE_CHECK_KEY not in row
+
+    async def test_gate_broken_row_carries_the_plumbing_failures_message(
+        self, safe_log
+    ) -> None:
+        # The gate's own plumbing raised. Its error leaves the activity with
+        # FailureDetails at details[0] precisely so a consumer has something to
+        # attribute — the row must read it, or the case where the gate itself
+        # broke is the one case with no sentence.
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        plumbing = ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+        _, exec_patch = _exec(side_effect=_real_activity_error(plumbing))
+        with _patched(True), exec_patch:
+            await _run_preflight_gate(_ResolvableInput(), "mssql", "crawler")
+        row = _row(safe_log)
+        assert row["outcome"] == "no_verdict"
+        assert row[GATE_CLASSIFICATION_KEY] == PreflightClassification.GATE_BROKEN
+        assert row["reason"] == "DependencyUnavailableError"
+        assert row[FAILURE_MESSAGE_KEY] == "Secret store unreachable: vault down"
+        assert FAILURE_CHECK_KEY not in row
+
+
+class TestPlumbingEvidenceKeepsReadingTheChain:
+    """The two silent-swallow branches of ``_plumbing_evidence``.
+
+    Both step past a link and keep going; a regression in either yields a row
+    with no sentence rather than a failure, so each is pinned on its own.
+    """
+
+    def _plumbing(self) -> ApplicationError:
+        from application_sdk.errors.leaves import DependencyUnavailableError
+
+        return ApplicationError(
+            "vault down",
+            DependencyUnavailableError(
+                message="Secret store unreachable: vault down", service="secret_store"
+            ).to_failure_details(),
+            type="DependencyUnavailableError",
+        )
+
+    def test_an_unreadable_envelope_on_one_link_does_not_stop_the_read(self) -> None:
+        outer = ApplicationError("wrapper", {"not": "a FailureDetails"}, type="Wrapper")
+        outer.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(outer)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_gate_marker_carrying_details_is_skipped_not_read(self) -> None:
+        # A marker's details are a verdict's evidence — _gate_failure_evidence's
+        # business, never a plumbing failure's.
+        marker = _no_verdict_marker()
+        marker.__cause__ = self._plumbing()
+        evidence = _plumbing_evidence(marker)
+        assert evidence is not None
+        assert evidence.message == "Secret store unreachable: vault down"
+
+    def test_a_bare_chain_yields_nothing(self) -> None:
+        assert _plumbing_evidence(RuntimeError("no envelope anywhere")) is None

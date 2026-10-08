@@ -135,7 +135,10 @@ gates:
       `external_influence = true` and is escalated to residue for mandatory
       human sign-off on a passing recheck (a failing recheck reverts and
       residues as "recheck failed" like any other rule, never reaching this
-      branch).
+      branch).  Separately, after the loop, a migration skill handed a
+      finding in an interactive session may edit tests/ and uv.lock while
+      the developer reviews each step; those changes are residued for
+      human review (see *After the loop — migration hand-off*).
 ---
 
 # /remediate — Conformance Remediation Loop
@@ -215,6 +218,8 @@ nothing else changes:
   within your first few actions and fix each site as you inspect it.  Do NOT
   survey the whole repository before the first edit — headless sessions have
   a hard deadline, and analysis without edits is discarded at it.
+- **No migration hand-off.**  Skip *After the loop — migration hand-off*:
+  list each residue entry's `remediation_reference` and start nothing.
 - **Residue is a report, not a retry loop.**  A finding that genuinely cannot
   be fixed safely is skipped (last resort) and the caller accounts for it;
   do not burn the budget re-attempting it.
@@ -326,6 +331,109 @@ in-loop `bootstrap`, which is per-finding and gated by recheck.
 **zero C002 findings**. One that appears means Phase 0 did not converge, and is
 an independent check on the same property.
 
+### Reference apps — load before any fix, verify against them after
+
+Do not fix from memory. Every app-facing rule names a `canonical_reference`
+(SARIF `atlan/canonicalReference` on the finding): a file in one of the three
+maintained reference apps — `atlan-mysql-app`, `atlan-metabase-app`,
+`atlan-openapi-app` — that already has the compliant shape. Before the first
+edit of a run, make the **full checkout** of all three available **outside
+the repo** (shallow clones of `origin/main`; read-only — never edited, never
+committed, never in a fix's `touched_files`):
+
+```sh
+REFS="${XDG_CACHE_HOME:-$HOME/.cache}/atlan-conformance/refs"
+mkdir -p "$REFS"
+for app in atlan-mysql-app atlan-metabase-app atlan-openapi-app; do
+  if [ -d "$REFS/$app/.git" ]; then
+    git -C "$REFS/$app" fetch --depth 1 origin HEAD && git -C "$REFS/$app" checkout --quiet --detach FETCH_HEAD
+  else
+    git clone --depth 1 "https://github.com/atlanhq/$app.git" "$REFS/$app"
+  fi
+done
+echo "$REFS"
+```
+
+Read them by the absolute path the snippet echoes. Never clone them into the
+repo: `detect` scans the whole tree, and a reference app's `@entrypoint`s
+under `remediation/` were added to the F016 matrix as false BLOCK failures.
+
+For every finding, in this order (contract:
+`$PROGRAMS/functions/remediate-finding.prose.md`, section *Reference apps,
+impact analysis and verification*):
+
+1. **Read** the whole file the finding's `canonical_reference` names, grep that
+   reference app for the same pattern, and mirror it — never invent an API,
+   kwarg or config key the reference app does not use.
+2. **Analyse the impact** across the whole repo before applying: callers and
+   importers, tests that pin the old behaviour, the contract and generated
+   tree, `pyproject.toml`/`uv.lock`, `.env.example` and docs. Fold every
+   in-scope consequence into the same edit; list the rest in `impact`.
+3. **Verify** after applying and record it in `verification`: finding gone
+   (`recheck-narrowest`), orthogonal gate passed, whole-series re-detect on the
+   touched files introduced no new finding for any rule, fixed site reads like
+   the reference. All four true, or revert.
+4. **Review the consequences** once verified — what the fix changed
+   behaviourally (control flow, signatures, runtime surfaces the gates do not
+   exercise, new runtime dependencies) and who is affected. Fix what is in
+   scope in the same unit and re-verify; list the rest in `impact.after`.
+5. **A suppression is a rule-defect signal.** If the finding will not clear
+   and the only way out is an inline ignore, classify why: `site-exception`
+   (normal strict-mode suppression), `false-positive` or `prescription-defect`.
+   For the last two run `$PROGRAMS/functions/report-rule-defect.prose.md`: it
+   opens a `fix(conformance):` PR against `atlanhq/application-sdk` with a
+   failing reproducer test (and the fix when local) for the SDK owners to
+   review; suppress WARN-tier only, citing that PR; BLOCK-tier stays in residue
+   with the PR link. Never merge that PR; never edit this repo's own gate.
+
+`autofixable = true` rules (the **auto-fixable** ruleset) are applied this way.
+`autofixable = false` rules (the **migration** ruleset) are never applied by
+the loop: steps 1–2 still run and the result is a `migration_brief` in residue,
+with the rule's `remediation_reference`.
+
+### After the loop — migration hand-off
+
+Residue entries for migration rules carry `remediation_reference`
+(`kind`, `target`, `note`). Group them by reference, then:
+
+- `kind = skill` — interactive sessions only (a developer is present).
+  Resolve the skills directory the same way as the programs directory:
+  `SKILLS=$(uv run atlan-application-sdk-conformance skills-dir)` inside a
+  connector repo, `SKILLS=$(uvx atlan-application-sdk-conformance@latest skills-dir)`
+  anywhere else. The skills to run are every skill named by a residue
+  entry, plus every skill whose `also_clears` frontmatter list names a symbol
+  that a B001, B008 or P005 finding reports: those findings point at another
+  skill, but this one performs their migration. Run them one at a time, in
+  the order of `$SKILLS/order.txt` and never another: an earlier skill can be
+  a precondition of a later one (`migrate-off-daft` must cross the daft
+  cliff before any skill that bumps the SDK). Routed work runs wherever
+  `order.txt` places the receiving skill, before or after the sender: the
+  receiver is selected up front from the findings, not when the sender reaches
+  the site. For each skill:
+  1. Tell the developer which rule ids and how many findings it covers, and
+     ask before starting it.
+  2. Read `$SKILLS/<target>/SKILL.md` and follow it, stop points included.
+     While it runs, the skill's declared `outputs` replace this loop's write
+     scope: it may edit `tests/`, `uv.lock` and other files the loop never
+     touches. This exception to the write-scope constraint holds only while
+     the skill runs, and only because the developer reviews each step.
+  3. When it ends, run the orthogonal test gate, then
+     `atlan-application-sdk-conformance detect --rule <ids>` for the rule ids
+     it names. A cleared finding is removed from residue; a remaining one
+     stays in residue with the skill named. If the test gate fails, do not
+     revert the skill's changes: show the developer the failing tests, let
+     them decide, and keep the skill's findings in residue with the failure.
+  4. Record in residue every file the skill changed under `tests/` and any
+     `uv.lock` change, for human review.
+- `kind = guide` — apply nothing. Report the rule ids with the guide path
+  `$(dirname "$PROGRAMS")/<target>`.
+- `kind = decision` — apply nothing. Report the rule ids, who decides
+  (`target`) and the choice (`note`).
+
+Headless runs — the caller's prompt says the run is non-interactive, as in the
+remediation lane, so no developer is present — skip the hand-off: the residue
+report lists each reference and nothing is started.
+
 ### Phase 1: Baseline
 
 Call `detect-violations` to run the suite and capture the before-state.  Use the
@@ -407,7 +515,7 @@ Review each item before merging.
 
 | Discipline | Enforcement |
 |---|---|
-| No self-judging (§6.1) | Write scope excludes `tests/`, `.github/`, `conformance/` — except C002's `bootstrap` re-sync (deterministic, non-model-authored content, including its side-effect writes to `.claude/skills/remediate/SKILL.md` and `contract_schema.lock.json` — see `remediate-finding.prose.md`) and C001's ref-suffix repin (model-obtained SHA, so always escalated via `external_influence`) |
+| No self-judging (§6.1) | Write scope excludes `tests/`, `.github/`, `conformance/` — except C002's `bootstrap` re-sync (deterministic, non-model-authored content, including its side-effect writes to `.claude/skills/remediate/SKILL.md` and `contract_schema.lock.json` — see `remediate-finding.prose.md`) and C001's ref-suffix repin (model-obtained SHA, so always escalated via `external_influence`). After the loop, an interactive migration-skill hand-off may edit `tests/` and `uv.lock` under developer review; those changes are residued |
 | Orthogonal gate (§6.1) | Test suite runs after every source-logic fix; fail → revert |
 | Oscillation detection (§6.2) | Fingerprint-set identity check across rounds → freeze-and-escalate |
 | Bounded loop (§6.2) | 5-attempt cap; batch per-file fixes in one pass |
