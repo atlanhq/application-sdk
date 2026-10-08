@@ -775,6 +775,30 @@ faults keep their tripwire and stay red for a human; recycling a real wedge ever
 four hours would hide it behind a lane that looks busy. An *unstamped* tripwire
 is also left alone: "no reason given" must never read as self-healing.
 
+**A `window-empty` refusal never becomes a PR (FND-3517).** These PRs were
+blocked on purpose and replaced automatically, but they still showed up red and
+looked like CI failures someone should investigate. The lock lane now sets
+`prCreation: status-success` (with `internalChecksAsSuccess: true`), so Renovate
+opens its PR only once the branch status is green. Before a PR exists no fleet
+CI runs on the branch, so that status is just `renovate/artifacts`, which is
+the driver's exit code. `refusal_exit_code()` makes the driver fail only for
+`window-empty`:
+
+| Refusal | Driver exit | PR? | What holds it |
+| -- | -- | -- | -- |
+| `window-empty` | 1 | no | nothing needed; the reaper deletes the branch, PR or not |
+| any standing fault | 0 | yes, for a human | the tripwire, through the required `suite / Conformance Gate` |
+| any, under `--caller-owns-commit` | 1 | unchanged | the caller commits nothing |
+
+A dependency bump that breaks an app's tests still opens a PR: tests only run
+once the PR exists. Two costs come with it. A good refresh opens one fleet
+pass (~4h) later, because Renovate never opens a PR on the pass that pushed
+the commit under `status-success`. And Renovate may call the merge API on a PR
+it has just opened, before CI registers, so a repo whose `main` ruleset
+requires no checks could merge an untested refresh. Both stay confined to the
+lock lane: the atlan framework dependencies rules keep `prCreation: immediate`,
+and `test_renovate_lock_pr_creation.py` pins that.
+
 **The fleet dashboard names both, and one of them alarms.**
 `conformance.renovate.classify` splits the shape out of `checks_failing` once
 three things hold — the PR is lock-maintenance, its diff is a `uv.lock` and

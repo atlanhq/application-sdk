@@ -117,6 +117,12 @@ exactly ``BRANCH``, the PR's only changed file a ``uv.lock``, whose
 ``SELF_HEALING_REFUSALS``. A stamp exists on no other lane, so there is nothing
 to generalise.
 
+Since FND-3517 a ``window-empty`` refusal usually has NO PR: the lock lane sets
+``prCreation: status-success`` and the driver fails only on that reason, so
+Renovate never opens one. ``find_prless_refusal`` reads such a branch through
+the compare API instead and applies the same predicate, plus one guard the PR
+path does not need: every commit on the branch must be ``FLEET_ENGINE``'s.
+
 An *unstamped* tripwire is left alone. Locks refused before this change carry no
 reason, and treating "no reason given" as self-healing is the one mistake that
 would recycle a real wedge forever. Those are triaged by hand once; every
@@ -408,7 +414,7 @@ def find_refusal(
         None,
     )
     if not prs:
-        return None
+        return find_prless_refusal(token, repo, fetch)
     pr = prs[0]  # type: ignore[index]
     if not head_is_in_repo(pr, repo):
         # `head=<owner>:<branch>` matches on the head OWNER, so a fork inside the
@@ -437,6 +443,59 @@ def find_refusal(
     if not should_reap(files, lock_text):
         return None
     return pr, f"self-healing lock refusal ({refusal_reason(lock_text)})"
+
+
+def find_prless_refusal(
+    token: str, repo: str, fetch: Fetch = _request
+) -> Optional[tuple[dict, str]]:
+    """The lock branch on ``repo`` if it is a self-healing refusal with NO PR.
+
+    The lock lane sets ``prCreation: status-success`` and the driver fails only
+    on ``window-empty`` (FND-3517), so that refusal now sits on a branch with no
+    PR at all. Renovate reuses a branch that is not behind its base without
+    re-running the bound, so without this the branch would stay refused until
+    ``main`` next moves.
+
+    Read through the compare API, since there is no PR to ask. The same
+    predicate as the PR path (``should_reap``) decides, with one extra guard:
+    every commit on the branch must be this runner's. With no PR there is no
+    head-repository check to lean on, and a branch someone else pushed to is
+    left alone.
+    """
+    owner, name = repo.split("/", 1)
+    meta = fetch(token, f"{API_ROOT}/repos/{owner}/{name}", None)
+    base = meta["default_branch"]  # type: ignore[index]
+    try:
+        compare = fetch(
+            token,
+            f"{API_ROOT}/repos/{owner}/{name}/compare/{base}...{BRANCH}",
+            None,
+        )
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None  # no lock branch: the ordinary state between refreshes
+        raise
+    commits = compare["commits"]  # type: ignore[index]
+    if not commits or any(
+        (c.get("author") or {}).get("login") != FLEET_ENGINE for c in commits
+    ):
+        return None
+    files = [f["filename"] for f in compare.get("files", [])]  # type: ignore[union-attr]
+    path = lone_lock(files)
+    if path is None:
+        return None
+    contents = fetch(
+        token,
+        f"{API_ROOT}/repos/{owner}/{name}/contents/{path}?ref={BRANCH}",
+        None,
+    )
+    lock_text = base64.b64decode(contents["content"]).decode(  # type: ignore[index]
+        errors="replace"
+    )
+    if not should_reap(files, lock_text):
+        return None
+    branch = {"number": None, "head": {"ref": BRANCH, "sha": commits[-1]["sha"]}}
+    return branch, f"self-healing lock refusal with no PR ({refusal_reason(lock_text)})"
 
 
 def find_reapable(
@@ -523,8 +582,9 @@ def main(argv: list[str] | None = None) -> int:
     owner, name = args.repo.split("/", 1)
     for pr, reason in found:
         branch = pr["head"]["ref"]
+        label = f"PR #{pr['number']}" if pr["number"] else f"{branch} (no PR)"
         print(
-            f"{args.repo}: PR #{pr['number']} is reapable — {reason} "
+            f"{args.repo}: {label} is reapable — {reason} "
             f"({branch}, head {pr['head']['sha'][:7]}) — deleting the branch so "
             "this pass rebuilds it"
         )
@@ -542,7 +602,7 @@ def main(argv: list[str] | None = None) -> int:
             # stop the others from recovering on this pass.
             print(f"::warning::reaper could not delete {args.repo}@{branch}: {exc}")
             continue
-        print(f"::notice::reaped {args.repo}#{pr['number']} ({branch})")
+        print(f"::notice::reaped {args.repo} {label} ({branch})")
     return 0
 
 

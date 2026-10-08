@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import urllib.error
 
 import pytest
 
@@ -383,6 +384,11 @@ class TestFindReapable:
                 if "head=" in url and f":{branch}" not in url:
                     return []
                 return [pr]
+            # The lock branch does not exist when the only PR is on another lane.
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
             if url.endswith("/commits?per_page=100"):
                 return [commit_by(a) for a in authors]
             if url.endswith("/files?per_page=100"):
@@ -415,11 +421,87 @@ class TestFindReapable:
         assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
         assert not any("/contents/" in u for u in fetch.calls)
 
-    def test_no_open_pr_is_nothing(self):
+    def test_no_open_pr_and_no_branch_is_nothing(self):
         def fetch(token, url, _method):
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
             return []
 
         assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def prless_fetch(self, *, files, lock_text, authors=(reaper.FLEET_ENGINE,)):
+        """The lock branch exists with no PR, as status-success leaves a refusal."""
+        calls: list[str] = []
+
+        def fetch(token, url, _method):
+            calls.append(url)
+            if "/pulls?" in url:
+                return []
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            if url.endswith(f"/compare/main...{LOCK}"):
+                return {
+                    "commits": [
+                        {"sha": f"sha{i}", "author": {"login": a}}
+                        for i, a in enumerate(authors)
+                    ],
+                    "files": [{"filename": f} for f in files],
+                }
+            if "/contents/" in url:
+                return {"content": base64.b64encode(lock_text.encode()).decode()}
+            raise AssertionError(f"unexpected url {url}")
+
+        fetch.calls = calls  # type: ignore[attr-defined]
+        return fetch
+
+    def test_finds_a_self_healing_refusal_with_no_pr(self):
+        # FND-3517: the lane opens no PR for window-empty, so the branch is all
+        # there is to reap.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text)
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert len(found) == 1
+        branch, reason = found[0]
+        assert branch == {"number": None, "head": {"ref": LOCK, "sha": "sha0"}}
+        assert "no PR" in reason
+
+    def test_keeps_a_prless_standing_fault(self):
+        text = lock_with('[options]\nexclude-newer-span = "P3D"  # refusal: rollback')
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text)
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def test_keeps_a_prless_branch_someone_else_pushed_to(self):
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(
+            files=["uv.lock"],
+            lock_text=text,
+            authors=(reaper.FLEET_ENGINE, "a-human"),
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_keeps_a_prless_branch_with_other_files(self):
+        fetch = self.prless_fetch(files=["uv.lock", "pyproject.toml"], lock_text="")
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_a_compare_error_other_than_404_propagates(self):
+        # main() turns it into a loud warning; it must not read as "nothing".
+        def fetch(token, url, _method):
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 502, "Bad Gateway", None, None)
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            return []
+
+        with pytest.raises(urllib.error.HTTPError):
+            reaper.find_reapable("tok", "atlanhq/x", fetch)
 
     def test_the_refusal_path_queries_only_the_lock_branch(self):
         # The refusal reap stays scoped to the lock lane: a refusal stamp is
