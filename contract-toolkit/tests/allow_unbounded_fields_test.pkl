@@ -1,0 +1,102 @@
+// Tests for `allowUnboundedFieldsReason`.
+//
+// Background: an apitree / nested / object-valued widget renders as
+// `Annotated[dict[str, Any], MaxItems(1000)]`, which the SDK's payload-safety
+// check refuses at import. The only way to opt out used to be a
+// `contract/post-generate.sh` that string-matched the generated class line and
+// patched it, so every change to that line (e.g. FND-3140's per-entrypoint class
+// names) broke the hook and, with it, the Renovate regen and the freshness gate.
+
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+import "../examples/minimal/app.pkl" as minimalApp
+import "fixtures/app_bundle_entrypoint_names.pkl" as namesBundle
+
+local reason = "component filters are an arbitrary-depth tree, so no concrete type fits"
+
+local apiTreeApp = (App) {
+  name = "unbounded-test"
+  displayName = "Unbounded Test"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  credentialConnectorType = "rest"
+
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; displayName = "Password"; sensitive = true }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Metadata"] {
+        inputs {
+          ["include-folders"] = new App.ConditionalInput {
+            title = "Include Folders"
+            baseWidgetType = "apitree"
+            connectorConfig = "atlan-connectors-unbounded-test"
+            credentialRef = "credential-guid"
+            additionalProperties = new Dynamic { type = "array" }
+          }
+        }
+      }
+    }
+  }
+}
+
+local optedOut = (apiTreeApp) { allowUnboundedFieldsReason = reason }
+local optedOutPy: String = optedOut.output.files["app/generated/_input.py"].text
+
+local optedOutBundle = (namesBundle) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "ecc"; contract = optedOut }
+  }
+}
+local bundlePy: String = optedOutBundle.output.files["app/generated/ecc/_input.py"].text
+
+facts {
+  ["Unset: the class line is unchanged"] {
+    apiTreeApp.output.files["app/generated/_input.py"].text
+      .contains("\n\nclass AppInputContract(ExtractionInput):\n")
+    !apiTreeApp.output.files["app/generated/_input.py"].text.contains("allow_unbounded_fields")
+    minimalApp.output.files["app/generated/_input.py"].text
+      .contains("\nclass AppInputContract(ExtractionInput):\n")
+  }
+
+  ["Set: the class opts out, with the P001 suppression on the line directly above"] {
+    optedOutPy.contains(
+      "\n# conformance: ignore[P001] \(reason)\n"
+        + "class AppInputContract(ExtractionInput, allow_unbounded_fields=True):\n")
+  }
+
+  ["Set: the fields themselves are unchanged"] {
+    optedOutPy.contains("include_folders: Annotated[dict[str, Any], MaxItems(1000)]")
+    optedOut.output.files["app/generated/manifest.json"].text
+      == apiTreeApp.output.files["app/generated/manifest.json"].text
+  }
+
+  ["Bundle: the opt-out survives the per-entrypoint class rename"] {
+    bundlePy.contains(
+      "\n# conformance: ignore[P001] \(reason)\n"
+        + "class EccAppInputContract(ExtractionInput, allow_unbounded_fields=True):\n")
+    bundlePy.endsWith("\n\n\nAppInputContract = EccAppInputContract\n")
+  }
+
+  ["Refused when no field is Any-typed"] {
+    module.catch(() -> (minimalApp) { allowUnboundedFieldsReason = reason }.output.files["app/generated/_input.py"].text)
+      .contains("declares no Any-typed field")
+  }
+
+  ["Refused when blank or multi-line"] {
+    module.catch(() -> (apiTreeApp) { allowUnboundedFieldsReason = "  " }.allowUnboundedFieldsReason)
+      .contains("isBlank")
+    module.catch(() -> (apiTreeApp) { allowUnboundedFieldsReason = "one\ntwo" }.allowUnboundedFieldsReason)
+      .contains("contains")
+  }
+}

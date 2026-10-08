@@ -401,6 +401,39 @@ workflowConfigName: String = name
 /// Required for single-entrypoint apps (when `entrypoints` is empty).
 uiConfig: Widgets.UIConfig?
 
+/// Opts the generated input contract out of the SDK's payload-safety check, with
+/// the reason recorded beside it. Unset (the default) emits the class exactly as
+/// before.
+///
+/// Some widgets have no payload-safe Python type: `APITree`, `ApiTreeSelect`,
+/// `NestedInput`, `DsnTreeMap`, `AgentSelector`, and a `ConditionalInput` whose
+/// value is an object all render as `Annotated[dict[str, Any], MaxItems(1000)]`.
+/// The SDK refuses `Any` even inside `MaxItems` (`PayloadSafetyError
+/// [AAF-CTR-002]`), so such a module fails to import unless the class opts out.
+/// Before this property the only way to opt out was to patch `_input.py` after
+/// `pkl eval` in `contract/post-generate.sh`, which breaks whenever the toolkit
+/// changes the generated class line.
+///
+/// Setting it changes the generated `_input.py` in two places:
+///
+/// - the class gains the SDK keyword:
+///   `class AppInputContract(ExtractionInput, allow_unbounded_fields=True):`
+///   (in a bundle, the per-entrypoint class name is used as usual);
+/// - the line directly above it becomes
+///   `# conformance: ignore[P001] <this value>`, the justified suppression that
+///   conformance rule P001 requires for every opt-out. The opt-out stays visible
+///   in review and is still counted in the SARIF report.
+///
+/// It does not change the fields themselves, the manifest, or any other generated
+/// file. The value must be one line, since it renders into a Python comment. It is
+/// refused when the contract declares no `Any`-typed field, because then there is
+/// nothing to opt out of and the class should stay payload-safe.
+///
+/// Use it only after typing the field concretely has been ruled out (P001 lists
+/// the alternatives, e.g. `FilterMap` for flat filter maps), and say why in the
+/// value. In a bundle, set it on the entrypoint contract that needs it.
+allowUnboundedFieldsReason: String(!isBlank, !contains("\n"))?
+
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
 
 /// Additional DAG nodes beyond the pipeline.
@@ -3626,6 +3659,19 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     streamingFieldBlock
   local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
   local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  // allowUnboundedFieldsReason: the SDK opt-out plus the P001 suppression on the
+  // line directly above the class, which is the only line P001 reads besides the
+  // class line itself. Refused when no field is Any-typed, so an opt-out is never
+  // emitted on a class that is already payload-safe.
+  local inputClassLine: String =
+    if (allowUnboundedFieldsReason == null)
+      "class AppInputContract(ExtractionInput):\n"
+    else if (!uiFieldLines.contains("dict[str, Any]"))
+      throw("allowUnboundedFieldsReason is set, but this contract declares no Any-typed field, "
+        + "so the generated input contract is already payload-safe. Remove allowUnboundedFieldsReason.")
+    else
+      "# conformance: ignore[P001] \(allowUnboundedFieldsReason)\n" +
+      "class AppInputContract(ExtractionInput, allow_unbounded_fields=True):\n"
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
@@ -3695,7 +3741,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     inputImportBlock +
     loggerModuleLine +
-    "class AppInputContract(ExtractionInput):\n" +
+    inputClassLine +
     (if (classBody.isEmpty) "    pass\n" else classBody)
 }
 

@@ -185,6 +185,8 @@ See [`docs/reference.md`](docs/reference.md) → *Legacy Workflow Type Aliases*.
 
 Typed Python `AppInputContract` dataclass. SDK-owned fields inherited from `ExtractionInput`; app-specific fields generated from `uiConfig.properties`. Inherited `include_filter` and `exclude_filter` fields accept APITree object selections by normalizing them to the SDK filter-map shape before validation.
 
+Tree and nested widgets (`APITree`, `ApiTreeSelect`, `NestedInput`, `DsnTreeMap`, `AgentSelector`, object-valued `ConditionalInput`) render as `Annotated[dict[str, Any], MaxItems(1000)]`, which the SDK's payload-safety check refuses at import (`AAF-CTR-002`). When no concrete type fits, set `allowUnboundedFieldsReason = "<why>"`: the class gains `allow_unbounded_fields=True` and the justified `# conformance: ignore[P001] <why>` line above it, so no `contract/post-generate.sh` patch is needed. Unset (the default) leaves the class unchanged; it is refused on a contract with no `Any`-typed field. See [docs/reference.md](docs/reference.md#opting-out-of-payload-safety-allowunboundedfieldsreason).
+
 Framework-populated fields (`workflow_id`, `correlation_id`, `app_name`) are declared by
 the SDK's base `Input` and are never regenerated from a `uiConfig` property — redeclaring
 one would shadow the base field with the author's type and fail only at workflow dispatch.

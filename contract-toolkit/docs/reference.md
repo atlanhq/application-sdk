@@ -857,6 +857,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
+| `allowUnboundedFieldsReason` | String? | Opts the generated `_input.py` class out of the SDK's payload-safety check (`allow_unbounded_fields=True`) and records the reason as its P001 suppression. Default unset: class unchanged. See [Opting out of payload safety](#opting-out-of-payload-safety-allowunboundedfieldsreason). |
 
 ### Deploy Configuration
 
@@ -3850,6 +3851,55 @@ Notes:
   preserved, so an override survives even before you add the script. That
   detection needs a baseline pin and therefore does not apply on the test and
   image-build paths — `post-generate.sh` is what covers those.
+- Before writing one, check whether the toolkit can already express the change.
+  A hook that patches the generated `_input.py` class line to add
+  `allow_unbounded_fields=True` is replaced by
+  [`allowUnboundedFieldsReason`](#opting-out-of-payload-safety-allowunboundedfieldsreason).
+  Hooks that string-match generated output break whenever that output changes;
+  for example, bundle input classes were renamed per entrypoint in 0.29.0.
+
+---
+
+## Opting out of payload safety (`allowUnboundedFieldsReason`)
+
+`allowUnboundedFieldsReason: String?` (default unset) opts the generated input
+contract out of the SDK's payload-safety check and records why.
+
+**Why it exists.** Tree and nested widgets have no payload-safe Python type:
+`APITree`, `ApiTreeSelect`, `NestedInput`, `DsnTreeMap`, `AgentSelector`, and a
+`ConditionalInput` whose value is an object all render as
+`Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` even inside
+`MaxItems` (`PayloadSafetyError [AAF-CTR-002]`), so the module fails to import
+unless the class opts out. Previously the only way to do that was a
+`contract/post-generate.sh` that patched the class line after `pkl eval`.
+
+**What it changes.** Only the class declaration in `_input.py`:
+
+```python
+# conformance: ignore[P001] <your reason>
+class AppInputContract(ExtractionInput, allow_unbounded_fields=True):
+```
+
+The comment is the justified suppression conformance rule P001 requires for every
+opt-out; it must sit on the line directly above the class, which is where the
+toolkit puts it. Suppressed opt-outs are still reported in SARIF. In a bundle, the
+per-entrypoint class name (`EccAppInputContract`, …) and the `AppInputContract`
+alias are generated as usual; set the property on the entrypoint contract that
+needs it.
+
+**What it does not change.** Field types, defaults and validators, the manifest,
+the workflow and credential configs, and every other generated file.
+
+**Caveats.**
+
+- Evaluation fails when the contract declares no `Any`-typed field: there is
+  nothing to opt out of, and the class should stay payload-safe.
+- The value must be one non-blank line, because it renders into a Python comment.
+- It is a last resort. P001 asks you to try a concrete type first (for flat filter
+  maps the SDK ships `FilterMap`), then dropping an app-level override, then
+  retiring an unused field. Say in the reason why those do not apply.
+- The opt-out skips only the type check. It does not make the contract accept
+  undeclared keys; that is `extra='allow'` (see K018).
 
 ---
 
