@@ -1,5 +1,15 @@
 # Changelog
 
+## v3.44.0 (October 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.43.0...v3.44.0
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) (by @cmgrote in [01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+- SystemAppE2ETest submits straight to AE on an isolated system-app tenant pool (FND-3542) (#4249) (by @cmgrote in [3c3cf93](https://github.com/atlanhq/application-sdk/commit/3c3cf93))
+
+
 ## v3.43.0 (October 07, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.1...v3.43.0
