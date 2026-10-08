@@ -526,7 +526,8 @@ def _description_lines(path: str, text: str) -> set[int]:
         skip.add(i)
         value = line.split(":", 1)[1].strip()
         if path.endswith(_YAML_SUFFIXES) and _YAML_BLOCK_SCALAR.match(value):
-            block_indent = indent
+            stripped = line.lstrip()
+            block_indent = indent + len(stripped) - len(stripped.lstrip("- "))
     return skip
 
 

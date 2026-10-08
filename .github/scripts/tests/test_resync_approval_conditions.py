@@ -490,6 +490,10 @@ def test_settings_next_to_a_description_are_still_checked():
     assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == [
         '"automerge": true'
     ]
+    list_item = "rules:\n  - description: |\n      Some text.\n    automerge: true\n"
+    assert resync.lost_setting_lines(
+        list_item, "rules:\n  - description: |\n      Other.\n", TESTS_YAML
+    ) == ["automerge: true"]
 
 
 def test_description_and_quotes_count_in_files_that_are_not_yaml_or_json():
