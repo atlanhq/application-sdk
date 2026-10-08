@@ -30,6 +30,7 @@ open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
 import "Deployment.pkl" as DeploymentPkg
+import "Inputs.pkl" as InputsPkg
 import "Widgets.pkl"
 
 // ── CONNECTOR RE-EXPORT ───────────────────────────────────────────────────────
@@ -108,6 +109,17 @@ typealias ResourceConfig = DeploymentPkg.ResourceConfig
 typealias VpaConfig = DeploymentPkg.VpaConfig
 typealias DeployConfig = DeploymentPkg.DeployConfig
 typealias Pool = DeploymentPkg.Pool
+
+// ── Input field re-exports (see `inputs`) ────────────────────────────────────
+typealias InputField = InputsPkg.InputField
+typealias StringField = InputsPkg.StringField
+typealias IntField = InputsPkg.IntField
+typealias FloatField = InputsPkg.FloatField
+typealias BoolField = InputsPkg.BoolField
+typealias EnumField = InputsPkg.EnumField
+typealias ListField = InputsPkg.ListField
+typealias MapField = InputsPkg.MapField
+typealias ObjectField = InputsPkg.ObjectField
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -427,6 +439,82 @@ workflowConfigName: String = name
 /// UI configuration for the workflow setup form.
 /// Required for single-entrypoint apps (when `entrypoints` is empty).
 uiConfig: Widgets.UIConfig?
+
+/// Typed inputs that have no setup-form widget. System apps only (`type = "system"`).
+///
+/// A system app is started by other apps' DAG nodes, so its inputs are the
+/// args those nodes pass, not form fields. Declare each one here, keyed by
+/// the arg name callers send (snake_case, used as-is), and the toolkit renders
+/// them into `app/generated/_input.py`. The app imports the generated
+/// `AppInputContract` (subclassing it to add validators or properties) instead
+/// of hand-maintaining its own model.
+///
+/// Field types: `StringField`, `IntField`, `FloatField`, `BoolField`,
+/// `EnumField` (`Literal[...]`), `ListField` and `MapField` (always bounded by
+/// `MaxItems`), and `ObjectField` (a nested model, `extra="forbid"` by
+/// default). See `Inputs.pkl` for how each field's default is resolved.
+///
+/// What changes: `_input.py` (and `app/generated/__init__.py`) are emitted
+/// when `inputs` is non-empty, even with no `uiConfig`. What does not:
+/// `manifest.json` and the workflow configmap still follow `uiConfig` only,
+/// so declaring inputs never creates a manifest.
+///
+/// Refused at eval: `inputs` on a non-system app (no manifest arg would
+/// populate them, so they would always hold their defaults), on a
+/// multi-entrypoint bundle root (which renders no `_input.py`), a key that
+/// collides with a field the generated class already declares, and two
+/// different `ObjectField`s sharing a `className`.
+inputs: Mapping<InputsPkg.FieldName, InputsPkg.InputField> = new Mapping {}
+
+/// (Derived) Base class of the generated input model. A system app's input is
+/// the args its callers pass, not an extraction run's, so it extends the SDK's
+/// plain `Input` instead of `ExtractionInput`.
+local inputBaseClass: String = if (isSystemApp) "Input" else "ExtractionInput"
+
+/// (Derived) Fields the base input class already declares. A generated field
+/// with one of these names is skipped (UI) or refused (`inputs`).
+local inputBaseProvidedFields: Set<String> =
+  if (isSystemApp) Set("workflow_id", "correlation_id", "app_name", "workflow_slug")
+  else extractionInputProvidedFields.toList().toSet()
+
+/// (Derived) Every nested object `inputs` needs, dependencies first.
+local inputAllObjects: List<InputsPkg.ObjectField> =
+  inputs.toMap().values.flatMap((f) -> f.nestedClasses).toList()
+
+/// (Derived) One class per `className`, in dependency order.
+local inputNestedClasses: List<InputsPkg.ObjectField> =
+  inputAllObjects.fold(List(), (acc: List<InputsPkg.ObjectField>, o: InputsPkg.ObjectField) ->
+    if (acc.any((a) -> a.className == o.className)) acc else acc.add(o))
+
+/// Refuses `inputs` declarations that would be dropped or would clash.
+local _inputsCheck: Any =
+  if (inputs.isEmpty) null
+  else if (!entrypoints.isEmpty)
+    throw("App.pkl: `inputs` is declared on a multi-entrypoint bundle root, which renders no `_input.py` of its own, so the inputs would be dropped. Declare `inputs` on each entrypoint's `contract` instead.")
+  else if (!isSystemApp)
+    throw("App.pkl: `inputs` is only supported on system apps (`type = \"system\"`). Nothing in this app's manifest would pass them, so every run would see only their defaults. Use `uiConfig` for setup-form inputs.")
+  else
+    let (keys = inputs.keys)
+    let (uiNames = (uiConfig?.properties ?? Map()).keys.map((k) -> toPyFieldName(k)))
+    let (reserved = inputBaseProvidedFields
+      + (if (credentialFieldName != null) Set(credentialFieldName!!) else Set())
+      + (if (uiConfig != null && pipeline.publish != null && pipeline.publish!!.includeInputFields)
+          Set("output_dir", "checkpoint_dir", "load_to_atlan", "publish_dry_run") else Set())
+      + (if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)) Set("batch_key") else Set()))
+    let (clashUi = keys.filter((k) -> uiNames.contains(k)))
+    let (clashBase = keys.filter((k) -> reserved.contains(k)))
+    let (dupClasses = inputAllObjects
+      .filter((o) -> inputAllObjects.any((p) -> p.className == o.className && p != o))
+      .map((o) -> o.className).toSet())
+    if (!clashUi.isEmpty)
+      throw("App.pkl: `inputs` key(s) \(clashUi.toList().sort()) are also uiConfig fields. Declare each input in one place.")
+    else if (!clashBase.isEmpty)
+      throw("App.pkl: `inputs` key(s) \(clashBase.toList().sort()) are already declared by the generated input class (base \(inputBaseClass), credential, publish or streaming fields).")
+    else if (!dupClasses.isEmpty)
+      throw("App.pkl: different ObjectFields share className(s) \(dupClasses.toList().sort()). Give each nested object a unique className, or reuse one ObjectField value.")
+    else if (inputAllObjects.any((o) -> o.className == "AppInputContract"))
+      throw("App.pkl: ObjectField className `AppInputContract` clashes with the generated input class.")
+    else null
 
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
 
@@ -3549,7 +3637,7 @@ local extractionInputProvidedFields: Listing<String> = new Listing {
 
 local function generateInputClassPy(): FileOutput = new FileOutput {
   local props = uiConfig?.properties ?? Map()
-  local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
+  local skipFields: Set<String> = inputBaseProvidedFields
   local uiFieldLines: String = (new Listing {
     for (k, u in props) {
       if (u.includeInInput && !skipFields.contains(toPyFieldName(k)))
@@ -3588,13 +3676,21 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local inputFieldLines: String =
+    inputs.toMap().fold("", (acc: String, k: String, f: InputsPkg.InputField) -> acc + InputsPkg.renderField(k, f, "    "))
+  local nestedClassText: String =
+    inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
+  // Everything the module declares, for import detection.
+  local fieldText: String = uiFieldLines + inputFieldLines + nestedClassText
   local objectStringCoercionSeparator: String =
-    if (!uiFieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!(uiFieldLines + inputFieldLines).isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
   local hasPublish = pipeline.publish != null
-  local includePublishInputFields = hasPublish && pipeline.publish!!.includeInputFields
+  // The scaffold serves the manifest's publish step, so only an app that renders
+  // a manifest (one with a uiConfig) gets it. `inputs` alone renders none.
+  local includePublishInputFields = uiConfig != null && hasPublish && pipeline.publish!!.includeInputFields
   // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
   local uiPyNames: Set<String> = (new Listing {
     for (k, u in props) {
@@ -3652,13 +3748,15 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local classBody: String =
     publishHashExcludeBlock +
     uiFieldLines +
+    inputFieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
     credFieldLine +
     publishFieldBlock +
     streamingFieldBlock
-  local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
-  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesAnnotated: Boolean = fieldText.contains("Annotated[")
+  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesLiteral: Boolean = (inputFieldLines + nestedClassText).contains("Literal[")
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
@@ -3670,6 +3768,9 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     when (usesClassVar) {
       "ClassVar"
     }
+    when (usesLiteral) {
+      "Literal"
+    }
   }).toList()
   local stdlibImportLines: String =
     (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
@@ -3679,7 +3780,11 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local thirdPartyImportLines: String =
     (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
-    when (uiFieldLines.contains(" = Field(")) {
+    when (!nestedClassText.isEmpty) {
+      "BaseModel"
+      "ConfigDict"
+    }
+    when (fieldText.contains(" = Field(")) {
       "Field"
     }
     when (!objectStringCoercionFields.isEmpty) {
@@ -3689,16 +3794,16 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local pydanticImportLines: String =
     if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
   local sdkTypeImports: List<String> = (new Listing {
-    when (uiFieldLines.contains(": ConnectionRef") || uiFieldLines.contains("list[ConnectionRef]")) {
+    when (fieldText.contains(": ConnectionRef") || fieldText.contains("list[ConnectionRef]")) {
       "ConnectionRef"
     }
-    when (uiFieldLines.contains(": FileReference")) {
+    when (fieldText.contains(": FileReference")) {
       "FileReference"
     }
-    when (uiFieldLines.contains("MaxItems(")) {
+    when (fieldText.contains("MaxItems(")) {
       "MaxItems"
     }
-    when (uiFieldLines.contains(": TreeSelection")) {
+    when (fieldText.contains(": TreeSelection")) {
       "TreeSelection"
     }
   }).toList()
@@ -3710,7 +3815,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     (if (!objectStringCoercionFields.isEmpty)
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
-    "from application_sdk.templates.contracts import ExtractionInput\n"
+    (if (inputBaseClass == "Input") "from application_sdk.contracts.base import Input\n"
+     else "from application_sdk.templates.contracts import ExtractionInput\n")
   // Module-level logger, emitted only when the coercion validator needs it, so
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
@@ -3731,7 +3837,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     inputImportBlock +
     loggerModuleLine +
-    "class AppInputContract(ExtractionInput):\n" +
+    nestedClassText +
+    "class AppInputContract(\(inputBaseClass)):\n" +
     (if (classBody.isEmpty) "    pass\n" else classBody)
 }
 
@@ -4940,6 +5047,7 @@ output =
   // Forced here because nothing that renders atlan.yaml reads it, so it would
   // otherwise never be evaluated.
   let (_sysAppCheck = _systemAppCheck)
+  let (_inputsDeclCheck = _inputsCheck)
   // Forced here because a bundle root never evaluates manifestData, which is the only
   // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
   let (_legacyAliasPlacementCheck = _legacyWorkflowTypesPlacementCheck)
@@ -4984,6 +5092,10 @@ output =
             ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
           }
           ["app/generated/manifest.json"] = manifestOutput
+        }
+        // The input model: from uiConfig, `inputs`, or both. `inputs` alone
+        // (a system app) renders it with no manifest or configmap.
+        when (uiConfig != null || !inputs.isEmpty) {
           ["app/generated/_input.py"] = generateInputClassPy()
           ["app/generated/__init__.py"] = new FileOutput { text = "" }
         }

@@ -857,6 +857,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
+| `inputs` | Mapping<FieldName, InputField> | Typed inputs with no setup-form widget. System apps only; see [System App Inputs](#system-app-inputs). |
 
 ### Deploy Configuration
 
@@ -1025,10 +1026,60 @@ A system app runs only inside a tenant and is started by other apps' DAG nodes (
 
 What does **not** change:
 
-- `manifest.json`, the workflow configmap and `_input.py` still follow `uiConfig`. A system app with a setup form keeps it; one without renders only `atlan.yaml`, `app.yaml` and the e2e base.
+- `manifest.json` and the workflow configmap still follow `uiConfig`. A system app with a setup form keeps it; one without renders no manifest.
+- `_input.py` is rendered from `uiConfig`, from `inputs` (below), or both. A system app's input class extends the SDK's `Input` rather than `ExtractionInput`.
 - Hiding the app's own listing is the Global Marketplace App row's `is_system_app` flag. Only a GM admin sets it, so the toolkit does not emit it.
 
 See `examples/system-app/`.
+
+### System App Inputs
+
+A system app's inputs are the args its callers' DAG nodes pass, so there is no `uiConfig` to derive them from. Declare them in `inputs`, keyed by the arg name callers send (snake_case, used as-is). The toolkit renders them into `app/generated/_input.py` as `AppInputContract(Input)`. The app imports that class, subclassing it to add validators or properties, instead of hand-maintaining its own model.
+
+```pkl
+inputs {
+  ["connection_qualified_name"] = new StringField { required = true }
+  ["window_days"] = new IntField { default = 30; min = 1 }
+  ["lake_provider"] = new EnumField { values { "local"; "aws"; "gcp"; "azure" }; default = "local" }
+  ["include_filter"] = new MapField { values = new ListField { items = new StringField {} } }
+  ["column_mapping"] = new ObjectField {
+    className = "ColumnMapping"
+    fields { ["query_id"] = new StringField { default = "QUERY_ID" } }
+  }
+}
+```
+
+| Field class | Renders | Notes |
+|---|---|---|
+| `StringField` | `str` | |
+| `IntField` / `FloatField` | `int` / `float` | `min` / `max` render `ge=` / `le=`. |
+| `BoolField` | `bool` | |
+| `EnumField` | `Literal[...]` | `default` must be one of `values`. |
+| `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are type-checked. |
+| `MapField` | `Annotated[dict[str, V], MaxItems(n)]` | `values` is a scalar field or a `ListField`. Its only default is `{}`. |
+| `ObjectField` | its own model class | `className` must be unique. `extra="forbid"` by default; `allowExtra = true` renders `extra="ignore"`. |
+
+Every field also takes `doc` (rendered as a docstring), `required`, `nullable` (renders `T | None`) and `lifecycle` / `lifecycleMessage` (as on widgets).
+
+**Defaults** resolve in one order for every field:
+
+1. `required = true`: no default.
+2. An explicit `default`.
+3. `nullable = true`: `None`.
+4. The type's natural empty value: `[]`, `{}`, or an object with every field at its default.
+
+A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value, and inventing one (`""`, `0`) would hide a missing argument.
+
+**What changes:** `_input.py` and `app/generated/__init__.py` are emitted when `inputs` is non-empty, even with no `uiConfig`.
+
+**What does not:** `manifest.json` and the workflow configmap follow `uiConfig` only, so declaring inputs never creates a manifest. The publish-step scaffold fields (`output_dir`, ...) are added only for an app that renders a manifest.
+
+**Refused at `pkl eval`:**
+
+- `inputs` on a non-system app. No manifest arg would pass them, so every run would see only their defaults.
+- `inputs` on a multi-entrypoint bundle root, which renders no `_input.py`.
+- A key that is also a `uiConfig` field, or that the generated class already declares (base, credential, publish or streaming fields).
+- Two different `ObjectField`s with the same `className`.
 
 ### Multi-Entrypoint Bundle
 
