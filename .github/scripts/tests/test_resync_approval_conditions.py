@@ -389,6 +389,170 @@ def test_lost_setting_lines_is_reorder_immune():
     ]
 
 
+TESTS_YAML = ".github/workflows/tests.yaml"
+
+
+def test_yaml_quoting_alone_is_not_a_lost_setting():
+    backup = (
+        "    with:\n"
+        "      services-script: .github/test/setup-services.sh\n"
+        "      e2e-test-path: 'tests/e2e/sdr'\n"
+    )
+    new = (
+        "    with:\n"
+        '      e2e-test-path: "tests/e2e/sdr"\n'
+        '      services-script: ".github/test/setup-services.sh"\n'
+    )
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ('enable-e2e: "true"', "enable-e2e: true"),
+        ("timeout-minutes: 30", 'timeout-minutes: "30"'),
+        ('runtime-sdk-ref: ""', "runtime-sdk-ref:"),
+        ('runtime-sdk-ref: "~"', "runtime-sdk-ref: ~"),
+        ('args: "a\\tb"', "args: a\\tb"),
+        ('args: "-k slow"', "args: -k slow"),
+        ('args: "a: b"', "args: a: b"),
+        ('key: "a,b"', "key: a,b"),
+        ('key: "a{b}"', "key: a{b}"),
+    ],
+)
+def test_yaml_quotes_that_change_the_value_still_count_as_lost(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+def test_json_quoting_is_never_ignored():
+    backup = '{\n  "automerge": "true",\n  "groupName": "x"\n}\n'
+    new = '{\n  "automerge": true,\n  "groupName": "x"\n}\n'
+    assert resync.lost_setting_lines(backup, new, "renovate.json") == [
+        '"automerge": "true",'
+    ]
+
+
+def test_template_description_text_is_not_a_lost_setting():
+    backup = (
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      application_sdk_ref:\n"
+        "        description: |\n"
+        "          Branch/SHA of atlanhq/application-sdk.\n"
+        "\n"
+        "          Pins the SDK in the tests + e2e jobs.\n"
+        "        required: false\n"
+        "      run_e2e:\n"
+        "        description: \"Set to 'true' to trigger the e2e job.\"\n"
+        "        type: string\n"
+    )
+    new = (
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      application_sdk_ref:\n"
+        "        description: >-\n"
+        "          Pins SDK in tests + e2e jobs.\n"
+        "        required: false\n"
+        "      run_e2e:\n"
+        "        description: \"Set to 'true' to run e2e. Defaults to off.\"\n"
+        "        type: string\n"
+    )
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+    json_backup = '{\n  "packageRules": [\n    {\n      "description": "old text",\n      "automerge": true\n    }\n  ]\n}\n'
+    json_new = '{\n  "packageRules": [\n    {\n      "description": "new text",\n      "automerge": true\n    }\n  ]\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == []
+
+
+def test_settings_next_to_a_description_are_still_checked():
+    backup = (
+        "      run_e2e:\n"
+        "        description: |\n"
+        "          Some text.\n"
+        "        required: false\n"
+        "        default: 'off'\n"
+    )
+    new = "      run_e2e:\n        description: |\n          Other text.\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "required: false",
+        "default: 'off'",
+    ]
+    after_block = (
+        "    description: |\n"
+        "      Some text.\n"
+        "    with:\n"
+        "      services-script: .github/test/setup-services.sh\n"
+    )
+    assert resync.lost_setting_lines(
+        after_block, "    description: |\n      Other.\n    with:\n", TESTS_YAML
+    ) == ["services-script: .github/test/setup-services.sh"]
+    json_backup = '{\n  "description": "a",\n  "automerge": true\n}\n'
+    json_new = '{\n  "description": "b"\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == [
+        '"automerge": true'
+    ]
+    list_item = "rules:\n  - description: |\n      Some text.\n    automerge: true\n"
+    assert resync.lost_setting_lines(
+        list_item, "rules:\n  - description: |\n      Other.\n", TESTS_YAML
+    ) == ["automerge: true"]
+
+
+def test_description_prose_in_the_new_file_cannot_stand_in_for_a_setting():
+    backup = "      run_e2e:\n        required: false\n"
+    new = "      run_e2e:\n        description: |\n          required: false\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == ["required: false"]
+    # A line shared with a description is compared whole: the conservative
+    # side, a hold rather than a missed loss.
+    json_backup = '{\n  "automerge": true\n}\n'
+    json_new = '{\n  "description": "x", "automerge": true\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == [
+        '"automerge": true'
+    ]
+
+
+def test_json_description_sharing_a_line_does_not_hide_its_neighbour():
+    backup = '{\n  "description": "old", "automerge": true\n}\n'
+    new = '{\n  "description": "old"\n}\n'
+    assert resync.lost_setting_lines(backup, new, "renovate.json") == [
+        '"description": "old", "automerge": true'
+    ]
+
+
+def test_description_and_quotes_count_in_files_that_are_not_yaml_or_json():
+    backup = 'description: old\nname: "x"\n'
+    new = "description: new\nname: x\n"
+    assert resync.lost_setting_lines(backup, new, ".claude/skills/r/SKILL.md") == [
+        "description: old",
+        'name: "x"',
+    ]
+    assert resync.lost_setting_lines(backup, new) == [
+        "description: old",
+        'name: "x"',
+    ]
+
+
+def test_stage_like_the_lane_does_not_hold_on_quoting_or_description(tmp_path):
+    work = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "tests.yaml.bak").write_text(
+        "    with:\n      services-script: .github/test/setup-services.sh\n"
+    )
+    (wf / "tests.yaml").write_text(
+        '    with:\n      services-script: ".github/test/setup-services.sh"\n'
+    )
+    (tmp_path / "renovate.json.bak").write_text(
+        '{\n  "description": "old",\n  "automerge": true\n}\n'
+    )
+    (tmp_path / "renovate.json").write_text(
+        '{\n  "description": "new",\n  "automerge": true\n}\n'
+    )
+    manifest = {"touched": [TESTS_YAML, "renovate.json"]}
+    assert resync.stage_like_the_lane(work, manifest, subprocess.run) == {}
+
+
 def test_safe_touched_drops_escapes_backups_and_symlinked_dirs(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "linked").symlink_to(tmp_path / "real")
@@ -583,6 +747,81 @@ def test_copy_back_refuses_a_symlink_the_render_wrote(tmp_path):
     (scratch / "a.yaml").symlink_to("/etc/passwd")
     assert resync.copy_back(scratch, work, {"touched": ["a.yaml"]}) == ["a.yaml"]
     assert not (work / "a.yaml").exists()
+
+
+@pytest.mark.parametrize(
+    "link, target, touched",
+    [
+        (".claude", ".agents", ".claude/settings.json"),
+        (".claude/skills", "../.agents/skills", ".claude/skills/remediate/SKILL.md"),
+    ],
+)
+def test_copy_back_skips_paths_under_a_symlinked_dir_of_the_clone(
+    tmp_path, link, target, touched
+):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    for root in (scratch, work):
+        _tree(root, {".agents/skills/remediate/SKILL.md": "old", "a.yaml": "old"})
+        (root / ".agents" / "settings.json").write_text("old")
+        (root / link).parent.mkdir(parents=True, exist_ok=True)
+        (root / link).symlink_to(target)
+    (scratch / touched).write_text("new")
+    (scratch / "a.yaml").write_text("new")
+    refused = resync.copy_back(scratch, work, {"touched": [touched, "a.yaml"]})
+    assert refused == []
+    assert (work / touched).read_text() == "old"
+    assert (work / "a.yaml").read_text() == "new"
+
+
+def test_symlink_skipped_lists_only_paths_under_a_symlinked_dir(tmp_path):
+    _tree(tmp_path, {".agents/skills/r/SKILL.md": "x", "a.yaml": "x"})
+    (tmp_path / ".claude").symlink_to(".agents")
+    touched = [
+        ".claude/skills/r/SKILL.md",
+        ".claude/skills/r/SKILL.md",
+        "a.yaml",
+        ".claude",
+        ".agents/../.claude/skills/r/SKILL.md",
+        "/abs/.claude/x",
+        7,
+    ]
+    assert resync.symlink_skipped({"touched": touched}, tmp_path) == [
+        ".claude/skills/r/SKILL.md"
+    ]
+    assert resync.symlink_skipped({}, tmp_path) == []
+
+
+def test_copy_back_refuses_a_symlinked_dir_only_the_render_has(tmp_path):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    _tree(scratch, {"real/f.yaml": "new"})
+    (scratch / "linked").symlink_to(scratch / "real")
+    work.mkdir()
+    assert resync.copy_back(scratch, work, {"touched": ["linked/f.yaml"]}) == [
+        "linked/f.yaml"
+    ]
+    assert not (work / "linked").exists()
+
+
+def test_sandboxed_render_succeeds_when_the_render_writes_through_a_clone_symlink(
+    tmp_path,
+):
+    work = tmp_path / "w"
+    _tree(work, {".agents/settings.json": "old", "a.yaml": "old"})
+    (work / ".claude").symlink_to(".agents")
+
+    def runner(cmd, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            scratch = Path(cmd[cmd.index("-v") + 1].split(":")[0])
+            (scratch / ".claude" / "settings.json").write_text("new")
+            (scratch / "a.yaml").write_text("new")
+            touched = '{"touched": [".claude/settings.json", "a.yaml"]}\n'
+            return subprocess.CompletedProcess(cmd, 0, touched, "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    rc, _, err = resync.sandboxed_render(str(work), "0.39.0", RESOLVED_AT, runner)
+    assert (rc, err) == (0, "")
+    assert (work / ".agents" / "settings.json").read_text() == "old"
+    assert (work / "a.yaml").read_text() == "new"
 
 
 def test_sandboxed_render_never_copies_git_into_the_sandbox(tmp_path):

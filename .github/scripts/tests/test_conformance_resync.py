@@ -550,6 +550,21 @@ def test_in_sync_main_closes_the_existing_lane_pr(monkeypatch):
     assert not any(c[:2] == ["git", "push"] for c in runner.calls)
 
 
+def test_paths_under_a_symlinked_dir_are_reported(monkeypatch):
+    runner = _process(monkeypatch, keep=_pr(7, gate.RESYNC_BRANCH), staged=[])
+    monkeypatch.setattr(
+        gate, "symlink_skipped", lambda manifest, root: [".claude/settings.json"]
+    )
+    result = _drive(runner)
+    assert result["symlinkSkipped"] == [".claude/settings.json"]
+    assert any(".claude/settings.json" in t for t in result["trace"])
+
+
+def test_no_symlink_report_when_nothing_is_skipped(monkeypatch):
+    result = _drive(_process(monkeypatch, keep=_pr(7, gate.RESYNC_BRANCH), staged=[]))
+    assert "symlinkSkipped" not in result
+
+
 def test_a_fresh_render_is_pushed_and_opened_as_the_lane_pr(monkeypatch):
     runner = _process(monkeypatch, keep=None, staged=["a.yaml"])
 

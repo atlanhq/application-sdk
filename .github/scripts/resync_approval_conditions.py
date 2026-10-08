@@ -249,8 +249,10 @@ def copy_back(scratch: pathlib.Path, work: pathlib.Path, manifest: dict) -> list
     as regular files with their exec bit; a path the render deleted is
     deleted here. Nothing under ``.git`` ever comes back: a render able to
     write ``.git/config`` or a hook would run code at the next host-side
-    ``git`` call, which holds the token. Returns the refused paths; any
-    refusal fails the render closed.
+    ``git`` call, which holds the token. A path under a directory the
+    clone already has as a symlink is skipped, as the lane's staging skips
+    it; a symlinked directory only the render has is refused. Returns the
+    refused paths; any refusal fails the render closed.
     """
     wanted = {p for p in manifest.get("touched") or [] if isinstance(p, str)}
     for bak in scratch.rglob("*.bak"):
@@ -260,7 +262,12 @@ def copy_back(scratch: pathlib.Path, work: pathlib.Path, manifest: dict) -> list
     refused: list[str] = []
     for rel in sorted(wanted):
         src, dest = scratch / rel, work / rel
-        if _unsafe_rel(rel) or _via_symlink(work, rel) or _via_symlink(scratch, rel):
+        if _unsafe_rel(rel):
+            refused.append(rel)
+            continue
+        if _via_symlink(work, rel):
+            continue
+        if _via_symlink(scratch, rel):
             refused.append(rel)
             continue
         if src.is_symlink() or (src.exists() and not src.is_file()):
@@ -471,6 +478,82 @@ def _normalise(line: str) -> str:
     return line.strip().rstrip(",").strip()
 
 
+_YAML_SUFFIXES = (".yaml", ".yml")
+_YAML_KEY_VALUE = re.compile(r"^((?:-\s+)?[\w.-]+:)\s+(\S.*)$")
+_YAML_INDICATORS = frozenset("-?:,[]{}#&*!|>'\"%@`")
+_YAML_KEYWORDS = frozenset(
+    {"~", "null", "true", "false", "yes", "no", "on", "off", "y", "n"}
+)
+_YAML_NUMBER_LIKE = re.compile(r"^[+.]?\d|^[+]?\.(inf|nan)$", re.IGNORECASE)
+_YAML_BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d?[+-]?\s*(#.*)?$")
+
+
+def _unquote_yaml_scalar(value: str) -> str:
+    """``value`` without its quotes when YAML reads it the same either way."""
+    if len(value) < 3 or value[0] != value[-1] or value[0] not in "\"'":
+        return value
+    inner = value[1:-1]
+    if (
+        inner[0] in _YAML_INDICATORS
+        or inner != inner.strip()
+        # `,[]{}` are flow-collection syntax: inside a `{ ... }` or `[ ... ]`
+        # spanning lines, the unquoted form is not the same scalar.
+        or any(c in inner for c in ":#\\\"',[]{}")
+        or inner.lower() in _YAML_KEYWORDS
+        or _YAML_NUMBER_LIKE.search(inner)
+    ):
+        return value
+    return inner
+
+
+def _normalise_for(path: str, line: str) -> str:
+    norm = _normalise(line)
+    if not path.endswith(_YAML_SUFFIXES):
+        return norm
+    match = _YAML_KEY_VALUE.match(norm)
+    if not match:
+        return norm
+    return f"{match.group(1)} {_unquote_yaml_scalar(match.group(2))}"
+
+
+def _description_lines(path: str, text: str) -> set[int]:
+    """Indexes of ``description`` lines in a YAML or JSON file, including the
+    body of a YAML block-scalar description. Descriptions are template prose,
+    so a reworded one is not a lost setting."""
+    if not path.endswith((*_YAML_SUFFIXES, ".json")):
+        return set()
+    skip: set[int] = set()
+    block_indent: int | None = None
+    for i, line in enumerate(text.splitlines()):
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None and (not line.strip() or indent > block_indent):
+            skip.add(i)
+            continue
+        block_indent = None
+        if _setting_key(line) != "description":
+            continue
+        if path.endswith(".json") and not _only_description(line):
+            continue
+        skip.add(i)
+        value = line.split(":", 1)[1].strip()
+        if path.endswith(_YAML_SUFFIXES) and _YAML_BLOCK_SCALAR.match(value):
+            stripped = line.lstrip()
+            block_indent = indent + len(stripped) - len(stripped.lstrip("- "))
+    return skip
+
+
+def _only_description(line: str) -> bool:
+    """True when a JSON line's sole member is ``description``. A line that
+    also carries another property is compared whole, so that property's
+    removal is still caught (a reworded description there is a false hold,
+    never a missed loss)."""
+    try:
+        doc = json.loads("{" + _normalise(line) + "}")
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and list(doc) == ["description"]
+
+
 # Settings the canonical templates deliberately stopped carrying: a render
 # that drops one of these is the intended change, not a lost per-repo value.
 # Keyed by repo-relative path; matched on the YAML/JSON key. The lane imports
@@ -506,14 +589,24 @@ def still_lost(path: str, lost: list[str]) -> list[str]:
     return remaining
 
 
-def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
+def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
     (reorder-immune, counted per line so a duplicate elsewhere in the file
-    cannot stand in for a removed one). The lane imports this function."""
-    remaining = Counter(_normalise(x) for x in new_text.splitlines())
+    cannot stand in for a removed one). In a YAML or JSON ``path``,
+    descriptions are not compared, and in YAML a value that only gained or
+    lost its quotes still matches. The lane imports this function."""
+    new_skip = _description_lines(path, new_text)
+    remaining = Counter(
+        _normalise_for(path, x)
+        for i, x in enumerate(new_text.splitlines())
+        if i not in new_skip
+    )
+    skip = _description_lines(path, backup_text)
     lost: list[str] = []
-    for line in backup_text.splitlines():
-        norm = _normalise(line)
+    for i, line in enumerate(backup_text.splitlines()):
+        if i in skip:
+            continue
+        norm = _normalise_for(path, line)
         if not norm or norm.startswith("#") or norm.startswith("//"):
             continue
         if norm in {"{", "}", "[", "]", "},", "],"}:
@@ -544,6 +637,19 @@ def safe_touched(manifest: dict, root: pathlib.Path) -> list[str]:
         if not via_link:
             out.add(p)
     return sorted(out)
+
+
+def symlink_skipped(manifest: dict, root: pathlib.Path) -> list[str]:
+    """Manifest paths under a directory ``root`` has as a symlink: the render
+    touched them, but :func:`copy_back` and :func:`safe_touched` skip them, so
+    the repo never receives them. The lane reports them."""
+    return sorted(
+        {
+            p
+            for p in manifest.get("touched") or []
+            if isinstance(p, str) and not _unsafe_rel(p) and _via_symlink(root, p)
+        }
+    )
 
 
 def count_resync_approvals(reviews: list[Any], head_sha: str) -> int:
@@ -617,6 +723,7 @@ def stage_like_the_lane(
                 lost_setting_lines(
                     bak.read_text(encoding="utf-8", errors="replace"),
                     original.read_text(encoding="utf-8", errors="replace"),
+                    rel,
                 ),
             )
             if missing:
