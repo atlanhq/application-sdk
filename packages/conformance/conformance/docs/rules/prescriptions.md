@@ -23,7 +23,7 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | yes | 0.3.0 |
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
 | [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | yes | 0.3.0 |
 | [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | yes | 0.3.0 |
 | [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
@@ -77,7 +77,7 @@ reassigned.
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** yes · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
@@ -97,7 +97,7 @@ nothing in their configuration explains.
   `AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at all: every
   field it adds is a concrete str or bool, and the include/exclude filters it inherits
   from ExtractionInput are already the bounded `FilterMap | str`.
-- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** B005 + ledger-guard bound the fix, but less tightly than they look, and reading them as
   a wall is how a fixable site gets suppressed. ledger-guard refuses a change to a
   RECORDED type; gen-contract-ledger never deletes an entry and never rewrites a

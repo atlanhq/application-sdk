@@ -85,7 +85,9 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-payload-safety",
-        autofixable=True,
+        # Removing the opt-out changes what a contract accepts on the wire, so each site needs the
+        # app owner's decision on the payload shape, often with a ledger retirement: a migration.
+        autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
@@ -170,7 +172,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),
