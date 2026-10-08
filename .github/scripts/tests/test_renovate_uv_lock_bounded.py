@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import renovate_uv_lock_bounded as bounded
@@ -501,7 +503,7 @@ class TestMain:
         assert len(calls) == 2
         assert "cryptography=P0D" in calls[1]
 
-    def test_failure_with_no_floor_named_does_not_retry_and_fails(
+    def test_failure_with_no_floor_named_does_not_retry_and_refuses(
         self, monkeypatch, tmp_path
     ):
         project = self._project(tmp_path, lock(boto3="1.43.72"))
@@ -514,7 +516,7 @@ class TestMain:
             )
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
         assert len(calls) == 1, "must not retry blind, and must never resolve unbounded"
 
     def test_bare_dep_named_in_error_does_not_get_a_p0d_exemption(
@@ -538,7 +540,7 @@ class TestMain:
             )
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P7D", "--project-dir", str(project)]) == 0
         assert len(calls) == 1, "a bare dep is not a floor, so no P0D retry"
         assert not any(
             "orjson=P0D" in part for command in calls for part in command
@@ -770,7 +772,7 @@ class TestMain:
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
         argv = ["--window", "P3D", "--project-dir", str(project)]
-        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 1
+        assert bounded.main(argv + ["--hold", "atlan-application-sdk"]) == 0
         on_disk = (project / "uv.lock").read_text()
         assert bounded.lock_versions(on_disk) == {"atlan-application-sdk": "3.41.5"}
         assert bounded.REFUSAL_HOLD_MOVED in on_disk
@@ -954,7 +956,7 @@ class TestMain:
         project = self._project(tmp_path, lock(boto3="1.43.72"))
         assert bounded.main(["--window", "P1M", "--project-dir", str(project)]) == 1
 
-    def test_silent_rollback_of_an_exempt_package_fails_the_run(
+    def test_silent_rollback_of_an_exempt_package_is_refused(
         self, monkeypatch, tmp_path
     ):
         project = self._project(tmp_path, lock(atlan_application_sdk="3.28.0"))
@@ -974,7 +976,7 @@ class TestMain:
                 str(project),
             ]
         )
-        assert exit_code == 1
+        assert exit_code == 0
 
 
 class TestBaselineRef:
@@ -1220,7 +1222,9 @@ class TestWithholds:
         assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
         self._assert_withheld(project, baseline)
 
-    def test_a_missing_version_parser_fails_before_uv_runs(self, monkeypatch, tmp_path):
+    def test_a_missing_version_parser_refuses_before_uv_runs(
+        self, monkeypatch, tmp_path
+    ):
         """`packaging` absent must read as `packaging` absent.
 
         Every comparison in this module degrades to "cannot compare" without it,
@@ -1238,7 +1242,7 @@ class TestWithholds:
 
         monkeypatch.setattr(bounded, "Version", None)
         monkeypatch.setattr(bounded, "run_uv_lock", fail_if_called)
-        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
         self._assert_withheld(project, baseline)
 
     def test_a_hold_is_an_ordinary_no_op_when_the_caller_owns_the_commit(
@@ -1395,7 +1399,7 @@ class TestWithholds:
             return subprocess.CompletedProcess(command, 0, "", "")
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
         self._assert_withheld(project, baseline)
         assert '"2.4.0"' not in (project / "uv.lock").read_text()
 
@@ -1412,7 +1416,7 @@ class TestWithholds:
             )
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
         self._assert_withheld(project, baseline)
 
     def test_a_failed_retry_is_withheld(self, monkeypatch, tmp_path):
@@ -1433,7 +1437,7 @@ class TestWithholds:
             )
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
         assert len(calls) == 2, "the floor should have earned exactly one retry"
         self._assert_withheld(project, baseline)
 
@@ -1467,7 +1471,7 @@ class TestWithholds:
             )
 
         monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
-        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 1
+        assert bounded.main(["--window", "P3D", "--project-dir", str(project)]) == 0
         on_disk = (project / "uv.lock").read_text()
         assert "[options]" in on_disk, "a new lockfile must be held like any other"
         assert bounded.strip_options(on_disk) == unbounded
@@ -1513,3 +1517,92 @@ class TestWithholds:
         assert 'exclude-newer-span = "P3D"' in written
         # Recoverable: a human, or the next run, gets the baseline back exactly.
         assert bounded.strip_options(written) == baseline
+
+
+class TestRefusalExitCode:
+    """Only a self-healing refusal fails the run under Renovate (FND-3517).
+
+    The lock lane sets ``prCreation: status-success``, so this exit code decides
+    whether the refusal becomes a PR at all. ``window-empty`` must not: nothing
+    is wrong. A standing refusal must, or nobody sees it; its tripwire keeps the
+    PR unmergeable.
+    """
+
+    STANDING = sorted(
+        {
+            bounded.REFUSAL_NO_PACKAGING,
+            bounded.REFUSAL_UNSATISFIABLE_FLOOR,
+            bounded.REFUSAL_FLOOR_ADMITTED_STILL_FAILED,
+            bounded.REFUSAL_ROLLBACK,
+            bounded.REFUSAL_HOLD_MOVED,
+        }
+        - bounded.SELF_HEALING_REFUSALS
+    )
+
+    def test_every_standing_reason_is_covered(self):
+        assert len(self.STANDING) == 5
+
+    def test_window_empty_fails_so_no_pr_opens(self):
+        assert (
+            bounded.refusal_exit_code(
+                reason=bounded.REFUSAL_WINDOW_EMPTY,
+                wrote=True,
+                caller_owns_commit=False,
+            )
+            == 1
+        )
+
+    @pytest.mark.parametrize("reason", STANDING)
+    def test_standing_refusal_passes_so_a_pr_opens(self, reason):
+        assert (
+            bounded.refusal_exit_code(
+                reason=reason, wrote=True, caller_owns_commit=False
+            )
+            == 0
+        )
+
+    @pytest.mark.parametrize("reason", [*STANDING, bounded.REFUSAL_WINDOW_EMPTY])
+    def test_caller_owned_commit_always_fails_closed(self, reason):
+        # bound_lock_branch.py commits nothing only on a non-zero exit.
+        assert (
+            bounded.refusal_exit_code(
+                reason=reason, wrote=True, caller_owns_commit=True
+            )
+            == 1
+        )
+
+    @pytest.mark.parametrize("reason", STANDING)
+    def test_no_tripwire_written_fails_closed(self, reason):
+        # Without a tripwire nothing required holds the branch, and a tree that
+        # matches HEAD lets Renovate commit its own unbounded lock.
+        assert (
+            bounded.refusal_exit_code(
+                reason=reason, wrote=False, caller_owns_commit=False
+            )
+            == 1
+        )
+
+    def test_standing_refusal_under_caller_owned_commit_exits_non_zero(
+        self, monkeypatch, tmp_path
+    ):
+        baseline = lock(boto3="1.43.72")
+        (tmp_path / "uv.lock").write_text(baseline)
+        (tmp_path / "pyproject.toml").write_text("[project]\nname = 'app'\n")
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-qm", "base"],
+            cwd=tmp_path,
+            check=True,
+            env=TestWithholds.GIT_ENV,
+        )
+
+        def fake_run(command, cwd):
+            return subprocess.CompletedProcess(
+                command, 1, "", "error: something else entirely"
+            )
+
+        monkeypatch.setattr(bounded, "run_uv_lock", fake_run)
+        argv = ["--window", "P3D", "--project-dir", str(tmp_path)]
+        assert bounded.main([*argv, "--caller-owns-commit"]) == 1
+        assert "# refusal: unsatisfiable-floor" in (tmp_path / "uv.lock").read_text()
