@@ -69,7 +69,7 @@ reassigned.
 | [P050](#p050) | `NonAtomicDestinationWrite` | `warn` | `sdk` | `storage-atomicity` | — | 0.25.0 |
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
-| [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
+| [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | yes | 0.40.0 |
 | [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | — | 0.43.0 |
 | [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 
@@ -2697,7 +2697,7 @@ non-entity use, such as a `ConnectionRef` built from `to_atlas_format`.
 
 ## P053 — `LocalCredentialRouting` {#p053}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `credential-seam` · **Autofixable:** — · **Since:** 0.40.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `credential-seam` · **Autofixable:** yes · **Since:** 0.40.0
 
 > App routes credential channels itself, or declares its own credential types, instead of using the SDK's route_credentials
 
@@ -2717,12 +2717,14 @@ never exercise (an agent-mode run, an inline pair with no value).
   template method to call; its seam is application_sdk/credentials/routing.py —
   `route_credentials(input)` returns `ResolvedCredentials(ref, inline)`, and
   `AppContext.resolve_credential_raw_or_inline(ref, inline)` reads it on the task side.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** P037 (SdrAgentJsonNotConsumed) predates this rule and names `CredentialRef.resolve` as
   its agent-aware fix, citing a hand-rolled `build_credential_ref` as its reference. On
   an SDK below 3.40.0 that is still the right fix and this rule is silent; from 3.40.0
   this rule flags that call and P037 also accepts `route_credentials` as agent-aware, so
   migrating onto the seam clears both rather than trading one finding for the other.
+  P053's draft for a `CredentialRef(credential_guid=...)` site is that migration, so it
+  is also the fix for a P037 finding at the same site.
 
 App code decides how a workflow input's credential channels become a credential — or
 declares its own copy of the types that carry the result — instead of using the SDK's
