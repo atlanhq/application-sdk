@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.43.0
-source-sha:    99f5c1564cd620cfe32eb5efe48b207e19094215
-source-date:   2026-10-08T15:02:46+01:00
+sdk-version:   3.44.0
+source-sha:    fee27c45d60aa64ecadf6a89298766fefa1f34ad
+source-date:   2026-10-09T03:21:00+05:30
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7297,6 +7297,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `type_name: str` `= Field(default='Connection')`
   - `attributes: ConnectionAttributes` `= Field(default_factory=ConnectionAttributes)`
+  - `is_unidentifiable: bool` — Whether this names a Connection but carries no qualified name.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `ContractMetadata`
