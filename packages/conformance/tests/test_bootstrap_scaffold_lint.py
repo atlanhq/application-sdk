@@ -41,7 +41,7 @@ from conformance.cli import _cmd_bootstrap
 # The strictest ruff lint selection seen in the fleet, plus "I" (import
 # order), because fleet repos also run isort. A repo tightening its config
 # further is exactly how FND-445 surfaced, so widen this list when it does.
-_STRICT_SELECT = "E,F,W,I,D,G,T201,LOG,BLE,S110,S112,TRY400,TRY401"
+_STRICT_SELECT = "E,F,W,I,D,G,T201,LOG,BLE,S,TRY400,TRY401"
 
 # Every line length a caller plausibly configures. Both check (E501) and
 # format (re-wrapping) run at each: a scaffold formatted for one width is
