@@ -1,6 +1,7 @@
 """Guards the history-append invariant in .github/workflows/update-dashboard.yaml.
 
-All three dashboard jobs (security/Trivy, conformance, test-readiness) append a
+Both remaining dashboard jobs (conformance, test-readiness; the security/Trivy
+job was removed in FND-3462) append a
 per-repo trend line to S3 with the same download -> merge -> upload sequence::
 
     aws s3 cp s3://.../history/<slug>.jsonl /tmp/existing.jsonl 2>/dev/null || true
@@ -44,9 +45,10 @@ def test_every_history_merge_touches_its_source_first():
     text = _text()
     merges = _CAT_MERGE.findall(text)
 
-    # Three dashboards, three merges. If this count changes, a fourth dashboard
-    # was added (or one removed) and its history path needs the same guard.
-    assert len(merges) == 3, f"expected 3 history merges, found {len(merges)}: {merges}"
+    # Two dashboards (conformance, test-readiness), two merges. If this count
+    # changes, a dashboard was added (or one removed) and its history path needs
+    # the same guard.
+    assert len(merges) == 2, f"expected 2 history merges, found {len(merges)}: {merges}"
 
     for source in merges:
         cat_at = text.index(f"cat {source}")
