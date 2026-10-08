@@ -2,6 +2,12 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.44.1] - 2026-10-08
+
+### Bug fixes
+
+- P001 is a migration rule that names its fields and guides the fix (#4235) ([b7774d4](https://github.com/atlanhq/application-sdk/commit/b7774d4))
+
 ## [0.44.0] - 2026-10-07
 
 ### Features
