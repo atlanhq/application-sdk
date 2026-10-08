@@ -27,14 +27,15 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
-**Why suggest-only, not auto-applied (not an oversight):** P001 has real
-non-suppression fixes. Make every declared field payload-safe: replace `Any`
-with a concrete type in the same outer shape (use `FilterMap` from
-`application_sdk.templates.contracts` for filter maps), bound a collection
-with `MaxItems` only when its element/value type is already payload-safe, and
-remove `allow_unbounded_fields=True`. Drop an app-level override or retire a
-dead field where those alternatives apply. Keep an opt-out with a justified
-inline suppression only as a last resort after those alternatives fail.
+**Why suggest-only, not auto-applied (not an oversight):** P001 is a
+migration. Removing an opt-out changes what a contract accepts on the wire, so
+each site needs the app owner's decision on the payload shape. It has real
+non-suppression fixes, in the order the P001 prescription below gives: remove
+an opt-out that guards no unsafe field, drop an app override of an SDK base
+field, use the SDK's own types in the same outer shape, bound safe collections,
+move source-sized data by `FileReference`, retire dead fields, and fix
+generated contracts at their source. Keep an opt-out with a justified inline
+suppression only as the owner's last resort after those fail.
 
 `MaxItems` is a **declarative marker — not runtime-enforced**. Adding it alone
 neither makes `Any` acceptable nor clears an active opt-out finding. For a
@@ -284,57 +285,104 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   Writing "non-scalar values are now correctly rejected" without that table is
   an assumption wearing the costume of a verification.
 
-  Then draft, in order of preference:
+  **Classify the class first.**  Generated (`app/generated/`) classes are
+  fixed at their source; see step 7.  `@entrypoint` contracts are recorded in
+  the contract ledger, so a retype there is B005-guarded.  Task contracts are
+  not in the ledger and can be narrowed freely.  The finding lists the fields
+  this class declares that block removing the opt-out, those the check
+  accepts that still bound nothing, and any whose type it cannot resolve;
+  start from them.
 
-  1. **Type the field concretely (preferred)** — replace `Any` (and
-     `dict[str, Any]` / `list[Any]`) with a concrete bounded type.  For
-     filter maps use `FilterMap` from
-     `application_sdk.templates.contracts` (a bounded
-     `dict[str, list[str]]`).  Only after every field would pass
-     `validate_payload_safety`, remove `allow_unbounded_fields=True`.
-     Return `outcome = "fix"`.
+  Then propose, in this order (cheapest wire-preserving fix first):
 
-  2. **Bound an otherwise-legal unbounded collection** — wrap an unbounded
-     `list[T]` as `Annotated[list[T], MaxItems(N)]` and an unbounded
-     `dict[K, V]` as `Annotated[dict[K, V], MaxItems(N)]` **only when `T` /
-     `V` is already a legal payload type** (not `Any`).  Choose `N` from
-     the field's realistic cardinality and **state that assumption** in the
-     proposal (e.g. ~10000 ≈ ~1MB JSON, well under Temporal's 2MB limit).
-     A scalar-only contract needs only the opt-out removed.  Add
-     `from typing import Annotated` and
+  1. **Nothing to fix: remove the opt-out.**  When the finding says every
+     declared field is already payload-safe, deleting `allow_unbounded_fields`
+     (or the `_allow_unbounded_fields` class attribute, here or on the mixin
+     it comes from) is the whole fix.  This is the most common case, and suppressions often
+     hide it behind a reason that is wrong ("the base's FilterMap is
+     unbounded", "AE sends extra keys").  Import the module afterwards: a
+     base or mixin outside this file may still carry an `Any`.
+
+  2. **Drop an app-level override of an SDK base field.**  `connection`
+     re-declared as `dict[str, Any]` over the base's `ConnectionRef`, or
+     `include_filter` / `exclude_filter` as `dict[str, Any]` over
+     `FilterMap | str`, is how most `Any` arrives.  Deleting the override
+     inherits the safe type, keeps the wire shape, and is compatible under
+     B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
+     legacy string, and a one-level `APITree` tree.
+
+  3. **Use the SDK's own types, in the same outer shape.**
+     | Field carries | Type it as |
+     |---|---|
+     | a connection | `ConnectionRef` (inherit it) |
+     | credentials | `credential_guid` / `CredentialRef`: by reference, never inline across tasks |
+     | `agent_json` | `AgentCredentialSpec` |
+     | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
+     | filters | `FilterMap` (`application_sdk.templates.contracts`) |
+     | a dict with known keys | a small `BaseModel` with those fields |
+
+     Absorb legacy wire shapes with a `@field_validator(..., mode="before")`
+     normaliser rather than widening the annotation, and diff accept/reject
+     (above) before proposing.
+
+  4. **Bound a collection of safe values** with
+     `Annotated[list[T], MaxItems(N)]` / `Annotated[dict[K, V], MaxItems(N)]`,
+     only when `T` / `V` is already a legal payload type.  Every nested
+     `dict` or `list` needs its own bound (a set or tuple of safe values
+     passes the check as it is).  Choose `N` from the field's realistic
+     cardinality and **state that assumption** in the proposal (for example,
+     ~10000 entries ≈ ~1MB of JSON).  Add `from typing import Annotated` and
      `from application_sdk.contracts.types import MaxItems` if missing.
-     Remove the opt-out last.  Return `outcome = "fix"`.
 
-  3. **Retire a field nothing populates** — before concluding that an
+  5. **Move data that grows with the source system by reference.**  File
+     lists, event batches and per-object results scale with the customer's
+     data, so no `MaxItems` holds at 2MB for every tenant.  Write them to the
+     object store and pass a `FileReference` (or a list of them, bounded), so
+     only keys and counts cross the task boundary.
+
+  6. **Retire a field nothing populates** — before concluding that an
      `@entrypoint` field is immovable, check whether it is *live*.  Grep the
      generated `manifest.json` `dag.<node>.inputs.args` for the field name and
      grep the repo for constructions of the contract.  A field absent from the
      manifest and constructed nowhere is dead weight (a defensive
      `getattr(input, "x", {})` at the read site is the usual tell).
-
      Retirement is **two steps, in order**: mark it
      `Field(..., deprecated=True, json_schema_extra={"x-lifecycle": "sunset"})`,
      regenerate the ledger, **then remove the field from source**.  B005 skips a
-     sunset field only when it is *absent* from source — `live is None and
-     status == "sunset"` — so a sunset field that is still declared is still
-     judged on its type, and marking it alone changes nothing.  An **unmarked**
-     removal fires B005 at BLOCK tier, which is why the order matters.
+     sunset field only when it is *absent* from source, so marking it alone
+     changes nothing, and an **unmarked** removal fires B005 at BLOCK tier.
 
-     Do not narrow a retired field's type "in the same edit" as a shortcut:
-     that is an ordinary retype and is judged as one.  Narrowing in place is
-     free only where `_retype_is_compatible` allows it — an inherited field, a
-     widening, or replacing `Any` with a concrete type in the **same outer
-     shape** (which payload safety requires anyway).  Return `outcome = "fix"`.
+  7. **Generated contract with `Any`: fix the source, never the file.**  The
+     `contract/*.pkl` widget decides the shape, and the toolkit emits
+     `dict[str, Any]` for widgets such as `APITree`.  Change the widget, or
+     fix the toolkit's emission, and regenerate.  Do not hand-edit
+     `app/generated/`, and do not keep a `post-generate` hook that re-inserts
+     the opt-out.  When only the toolkit can fix it, say so in the proposal:
+     the app cannot.
 
-  4. **Keep the opt-out with a justified suppression** — the last resort, and
-     it is reached less often than it looks.
+  **Not fixes, whatever the gate says.**  `object`, `JsonValue`, a bare
+  `dict` / `list`, a recursive `TypeAliasType`, and a nested
+  `BaseModel(extra="allow")` all pass `validate_payload_safety` while
+  bounding nothing.  Propose one only as an owner's decision, named as such.
+  A hand-rolled JSON union capped at a fixed nesting depth rejects any deeper
+  live payload; prefer a JSON `str` the consumer parses when the shape is
+  genuinely open.
+
+  **Verify before proposing:** import the module; for an `@entrypoint` field
+  run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
+  re-detect; and run
+  `tools/migrate_v3/check_migration.py`, which fails on any remaining
+  `allow_unbounded_fields=True`.  A proposal from steps 1–7 returns
+  `outcome = "fix"`.
+
+  8. **Keep the opt-out with a justified suppression** — the owner's call,
+     reached only when 1–7 were tried and refused.
 
      **Do not assume a recorded field is frozen in source.**  `ledger-guard`
      refuses a change to a *recorded* `type`; `gen-contract-ledger` never
      deletes an entry and never rewrites a recorded type, so **narrowing the
      annotation in source leaves the ledger entry untouched and the guard
-     passes**.  A retype that is refused when applied to the ledger file is not
-     the same as one applied to the contract.  Verify, do not infer:
+     passes**.  Verify, do not infer:
 
      ```bash
      uv run atlan-application-sdk-conformance gen-contract-ledger
@@ -342,12 +390,12 @@ above.  `classification` is always `"judgment"` for all P-series rules.
        --base-ref origin/main --ledger-path contract_schema.lock.json
      ```
 
-     Only when 1–3 are all genuinely blocked, draft an inline
-     `# conformance: ignore[P001] <concise justification>` on the declaration
-     line, where the justification explains *why* unbounded fields are
-     unavoidable here (not merely that the rule is suppressed) and names which
-     of 1–3 was tried and what refused it.  Do **not** remove
-     `allow_unbounded_fields`.  Return `outcome = "suppress"`.
+     Only then propose `# conformance: ignore[P001] <reason>` on the
+     declaration line, naming which steps were tried and what refused each.
+     The directive keeps the gate green, but `check_migration` still fails on
+     the opt-out, so the proposal must say it stays an open migration item for
+     the owner.  Do **not** remove `allow_unbounded_fields`.  Return
+     `outcome = "suppress"`.
 
   **Before returning `outcome = "fix"`: trace the field to its wire and to its
   consumers.**  A contract field is an interface with three sides, and the type
