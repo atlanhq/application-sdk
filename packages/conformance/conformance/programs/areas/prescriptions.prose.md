@@ -869,11 +869,19 @@ the blind gate cannot tell a correct hop from a plausible one.
   `.run_in_executor(<that name>, ...)`.  Exiting the `with` calls
   `pool.shutdown(wait=True)` on the event loop thread, so a cancel during a
   blocking driver call freezes the whole worker, not just the cancelled task
-  (FND-2873).  Draft one of two shapes: `await run_in_thread(fn, arg)` (the SDK
-  seam, and it does not join on cancel); or, when the calls must stay on one
-  thread (some DB-API cursors break when `execute` and `fetchmany` run on
-  different threads), a dedicated executor created **without** `with` and
-  `executor.shutdown(wait=False)` in `finally`.  Cite as evidence
+  (FND-2873).  Draft by default a dedicated executor created **without**
+  `with` — the same `ThreadPoolExecutor(...)` constructor arguments, including
+  `max_workers` — with `executor.shutdown(wait=False)` in `finally`.  That shape
+  is correct whether or not the calls need thread affinity (some DB-API cursors
+  break when `execute` and `fetchmany` run on different threads).  Draft
+  `await run_in_thread(fn, arg)` instead (the SDK seam, and it does not join on
+  cancel) only when the block makes a single offload call with no thread
+  affinity; keep the callable **passed, not called**, as for P031.  Route to
+  residue, with the proposed shape, when the `with` block also calls
+  `pool.submit(...)` or `pool.map(...)` whose result it does not await (the
+  `with` exit waits for that work today), when the pool object is used, stored
+  or passed outside the block, or when the executor is not a
+  `ThreadPoolExecutor` built in that `with`.  Cite as evidence
   `application_sdk/clients/sql.py` `BaseSQLClient.run_query` — every driver call
   goes through `run_in_thread` — and the offending call site.
 

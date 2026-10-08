@@ -528,14 +528,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "application_sdk/clients/sql.py — `BaseSQLClient.run_query` and "
             "`_execute_async_read_operation` offload every driver call with "
             "`run_in_thread` instead of a `with`-scoped executor, so cancelling the "
-            "awaiting task never joins a blocked driver call on the event loop."
+            "awaiting task never joins a blocked driver call on the event loop. "
+            "atlan-openapi-app app/connector.py offloads blocking work with "
+            "`self.run_in_thread` the same way."
         ),
         scope=RuleScope.BOTH,
         name="ScopedExecutorJoinedOnCancel",
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="async-correctness",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.43.0",
         rationale=(
@@ -562,23 +564,28 @@ RULES: tuple[RuleDefinition, ...] = (
             "blocks until the driver call returns — freezing the whole worker, not just\n"
             "the cancelled task.\n"
             "\n"
-            "Fix (a): use ``run_in_thread(fn, ...)``, which dispatches onto the SDK's\n"
-            "dedicated pool and does not join on cancel — the shape\n"
-            "``application_sdk/clients/sql.py`` ``BaseSQLClient.run_query`` uses.\n"
-            "Fix (b): when the calls must stay on one thread (some DB-API cursors break\n"
-            "when ``execute`` and ``fetchmany`` run on different threads), keep a\n"
-            "dedicated executor created **without** ``with`` and call\n"
-            "``executor.shutdown(wait=False)`` in ``finally``.\n"
+            "Fix (a): keep a dedicated executor created **without** ``with`` (same\n"
+            "constructor arguments) and call ``executor.shutdown(wait=False)`` in\n"
+            "``finally``.  It is correct whether or not the calls must stay on one\n"
+            "thread (some DB-API cursors break when ``execute`` and ``fetchmany`` run\n"
+            "on different threads).\n"
+            "Fix (b): for a single offload call with no thread affinity, use\n"
+            "``run_in_thread(fn, ...)``, which dispatches onto the SDK's dedicated pool\n"
+            "and does not join on cancel — the shape ``application_sdk/clients/sql.py``\n"
+            "``BaseSQLClient.run_query`` uses.\n"
             "\n"
             "``run_in_executor(None, ...)`` is P031, not this rule; a ``with``-scoped\n"
-            "executor that only calls ``pool.submit(...)`` is out of scope.  Land as\n"
+            "executor that only calls ``pool.submit(...)`` is out of scope.\n"
+            "\n"
+            "Remediation is a restructure, so each site gets a drafted fix that a\n"
+            "human reviews, not a mechanical rewrite.  Land as\n"
             "``WARN``; suppress a reviewed exception on the ``with`` line (the finding\n"
             "anchors there, not on the ``run_in_executor`` call) with\n"
             "``# conformance: ignore[P054] <reason>``.\n"
         ),
         help_uri=f"{_HELP_BASE}#p054",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
+            kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),
