@@ -618,6 +618,19 @@ def safe_touched(manifest: dict, root: pathlib.Path) -> list[str]:
     return sorted(out)
 
 
+def symlink_skipped(manifest: dict, root: pathlib.Path) -> list[str]:
+    """Manifest paths under a directory ``root`` has as a symlink: the render
+    touched them, but :func:`copy_back` and :func:`safe_touched` skip them, so
+    the repo never receives them. The lane reports them."""
+    return sorted(
+        {
+            p
+            for p in manifest.get("touched") or []
+            if isinstance(p, str) and _via_symlink(root, p)
+        }
+    )
+
+
 def count_resync_approvals(reviews: list[Any], head_sha: str) -> int:
     """Condition (h): atlan-ci approvals of THIS head with the resync signature."""
     return sum(

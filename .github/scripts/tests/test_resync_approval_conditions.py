@@ -750,6 +750,22 @@ def test_copy_back_skips_paths_under_a_symlinked_dir_of_the_clone(
     assert (work / "a.yaml").read_text() == "new"
 
 
+def test_symlink_skipped_lists_only_paths_under_a_symlinked_dir(tmp_path):
+    _tree(tmp_path, {".agents/skills/r/SKILL.md": "x", "a.yaml": "x"})
+    (tmp_path / ".claude").symlink_to(".agents")
+    touched = [
+        ".claude/skills/r/SKILL.md",
+        ".claude/skills/r/SKILL.md",
+        "a.yaml",
+        ".claude",
+        7,
+    ]
+    assert resync.symlink_skipped({"touched": touched}, tmp_path) == [
+        ".claude/skills/r/SKILL.md"
+    ]
+    assert resync.symlink_skipped({}, tmp_path) == []
+
+
 def test_copy_back_refuses_a_symlinked_dir_only_the_render_has(tmp_path):
     scratch, work = tmp_path / "s", tmp_path / "w"
     _tree(scratch, {"real/f.yaml": "new"})

@@ -584,6 +584,10 @@ def process_repo(
             f"Ran bootstrap at {pinned}: {len(touched)} path(s) touched, "
             f"{len(staged)} differ from main."
         )
+        symlinked = gate.symlink_skipped(manifest, pathlib.Path(work))
+        if symlinked:
+            result["symlinkSkipped"] = symlinked
+            step(f"Not synced, under a symlinked directory: {symlinked}.")
 
         if lost:
             step(f"HELD — settings would be lost: {lost}.")
