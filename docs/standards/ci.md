@@ -787,8 +787,15 @@ the driver's exit code. `refusal_exit_code()` makes the driver fail only for
 | Refusal | Driver exit | PR? | What holds it |
 | -- | -- | -- | -- |
 | `window-empty` | 1 | no | nothing needed; the reaper deletes the branch, PR or not |
-| any standing fault | 0 | yes, for a human | the tripwire, through the required `suite / Conformance Gate` |
+| standing fault, tripwire written | 0 | yes, for a human | the tripwire, through the required `suite / Conformance Gate` |
+| standing fault, no tripwire written (e.g. an empty `uv.lock`) | 1 | no | fails closed: with no tripwire nothing required would hold a PR, and a tree matching HEAD would let Renovate commit its own unbounded lock |
 | any, under `--caller-owns-commit` | 1 | unchanged | the caller commits nothing |
+
+The reaper deletes with GraphQL `updateRefs` and `beforeOid` set to the SHA it
+inspected, so a push between inspection and delete makes GitHub refuse the
+delete and the branch is kept. For a branch with no PR it reads history through
+the compare API, and keeps the branch if that history is incomplete or has any
+commit not written by the fleet runner.
 
 A dependency bump that breaks an app's tests still opens a PR: tests only run
 once the PR exists. Two costs come with it. A good refresh opens one fleet
