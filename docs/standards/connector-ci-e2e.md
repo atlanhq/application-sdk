@@ -28,12 +28,33 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 |---|---|
 | SQL | `application_sdk.testing.e2e.SQLAppE2ETest` |
 | Anything else (BI, API, object-store, agent apps) | the generated `app/generated/_e2e_base.py`, which subclasses `application_sdk.testing.e2e.BaseE2ETest` |
+| A system app (connection-delete, popularity, publish, …) | `application_sdk.testing.e2e.SystemAppE2ETest` — see [System apps](#system-apps) |
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
 `application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
 
 The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating those suites instead.
+
+### System apps
+
+A system app runs only inside a tenant, never in SDR mode, and its production
+DAG is usually declared by the connector that calls it rather than served by the
+app. `BaseE2ETest` submits through Heracles, which rebuilds the graph from the
+named app's served manifest, so it cannot run such a suite. `SystemAppE2ETest`
+submits the harness's own published DAG straight to AE instead; seeding, node
+routing, polling, grading and teardown are unchanged.
+
+- Declare `connector_short_name`, `manifest_path` (the app's generated manifest,
+  or a fixture whose top-level `dag` is the graph to run) and
+  `required_dag_nodes`. `argo_package_name` / `argo_template_name` are optional.
+- Nothing substitutes placeholders on this path except the harness, so give the
+  substitutions model an aliased field for every `{{...}}` the DAG carries and
+  return it from `_mustache_substitutions()`, as connector suites already do.
+- System apps test on their own tenants. A `SystemAppE2ETest` suite runs only
+  when `E2E_TENANT_POOL=system`, and every other suite refuses that pool. CI sets
+  the variable when it places a leg; for a local run against a system-app
+  tenant, export it yourself.
 
 ### The SDR base class
 
@@ -378,6 +399,7 @@ Threaded secrets the reusable workflow expects on the caller side:
 | Secret | Required | Used by |
 |---|---|---|
 | `E2E_TENANT_MATRIX_JSON` | for the cross-CSP matrix | Per-leg tenant + credentials. See [Cross-CSP matrix](#cross-csp-matrix). Org-level; shared with `application-sdk` and every `atlan-*-app`. |
+| `E2E_SYSTEM_TENANT_MATRIX_JSON` | system apps | Same shape, for the system-app tenants. Org-level; shared only with system-app repos. Where present it replaces `E2E_TENANT_MATRIX_JSON` and the fallback below, and legs get `E2E_TENANT_POOL=system`. See [System apps](#system-apps). |
 | `SDR_TEST_TENANT` | fallback only | configurator |
 | `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | fallback only | configurator OAuth |
 | `ATLAN_API_KEY` | fallback only | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |

@@ -4816,6 +4816,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
 
+#### `SystemAppE2ETest`
+
+- **Import:** `from application_sdk.testing.e2e import SystemAppE2ETest`
+- **Signature:** `class SystemAppE2ETest`
+- **Summary:** Pytest base for a system app's full-DAG suite, submitted straight to AE.
+- **Defined in:** `application_sdk/testing/e2e/system_app.py`
+
 #### `TableSpec`
 
 - **Import:** `from application_sdk.testing.harness.seed import TableSpec`
@@ -4880,6 +4887,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantAuth(base_url: str, ...)`
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `TenantPool`
+
+- **Import:** `from application_sdk.testing.e2e import TenantPool`
+- **Also importable from:** `application_sdk.testing.e2e.tenant_pool`
+- **Signature:** `class TenantPool(*values)`
+- **Summary:** A pool of e2e tenants.
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `TenantRoutes`
 
