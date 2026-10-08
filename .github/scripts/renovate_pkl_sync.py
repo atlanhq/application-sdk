@@ -86,6 +86,7 @@ from pkl_contract_layout import (  # noqa: E402
     ROOT_FILES,
     baseline_contract_ref,
     export_contract_at,
+    format_generated_python,
     run_post_generate,
     swap_outputs,
 )
@@ -404,39 +405,19 @@ def _baseline_output(contract_dir: str) -> tuple[Path | None, Path | None]:
 
 
 def _format_generated() -> None:
-    """ruff-fix + format every generated *.py in the working tree (post-swap),
-    mirroring contract-toolkit/scripts/regenerate-all.sh. The contract emits
-    more than _input.py (e.g. _e2e_base.py, _e2e_credential.py,
-    _e2e_substitutions.py); every one must match what pre-commit's ruff would
+    """ruff-fix + format every generated *.py in the working tree (post-swap).
+    The contract emits more than _input.py (e.g. _e2e_base.py,
+    _e2e_credential.py); every one must match what pre-commit's ruff would
     produce, or the consumer's pre-commit reformats it on the renovate PR and
     fails CI. This sync commit bypasses pre-commit, so we format here.
-    Best-effort: a ruff hiccup must not fail the sync (many apps exclude
-    app/generated from lint entirely).
 
-    Runs after `swap_outputs`, on the real `app/generated/**` path relative
-    to cwd (the consumer repo root) — not the temp eval output dir. `ruff
-    check --fix` also runs with no --select, so it applies whatever the
-    consumer's own pyproject.toml configures (fleet configs aren't uniform:
-    e.g. atlan-hello-world-app selects "I" for import sorting; application-sdk's
-    own config and the app-template scaffold do not). Both of these depend on
-    linting the files at their real repo-relative path: `select`/`extend-select`
-    resolve via cwd regardless, but path-scoped `per-file-ignores`/`exclude`
-    patterns (e.g. an app that exempts `app/generated/**` from a rule) only
-    match a real relative path — they silently fail to match an absolute
-    temp-dir path, which would make this over-apply rules relative to what
-    pre-commit actually enforces.
-
-    `--force-exclude` makes ruff honor those `exclude`/`extend-exclude` patterns
-    even for the explicitly-passed paths (ruff otherwise ignores excludes for
-    paths named on the command line). An app that excludes `app/generated` then
-    keeps its raw pkl output here instead of this pass reformatting it into
-    freshness drift (CNCT-70)."""
-    inputs = sorted(Path("app/generated").rglob("*.py"))
-    if not inputs:
-        return
-    paths = [str(p) for p in inputs]
-    run(["uvx", "ruff", "check", "--fix", "--quiet", "--force-exclude", *paths])
-    run(["uvx", "ruff", "format", "--force-exclude", *paths])
+    Runs after `swap_outputs`, on the real `app/generated/**` path relative to
+    cwd (the consumer repo root) — not the temp eval output dir. The exact ruff
+    calls live in ``pkl_contract_layout.format_generated_python``, shared with
+    ``regenerate_contract.py`` so the freshness gate and local regeneration
+    cannot disagree about formatting (FND-3560). Best-effort: a ruff hiccup or
+    a missing ruff must not fail the sync."""
+    format_generated_python(run)
 
 
 def stage_and_commit(message: str) -> bool:
