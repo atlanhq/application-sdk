@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.43.0
-source-sha:    69b7652dba6f62f93a74e5b9f5c4d19212af34b1
-source-date:   2026-10-08T10:17:11+01:00
+source-sha:    99f5c1564cd620cfe32eb5efe48b207e19094215
+source-date:   2026-10-08T15:02:46+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 406 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 410 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -4819,6 +4819,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `SystemAppE2ETest`
 
 - **Import:** `from application_sdk.testing.e2e import SystemAppE2ETest`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
 - **Signature:** `class SystemAppE2ETest`
 - **Summary:** Pytest base for a system app's full-DAG suite, submitted straight to AE.
 - **Defined in:** `application_sdk/testing/e2e/system_app.py`
@@ -4892,7 +4893,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 
 - **Import:** `from application_sdk.testing.e2e import TenantPool`
 - **Also importable from:** `application_sdk.testing.e2e.tenant_pool`
-- **Signature:** `class TenantPool(*values)`
+- **Signature:** `class TenantPool`
 - **Summary:** A pool of e2e tenants.
 - **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
@@ -5202,6 +5203,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `check_no_stale_pollers(*, *, ...)`
 - **Summary:** Require that the queue is polled, and only by the intended build.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `check_tenant_pool`
+
+- **Import:** `from application_sdk.testing.e2e.tenant_pool import check_tenant_pool`
+- **Signature:** `check_tenant_pool(required: TenantPool, environ: Mapping[str, str], *, suite: str) -> TenantPool`
+- **Summary:** Return the pool *environ* names, if *suite* may run on it.
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `check_worker_health`
 
@@ -6593,6 +6601,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SUPPORTED_SUFFIXES`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `TENANT_POOL_ENV`
+
+- **Import:** `from application_sdk.testing.e2e.tenant_pool import TENANT_POOL_ENV`
+- **Signature:** `TENANT_POOL_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `TRANSFORMED_FILE_NAME`
 
