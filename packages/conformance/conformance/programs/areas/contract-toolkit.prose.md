@@ -811,6 +811,13 @@ missing keys are all supplied by an SDK contract base the class can mix in;
 not obvious. **Does not require `pkl`** — a pure Python edit, verified by the
 test-suite gate.
 
+An arg wired to a non-value widget (the `Sage` / `SageV2` preflight runner —
+`preflight_check = "{{preflight-check}}"` — or an `InfoBanner`) is **not** a K018
+finding: the detector skips it, because nothing at runtime reads it. Never declare
+a field, or retype the entrypoint's `Input` (for example to the generated
+`AppInputContract`), just to receive such an arg. If a pinned older suite still
+reports one, the fix is a conformance bump, not an app edit — route it to residue.
+
 `finding.discriminator` is the arg key; `finding.message` names the manifest path,
 the depth it was sent at, and the `Input` class. Read the actual class at
 `finding.line` in `finding.file` before proposing an edit.
