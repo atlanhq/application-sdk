@@ -416,6 +416,8 @@ def test_yaml_quoting_alone_is_not_a_lost_setting():
         ('args: "a\\tb"', "args: a\\tb"),
         ('args: "-k slow"', "args: -k slow"),
         ('args: "a: b"', "args: a: b"),
+        ('key: "a,b"', "key: a,b"),
+        ('key: "a{b}"', "key: a{b}"),
     ],
 )
 def test_yaml_quotes_that_change_the_value_still_count_as_lost(old, new):
@@ -494,6 +496,27 @@ def test_settings_next_to_a_description_are_still_checked():
     assert resync.lost_setting_lines(
         list_item, "rules:\n  - description: |\n      Other.\n", TESTS_YAML
     ) == ["automerge: true"]
+
+
+def test_description_prose_in_the_new_file_cannot_stand_in_for_a_setting():
+    backup = "      run_e2e:\n        required: false\n"
+    new = "      run_e2e:\n        description: |\n          required: false\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == ["required: false"]
+    # A line shared with a description is compared whole: the conservative
+    # side, a hold rather than a missed loss.
+    json_backup = '{\n  "automerge": true\n}\n'
+    json_new = '{\n  "description": "x", "automerge": true\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == [
+        '"automerge": true'
+    ]
+
+
+def test_json_description_sharing_a_line_does_not_hide_its_neighbour():
+    backup = '{\n  "description": "old", "automerge": true\n}\n'
+    new = '{\n  "description": "old"\n}\n'
+    assert resync.lost_setting_lines(backup, new, "renovate.json") == [
+        '"description": "old", "automerge": true'
+    ]
 
 
 def test_description_and_quotes_count_in_files_that_are_not_yaml_or_json():

@@ -496,7 +496,9 @@ def _unquote_yaml_scalar(value: str) -> str:
     if (
         inner[0] in _YAML_INDICATORS
         or inner != inner.strip()
-        or any(c in inner for c in ":#\\\"'")
+        # `,[]{}` are flow-collection syntax: inside a `{ ... }` or `[ ... ]`
+        # spanning lines, the unquoted form is not the same scalar.
+        or any(c in inner for c in ":#\\\"',[]{}")
         or inner.lower() in _YAML_KEYWORDS
         or _YAML_NUMBER_LIKE.search(inner)
     ):
@@ -530,12 +532,26 @@ def _description_lines(path: str, text: str) -> set[int]:
         block_indent = None
         if _setting_key(line) != "description":
             continue
+        if path.endswith(".json") and not _only_description(line):
+            continue
         skip.add(i)
         value = line.split(":", 1)[1].strip()
         if path.endswith(_YAML_SUFFIXES) and _YAML_BLOCK_SCALAR.match(value):
             stripped = line.lstrip()
             block_indent = indent + len(stripped) - len(stripped.lstrip("- "))
     return skip
+
+
+def _only_description(line: str) -> bool:
+    """True when a JSON line's sole member is ``description``. A line that
+    also carries another property is compared whole, so that property's
+    removal is still caught (a reworded description there is a false hold,
+    never a missed loss)."""
+    try:
+        doc = json.loads("{" + _normalise(line) + "}")
+    except ValueError:
+        return False
+    return isinstance(doc, dict) and list(doc) == ["description"]
 
 
 # Settings the canonical templates deliberately stopped carrying: a render
@@ -579,7 +595,12 @@ def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[
     cannot stand in for a removed one). In a YAML or JSON ``path``,
     descriptions are not compared, and in YAML a value that only gained or
     lost its quotes still matches. The lane imports this function."""
-    remaining = Counter(_normalise_for(path, x) for x in new_text.splitlines())
+    new_skip = _description_lines(path, new_text)
+    remaining = Counter(
+        _normalise_for(path, x)
+        for i, x in enumerate(new_text.splitlines())
+        if i not in new_skip
+    )
     skip = _description_lines(path, backup_text)
     lost: list[str] = []
     for i, line in enumerate(backup_text.splitlines()):
