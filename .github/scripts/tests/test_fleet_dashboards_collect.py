@@ -3,8 +3,7 @@
 The collector replaces the per-repo ``update-dashboard.yml`` shim with one
 central pull (FND-3337). What these guard:
 
-* the doc shapes connector-pulse ingests are unchanged from the reusable's
-  inline Python;
+* the test-readiness doc connector-pulse ingests is the scorecard verbatim;
 * only live, default-branch artifacts are read, newest first, retry names
   included;
 * a repo with nothing live is SKIPPED, never written as an empty "clean" row;
@@ -30,39 +29,7 @@ import fleet_dashboards_collect as fdc
 
 REPO = "atlanhq/atlan-example-app"
 SLUG = "atlanhq_atlan-example-app"
-
-SARIF = {
-    "runs": [
-        {
-            "tool": {
-                "driver": {
-                    "version": "1.2.3",
-                    "rules": [
-                        {
-                            "id": "L001",
-                            "name": "pct-logging",
-                            "properties": {"atlan/tier": "warn"},
-                            "shortDescription": {"text": "short"},
-                        }
-                    ],
-                }
-            },
-            "properties": {
-                "atlan/summary": {"failing": 1, "warning": 2, "suppressing": 1},
-                "atlan/excludedPaths": ["tests/"],
-                "atlan/profileVersion": "v2",
-            },
-            "results": [
-                {"ruleId": "L001"},
-                {
-                    "ruleId": "L001",
-                    "suppressions": [{"justification": " legacy "}],
-                },
-                {"ruleId": "L001", "kind": "pass"},
-            ],
-        }
-    ]
-}
+OTHER = "atlanhq/atlan-other-app"
 
 SCORECARD = {
     "repo": REPO,
@@ -84,16 +51,13 @@ def _artifact(name: str, run_id: int, created: str, **kw: Any) -> dict[str, Any]
 
 
 class FakeGh:
-    """Answers the handful of gh calls the collector and fcs make."""
+    """Answers the handful of gh calls the collector makes."""
 
     def __init__(self) -> None:
         self.default_branch = "main"
         self.artifacts: dict[str, list[dict[str, Any]]] = {}
         # run id -> {artifact name: {filename: content}}
         self.downloads: dict[int, dict[str, dict[str, str]]] = {}
-        self.conformance_runs: list[dict[str, Any]] = []
-        self.run_artifacts: dict[int, list[dict[str, Any]]] = {}
-        self.run_views: dict[int, dict[str, str]] = {}
         self.fail: set = set()
         self.calls: list[list[str]] = []
 
@@ -102,7 +66,7 @@ class FakeGh:
         key = " ".join(args)
         if any(f in key for f in self.fail):
             return 1, ""
-        if args[:2] == ["api", f"repos/{REPO}"]:
+        if args[:2] in (["api", f"repos/{REPO}"], ["api", f"repos/{OTHER}"]):
             return 0, self.default_branch + "\n"
         if args[0] == "api" and "/actions/artifacts?name=" in args[1]:
             name = args[1].split("name=")[1].split("&")[0]
@@ -110,11 +74,6 @@ class FakeGh:
             size, page = int(query["per_page"]), int(query.get("page", 1))
             listed = self.artifacts.get(name, [])[(page - 1) * size : page * size]
             return 0, json.dumps({"artifacts": listed})
-        if args[0] == "api" and "/actions/runs/" in args[1]:
-            run_id = int(args[1].split("/runs/")[1].split("/")[0])
-            return 0, json.dumps({"artifacts": self.run_artifacts.get(run_id, [])})
-        if args[:2] == ["run", "list"]:
-            return 0, json.dumps(self.conformance_runs)
         if args[:2] == ["run", "download"]:
             run_id = int(args[2])
             name = args[args.index("--name") + 1]
@@ -126,24 +85,11 @@ class FakeGh:
             for fname, content in files.items():
                 (dest / fname).write_text(content)
             return 0, ""
-        if args[:2] == ["run", "view"]:
-            return 0, json.dumps(self.run_views[int(args[2])])
         raise AssertionError(f"unexpected gh call: {args}")
 
 
 def _full_fleet_gh() -> FakeGh:
     gh = FakeGh()
-    gh.conformance_runs = [{"databaseId": 20, "conclusion": "failure"}]
-    gh.run_artifacts[20] = [{"name": "conformance-logging-sarif", "expired": False}]
-    gh.downloads[20] = {
-        "conformance-logging-sarif": {"logging.sarif": json.dumps(SARIF)}
-    }
-    gh.run_views[20] = {
-        "headSha": "def456",
-        "headBranch": "main",
-        "createdAt": "2026-10-04T05:06:07Z",
-    }
-
     gh.artifacts["test-readiness-scorecard-retry"] = [
         _artifact("test-readiness-scorecard-retry", 30, "2026-10-05T01:00:00Z"),
         # Newer, but from a PR branch: must be ignored.
@@ -185,46 +131,13 @@ def test_collects_every_dashboard(tmp_path: Path) -> None:
 def test_stamps_come_from_the_source_run_not_the_clock(tmp_path: Path) -> None:
     """A re-read of an unchanged artifact must produce the same history line."""
     _collect(_full_fleet_gh(), tmp_path)
-    conf, conf_h = _read(tmp_path, fdc.CONFORMANCE_PREFIX)
     _, tr_h = _read(tmp_path, fdc.TEST_READINESS_PREFIX)
-
-    assert conf["collectedAt"] == "2026-10-04T05:06:07Z"
-    assert conf_h["date"] == "2026-10-04"
     assert tr_h["date"] == "2026-10-05"
 
     histories = [tmp_path / prefix / f"history_{SLUG}.jsonl" for prefix in fdc.PREFIXES]
     first = [h.read_text() for h in histories]
     _collect(_full_fleet_gh(), tmp_path)
     assert [h.read_text() for h in histories] == first
-
-
-def test_conformance_doc_matches_the_reusable_shape(tmp_path: Path) -> None:
-    _collect(_full_fleet_gh(), tmp_path)
-    doc, history = _read(tmp_path, fdc.CONFORMANCE_PREFIX)
-
-    assert doc["commit"] == "def456" and doc["branch"] == "main"
-    assert doc["toolVersion"] == "1.2.3"
-    assert doc["profileVersion"] == "v2"
-    assert doc["summary"] == {"failing": 1, "warning": 2, "suppressing": 1}
-    assert doc["byRule"] == {"L001": {"failing": 1, "suppressing": 1}}
-    assert doc["suppressions"] == [{"ruleId": "L001", "justification": "legacy"}]
-    assert doc["excludedPaths"] == ["tests/"]
-    assert doc["ruleCatalog"]["L001"]["tier"] == "warn"
-    assert history == {
-        "date": "2026-10-04",
-        "repo": REPO,
-        "toolVersion": "1.2.3",
-        "failing": 1,
-        "warning": 2,
-        "suppressing": 1,
-    }
-
-
-def test_conformance_tool_version_skew_is_surfaced() -> None:
-    a = {"runs": [{"tool": {"driver": {"version": "1.0"}}}]}
-    b = {"runs": [{"tool": {"driver": {"version": "2.0"}}}]}
-    doc, _ = fdc.conformance_doc(REPO, [a, b], "s", "main", "2026-10-01T00:00:00Z")
-    assert doc["toolVersion"] == "skew:1.0,2.0"
 
 
 def test_test_readiness_doc_is_the_scorecard_verbatim(tmp_path: Path) -> None:
@@ -254,25 +167,30 @@ def test_newest_live_artifact_across_plain_and_retry_names() -> None:
 def test_non_main_default_branch_is_honoured(tmp_path: Path) -> None:
     gh = _full_fleet_gh()
     gh.default_branch = "master"
-    outcome = _collect(gh, tmp_path)
-    # Every fixture artifact is on `main`, so nothing matches `master`.
-    assert outcome[fdc.TEST_READINESS_PREFIX] == "skipped"
-    assert any("--branch=master" in c for c in gh.calls if c[:2] == ["run", "list"])
+    # Every `main` fixture artifact is ignored; only the `master` one counts.
+    assert _collect(gh, tmp_path)[fdc.TEST_READINESS_PREFIX] == "skipped"
+
+    name = fdc.SCORECARD_ARTIFACTS[0]
+    gh.artifacts[name] = [_artifact(name, 40, "2026-10-01T00:00:00Z", branch="master")]
+    gh.downloads[40] = {name: {"test-readiness.json": json.dumps(SCORECARD)}}
+    assert _collect(gh, tmp_path)[fdc.TEST_READINESS_PREFIX] == "published"
+    assert any(c[:3] == ["run", "download", "40"] for c in gh.calls)
 
 
-def test_one_dashboard_failing_does_not_cost_the_others(tmp_path: Path) -> None:
+def test_one_repo_failing_does_not_cost_the_others(tmp_path: Path) -> None:
+    gh = _full_fleet_gh()
+    gh.fail.add(f"repos/{OTHER}")
+    results = fdc.collect_fleet([REPO, OTHER], tmp_path, gh)
+    assert results[REPO] == {p: "published" for p in fdc.PREFIXES}
+    assert results[OTHER] == {p: "error" for p in fdc.PREFIXES}
+
+
+def test_unreadable_scorecard_is_an_error_not_a_skip(tmp_path: Path) -> None:
     gh = _full_fleet_gh()
     gh.fail.add("test-readiness-scorecard")
     outcome = _collect(gh, tmp_path)
     assert outcome[fdc.TEST_READINESS_PREFIX] == "error"
-    assert outcome[fdc.CONFORMANCE_PREFIX] == "published"
-
-
-def test_conformance_discovery_error_is_an_error_not_a_skip(tmp_path: Path) -> None:
-    gh = _full_fleet_gh()
-    gh.fail.add("run list")
-    outcome = _collect(gh, tmp_path)
-    assert outcome[fdc.CONFORMANCE_PREFIX] == "error"
+    assert not (tmp_path / fdc.TEST_READINESS_PREFIX).exists()
 
 
 def test_main_fails_only_when_every_repo_failed(
@@ -294,19 +212,19 @@ def test_main_rejects_an_empty_roster(tmp_path: Path) -> None:
     assert fdc.main(argv, gh=FakeGh()) == 1
 
 
-def test_main_succeeds_when_only_some_dashboards_failed(
+def test_main_succeeds_when_only_some_repos_failed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The run fails only when EVERY dashboard of every repo errored. One
-    error beside a published dashboard is a partial collection, not a token
+    repo erroring beside a published one is a partial collection, not a token
     or API fault, and must not turn the job red."""
     monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    argv = ["--repos", json.dumps([REPO]), "--out-dir", str(tmp_path / "out")]
+    argv = ["--repos", json.dumps([REPO, OTHER]), "--out-dir", str(tmp_path / "out")]
     gh = _full_fleet_gh()
-    gh.fail.add("test-readiness-scorecard")
+    gh.fail.add(f"repos/{OTHER}")
     assert fdc.main(argv, gh=gh) == 0
     assert (
-        tmp_path / "out" / fdc.CONFORMANCE_PREFIX / "repos" / f"{SLUG}.json"
+        tmp_path / "out" / fdc.TEST_READINESS_PREFIX / "repos" / f"{SLUG}.json"
     ).exists()
 
 
@@ -336,16 +254,6 @@ def test_artifact_paging_stops_at_the_first_page_with_a_match() -> None:
     ]
     fdc.latest_artifact(REPO, (name,), "main", gh)
     assert len([c for c in gh.calls if f"name={name}&" in c[1]]) == 1
-
-
-def test_unparseable_sarif_only_is_an_error_not_a_clean_row(tmp_path: Path) -> None:
-    """A run whose SARIF all fails to parse is not evidence of zero findings:
-    publishing would overwrite the stored row with a false "clean"."""
-    gh = _full_fleet_gh()
-    gh.downloads[20] = {"conformance-logging-sarif": {"logging.sarif": "{not json"}}
-    outcome = _collect(gh, tmp_path)
-    assert outcome[fdc.CONFORMANCE_PREFIX] == "error"
-    assert not (tmp_path / fdc.CONFORMANCE_PREFIX).exists()
 
 
 def test_a_stalled_gh_call_fails_instead_of_blocking(
@@ -384,8 +292,8 @@ def test_the_workflow_runs_on_schedule_only() -> None:
 
 def test_the_workflow_publishes_exactly_the_collected_prefixes() -> None:
     """Every collected dashboard has a publish step, and no step publishes a
-    prefix the collector no longer writes (the security dashboard was dropped
-    in FND-3462)."""
+    prefix the collector no longer writes (the security and conformance
+    dashboards were dropped in FND-3462)."""
     workflow = (
         Path(__file__).resolve().parents[2]
         / "workflows"
@@ -398,7 +306,8 @@ def test_the_workflow_publishes_exactly_the_collected_prefixes() -> None:
         if "publish_fleet_dashboard.py" in step.get("run", "")
     }
     assert published == set(fdc.PREFIXES)
-    assert not any("security-dashboard" in step.get("run", "") for step in steps)
+    for dropped in ("security-dashboard", "conformance-dashboard"):
+        assert not any(dropped in step.get("run", "") for step in steps)
 
 
 def test_a_stalled_repo_does_not_stop_the_fleet(
@@ -408,7 +317,6 @@ def test_a_stalled_repo_does_not_stop_the_fleet(
         raise fdc.subprocess.TimeoutExpired(cmd=cmd, timeout=kwargs["timeout"])
 
     monkeypatch.setattr(fdc.subprocess, "run", stalled)
-    other = "atlanhq/atlan-other-app"
-    results = fdc.collect_fleet([REPO, other], tmp_path)
-    assert set(results) == {REPO, other}
+    results = fdc.collect_fleet([REPO, OTHER], tmp_path)
+    assert set(results) == {REPO, OTHER}
     assert all(s == "error" for o in results.values() for s in o.values())
