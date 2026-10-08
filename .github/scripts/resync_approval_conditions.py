@@ -249,8 +249,10 @@ def copy_back(scratch: pathlib.Path, work: pathlib.Path, manifest: dict) -> list
     as regular files with their exec bit; a path the render deleted is
     deleted here. Nothing under ``.git`` ever comes back: a render able to
     write ``.git/config`` or a hook would run code at the next host-side
-    ``git`` call, which holds the token. Returns the refused paths; any
-    refusal fails the render closed.
+    ``git`` call, which holds the token. A path under a directory the
+    clone already has as a symlink is skipped, as the lane's staging skips
+    it; a symlinked directory only the render has is refused. Returns the
+    refused paths; any refusal fails the render closed.
     """
     wanted = {p for p in manifest.get("touched") or [] if isinstance(p, str)}
     for bak in scratch.rglob("*.bak"):
@@ -260,7 +262,12 @@ def copy_back(scratch: pathlib.Path, work: pathlib.Path, manifest: dict) -> list
     refused: list[str] = []
     for rel in sorted(wanted):
         src, dest = scratch / rel, work / rel
-        if _unsafe_rel(rel) or _via_symlink(work, rel) or _via_symlink(scratch, rel):
+        if _unsafe_rel(rel):
+            refused.append(rel)
+            continue
+        if _via_symlink(work, rel):
+            continue
+        if _via_symlink(scratch, rel):
             refused.append(rel)
             continue
         if src.is_symlink() or (src.exists() and not src.is_file()):
