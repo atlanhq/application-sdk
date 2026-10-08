@@ -132,7 +132,17 @@ RULES: tuple[RuleDefinition, ...] = (
             " drift:\n"
             "\n"
             '1. Add an explicit ``name = \\"<intended-name>\\"`` class variable to the'
-            " App subclass so the code name is unambiguous.\n"
+            " App subclass so the code name is unambiguous.  If ``<intended-name>``"
+            " differs from the name the class resolves to today, this renames"
+            " ``App.name``, and ``App.name`` is also the Temporal workflow type the"
+            " worker registers (``<app>`` for the implicit ``run()``,"
+            " ``<app>:<entry-point>`` for each ``@entrypoint``).  Live DAGs still"
+            " dispatch the old type, so the rename requires an alias that keeps it"
+            ' dispatchable: ``legacy_workflow_types = {"<old-type>":'
+            ' "<entry-point>"}`` on the App subclass (``run`` for the implicit'
+            " entry point), and the same pair in ``legacyWorkflowTypes`` in"
+            " ``contract/app.pkl`` (K015 holds the two in agreement).  Without the"
+            " alias, no worker claims the old type and live DAGs are stranded.\n"
             "\n"
             "2. Update ``contract/app.pkl`` ``name`` to match and re-run"
             " ``pkl eval`` (never hand-edit ``atlan.yaml`` — C002 catches stale"
@@ -152,7 +162,12 @@ RULES: tuple[RuleDefinition, ...] = (
         remediation_reference=RemediationReference(
             kind=RemediationKind.DECISION,
             target="app owner",
-            note="align the contract and .env.example to the code name, or rename App.name with a legacy_workflow_types alias",
+            note=(
+                "align the contract and .env.example to the code name, or rename "
+                "App.name; a rename changes the Temporal workflow type, so the old "
+                "type must stay dispatchable through a legacy_workflow_types alias, "
+                "else live DAGs are stranded"
+            ),
         ),
     ),
 )

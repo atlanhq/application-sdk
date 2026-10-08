@@ -218,6 +218,8 @@ generation. For P052, the envelope keeps the released wire shape:
 `to_nested_bytes()` / `to_nested_dict()` ⇒ `EnvelopeShape.PYATLAN` (deprecated,
 removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 `FLATTENED` from a nested shape changes the wire shape: owner decision.
+Choosing `PYATLAN` defers the decision; record it, the site must move again
+before v4.0.
 
 **Stop 1** (see Agent protocol).
 

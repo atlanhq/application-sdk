@@ -1045,6 +1045,48 @@ modules, and the role (Input or Output).
 
 ---
 
+**P016 EntryPointContractCodeDrift** — the `@entrypoint` names in code and the
+entry points the contract declares (`app/generated/<name>/` dirs in a
+multi-entrypoint contract, DAG routes in a single-entrypoint one) do not agree.
+**BLOCK-tier**: remediate in default mode.  P016 is a migration rule: the lane
+never applies it, so every step below is reviewed by the app owner.
+
+*Procedure:*
+
+1. Read the finding message.  It names the entry point and the names on the
+   other side.
+2. **A tile and the entry point it starts share one name** (FND-3453).  The tile
+   name is the `?entrypoint=` value, the marketplace card id and the generated
+   path, so a code entry point that backs a tile under another name is renamed to
+   the tile name: `@entrypoint(name="<tile>")`.  The rename changes its Temporal
+   workflow type, so keep the old type dispatching with an alias, declared twice:
+   `legacy_workflow_types = {"<app>:<old-name>": "<tile>"}` on the `App` class,
+   and the same pair in `legacyWorkflowTypes` on every entrypoint contract in
+   `contract/app.pkl` (K015 holds the two in agreement).  The alias covers
+   Temporal dispatch only: callers selecting `?entrypoint=<old-name>` on `/start`
+   must switch to the tile name.  Do **not** rename a released tile to match the
+   code — no alias covers a tile rename.
+3. **Internal DAG steps and background jobs** — a code entry point that no tile
+   starts (a step a manifest DAG dispatches, or a job a workflow starts on its own)
+   is still an entry point, and the contract declares every entry point.  Declare
+   it as an `Entrypoint` in `contract/app.pkl` **without a `packageId`**: it gets
+   its own `app/generated/<name>/` dir, stays routable through `?entrypoint=`, and
+   gets no marketplace card (only an `Entrypoint` with a `packageId` emits
+   `marketplace_card: true`).  On a legacy NativeApp contract, declare these
+   during the App.pkl migration (K001).
+4. **A contract entry point with no code entry point** — add
+   `@entrypoint(name="<name>")` on the `App` method that runs it, or rename the
+   entry point that already backs it as in step 2.  Remove it from the contract
+   only when the owner confirms it is unused.
+5. **Single-entrypoint contract** — declare the extra entry point as a route in
+   `contract/app.pkl`, or remove the `@entrypoint`.
+6. Regenerate with `pkl eval -m . contract/app.pkl` (or `uv run poe generate`).
+   **Never hand-edit `app/generated/`** — C002 and K004/K005 catch that staleness.
+7. Suppression: `# conformance: ignore[P016] <reason>` on the decorator line.
+   Rarely right — route to residue.
+
+---
+
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline suppression comment — `// conformance: ignore[Kxxx]
 <8–40 word justification>` for the `.pkl`-source / `PklProject`-anchored rules
