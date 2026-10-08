@@ -337,6 +337,134 @@ def test_k018_ignores_platform_injected_credential_arg(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# K018 — args wired to a non-value widget (SageV2 preflight runner, FND-3519)
+# ---------------------------------------------------------------------------
+#
+# The preflight runner's checks execute in the UI through Handler.preflight_check;
+# no runtime path reads the `preflight_check` arg, so dropping it is harmless. The
+# widget type comes from the generated config JSON beside the manifest, and the
+# exemption keys on the *form key*, never on the arg name.
+
+_PREFLIGHT_ARGS = {"preflight_check": "{{preflight-check}}"}
+
+
+def _ui(widget: str) -> dict:
+    return {"widget": widget, "label": "", "hidden": False}
+
+
+def _write_config(directory: Path, properties: dict) -> None:
+    """A generated connector config JSON (``config.properties`` shape)."""
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "myapp.json").write_text(
+        json.dumps(
+            {"id": "myapp", "name": "myapp", "config": {"properties": properties}}
+        ),
+        encoding="utf-8",
+    )
+
+
+def _preflight_app(tmp_path: Path, properties: dict | None) -> list:
+    paths = _write_py(
+        tmp_path, {"app.py": _app_src("    pass\n", bases="(ExtractionInput)")}
+    )
+    generated = tmp_path / "app" / "generated"
+    _write_manifest(
+        generated / "manifest.json", {"extract": _extract_node(_PREFLIGHT_ARGS)}
+    )
+    if properties is not None:
+        _write_config(generated, properties)
+    return paths
+
+
+def test_k018_ignores_arg_wired_to_sagev2_widget(tmp_path: Path) -> None:
+    paths = _preflight_app(
+        tmp_path, {"preflight-check": {"type": "string", "ui": _ui("sageV2")}}
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_ignores_conditional_whose_every_branch_is_sagev2(tmp_path: Path) -> None:
+    """The mysql shape: a conditional input that is SageV2 on every branch."""
+    paths = _preflight_app(
+        tmp_path,
+        {
+            "preflight-check": {
+                "type": "conditional",
+                "ui": _ui("sageV2"),
+                "conditions": [
+                    {
+                        "property": "extraction-method",
+                        "value": "direct",
+                        "ui": _ui("sageV2"),
+                    },
+                    {
+                        "property": "extraction-method",
+                        "value": "agent",
+                        "ui": _ui("sageV2"),
+                    },
+                ],
+            }
+        },
+    )
+    assert _only(scan_all(paths, tmp_path), "K018") == []
+
+
+def test_k018_still_flags_same_arg_wired_to_value_widget(tmp_path: Path) -> None:
+    """Keyed on the widget, not the name: a text input named preflight-check is config."""
+    paths = _preflight_app(
+        tmp_path, {"preflight-check": {"type": "string", "ui": _ui("input")}}
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_still_flags_conditional_with_a_value_branch(tmp_path: Path) -> None:
+    paths = _preflight_app(
+        tmp_path,
+        {
+            "preflight-check": {
+                "type": "conditional",
+                "ui": _ui("sageV2"),
+                "conditions": [
+                    {
+                        "property": "extraction-method",
+                        "value": "direct",
+                        "ui": _ui("sageV2"),
+                    },
+                    {
+                        "property": "extraction-method",
+                        "value": "agent",
+                        "ui": _ui("input"),
+                    },
+                ],
+            }
+        },
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_still_flags_preflight_arg_without_config_json(tmp_path: Path) -> None:
+    """No config JSON to read the widget from — nothing is exempted."""
+    paths = _preflight_app(tmp_path, None)
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+def test_k018_non_value_exemption_is_scoped_to_the_manifests_own_directory(
+    tmp_path: Path,
+) -> None:
+    """A SageV2 declared in another directory's config does not exempt this manifest."""
+    paths = _preflight_app(tmp_path, None)
+    _write_config(
+        tmp_path / "app" / "generated" / "other",
+        {"preflight-check": {"type": "string", "ui": _ui("sageV2")}},
+    )
+    findings = _only(scan_all(paths, tmp_path), "K018")
+    assert [f.discriminator for f in findings] == ["preflight_check"]
+
+
+# ---------------------------------------------------------------------------
 # K018 — bundle apps: one `AppInputContract` per entrypoint (FND-1791)
 # ---------------------------------------------------------------------------
 #

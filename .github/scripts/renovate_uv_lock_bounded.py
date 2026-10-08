@@ -328,6 +328,35 @@ def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> boo
     return True
 
 
+def refusal_exit_code(*, reason: str, wrote: bool, caller_owns_commit: bool) -> int:
+    """Exit code for a refusal. Whether Renovate opens a PR depends on it (FND-3517).
+
+    The preset's lock lane sets ``prCreation: status-success``, so Renovate opens
+    a PR only once the branch status is green. Before a PR exists, the only
+    status on the branch is ``renovate/artifacts``, and this exit code is what
+    sets it. A non-zero exit therefore means "no PR", and exit 0 means "PR".
+
+    * A self-healing refusal (``window-empty``) exits 1. Nothing is wrong, the
+      bound admitted nothing on this pass, so no PR should open. The reaper
+      deletes the branch and a later pass rebuilds it.
+    * A standing refusal exits 0, so the PR opens and a human sees it. It still
+      cannot merge: ``withhold`` wrote the tripwire into ``uv.lock``, and
+      ``check_uv_lock.py`` rejects it in the required ``suite / Conformance
+      Gate`` (no ``exit-zero`` there). Exiting 1 would hide the fault, because
+      ``dependencyDashboard`` is off fleet-wide and nothing else would report a
+      branch that has no PR.
+
+    Two cases always exit 1 and fail closed. Under ``--caller-owns-commit``
+    (``bound_lock_branch.py``), a non-zero exit is how the caller knows to
+    commit nothing. And when ``withhold`` wrote nothing, there is no tripwire
+    to hold the branch: leaving the tree matching HEAD would let Renovate commit
+    its own unbounded lock.
+    """
+    if caller_owns_commit or not wrote or reason in SELF_HEALING_REFUSALS:
+        return 1
+    return 0
+
+
 def strip_options(lock_text: str) -> str:
     """Remove the ``[options]`` table and any ``[options.*]`` subtable.
 
@@ -843,7 +872,7 @@ def main(argv: list[str] | None = None) -> int:
         # accuses every ordinary upgrade of moving backwards — a wedged lane whose
         # message blames the dependency data. Say the true cause instead, and say
         # it before uv spends a minute resolving.
-        withhold(lock_path, baseline, args.window, reason=REFUSAL_NO_PACKAGING)
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_NO_PACKAGING)
         print(
             "`packaging` is not importable, so no version can be compared and the "
             "rollback gate cannot do its job. Refusing rather than bounding "
@@ -851,7 +880,11 @@ def main(argv: list[str] | None = None) -> int:
             "(the workflow pins it) and re-run.",
             file=sys.stderr,
         )
-        return 1
+        return refusal_exit_code(
+            reason=REFUSAL_NO_PACKAGING,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
 
     before = lock_versions(baseline)
     cutoff = dt.datetime.now(dt.timezone.utc) - window
@@ -883,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         admitted_early = blocked_by_floor(result.stderr, floors)
         if not admitted_early:
-            withhold(
+            wrote = withhold(
                 lock_path,
                 baseline,
                 args.window,
@@ -898,13 +931,17 @@ def main(argv: list[str] | None = None) -> int:
                 + result.stderr,
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_UNSATISFIABLE_FLOOR,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
         result = run_uv_lock(
             build_uv_command(args.window, exempt + admitted_early, ceilings, holds),
             project_dir,
         )
         if result.returncode != 0:
-            withhold(
+            wrote = withhold(
                 lock_path,
                 baseline,
                 args.window,
@@ -917,7 +954,11 @@ def main(argv: list[str] | None = None) -> int:
                 "table — so a required check holds the branch.\n" + result.stderr,
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_FLOOR_ADMITTED_STILL_FAILED,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
 
     after = lock_versions(lock_path.read_text())
 
@@ -930,7 +971,7 @@ def main(argv: list[str] | None = None) -> int:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(escaped.items())
         )
-        withhold(lock_path, baseline, args.window, reason=REFUSAL_HOLD_MOVED)
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_HOLD_MOVED)
         print(
             f"Held first-party package(s) moved despite the hold: {detail}. The "
             "hold is a release-time ceiling, and another release of the same "
@@ -939,7 +980,11 @@ def main(argv: list[str] | None = None) -> int:
             "this lane refuses rather than ship the move.",
             file=sys.stderr,
         )
-        return 1
+        return refusal_exit_code(
+            reason=REFUSAL_HOLD_MOVED,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
     leaked = moved_holds(sorted(transitive), before, after)
 
     regressed = rollbacks(before, after)
@@ -947,7 +992,7 @@ def main(argv: list[str] | None = None) -> int:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(regressed.items())
         )
-        withhold(lock_path, baseline, args.window, reason=REFUSAL_ROLLBACK)
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_ROLLBACK)
         print(
             f"Bounded resolve moved {len(regressed)} package(s) BACKWARDS from the "
             f"last committed lock: {detail}. Retention ceilings make an age-driven "
@@ -964,7 +1009,11 @@ def main(argv: list[str] | None = None) -> int:
             "table — for a required check to hold the branch on.",
             file=sys.stderr,
         )
-        return 1
+        return refusal_exit_code(
+            reason=REFUSAL_ROLLBACK,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
 
     if after == before and renovate_versions != before:
         moved = ", ".join(
@@ -984,7 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         else:
-            withhold(lock_path, baseline, args.window, reason=REFUSAL_WINDOW_EMPTY)
+            wrote = withhold(
+                lock_path, baseline, args.window, reason=REFUSAL_WINDOW_EMPTY
+            )
             print(
                 f"The bound admits nothing today, but Renovate's own unbounded "
                 f"resolve moved: {moved}. Leaving the tree matching HEAD would "
@@ -997,7 +1048,11 @@ def main(argv: list[str] | None = None) -> int:
                 "PR merges and the base branch locks it.",
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_WINDOW_EMPTY,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
 
     lock_path.write_text(strip_options(lock_path.read_text()))
 

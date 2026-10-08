@@ -1,10 +1,11 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, List, Literal
 from unittest.mock import patch
 
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
+from typing_extensions import TypeAliasType
 
 from application_sdk.contracts.base import (
     ContractMetadata,
@@ -21,7 +22,31 @@ from application_sdk.contracts.base import (
     is_backwards_compatible,
     validate_payload_safety,
 )
-from application_sdk.contracts.types import FileReference, MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems, TreeSelection
+
+# Module-level: pydantic resolves a recursive alias's string self-reference
+# through the defining module's namespace.
+_AnyMap = TypeAliasType("_AnyMap", Annotated[dict[str, Any], MaxItems(10)])
+_UnboundedAnyMap = TypeAliasType("_UnboundedAnyMap", dict[str, Any])
+_UnboundedTree = TypeAliasType("_UnboundedTree", dict[str, "_UnboundedTree"])
+_BoundedTree = TypeAliasType(
+    "_BoundedTree", Annotated[dict[str, "_BoundedTree"], MaxItems(10)]
+)
+# Quoted references to an unsafe alias, in both spellings Python produces:
+# list["X"] keeps a plain str, typing.List["X"] a ForwardRef.
+_UnsafeMap = TypeAliasType("_UnsafeMap", dict[str, Any])
+_QuotedStrOuter = TypeAliasType(
+    "_QuotedStrOuter", Annotated[list["_UnsafeMap"], MaxItems(10)]
+)
+_QuotedFwdOuter = TypeAliasType(
+    "_QuotedFwdOuter",
+    Annotated[List["_UnsafeMap"], MaxItems(10)],  # noqa: UP006
+)
+_SafeMap = TypeAliasType("_SafeMap", Annotated[dict[str, str], MaxItems(10)])
+_QuotedSafeOuter = TypeAliasType(
+    "_QuotedSafeOuter", Annotated[list["_SafeMap"], MaxItems(10)]
+)
+_LiteralAlias = TypeAliasType("_LiteralAlias", Literal["_UnsafeMap", "other"])
 
 # =============================================================================
 # Input / Output subclassing
@@ -242,6 +267,82 @@ class TestPayloadSafetyValidation:
 
         obj = FlexOutput(data=42)
         assert obj.data == 42
+
+
+# =============================================================================
+# Type aliases are checked through, not skipped
+# =============================================================================
+
+
+class TestPayloadSafetyThroughTypeAliases:
+    # A TypeAliasType has no origin and is not a class, so the checker used to
+    # skip it entirely: an alias over Any or an unbounded dict passed.
+
+    def test_alias_over_any_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError) as exc_info:
+
+            class BadInput(Input):
+                mapping: _AnyMap
+
+        assert "mapping" in str(exc_info.value)
+
+    def test_unbounded_recursive_alias_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                tree: _UnboundedTree
+
+    def test_alias_nested_in_a_bounded_collection_is_checked(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                maps: Annotated[list[_UnboundedAnyMap], MaxItems(10)]
+
+    def test_bounded_recursive_alias_passes(self) -> None:
+        # Recursion terminates: the self-reference is checked once.
+
+        class OkInput(Input):
+            tree: _BoundedTree = Field(default_factory=dict)
+
+        assert OkInput(tree={"a": {"b": {}}}).tree == {"a": {"b": {}}}
+
+    def test_tree_selection_passes(self) -> None:
+        class OkInput(Input):
+            selection: TreeSelection = Field(default_factory=dict)
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
+
+    @pytest.mark.parametrize("outer", [_QuotedStrOuter, _QuotedFwdOuter])
+    def test_quoted_reference_to_an_unsafe_alias_raises(self, outer: Any) -> None:
+        # The quoted name is resolved against the alias's module, not skipped.
+        with pytest.raises(PayloadSafetyError):
+            type("BadInput", (Input,), {"__annotations__": {"maps": outer}})
+
+    def test_quoted_reference_to_a_safe_alias_passes(self) -> None:
+        class OkInput(Input):
+            maps: _QuotedSafeOuter = Field(default_factory=list)
+
+        assert OkInput(maps=[{"a": "b"}]).maps == [{"a": "b"}]
+
+    def test_literal_strings_are_values_not_references(self) -> None:
+        # "_UnsafeMap" here is a literal value; it must not be resolved.
+        class OkInput(Input):
+            mode: _LiteralAlias = "other"
+
+        assert OkInput().mode == "other"
+
+    def test_tree_selection_is_exported_from_the_package(self) -> None:
+        # The documented import path, and the package's public surface.
+        import application_sdk.contracts as contracts
+        from application_sdk.contracts import TreeSelection as PackageTreeSelection
+
+        assert PackageTreeSelection is TreeSelection
+        assert "TreeSelection" in contracts.__all__
+
+        class OkInput(Input):
+            selection: PackageTreeSelection = Field(default_factory=dict)
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
 
 
 # =============================================================================

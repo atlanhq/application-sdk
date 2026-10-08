@@ -52,13 +52,27 @@ the SDK's nested-to-flat lift) neither exempts an app nor implicates one.
 from (2) is the whole point: that SDK class kwarg only suppresses the unknown-key
 *error*, it does not set Pydantic ``extra="allow"``, so the keys are still
 dropped before ``model_dump()``.
+
+**Args wired to a non-value widget are not checked.** The ``Sage`` / ``SageV2``
+preflight runner (and the presentational ``InfoBanner``) carries nothing the
+workflow consumes: preflight checks execute in the UI through
+``Handler.preflight_check``, and no SDK runtime path reads a ``preflight_check``
+arg. Dropping such a key is harmless, so reporting it is an unactionable finding
+whose only "fix" is widening the entrypoint's Input for no behaviour. This is the
+same :data:`._form_keys._NON_VALUE_WIDGETS` classification K019 applies. The
+widget is read from the generated config JSON beside each manifest
+(``config.properties.<form-key>.ui.widget``, every branch of a ``conditional``),
+so the exemption keys on the *form key* an arg is wired to, never on the arg's
+name; with no config JSON present, nothing is exempted.
 """
 
 from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 from pathlib import Path
+from typing import Any, cast
 
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
@@ -90,6 +104,7 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.schema.findings import Finding
 
+from ._form_keys import _NON_VALUE_WIDGETS
 from ._manifest_args import ManifestArgs, collect_arg_keys
 from ._manifest_refs import manifest_paths_for_contract
 
@@ -106,6 +121,80 @@ _EXTRACTION_INPUT_BASE = "ExtractionInput"
 # credential_ref instead. Reporting these would put an unactionable finding on
 # every app and bury the real ones.
 _PLATFORM_INJECTED_ARGS = frozenset({"credential"})
+
+# The generated config JSON spells widget names camelCase (``sageV2``) while the
+# pkl ``Config.<Widget>`` classes K019 matches are PascalCase (``SageV2``).
+_NON_VALUE_WIDGETS_LOWER = frozenset(w.lower() for w in _NON_VALUE_WIDGETS)
+
+
+def _json_object(value: object) -> dict[str, Any] | None:
+    """*value* as a JSON object, or ``None`` when it is any other JSON type."""
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else None
+
+
+def _is_non_value_ui(ui: object) -> bool:
+    obj = _json_object(ui)
+    widget = obj.get("widget") if obj is not None else None
+    return isinstance(widget, str) and widget.lower() in _NON_VALUE_WIDGETS_LOWER
+
+
+def _property_is_non_value(prop: object) -> bool:
+    """True when a config property renders only as a non-value widget.
+
+    A ``conditional`` input swaps its widget per branch, so it counts only when
+    the base widget AND every branch's widget are non-value — one value-bearing
+    branch means the arg can carry real config on that path.
+    """
+    obj = _json_object(prop)
+    if obj is None or not _is_non_value_ui(obj.get("ui")):
+        return False
+    conditions = obj.get("conditions")
+    if conditions is None:
+        return True
+    if not isinstance(conditions, list):
+        return False
+    branches = cast("list[object]", conditions)
+    return all(
+        (branch := _json_object(c)) is not None and _is_non_value_ui(branch.get("ui"))
+        for c in branches
+    )
+
+
+def _non_value_form_keys(manifest_dir: Path) -> set[str]:
+    """Form keys that are non-value widgets in the config JSON beside a manifest.
+
+    The toolkit writes each entrypoint's config JSON into the same directory as
+    its ``manifest.json`` (``app/generated/`` for a single-entrypoint app,
+    ``app/generated/<ep>/`` for a bundle), so a manifest is judged only against
+    its own entrypoint's form. Config JSONs are recognised by shape — a
+    top-level ``config.properties`` object — rather than by file name. A key
+    that is value-bearing in any of them is not exempted.
+    """
+    non_value: set[str] = set()
+    value: set[str] = set()
+    for path in sorted(manifest_dir.glob("*.json")):
+        try:
+            data: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        doc = _json_object(data)
+        config = _json_object(doc.get("config")) if doc is not None else None
+        props = _json_object(config.get("properties")) if config is not None else None
+        if props is None:
+            continue
+        for key, prop in props.items():
+            (non_value if _property_is_non_value(prop) else value).add(key)
+    return non_value - value
+
+
+def _non_value_arg_keys(manifest: ManifestArgs, root: Path) -> set[str]:
+    """Flat arg keys wired to a non-value widget's ``{{form-key}}``."""
+    form_keys = _non_value_form_keys((root / manifest.manifest_path).parent)
+    return {
+        a.key
+        for a in manifest.args
+        if not a.nested and a.form_key is not None and a.form_key in form_keys
+    }
 
 
 def _target_entrypoint(
@@ -620,7 +709,10 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                 sorted(name for name, fields in unwired.items() if arg_key in fields),
             )
             for arg_key in sorted(
-                pairing.manifest.flat_keys() - declared - _PLATFORM_INJECTED_ARGS
+                pairing.manifest.flat_keys()
+                - declared
+                - _PLATFORM_INJECTED_ARGS
+                - _non_value_arg_keys(pairing.manifest, root)
             )
         )
 

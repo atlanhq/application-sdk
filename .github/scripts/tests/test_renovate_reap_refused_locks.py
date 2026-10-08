@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import os
 import sys
+import urllib.error
 
 import pytest
 
@@ -383,6 +384,11 @@ class TestFindReapable:
                 if "head=" in url and f":{branch}" not in url:
                     return []
                 return [pr]
+            # The lock branch does not exist when the only PR is on another lane.
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
             if url.endswith("/commits?per_page=100"):
                 return [commit_by(a) for a in authors]
             if url.endswith("/files?per_page=100"):
@@ -415,11 +421,137 @@ class TestFindReapable:
         assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
         assert not any("/contents/" in u for u in fetch.calls)
 
-    def test_no_open_pr_is_nothing(self):
+    def test_no_open_pr_and_no_branch_is_nothing(self):
         def fetch(token, url, _method):
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 404, "Not Found", None, None)
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
             return []
 
         assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def prless_fetch(
+        self,
+        *,
+        files,
+        lock_text,
+        authors=(reaper.FLEET_ENGINE,),
+        total_commits=None,
+        prs=(),
+    ):
+        """The lock branch exists with no in-repo PR, as status-success leaves a
+        refusal. ``prs`` is what the ``head=`` query returns (e.g. a fork PR);
+        ``total_commits`` overrides the count to simulate a truncated page."""
+        calls: list[str] = []
+
+        def fetch(token, url, _method):
+            calls.append(url)
+            if "/pulls?" in url:
+                return list(prs)
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            if url.endswith(f"/compare/main...{LOCK}"):
+                return {
+                    "total_commits": (
+                        len(authors) if total_commits is None else total_commits
+                    ),
+                    "commits": [
+                        {"sha": f"sha{i}", "author": {"login": a}}
+                        for i, a in enumerate(authors)
+                    ],
+                    "files": [{"filename": f} for f in files],
+                }
+            if "/contents/" in url:
+                return {"content": base64.b64encode(lock_text.encode()).decode()}
+            raise AssertionError(f"unexpected url {url}")
+
+        fetch.calls = calls  # type: ignore[attr-defined]
+        return fetch
+
+    def test_finds_a_self_healing_refusal_with_no_pr(self):
+        # FND-3517: the lane opens no PR for window-empty, so the branch is all
+        # there is to reap.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text)
+        found = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert len(found) == 1
+        branch, reason = found[0]
+        assert branch == {"number": None, "head": {"ref": LOCK, "sha": "sha0"}}
+        assert "no PR" in reason
+
+    def test_keeps_a_prless_standing_fault(self):
+        text = lock_with('[options]\nexclude-newer-span = "P3D"  # refusal: rollback')
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text)
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+
+    def test_keeps_a_prless_branch_someone_else_pushed_to(self):
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(
+            files=["uv.lock"],
+            lock_text=text,
+            authors=(reaper.FLEET_ENGINE, "a-human"),
+        )
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_keeps_a_prless_branch_with_other_files(self):
+        fetch = self.prless_fetch(files=["uv.lock", "pyproject.toml"], lock_text="")
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_keeps_a_prless_branch_whose_history_was_truncated(self):
+        # F-0625f2: the compare API pages commits. Every commit on the page is
+        # ours, but more exist than were returned, so one could be a human's.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text, total_commits=31)
+        assert reaper.find_reapable("tok", "atlanhq/x", fetch) == []
+        assert not any("/contents/" in u for u in fetch.calls)
+
+    def test_reads_the_lock_at_the_inspected_sha(self):
+        # The stamp is read at the same commit the delete is conditioned on, not
+        # at whatever the branch name points to by then.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fetch = self.prless_fetch(
+            files=["uv.lock"], lock_text=text, authors=(reaper.FLEET_ENGINE,) * 2
+        )
+        [(branch, _)] = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert branch["head"]["sha"] == "sha1"
+        assert [u for u in fetch.calls if "/contents/" in u][0].endswith("?ref=sha1")
+
+    def test_a_fork_pr_alone_falls_through_to_the_prless_path(self):
+        # F-5956ed: `head=owner:branch` can match a same-owner fork's PR. That
+        # says nothing about this repo's branch, which still has no PR.
+        text = lock_with(
+            '[options]\nexclude-newer-span = "P3D"  # refusal: window-empty'
+        )
+        fork_pr = {
+            "number": 9,
+            "head": {"sha": "f" * 8, "ref": LOCK, "repo": {"full_name": "atlanhq/y"}},
+        }
+        fetch = self.prless_fetch(files=["uv.lock"], lock_text=text, prs=[fork_pr])
+        [(branch, reason)] = reaper.find_reapable("tok", "atlanhq/x", fetch)
+        assert branch["number"] is None and "no PR" in reason
+
+    def test_a_compare_error_other_than_404_propagates(self):
+        # main() turns it into a loud warning; it must not read as "nothing".
+        def fetch(token, url, _method):
+            if "/compare/" in url:
+                raise urllib.error.HTTPError(url, 502, "Bad Gateway", None, None)
+            if url.endswith("/repos/atlanhq/x"):
+                return {"default_branch": "main"}
+            return []
+
+        with pytest.raises(urllib.error.HTTPError):
+            reaper.find_reapable("tok", "atlanhq/x", fetch)
 
     def test_the_refusal_path_queries_only_the_lock_branch(self):
         # The refusal reap stays scoped to the lock lane: a refusal stamp is
@@ -575,6 +707,26 @@ class TestIsDryRun:
         assert reaper.is_dry_run("null", True) is True
 
 
+def stub_api(monkeypatch, fail=None) -> list[tuple[str, str]]:
+    """Stub the repo lookup and the conditional delete; record (ref, sha) deletes.
+
+    ``fail`` maps a branch to the exception its delete raises.
+    """
+    deleted: list[tuple[str, str]] = []
+    monkeypatch.setattr(reaper, "_request", lambda *a, **k: {"node_id": "R_1"})
+
+    def fake_graphql(_token, query, variables):
+        assert variables["repo"] == "R_1"
+        branch = variables["ref"].removeprefix("refs/heads/")
+        if fail and branch in fail:
+            raise fail[branch]
+        deleted.append((variables["ref"], variables["before"]))
+        return {}
+
+    monkeypatch.setattr(reaper, "_graphql", fake_graphql)
+    return deleted
+
+
 class TestMain:
     def test_a_dry_run_pass_deletes_nothing(self, monkeypatch, capsys):
         # The regression this guards: without the env check, `workflow_dispatch`
@@ -588,8 +740,7 @@ class TestMain:
                 ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
             ],
         )
-        deleted: list[str] = []
-        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        deleted = stub_api(monkeypatch)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
         assert deleted == []
         assert "dry run" in capsys.readouterr().out
@@ -604,12 +755,9 @@ class TestMain:
                 ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
             ],
         )
-        deleted: list[str] = []
-        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        deleted = stub_api(monkeypatch)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
-        assert deleted == [
-            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/{reaper.BRANCH}"
-        ]
+        assert deleted == [(f"refs/heads/{reaper.BRANCH}", "a" * 8)]
 
     def test_repo_comes_from_target_repo_env(self, monkeypatch, capsys):
         # The workflow passes it as env so no matrix value lands in `run:`.
@@ -635,12 +783,11 @@ class TestMain:
                 ),
             ],
         )
-        deleted: list[str] = []
-        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        deleted = stub_api(monkeypatch)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
         assert deleted == [
-            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/{LOCK}",
-            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/renovate/conf",
+            (f"refs/heads/{LOCK}", "a" * 8),
+            ("refs/heads/renovate/conf", "b" * 8),
         ]
 
     def test_one_branch_failing_to_delete_does_not_stop_the_others(
@@ -659,19 +806,35 @@ class TestMain:
                 ),
             ],
         )
-        deleted: list[str] = []
-
-        def flaky(_token, url, method="GET"):
-            if LOCK in url:
-                raise TimeoutError("api down")
-            deleted.append(url)
-
-        monkeypatch.setattr(reaper, "_request", flaky)
+        deleted = stub_api(monkeypatch, fail={LOCK: TimeoutError("api down")})
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
-        assert deleted == [
-            f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/renovate/conf"
-        ]
+        assert deleted == [("refs/heads/renovate/conf", "b" * 8)]
         assert "::warning::" in capsys.readouterr().out
+
+    def test_a_branch_that_moved_since_inspection_is_kept(self, monkeypatch, capsys):
+        # F-d4e564: a push between inspection and delete makes GitHub refuse the
+        # conditional delete. The branch stays, the others still go.
+        monkeypatch.setenv("GITHUB_TOKEN", "tok")
+        monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+        monkeypatch.setattr(
+            reaper,
+            "find_reapable",
+            lambda *a, **k: [
+                ({"number": None, "head": {"sha": "a" * 8, "ref": LOCK}}, "r1"),
+                (
+                    {"number": 8, "head": {"sha": "b" * 8, "ref": "renovate/conf"}},
+                    "r2",
+                ),
+            ],
+        )
+        deleted = stub_api(
+            monkeypatch,
+            fail={LOCK: reaper.RefMovedOrRejected("ref was not at expected oid")},
+        )
+        assert reaper.main(["--repo", "atlanhq/x"]) == 0
+        assert deleted == [("refs/heads/renovate/conf", "b" * 8)]
+        out = capsys.readouterr().out
+        assert f"::warning::atlanhq/x@{LOCK} moved" in out
 
     def test_the_reap_reason_reaches_the_log(self, monkeypatch, capsys):
         # The only record of WHICH shape fired. Without it a job log cannot
@@ -691,7 +854,7 @@ class TestMain:
                 )
             ],
         )
-        monkeypatch.setattr(reaper, "_request", lambda *a, **k: None)
+        stub_api(monkeypatch)
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
         assert "written by renovate[bot]" in capsys.readouterr().out
 
@@ -712,35 +875,45 @@ class TestMain:
                 ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
             ],
         )
-        deleted: list[str] = []
-        monkeypatch.setattr(reaper, "_request", lambda *a, **k: deleted.append(a[1]))
+        deleted = stub_api(monkeypatch)
         assert reaper.main(["--repo", "atlanhq/x", "--dry-run"]) == 0
         assert deleted == []
         assert "dry run" in capsys.readouterr().out
 
-    def test_the_delete_is_a_DELETE_on_exactly_the_lock_branch_ref(self, monkeypatch):
+    def test_the_delete_is_conditional_on_exactly_the_lock_branch_ref(
+        self, monkeypatch
+    ):
         monkeypatch.setenv("GITHUB_TOKEN", "tok")
         monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
         monkeypatch.setattr(
             reaper,
             "find_reapable",
             lambda *a, **k: [
-                ({"number": 7, "head": {"sha": "a" * 8, "ref": LOCK}}, "a reason")
+                ({"number": 7, "head": {"sha": "a" * 40, "ref": LOCK}}, "a reason")
             ],
         )
-        calls: list[tuple[str, str]] = []
+        rest: list[tuple[str, str]] = []
+        sent: list[tuple[str, dict]] = []
 
         def fake_request(token, url, method="GET"):
-            calls.append((url, method))
+            rest.append((url, method))
+            return {"node_id": "R_1"}
 
         monkeypatch.setattr(reaper, "_request", fake_request)
+        monkeypatch.setattr(
+            reaper, "_graphql", lambda _t, q, v: sent.append((q, v)) or {}
+        )
         assert reaper.main(["--repo", "atlanhq/x"]) == 0
-        assert calls == [
-            (
-                f"{reaper.API_ROOT}/repos/atlanhq/x/git/refs/heads/{reaper.BRANCH}",
-                "DELETE",
-            )
-        ]
+        # No unconditional REST delete anywhere: the only REST call is the lookup.
+        assert rest == [(f"{reaper.API_ROOT}/repos/atlanhq/x", "GET")]
+        [(query, variables)] = sent
+        assert "updateRefs" in query and "beforeOid: $before" in query
+        assert 'afterOid: "' + "0" * 40 + '"' in query
+        assert variables == {
+            "repo": "R_1",
+            "ref": f"refs/heads/{reaper.BRANCH}",
+            "before": "a" * 40,
+        }
 
     def test_missing_token_fails_loudly(self, monkeypatch):
         monkeypatch.delenv("GITHUB_TOKEN", raising=False)
@@ -820,3 +993,20 @@ def test_self_healing_set_is_exactly_the_window_case():
     # SELF_HEALING_REFUSALS, that is a decision to auto-delete branches carrying
     # it, and it should not pass review unnoticed.
     assert bounded.SELF_HEALING_REFUSALS == frozenset({bounded.REFUSAL_WINDOW_EMPTY})
+
+
+def test_a_prless_branch_is_deleted_and_labelled(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_TOKEN", "tok")
+    monkeypatch.setenv("RENOVATE_DRY_RUN", "null")
+    monkeypatch.setattr(
+        reaper,
+        "find_reapable",
+        lambda *a, **k: [
+            ({"number": None, "head": {"sha": "a" * 8, "ref": LOCK}}, "r")
+        ],
+    )
+    deleted = stub_api(monkeypatch)
+    assert reaper.main(["--repo", "atlanhq/x"]) == 0
+    assert deleted == [(f"refs/heads/{reaper.BRANCH}", "a" * 8)]
+    out = capsys.readouterr().out
+    assert "(no PR)" in out and "#None" not in out
