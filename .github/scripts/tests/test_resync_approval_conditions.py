@@ -726,6 +726,63 @@ def test_copy_back_refuses_a_symlink_the_render_wrote(tmp_path):
     assert not (work / "a.yaml").exists()
 
 
+@pytest.mark.parametrize(
+    "link, target, touched",
+    [
+        (".claude", ".agents", ".claude/settings.json"),
+        (".claude/skills", "../.agents/skills", ".claude/skills/remediate/SKILL.md"),
+    ],
+)
+def test_copy_back_skips_paths_under_a_symlinked_dir_of_the_clone(
+    tmp_path, link, target, touched
+):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    for root in (scratch, work):
+        _tree(root, {".agents/skills/remediate/SKILL.md": "old", "a.yaml": "old"})
+        (root / ".agents" / "settings.json").write_text("old")
+        (root / link).parent.mkdir(parents=True, exist_ok=True)
+        (root / link).symlink_to(target)
+    (scratch / touched).write_text("new")
+    (scratch / "a.yaml").write_text("new")
+    refused = resync.copy_back(scratch, work, {"touched": [touched, "a.yaml"]})
+    assert refused == []
+    assert (work / touched).read_text() == "old"
+    assert (work / "a.yaml").read_text() == "new"
+
+
+def test_copy_back_refuses_a_symlinked_dir_only_the_render_has(tmp_path):
+    scratch, work = tmp_path / "s", tmp_path / "w"
+    _tree(scratch, {"real/f.yaml": "new"})
+    (scratch / "linked").symlink_to(scratch / "real")
+    work.mkdir()
+    assert resync.copy_back(scratch, work, {"touched": ["linked/f.yaml"]}) == [
+        "linked/f.yaml"
+    ]
+    assert not (work / "linked").exists()
+
+
+def test_sandboxed_render_succeeds_when_the_render_writes_through_a_clone_symlink(
+    tmp_path,
+):
+    work = tmp_path / "w"
+    _tree(work, {".agents/settings.json": "old", "a.yaml": "old"})
+    (work / ".claude").symlink_to(".agents")
+
+    def runner(cmd, **kwargs):
+        if cmd[:2] == ["docker", "run"]:
+            scratch = Path(cmd[cmd.index("-v") + 1].split(":")[0])
+            (scratch / ".claude" / "settings.json").write_text("new")
+            (scratch / "a.yaml").write_text("new")
+            touched = '{"touched": [".claude/settings.json", "a.yaml"]}\n'
+            return subprocess.CompletedProcess(cmd, 0, touched, "")
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    rc, _, err = resync.sandboxed_render(str(work), "0.39.0", RESOLVED_AT, runner)
+    assert (rc, err) == (0, "")
+    assert (work / ".agents" / "settings.json").read_text() == "old"
+    assert (work / "a.yaml").read_text() == "new"
+
+
 def test_sandboxed_render_never_copies_git_into_the_sandbox(tmp_path):
     work = tmp_path / "w"
     _tree(work, {"a.yaml": "old", ".git/config": "[core]"})
