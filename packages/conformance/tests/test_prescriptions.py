@@ -833,6 +833,91 @@ def test_p003_sarif_output_validates(tmp_path: Path) -> None:
     validate_sarif(report)
 
 
+# ── P001 finding names the fields it is about ─────────────────────────────────
+
+
+def _p001_message(src: str) -> str:
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1, findings
+    return findings[0].message
+
+
+def test_p001_an_opt_out_guarding_no_unsafe_field_says_removing_it_is_the_fix() -> None:
+    # Many opt-outs sit on classes whose fields are all str, int, nested models or already
+    # bounded: the generic "type every field" message sent fixes looking for work that was not there.
+    src = (
+        "class TaskStats(Output, allow_unbounded_fields=True):\n"
+        "    total: int = 0\n"
+        "    name: str = ''\n"
+        "    files: Annotated[list[FileReference], MaxItems(100)] = []\n"
+        "    filters: FilterMap = {}\n"
+    )
+    message = _p001_message(src)
+    assert "every field it declares is already payload-safe" in message
+    assert "remove the opt-out" in message
+
+
+def test_p001_names_each_unsafe_field_and_why() -> None:
+    src = (
+        "class ExtractInput(Input, allow_unbounded_fields=True):\n"
+        "    credentials: dict[str, Any] = {}\n"
+        "    counts: dict[str, int] = {}\n"
+        "    connection: dict = {}\n"
+        "    payload: bytes = b''\n"
+        "    nested: Annotated[list[list[str]], MaxItems(10)] = []\n"
+        "    blob: Annotated[dict[str, object], MaxItems(20)] = {}\n"
+        "    ok: Annotated[dict[str, int], MaxItems(50)] = {}\n"
+        "    _private: dict[str, Any] = {}\n"
+        "    registry: ClassVar[dict[str, Any]] = {}\n"
+    )
+    message = _p001_message(src)
+    assert "credentials: `Any`" in message
+    assert "counts: `dict[...]` without MaxItems" in message
+    assert (
+        "connection: bare `dict`" in message
+    )  # unbounded although the runtime check misses it
+    assert "payload: `bytes`" in message
+    assert (
+        "nested: `list[...]` without MaxItems" in message
+    )  # the inner list is unbounded
+    assert (
+        "blob: `object` (open-ended" in message
+    )  # passes the runtime check, bounds nothing
+    for safe in ("ok:", "_private", "registry"):
+        assert safe not in message
+    assert (
+        "ConnectionRef" in message
+        and "FilterMap" in message
+        and "FileReference" in message
+    )
+
+
+def test_p001_fires_on_the_class_attribute_opt_out() -> None:
+    # The runtime honours a truthy `_allow_unbounded_fields` on the class as well as the keyword.
+    src = (
+        "class QueryInput(Input):\n"
+        "    _allow_unbounded_fields: ClassVar[bool] = True\n"
+        "    filters: dict[str, Any] = {}\n"
+    )
+    message = _p001_message(src)
+    assert "_allow_unbounded_fields class attribute" in message
+    assert "filters: `Any`" in message
+    assert (
+        _ids("class Q(Input):\n    _allow_unbounded_fields = False\n    x: str = ''\n")
+        == []
+    )
+
+
+def test_p001_class_attribute_opt_out_honours_a_directive() -> None:
+    src = (
+        "# conformance: ignore[P001] the upstream API returns an arbitrary-depth tree\n"
+        "class QueryInput(Input):\n"
+        "    _allow_unbounded_fields = True\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1 and findings[0].suppressed
+
+
 # ── P002 CategoryFieldOverride ─────────────────────────────────────────────────
 
 

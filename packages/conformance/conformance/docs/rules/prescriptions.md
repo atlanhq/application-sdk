@@ -121,65 +121,67 @@ nothing in their configuration explains.
   often what introduces the Any — the SDK's own ExtractionInput already models its
   filters payload-safely — and dropping an override is not a retype of your contract at
   all.
-- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site is the
-  fix ONLY once narrowing in source, dropping an app-level override, and retiring the
-  field as sunset have each been tried and shown to fail — with the refusal quoted. It
-  is not licensed by the field merely being recorded in the ledger. A site whose
-  justification names no attempted alternative is unremediated, not compliant.
+- **Already correct when:** The opt-out removed, with every field it guarded bounded, not merely accepted by the
+  payload-safety check. A kept opt-out with a justified `# conformance: ignore[P001]
+  <reason>` is the owner's decision, reached only after the fixes in the description
+  were tried and refused (each refusal named); it keeps the gate green but
+  check_migration still fails, so it stays an open migration item. A field being
+  recorded in the ledger does not license it, and a reason naming no attempted
+  alternative is unremediated.
 
-An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
-class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
-fields may cross task boundaries unchecked.  This is intended to be *extremely*
-exceptional — the sanctioned way to use it is an inline, justified suppression at the
-declaration site (`# conformance: ignore[P001] <reason>`), so the carve-out is reviewed
-and stays visible.
+An `Input`/`Output` contract subclass that sets `allow_unbounded_fields=True` (or a
+truthy `_allow_unbounded_fields` class attribute) opts out of the SDK's payload-safety
+check, so untyped or unbounded fields can cross task boundaries and fail at Temporal's
+2MB limit in the tenant with the largest source.  Each finding names the fields this
+class declares that the check would refuse.
 
-Suppressed declarations are still emitted to the SARIF report (counted in their own
-category), so every opt-out is reported every single time. This rule is `BLOCK`: an
-unsuppressed active opt-out fails the conformance gate. Remove the opt-out once every
-declared field is payload-safe; only an unavoidable remaining opt-out requires the
-justified inline suppression above — see BLDX-1428.
+**Removing the opt-out is the goal; the class's fields decide how.**  Work through these
+in order.  Each is a real fix only once the field is bounded, not merely accepted by the
+check.
 
-**The inverse is also a finding.** A contract that declares an `Any`-typed field and
-does NOT set `allow_unbounded_fields` raises `PayloadSafetyError` at class-definition
-time, so the app does not import at all.  `Any` is refused unconditionally: wrapping it
-in `MaxItems` does not make it acceptable.  Removing the opt-out is a real fix only when
-every field is concretely typed.
+1. *Nothing to fix.*  When the finding says every declared field is already
+payload-safe (str, int, a nested model, `FilterMap`, a `MaxItems`-bounded
+collection), remove the keyword.  This is the most common case.  `Input`    drops
+undeclared keys with or without the opt-out, so extra arguments a    caller sends never
+justify it. 2. *Drop an override of an SDK base field.*  Re-declaring `connection` as
+`dict[str, Any]` over `ConnectionRef`, or filters as `dict[str, Any]`    over `FilterMap
+| str`, is how most `Any` arrives.  Deleting the override    inherits the safe type and
+keeps the wire shape. 3. *Use the SDK's types in the same outer shape.*
+`ConnectionRef`;    `CredentialRef` or `credential_guid` (credentials cross tasks by
+reference, never inline); `AgentCredentialSpec` for `agent_json`; a
+`BaseMetadataConfig` subclass for wizard metadata; `FilterMap` for    filter maps; a
+small `BaseModel` for a dict whose keys are known.  Absorb    legacy wire shapes with a
+`mode='before'` validator. 4. *Bound a collection of safe values* with `Annotated[...,
+MaxItems(n)]`,    `n` taken from the field's real cardinality.  Every nested collection
+needs its own bound. 5. *Data that grows with the source system* (file lists, event
+batches,    per-object results) moves by reference: write it to the object store and
+pass a `FileReference`.  This is the fix that holds at 2MB. 6. *Retire a field nothing
+populates*: mark it `deprecated=True` with    `x-lifecycle: sunset`, regenerate the
+ledger, then remove it from source.
 
-**The opt-out does not govern unknown keys.**  `Input` drops keys the contract does not
-declare (logging which ones, once) whether or not `allow_unbounded_fields` is set — the
-flag only skips the payload-safety type check.  So a contract that receives more args
-than it reads (an AE DAG node's `credential` / `credential_guid`) does NOT need the
-opt-out to tolerate them; a justification that says it does is wrong, and the opt-out
-comes off with nothing else changed once every declared field is concretely typed.
+**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias, or a
+nested `BaseModel(extra='allow')` pass the check while bounding nothing; reach for them
+only as an owner's recorded decision. `MaxItems` never makes `Any` safe.  Removing the
+opt-out while an `Any` field remains raises `PayloadSafetyError` at class definition, so
+the app stops importing: import the module after the change, because a base class or
+mixin the detector cannot see may carry the `Any`.
 
-**Deciding what to do.** Four outcomes, in order of preference.  A field being recorded
-in the ledger does NOT by itself close the first three — reading it that way is what
-turns fixable sites into suppressions.
+**Generated contracts** (`app/generated/`) are fixed at their source: the
+`contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
+(`APITree` and similar).  Never hand-edit the generated file, and never let a
+post-generate hook re-insert the opt-out.
 
-1. *Type the field concretely.*  For filter maps the SDK already ships `FilterMap`
-(`application_sdk.templates.contracts`), a bounded `dict[str, list[str]]` — see the
-`mysql` reference app, whose generated contract needs no opt-out at all.  Replacing
-`Any` with a concrete type **in the same outer shape** is compatible under B005: payload
-safety refuses `Any` at class-definition time, so the change is required rather than
-optional.  A narrowing that changes the outer shape is not, and is judged as an ordinary
-retype.
+**Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
+really carries (its normaliser, its producers, the next task's contract) and confirm
+each still validates.  Only `@entrypoint` fields are in the contract ledger, so task
+contracts can be narrowed freely; for an entrypoint field run `gen-contract-ledger` then
+`ledger-guard` and read the result rather than inferring it.
 
-2. *Drop an app-level override.*  An `Any` often arrives because the app re-declared a
-field the SDK base already models safely.  Deleting the override inherits the base type,
-and an inherited field is compatible under B005 by construction — the app did not make
-the change and cannot revert it.
-
-3. *Retire a field nothing populates.*  Absent from the generated manifest's args and
-constructed nowhere, it is dead weight.  Mark it `deprecated=True` with `x-lifecycle:
-sunset`, regenerate, **then remove it from source** — B005 skips a sunset field only
-once it is gone.  A sunset field still declared with a changed type is still a retype.
-
-4. *Keep the opt-out with a justified suppression.*  The last resort, reached only after
-1–3 have each been tried and shown to fail, with the refusal quoted in the reason.
-`ledger-guard` rejects a change to a **recorded** type; it does not stop you narrowing
-the annotation in source, because `gen-contract-ledger` never rewrites a recorded type.
-A justification naming no attempted alternative is unremediated, not compliant.
+**Keeping the opt-out** is the owner's decision, reached only after the steps above were
+tried and refused, with each refusal named in `# conformance: ignore[P001] <reason>`.
+The directive keeps the opt-out visible and the gate green, but `check_migration` still
+fails on `allow_unbounded_fields=True`, so a kept opt-out stays an open migration item,
+not an end state.
 
 ---
 

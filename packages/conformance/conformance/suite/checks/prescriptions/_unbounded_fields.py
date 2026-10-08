@@ -1,10 +1,16 @@
 """P001 UnboundedContractFields — the payload-safety opt-out, in both directions.
 
 An ``Input``/``Output`` contract subclass declared with the
-``allow_unbounded_fields=True`` class keyword opts out of payload-safety
-enforcement. The fix is to type every field payload-safely and drop the
-opt-out; an opt-out that genuinely cannot be removed must carry an inline,
-justified suppression at the declaration site.
+``allow_unbounded_fields=True`` class keyword, or with a truthy
+``_allow_unbounded_fields`` class attribute (the runtime honours both), opts
+out of payload-safety enforcement. The fix is to type every field
+payload-safely and drop the opt-out; an opt-out that genuinely cannot be
+removed must carry an inline, justified suppression at the declaration site.
+
+Each finding names the fields this class declares that payload safety would
+refuse, and why, so the fix starts from the actual fields. Many opt-outs guard
+nothing: every declared field is already safe, and the finding says so, because
+removing the keyword is then the whole fix.
 
 The rule also catches the INVERSE, which is how a well-meaning remediation
 breaks an app: drop the opt-out from a class that still has an ``Any``-typed
@@ -71,6 +77,138 @@ def _is_classvar_annotation(annotation: ast.expr | None) -> bool:
     if isinstance(node, ast.Subscript):
         return _simple_name(node.value) == "ClassVar"
     return _simple_name(node) == "ClassVar"
+
+
+#: Collections payload safety requires a ``MaxItems`` bound on.
+_COLLECTIONS = frozenset(
+    {
+        "dict",
+        "list",
+        "set",
+        "frozenset",
+        "tuple",
+        "Dict",
+        "List",
+        "Set",
+        "FrozenSet",
+        "Tuple",
+        "Mapping",
+        "Sequence",
+    }
+)
+_BYTES = frozenset({"bytes", "bytearray"})
+_BARE_UNBOUNDED = frozenset({"dict", "list", "set", "Dict", "List", "Set"})
+#: Types the runtime check accepts that still let any value through: retyping a field to one of
+#: these clears the class-definition error without bounding the payload.
+_OPEN_ENDED = frozenset({"object", "JsonValue"})
+_OPTOUT_ATTR = "_allow_unbounded_fields"
+#: How many unsafe fields a finding names before summarising the rest.
+_LISTED_FIELDS = 6
+
+
+def _has_max_items(node: ast.expr) -> bool:
+    """True if *node* is ``Annotated[T, ..., MaxItems(n), ...]``."""
+    if not isinstance(node, ast.Subscript) or _simple_name(node.value) != "Annotated":
+        return False
+    sl = node.slice
+    metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
+    return any(
+        isinstance(m, ast.Call) and _simple_name(m.func) == "MaxItems" for m in metadata
+    )
+
+
+def _args(node: ast.Subscript) -> list[ast.expr]:
+    return list(node.slice.elts) if isinstance(node.slice, ast.Tuple) else [node.slice]
+
+
+def _why_unsafe(node: ast.expr | None, *, bounded: bool = False) -> str | None:
+    """Why payload safety refuses this annotation, or why it is unbounded where the runtime
+    check does not look (a bare ``dict``); None when it is safe or cannot be judged here.
+
+    Mirrors ``validate_payload_safety``: ``Any`` and ``bytes`` are refused anywhere, and every
+    collection, outer or nested, needs ``Annotated[..., MaxItems(n)]``. A name this file cannot
+    resolve (``FilterMap``, a model class) is taken as safe: a conservative miss is cheaper
+    than a wrong instruction.
+    """
+    if node is None or isinstance(node, ast.Constant):
+        return None
+    if _mentions_any(node):
+        return "`Any`"
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _why_unsafe(node.left) or _why_unsafe(node.right)
+    if isinstance(node, ast.Subscript):
+        name = _simple_name(node.value)
+        if name == "Annotated":
+            return _why_unsafe(_annotated_arg(node), bounded=_has_max_items(node))
+        if name in ("Optional", "Union"):
+            return next((w for a in _args(node) if (w := _why_unsafe(a))), None)
+        if name in ("ClassVar", "Literal"):
+            return None
+        if name in _COLLECTIONS:
+            if not bounded:
+                return f"`{name}[...]` without MaxItems"
+            return next((w for a in _args(node) if (w := _why_unsafe(a))), None)
+        return next((w for a in _args(node) if (w := _why_unsafe(a))), None)
+    name = _simple_name(node)
+    if name in _BYTES:
+        return f"`{name}` (pass it by FileReference)"
+    if name in _OPEN_ENDED:
+        return f"`{name}` (open-ended: the runtime check accepts it, but it bounds nothing)"
+    if name in _BARE_UNBOUNDED:
+        return f"bare `{name}` (unbounded, and the runtime check does not see it)"
+    return None
+
+
+def _unsafe_fields(node: ast.ClassDef) -> list[tuple[str, str]]:
+    """``(field, why)`` for each payload field this class declares that payload safety would refuse."""
+    out = []
+    for stmt in node.body:
+        if not (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)):
+            continue
+        if stmt.target.id.startswith("_") or _is_classvar_annotation(stmt.annotation):
+            continue
+        if why := _why_unsafe(stmt.annotation):
+            out.append((stmt.target.id, why))
+    return out
+
+
+def _optout_message(name: str, via: str, unsafe: list[tuple[str, str]]) -> str:
+    head = f"Contract '{name}' opts out of payload-safety enforcement via {via}"
+    if not unsafe:
+        return (
+            f"{head}, but every field it declares is already payload-safe. Fix: remove the opt-out. "
+            "Then import the module: a field inherited from a base class or mixin that payload safety "
+            "refuses raises PayloadSafetyError there, and is fixed in that class."
+        )
+    listed = "; ".join(f"{field}: {why}" for field, why in unsafe[:_LISTED_FIELDS])
+    if len(unsafe) > _LISTED_FIELDS:
+        listed += f"; and {len(unsafe) - _LISTED_FIELDS} more"
+    return (
+        f"{head}. Fields payload safety would refuse: {listed}. Fix each, then remove the opt-out: "
+        "drop an override of a field the SDK base already types (connection: ConnectionRef; "
+        "include/exclude filters: FilterMap | str); model passthrough data (metadata: a BaseMetadataConfig "
+        "subclass; credentials by reference: credential_guid or CredentialRef, never inline); bound a "
+        "collection of safe values with Annotated[..., MaxItems(n)]; pass data that grows with the source "
+        "system by FileReference. MaxItems never makes Any safe. Keep the opt-out only as a last resort, "
+        "with '# conformance: ignore[P001] <reason>' naming the alternatives tried."
+    )
+
+
+def _attribute_optout(node: ast.ClassDef) -> ast.stmt | None:
+    """The statement setting a truthy ``_allow_unbounded_fields`` class attribute, if any."""
+    for stmt in node.body:
+        if isinstance(stmt, ast.Assign):
+            targets, value = stmt.targets, stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            targets, value = [stmt.target], stmt.value
+        else:
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == _OPTOUT_ATTR for t in targets):
+            continue
+        if isinstance(value, ast.Constant) and not value.value:
+            return None
+        return stmt
+    return None
 
 
 def _mentions_any(node: ast.expr | None) -> bool:
@@ -148,24 +286,29 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     filename=self._filename,
                     rule_id="P001",
                     node=node,
-                    message=(
-                        f"Contract '{node.name}' opts out of payload-safety "
-                        "enforcement via allow_unbounded_fields — arbitrary untyped "
-                        "fields may cross task boundaries. Fix: type every declared "
-                        "field payload-safely (replace Any with a concrete type in the "
-                        "same outer shape, e.g. the SDK's FilterMap for filter maps; "
-                        "MaxItems alone does not make Any safe), then remove "
-                        "allow_unbounded_fields. Only if the opt-out is genuinely "
-                        "unavoidable, keep it with a justified inline '# conformance: "
-                        "ignore[P001] <reason>' directive at the declaration site (and "
-                        "prefer a non-dynamic value so the opt-out is statically "
-                        "auditable)."
+                    message=_optout_message(
+                        node.name, "allow_unbounded_fields", _unsafe_fields(node)
                     ),
                     directives=self._directives,
                 )
             )
             opted_out = True
             break
+        if not opted_out and (stmt := _attribute_optout(node)) is not None:
+            self._findings.append(
+                make_finding(
+                    filename=self._filename,
+                    rule_id="P001",
+                    node=node,
+                    message=_optout_message(
+                        node.name,
+                        f"the {_OPTOUT_ATTR} class attribute (line {stmt.lineno})",
+                        _unsafe_fields(node),
+                    ),
+                    directives=self._directives,
+                )
+            )
+            opted_out = True
         if not opted_out:
             self._check_missing_optout(node)
         self.generic_visit(node)
