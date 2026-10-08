@@ -205,6 +205,15 @@ result = requests.get(url)
 result = await self.run_in_thread(requests.get, url)
 ```
 
+Give the blocking call its own driver-level timeout (connect, socket, statement). An
+`asyncio.wait_for` / `asyncio.timeout` around `run_in_thread` frees only the caller.
+The thread keeps its pool slot until the driver returns, and is reported as
+*stranded* (a WARNING plus the `offload.stranded_threads` gauge, per app).
+
+When `ATLAN_OFFLOAD_MAX_THREADS_PER_APP` is set, an app with that many calls in flight
+gets a retryable `ResourceExhaustedError` instead of queueing. See ADR-0010 →
+*Addendum: containing stranded threads per app*.
+
 ## Writing Files
 
 Never write an artifact directly to its final name. Use `application_sdk.common.atomic`:
