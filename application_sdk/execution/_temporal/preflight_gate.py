@@ -2346,6 +2346,7 @@ def build_preflight_gate_activity(
                     block_error.details[0].code,
                     unidentifiable,
                     PreflightClassification.VERDICT,
+                    primary=block_error.details[0],
                     audience=block_error.details[0].audience.value,
                 )
                 raise block_error

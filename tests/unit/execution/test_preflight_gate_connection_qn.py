@@ -78,7 +78,10 @@ class TestUnidentifiableConnectionBlocks:
 
         assert exc_info.value.type == "PreflightFailed"
         assert exc_info.value.non_retryable
-        assert first_outcome_or_none(ml)["outcome"] == "blocked"
+        row = first_outcome_or_none(ml)
+        assert row["outcome"] == "blocked"
+        assert row["failure.check"] == "connection_qualified_name"
+        assert "no qualifiedName" in row["failure.message"]
         handler.preflight_check.assert_not_called()
 
     async def test_explicit_empty_qualified_name_blocks(self) -> None:
