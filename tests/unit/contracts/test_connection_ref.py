@@ -582,3 +582,36 @@ class TestRoundTrip:
         assert dumped["attributes"]["qualifiedName"] == "default/sf/789"
         assert dumped["attributes"]["name"] == "staging"
         assert dumped["attributes"]["adminUsers"] == ["charlie"]
+
+
+class TestIsUnidentifiable:
+    """A Connection that says something but carries no qualified name (CONNECT-1738)."""
+
+    @pytest.mark.parametrize(
+        "attributes",
+        [
+            {"defaultCredentialGuid": "guid-1"},
+            {"qualifiedName": ""},
+            {"qualified_name": "   "},
+            {"name": "my-conn"},
+        ],
+    )
+    def test_populated_without_qualified_name(self, attributes: dict) -> None:
+        ref = ConnectionRef.model_validate(
+            {"typeName": "Connection", "attributes": attributes}
+        )
+        assert ref.is_unidentifiable
+
+    def test_default_ref_names_no_connection(self) -> None:
+        assert not ConnectionRef().is_unidentifiable
+
+    def test_empty_attributes_name_no_connection(self) -> None:
+        ref = ConnectionRef.model_validate({"typeName": "Connection", "attributes": {}})
+        assert not ref.is_unidentifiable
+
+    @pytest.mark.parametrize("key", ["qualifiedName", "qualified_name"])
+    def test_qualified_name_identifies(self, key: str) -> None:
+        ref = ConnectionRef.model_validate(
+            {"attributes": {key: "default/snowflake/1", "defaultCredentialGuid": "g"}}
+        )
+        assert not ref.is_unidentifiable

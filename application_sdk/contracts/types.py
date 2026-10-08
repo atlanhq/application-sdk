@@ -668,6 +668,22 @@ class ConnectionRef(BaseModel, frozen=True):
         serialize_by_alias=True,
     )
 
+    @property
+    def is_unidentifiable(self) -> bool:
+        """Whether this names a Connection but carries no qualified name.
+
+        The absent-key half of the identity rule on :class:`ConnectionAttributes`:
+        an explicit ``null`` is rejected at validation, but an absent key falls
+        through to ``""``. Empty ``attributes`` is not this case — it is the
+        default of an input with no connection widget, a workflow naming no
+        connection at all. Exposed as a predicate rather than a validator because
+        a raise while Temporal deserializes the workflow input is a task failure
+        that retries forever; the preflight gate turns it into a terminal one.
+        """
+        attrs = self.attributes
+        populated = bool(attrs.model_fields_set or attrs.model_extra)
+        return populated and not attrs.qualified_name.strip()
+
     @staticmethod
     def from_connection(conn: Any) -> ConnectionRef:
         """Convert a pyatlan_v9 Connection (msgspec.Struct) to ConnectionRef.

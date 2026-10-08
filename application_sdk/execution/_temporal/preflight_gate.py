@@ -57,6 +57,7 @@ with workflow.unsafe.imports_passed_through():
         PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
     )
     from application_sdk.contracts.base import SerializableEnum
+    from application_sdk.contracts.types import ConnectionRef
     from application_sdk.credentials.errors import (
         CredentialNotFoundError,
         CredentialRoutingError,
@@ -74,6 +75,7 @@ with workflow.unsafe.imports_passed_through():
         AppTimeoutError,
         DependencyUnavailableError,
         InternalError,
+        InvalidInputError,
     )
     from application_sdk.errors.leaves import PreconditionError as PreconditionError
     from application_sdk.errors.leaves import (
@@ -82,6 +84,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
+        connection_qualified_name,
         persist_check_result,
     )
 
@@ -1359,55 +1362,41 @@ def _gate_error(
     )
 
 
-def _check_connection_qualified_name(
-    snapshot: dict[str, Any],
-) -> PreflightCheck | None:
-    """Return a failing :class:`PreflightCheck` when the connection snapshot
-    is present but carries no ``qualifiedName``.
+def _unidentifiable_connection(snapshot: dict[str, Any]) -> PreflightOutput | None:
+    """The block verdict for a workflow whose Connection carries no qualified name.
 
-    Returns ``None`` (skip) when the snapshot contains no connection data at
-    all — the check only applies to workflows that receive a connection.
+    ``None`` when the snapshot names its connection in any shape
+    :func:`connection_qualified_name` reads, or names no connection at all.
+    This is input validation, not a readiness opinion on the source, so the
+    gate blocks on it in every mode (CONNECT-1738).
     """
-    top_level_cqn = snapshot.get("connection_qualified_name")
-    connection = snapshot.get("connection")
-
-    # No connection data in the snapshot → nothing to validate.
-    if top_level_cqn is None and connection is None:
+    if connection_qualified_name(snapshot) is not None:
         return None
-
-    # Try the nested attribute path (camelCase and snake_case).
-    attr_qn = ""
-    if isinstance(connection, dict):
-        attrs = connection.get("attributes")
-        if isinstance(attrs, dict):
-            attr_qn = (
-                attrs.get("qualifiedName") or attrs.get("qualified_name") or ""
-            ).strip()
-
-    effective_cqn = (
-        (top_level_cqn or "").strip() if isinstance(top_level_cqn, str) else ""
-    )
-
-    if attr_qn or effective_cqn:
+    try:
+        ref = ConnectionRef.model_validate(snapshot.get("connection") or {})
+    except ValidationError:
         return None
-
-    from application_sdk.errors.leaves import InvalidInputError  # noqa: PLC0415
-
-    return PreflightCheck(
-        name="connection_qualified_name",
-        passed=False,
+    if not ref.is_unidentifiable:
+        return None
+    error = InvalidInputError(
         message=(
-            "Connection snapshot is missing qualifiedName. "
-            "The connection widget did not populate attributes.qualifiedName; "
-            "re-create the workflow from the setup wizard."
+            "The workflow's Connection has no qualifiedName, so nothing can be "
+            "crawled into it. Re-create the workflow from the setup wizard."
         ),
-        error=InvalidInputError(
-            message=(
-                "connection_qualified_name is empty. The workflow was saved "
-                "without a valid Connection qualifiedName and cannot proceed."
-            ),
-            field="connection_qualified_name",
-        ).to_failure_details(),
+        field="connection",
+    ).to_failure_details()
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[
+            PreflightCheck(
+                name="connection_qualified_name",
+                passed=False,
+                message=error.message,
+                error=error,
+            )
+        ],
+        message=error.message,
+        error=error,
     )
 
 
@@ -2347,30 +2336,19 @@ def build_preflight_gate_activity(
             )
         )
         try:
-            # ── Connection qualified name validation ────────────────────
-            # Must run before credential resolution so a broken snapshot
-            # is rejected without touching the secret store.
-            cqn_check = _check_connection_qualified_name(input.extraction_snapshot)
-            if cqn_check is not None and not cqn_check.passed:
-                verdict = PreflightOutput(
-                    status=PreflightStatus.NOT_READY,
-                    checks=[cqn_check],
-                    message=cqn_check.resolved_message,
-                    error=cqn_check.error,
+            unidentifiable = _unidentifiable_connection(input.extraction_snapshot)
+            if unidentifiable is not None:
+                block_error = _build_block_error(
+                    unidentifiable, app_name, _current_attempt()
                 )
-                block_error = _build_block_error(verdict, app_name, _current_attempt())
                 _emit_outcome(
-                    PreflightRowOutcome.BLOCKED
-                    if enforce
-                    else PreflightRowOutcome.WOULD_BLOCK,
+                    PreflightRowOutcome.BLOCKED,
                     block_error.details[0].code,
-                    verdict,
+                    unidentifiable,
                     PreflightClassification.VERDICT,
                     audience=block_error.details[0].audience.value,
                 )
-                if enforce:
-                    raise block_error
-                return verdict
+                raise block_error
 
             # Resolve inside the activity (the workflow forwarded only references),
             # under the same deadline the handler gets: a hung vault must end at
