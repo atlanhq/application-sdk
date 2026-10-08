@@ -32,10 +32,10 @@ shape:
 
 2. **Two uv projects, with different exempt sets.** ``packages/conformance`` is a
    separate uv project with its own lock, and unlike the root project it resolves
-   ``atlan-application-sdk`` from PyPI. Its exempt set therefore has to carry the
-   SDK *and* pyatlan, for the reason recorded in the preset's
-   ``lockFileMaintenance`` description: with the SDK exempt but pyatlan not, a
-   bounded resolve does not fail — it silently backtracks to an older SDK.
+   ``atlan-application-sdk`` from PyPI. It therefore HOLDS the SDK at main's
+   version, as the preset's ``lockFileMaintenance`` lane does fleet-wide
+   (FND-3481): the atlan framework dependencies lane is the only one that moves
+   a first-party package, so the two PRs never conflict on ``uv.lock``.
 
 3. **One commit, not three.** Each push to the branch re-fires the PR's entire
    required-check suite. Bounding every lock in a single commit costs one CI wave
@@ -77,6 +77,7 @@ class Project:
 
     directory: str
     exempt: tuple[str, ...] = field(default_factory=tuple)
+    hold: tuple[str, ...] = field(default_factory=tuple)
 
 
 # The repo's uv projects and their exempt sets. Hard-coded rather than passed in
@@ -92,13 +93,13 @@ PROJECTS: tuple[Project, ...] = (
     # fleet at all.
     Project(directory=".", exempt=("pyatlan",)),
     # The conformance package resolves atlan-application-sdk from PyPI (it declares
-    # it as a test extra), so both first-party names must be admitted. Dropping
-    # pyatlan here would reproduce the silent-backtrack failure exactly: SDK 3.28.0
-    # requires pyatlan>=10, so a bound that hides a fresh pyatlan 10 makes the
-    # newest SDK unreachable and uv resolves an older one without erroring.
+    # it as a test extra). It is HELD, not exempt, mirroring the fleet preset
+    # (FND-3481): the atlan framework dependencies lane is the only one that moves
+    # it, so the two PRs never rewrite the same uv.lock entries.
     Project(
         directory="packages/conformance",
-        exempt=("atlan-application-sdk", "pyatlan"),
+        exempt=("pyatlan",),
+        hold=("atlan-application-sdk",),
     ),
 )
 
@@ -127,6 +128,8 @@ def bound_project(project: Project, window: str, baseline_ref: str, root: Path) 
     ]
     for name in project.exempt:
         argv += ["--exempt", name]
+    for name in project.hold:
+        argv += ["--hold", name]
     return bounded.main(argv)
 
 

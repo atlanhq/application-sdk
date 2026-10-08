@@ -499,7 +499,7 @@ jobs:
       - name: Upload Trivy results
         id: upload-trivy
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: trivy-results
           path: /tmp/trivy_results.json
@@ -520,7 +520,7 @@ jobs:
 
       - name: Upload Trivy results (retry)
         if: steps.upload-trivy.outcome == 'failure'
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # A DISTINCT name, never the first attempt's: a FinalizeArtifact
           # failure leaves an unfinalized record holding that name for the whole
@@ -708,7 +708,7 @@ jobs:
       # the upstream outcomes and can say which job actually broke.
       - name: Download Trivy results
         id: download-trivy
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Glob, not the bare name: the upload's retry attempt lands under
@@ -730,7 +730,7 @@ jobs:
 
       - name: Download Trivy results (retry)
         if: steps.download-trivy.outcome == 'failure' && needs.build.result == 'success'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           pattern: trivy-results*

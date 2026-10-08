@@ -251,6 +251,15 @@ uiConfig = new UIConfig {
           multiSelect = true
           width = 4
         }
+        ["tag_keys"] = new TagsInput {
+          title = "Tag keys"
+          helpText = "Source tag keys to sync; leave empty to sync none."
+          placeholderText = "OwningTeam"
+          tokenSeparators { ", "; "," }
+          allowClear = true
+          maxTagCount = "responsive"
+          width = 4
+        }
         ["lineage_depth"] = new NumericInput {
           title = "Lineage depth"
           helpText = "How many hops of upstream lineage to resolve (required when lineage is on)."

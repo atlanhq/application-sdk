@@ -9,7 +9,7 @@ are also caught.
 from __future__ import annotations
 
 import ast
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
 from conformance.suite.checks._ast_common import (
@@ -68,6 +68,12 @@ class ClassRecord:
     """Entries of :attr:`bases` that the defining module binds by a ``from …
     import`` of a module outside ``application_sdk``, each mapped to that
     module's top-level package (``None`` for a relative import)."""
+    base_modules: Mapping[str, str] = field(default_factory=dict)
+    """Entries of :attr:`bases` mapped to the dotted module the defining module
+    imports them from (``from m import X``, ``import m`` + ``m.X``), relative
+    imports resolved against the defining file."""
+    rebound: bool = False
+    """Whether the defining module binds :attr:`name` more than once."""
 
 
 # The ONE method that, when overridden, takes the emitted code out of ``code``'s
@@ -281,6 +287,141 @@ def collect_import_aliases(tree: ast.Module) -> dict[str, str]:
     return aliases
 
 
+def _absolute_module(node: ast.ImportFrom, rel_file: str) -> str | None:
+    if node.level == 0:
+        return node.module or None
+    package = rel_file.replace("\\", "/").split("/")[:-1]
+    if package[:1] == ["src"]:
+        package = package[1:]
+    if node.level > len(package):
+        return None
+    package = package[: len(package) - (node.level - 1)]
+    return ".".join([*package, *([node.module] if node.module else [])]) or None
+
+
+_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+
+
+def _module_scope_nodes(tree: ast.AST) -> list[ast.AST]:
+    """Nodes that bind in *tree*'s module scope: never a function, lambda or
+    class body, but the ``def``/``class`` statement itself does bind its name."""
+    nodes: list[ast.AST] = []
+    stack: list[ast.AST] = [tree]
+    while stack:
+        node = stack.pop()
+        nodes.append(node)
+        if node is not tree and isinstance(node, _SCOPES):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return nodes
+
+
+def _single_bindings(tree: ast.AST) -> set[str]:
+    counts: dict[str, int] = {}
+    # ``global X`` lets a nested scope rebind the module name: never single.
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Global):
+            for name in node.names:
+                counts[name] = 2
+    for node in _module_scope_nodes(tree):
+        if isinstance(node, ast.ImportFrom) and any(
+            alias.name == "*" for alias in node.names
+        ):
+            return set()
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names = [node.id]
+        elif isinstance(node, ast.alias):
+            names = [node.asname or node.name.split(".")[0]]
+        elif isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            names = [node.name]
+        else:
+            continue
+        for name in names:
+            counts[name] = counts.get(name, 0) + 1
+    return {name for name, count in counts.items() if count == 1}
+
+
+def _import_modules(
+    tree: ast.AST, rel_file: str, single: set[str]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Per-file ``{local: module}`` for imported names and for imported modules.
+
+    Only module-level imports of names the file binds exactly once count.
+    """
+    name_modules: dict[str, str] = {}
+    module_bindings: dict[str, str] = {}
+    if not isinstance(tree, ast.Module):
+        return name_modules, module_bindings
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.ImportFrom):
+            module = _absolute_module(node, rel_file)
+            if module is None:
+                continue
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if local not in single:
+                    continue
+                name_modules[local] = module
+                module_bindings[local] = (
+                    f"{module}.{alias.name}" if module else alias.name
+                )
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if (alias.asname or alias.name.split(".")[0]) not in single:
+                    continue
+                if alias.asname:
+                    module_bindings[alias.asname] = alias.name
+                else:
+                    root = alias.name.split(".")[0]
+                    module_bindings[root] = root
+    return name_modules, module_bindings
+
+
+def _base_module(
+    base: ast.expr, name_modules: dict[str, str], module_bindings: dict[str, str]
+) -> str | None:
+    if isinstance(base, ast.Name):
+        return name_modules.get(base.id)
+    if not isinstance(base, ast.Attribute):
+        return None
+    parts: list[str] = []
+    value: ast.expr = base.value
+    while isinstance(value, ast.Attribute):
+        parts.append(value.attr)
+        value = value.value
+    if not isinstance(value, ast.Name) or value.id not in module_bindings:
+        return None
+    return ".".join([module_bindings[value.id], *reversed(parts)])
+
+
+def _defines_module(rec: ClassRecord, module: str) -> bool:
+    if rec.node.col_offset != 0 or rec.rebound:
+        return False
+    path = rec.file.replace("\\", "/").removesuffix(".py").removesuffix("/__init__")
+    dotted = path.replace("/", ".")
+    return dotted in (module, f"src.{module}")
+
+
+def _provenance_record(
+    base: str,
+    owner: ClassRecord,
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+) -> ClassRecord | None:
+    """The one top-level class *owner*'s base *base* names: the class in the
+    module it is imported from, else the class of that name in *owner*'s file."""
+    records = (by_name_all or {}).get(base, ())
+    module = owner.base_modules.get(base)
+    if module is not None:
+        matches = [r for r in records if _defines_module(r, module)]
+    else:
+        matches = [
+            r
+            for r in records
+            if r.file == owner.file and r.node.col_offset == 0 and not r.rebound
+        ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def collect_classes(
     tree: ast.AST, rel_file: str, aliases: dict[str, str]
 ) -> list[ClassRecord]:
@@ -292,12 +433,15 @@ def collect_classes(
     records: list[ClassRecord] = []
     sdk_bindings = sdk_app_base_bindings(tree)
     foreign_roots = non_sdk_import_roots(tree)
+    single = _single_bindings(tree)
+    name_modules, module_bindings = _import_modules(tree, rel_file, single)
     for node in ast.walk(tree):
         if not isinstance(node, ast.ClassDef):
             continue
         bases: list[str] = []
         sdk_app_bases: set[str] = set()
         non_sdk_bases: dict[str, str | None] = {}
+        base_modules: dict[str, str] = {}
         for base in node.bases:
             n = _get_name(base)
             if n is None:
@@ -307,6 +451,9 @@ def collect_classes(
                 sdk_app_bases.add(bases[-1])
             if isinstance(base, ast.Name) and base.id in foreign_roots:
                 non_sdk_bases[bases[-1]] = foreign_roots[base.id]
+            module = _base_module(base, name_modules, module_bindings)
+            if module:
+                base_modules[bases[-1]] = module
         code_value, code_node = _extract_code(node)
         records.append(
             ClassRecord(
@@ -319,6 +466,8 @@ def collect_classes(
                 overrides_emission=_overrides_emission(node),
                 sdk_app_bases=frozenset(sdk_app_bases),
                 non_sdk_bases=non_sdk_bases,
+                base_modules=base_modules,
+                rebound=node.name not in single,
             )
         )
     return records
@@ -357,6 +506,103 @@ def resolve_leaf_prefix(
     return result
 
 
+def _shadowed_base_reaches(
+    base_name: str,
+    rec: ClassRecord,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+    known_targets: frozenset[str],
+    known_ancestors: frozenset[str],
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+) -> bool:
+    """Whether the one top-level class *base_name* in the module *rec* imports it
+    from reaches *target*.
+
+    Walks with a private copy of *cache*, so nothing it learns leaks into the
+    shared memo.
+    """
+    module = rec.base_modules.get(base_name)
+    if module is None:
+        return False
+    candidates = [
+        other
+        for other in (by_name_all or {}).get(base_name, ())
+        if _defines_module(other, module)
+    ]
+    if len(candidates) != 1:
+        return False
+    if not known_targets:
+        cache = dict(cache)
+    return _record_reaches(
+        candidates[0],
+        target,
+        by_name,
+        cache,
+        visiting,
+        known_targets,
+        known_ancestors,
+        by_name_all,
+        set(),
+    )
+
+
+def _record_reaches(
+    rec: ClassRecord,
+    target: str,
+    by_name: dict[str, ClassRecord],
+    cache: dict[str, bool | None],
+    visiting: set[str],
+    known_targets: frozenset[str],
+    known_ancestors: frozenset[str],
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None,
+    seen: set[int],
+) -> bool:
+    """Whether *rec* reaches *target*, following each base to the class its
+    import provenance names rather than the first-wins *by_name* record.
+
+    A base with no single provenance record is unknown and does not confirm.
+    Only names absent from the registry go through :func:`resolve_ancestor`.
+    """
+    if id(rec) in seen:
+        return False
+    seen.add(id(rec))
+    for base in rec.bases:
+        if base == target or base in known_targets:
+            return True
+        if base not in by_name:
+            if (
+                resolve_ancestor(
+                    base,
+                    target,
+                    by_name,
+                    cache,
+                    visiting,
+                    known_targets,
+                    known_ancestors,
+                    by_name_all,
+                )
+                is True
+            ):
+                return True
+            continue
+        other = _provenance_record(base, rec, by_name_all)
+        if other is not None and _record_reaches(
+            other,
+            target,
+            by_name,
+            cache,
+            visiting,
+            known_targets,
+            known_ancestors,
+            by_name_all,
+            seen,
+        ):
+            return True
+    return False
+
+
 def resolve_ancestor(
     name: str,
     target: str,
@@ -365,6 +611,7 @@ def resolve_ancestor(
     visiting: set[str],
     known_targets: frozenset[str] = frozenset(),
     known_ancestors: frozenset[str] = frozenset(),
+    by_name_all: Mapping[str, Sequence[ClassRecord]] | None = None,
 ) -> bool | None:
     """Transitively resolve *name*'s base chain looking for *target*.
 
@@ -382,6 +629,11 @@ def resolve_ancestor(
     ``None``
         *name* is not in the scanned universe (unknown / third-party /
         generated — assumed OK to avoid false positives).
+
+    *by_name_all* holds every record per bare name. When a class subclasses a
+    same-named class, the record of that name defined in the module the base is
+    imported from is walked with a private memo; if it reaches *target*, the
+    result is ``True``.
     """
     if name == target or name in known_targets:
         return True
@@ -403,16 +655,32 @@ def resolve_ancestor(
     same_name_base = False
     for base in rec.bases:
         if base == name:
-            # A base that de-aliases to the class's own name is an import of a
-            # SAME-NAMED class from another module — Python forbids literal
-            # self-inheritance, so this is always
-            # ``from other import X as _X`` + ``class X(_X)``. The registry is
-            # keyed on the bare name and cannot hold both, so the chain is
-            # genuinely unresolvable rather than definitively negative.
+            # A same-named class from another module: resolve it by import
+            # provenance, else the chain is unresolvable, not negative.
+            if _shadowed_base_reaches(
+                base,
+                rec,
+                target,
+                by_name,
+                cache,
+                visiting,
+                known_targets,
+                known_ancestors,
+                by_name_all,
+            ):
+                result = True
+                break
             same_name_base = True
             continue
         sub = resolve_ancestor(
-            base, target, by_name, cache, visiting, known_targets, known_ancestors
+            base,
+            target,
+            by_name,
+            cache,
+            visiting,
+            known_targets,
+            known_ancestors,
+            by_name_all,
         )
         if sub is True:
             result = True

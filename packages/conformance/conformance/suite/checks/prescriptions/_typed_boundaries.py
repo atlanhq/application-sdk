@@ -246,6 +246,7 @@ def _check_one_annotation(
     sdk_contract_module_aliases: frozenset[str],
     aliases: dict[str, str],
     cache: dict[str, bool | None],
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
 ) -> Finding | None:
     """Return a finding for *annotation* when it is not a valid contract, else ``None``."""
     # ── Case 1: missing annotation ────────────────────────────────────────────
@@ -329,6 +330,7 @@ def _check_one_annotation(
         set(),
         known_sdk_contracts,
         _KNOWN_SDK_CONTRACT_ANCESTORS,
+        by_name_all,
     )
     if result is False:
         # Found in scanned universe but does not reach Input/Output.
@@ -383,6 +385,10 @@ def check_p013_p014(
     input_cache: dict[str, bool | None] = {}
     output_cache: dict[str, bool | None] = {}
     app_cache: dict[str, bool | None] = {}
+    by_name_all: dict[str, list[ClassRecord]] = {}
+    for records in file_records.values():
+        for rec in records:
+            by_name_all.setdefault(rec.name, []).append(rec)
     sdk_contract_names = frozenset(
         name
         for tree in file_trees.values()
@@ -452,6 +458,7 @@ def check_p013_p014(
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
                     cache=in_cache,
+                    by_name_all=by_name_all,
                 )
                 if finding is not None:
                     findings.append(finding)
@@ -471,6 +478,7 @@ def check_p013_p014(
                     sdk_contract_module_aliases=prov.sdk_contract_module_aliases,
                     aliases=aliases,
                     cache=out_cache,
+                    by_name_all=by_name_all,
                 )
                 if finding is not None:
                     findings.append(finding)

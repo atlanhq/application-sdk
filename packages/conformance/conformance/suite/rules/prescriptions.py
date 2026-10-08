@@ -61,12 +61,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "free only where _retype_is_compatible allows it: an inherited field, a "
             "widening, or replacing Any with a concrete type in the SAME OUTER SHAPE "
             "(which payload safety requires anyway, so it is not optional). "
-            "Wrapping Any in MaxItems clears P001 AND B005 "
-            "but the class then raises PayloadSafetyError at import: Any is refused "
-            "unconditionally. Note also that an app-level OVERRIDE of a base-class "
-            "field is often what introduces the Any — the SDK's own ExtractionInput "
-            "already models its filters payload-safely — and dropping an override is "
-            "not a retype of your contract at all."
+            "Wrapping Any in MaxItems does not make it acceptable or clear P001: "
+            "without the opt-out, P001's inverse finding still reports the "
+            "Any-typed field and class creation raises PayloadSafetyError; with "
+            "the opt-out, the class-level finding still fires. Any is refused "
+            "unconditionally. MaxItems bounds a collection only when its "
+            "element/value type is already payload-safe. Note also that an "
+            "app-level OVERRIDE of a base-class field is often what introduces "
+            "the Any — the SDK's own ExtractionInput already models its filters "
+            "payload-safely — and dropping an override is not a retype of your "
+            "contract at all."
         ),
         terminal_state=(
             "A justified inline `# conformance: ignore[P001] <reason>` at the "
@@ -87,8 +91,10 @@ RULES: tuple[RuleDefinition, ...] = (
         rationale=(
             "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
             "Unbounded fields can silently grow past it in production, failing the workflow "
-            "with a cryptic size error instead of a type error at import time. A justified "
-            "inline suppression keeps every opt-out visible in review and auditable in SARIF. "
+            "with a cryptic size error instead of a type error at import time. Typing every "
+            "field payload-safely and removing the opt-out restores that import-time check; "
+            "an opt-out that genuinely cannot be removed carries a justified inline "
+            "suppression, which keeps it visible in review and auditable in SARIF. "
             "Customer impact: payload size scales with the customer's data, so the app that "
             "passed every test fails only in the tenant with the largest source system — the "
             "customer's crawl dies mid-run with a serialization error nothing in their "
@@ -106,9 +112,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "Suppressed declarations are still emitted to the SARIF report (counted in\n"
             "their own category), so every opt-out is reported every single time.\n"
-            "This rule is ``BLOCK`` (suppress-only): an unsuppressed declaration fails\n"
-            "the conformance gate — the only sanctioned use is the justified inline\n"
-            "suppression above — see BLDX-1428.\n"
+            "This rule is ``BLOCK``: an unsuppressed active opt-out fails the\n"
+            "conformance gate. Remove the opt-out once every declared field is\n"
+            "payload-safe; only an unavoidable remaining opt-out requires the\n"
+            "justified inline suppression above — see BLDX-1428.\n"
             "\n"
             "**The inverse is also a finding.** A contract that declares an\n"
             "``Any``-typed field and does NOT set ``allow_unbounded_fields`` raises\n"
@@ -734,6 +741,77 @@ RULES: tuple[RuleDefinition, ...] = (
             "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P055",
+        canonical_reference=(
+            "atlan-metabase-app app/asset_mapper.py — the dashboard and question "
+            "mappers link each child to its collection from the child side "
+            "(`asset.metabase_collection = RelatedMetabaseCollection(...)`) and "
+            "never populate `MetabaseCollection.metabase_dashboards` / "
+            "`metabase_questions`."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P055] <reason>` is correct "
+            "only where the list end is set on an asset that is never published "
+            "ahead of its children — e.g. a value built for a comparison or a "
+            "test double. The reason must name why publish ordering cannot apply. "
+            "A directive on a mapper that writes the asset to transformed output "
+            "is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="OneToManyLinkFromParent",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.44.0",
+        rationale=(
+            "Publish orders entities by type and sends the '1' side of a 1-to-N "
+            "relationship first, relying on each child to reference its parent. "
+            "A parent that lists its children instead names entities that do not "
+            "exist yet, so Atlas returns ATLAS-404-00-00A and the run fails until "
+            "a later run, after the children were created. Nothing at runtime "
+            "stops a new connector from writing the link this way, so it recurs "
+            "app by app; catching it in the mapper is the earliest point."
+        ),
+        short_description=(
+            "Mapper populates the list end of a 1-to-N relationship instead of "
+            "the child's single reference"
+        ),
+        full_description=(
+            "In a module importing ``pyatlan_v9.model.assets``, the mapper sets\n"
+            "the list end of a 1-to-N relationship — the parent's\n"
+            "``Process.fabric_activities`` or ``Table.columns`` — instead of the\n"
+            "single end on each child (``FabricActivity.fabric_process``,\n"
+            "``Column.table``):\n"
+            "\n"
+            "* ``X(..., a=...)`` or ``X.creator(..., a=...)``;\n"
+            "* ``x.a = ...``, ``x.a += ...`` or ``x.a.append(...)`` /\n"
+            "  ``.extend(...)`` / ``.insert(...)``, where ``x`` is bound in the same\n"
+            "  scope to ``X(...)`` / ``X.creator(...)`` or annotated ``X``;\n"
+            "* the same assignment or append on a receiver of unknown type, when\n"
+            "  the value names the child type (``[RelatedColumn(...)]``,\n"
+            "  ``Column.ref_by_qualified_name(...)``) and that pairs with ``a``.\n"
+            "\n"
+            "The list ends come from a table generated off the pinned pyatlan_v9\n"
+            "models (``gen-relationship-directions``): an end whose single-valued\n"
+            "inverse is on the child type.  Many-to-many ends such as\n"
+            "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
+            "flagged.  Raw-dict mappers are out of scope — move them to\n"
+            "``pyatlan_v9`` first (O004).\n"
+            "\n"
+            "Fix: drop the list from the parent and set the single reference on\n"
+            "each child, e.g. ``activity.fabric_process =\n"
+            "RelatedProcess(qualified_name=process_qn)``.  Publish then sends the\n"
+            "parent first and each child references a parent that already exists.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",

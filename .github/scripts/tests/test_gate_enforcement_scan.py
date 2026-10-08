@@ -13,6 +13,7 @@ to stop a false green cannot itself manufacture one out of an auth error.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +21,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import gate_enforcement_scan  # noqa: E402
 from gate_enforcement_scan import (  # noqa: E402
     ARRIVAL_INTERMITTENT,
     ARRIVAL_NEVER,
@@ -44,6 +46,7 @@ from gate_enforcement_scan import (  # noqa: E402
     classify_arrival,
     evaluate_repo,
     fetch_arrival_samples,
+    fetch_pulls_for_commit,
     fetch_tests_workflow_last_modified,
     list_fleet_repos,
     parse_arrival_nodes,
@@ -1642,6 +1645,94 @@ def test_an_unreadable_cutoff_disables_the_filter_and_nothing_else():
     assert record["status"] == STATUS_GATED
     assert record["arrival"]["status"] == ARRIVAL_REPORTING
     assert record["arrival"]["prsSampled"] == 2
+
+
+def _resync_run(*, pulls_for_change):
+    """A repo whose tests.yaml was just changed by a fleet resync PR (#241) and
+    which has merged nothing since: every PR head predates the cutoff."""
+
+    def run(args: list) -> str:
+        if args[1] == f"repos/{REPO}":
+            return json.dumps({"b": "main"})
+        if args[1].startswith(f"repos/{REPO}/rulesets?"):
+            return json.dumps([[{"id": 1}]])
+        if args[1] == f"repos/{REPO}/rulesets/1":
+            return json.dumps(_ruleset())
+        if args[1].startswith(f"repos/{REPO}/commits?path="):
+            return json.dumps({"d": WORKFLOW_CHANGED, "s": "resync"})
+        if args[1] == f"repos/{REPO}/commits/resync/pulls":
+            return pulls_for_change()
+        if args[1] == "graphql":
+            return _paged_arrival(
+                _pr(241, committed=BEFORE),
+                _pr(240, found=False, committed=BEFORE),
+                _pr(239, committed=BEFORE),
+            )(args)
+        return json.dumps("sha")
+
+    return run
+
+
+def test_the_pr_that_changed_the_workflow_is_evidence_about_it():
+    """FND-3480. The resync PR ran the new tests.yaml on its own head, but that
+    head predates its own merge, so the plain cutoff discarded it and every
+    repo with no later PR read `no-data` — not baselined — after each fleet
+    resync. Older PRs stay excluded: only the introducing PR is exempt."""
+    record = scan_repo(
+        REPO,
+        GATE,
+        sample_size=5,
+        run=_resync_run(pulls_for_change=lambda: json.dumps([[{"number": 241}]])),
+    )
+    assert record["arrival"]["status"] == ARRIVAL_REPORTING
+    assert record["arrival"]["prsSampled"] == 1
+    assert record["arrival"]["prsWithContext"] == 1
+
+
+def test_an_unreadable_introducing_pr_keeps_the_plain_cutoff():
+    """Losing the exemption must not loosen the filter: the stale PRs stay
+    excluded and the repo falls back to the pre-FND-3480 `no-data`."""
+
+    def fail() -> str:
+        raise GhError("gh api failed: HTTP 502", status=502)
+
+    record = scan_repo(
+        REPO, GATE, sample_size=5, run=_resync_run(pulls_for_change=fail)
+    )
+    assert record["arrival"]["status"] == ARRIVAL_NO_DATA
+    assert _finding_ids(record) == set()
+
+
+def test_a_malformed_pulls_for_commit_payload_raises():
+    with pytest.raises(GhError, match="pulls-for-commit"):
+        fetch_pulls_for_commit(REPO, "sha", run=lambda args: json.dumps({"n": 1}))
+
+
+def test_the_introducing_pr_on_a_later_page_is_still_exempt():
+    """The listing defaults to 30 per page; an introducing PR on page two must
+    not silently lose its exemption."""
+    sent: list = []
+
+    def run(args: list) -> str:
+        sent.append(args)
+        page_one = [{"number": n} for n in range(1, 31)]
+        return json.dumps([page_one, [{"number": 241}]])
+
+    assert 241 in fetch_pulls_for_commit(REPO, "sha", run=run)
+    assert "--paginate" in sent[0] and "--slurp" in sent[0]
+
+
+def test_a_stalled_gh_call_raises_rather_than_hanging(monkeypatch):
+    """Unbounded, a stalled `gh` never raises, so no guarded fallback fires and
+    the sweep hangs until the job timeout kills it with nothing published."""
+
+    def stall(*args, **kwargs):
+        assert kwargs.get("timeout") == gate_enforcement_scan.GH_CALL_TIMEOUT_SECONDS
+        raise subprocess.TimeoutExpired(cmd="gh", timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(gate_enforcement_scan.subprocess, "run", stall)
+    with pytest.raises(GhError, match="timed out"):
+        gate_enforcement_scan._run_gh(["api", "repos/x"])
 
 
 def test_an_unparseable_timestamp_raises_rather_than_skipping_the_filter():

@@ -456,7 +456,7 @@ runs:
     # contracts, BaseSDRIntegrationTest — is import-compatible with the code
     # under test, and the whole E2E job runs one interpreter end to end.
     - name: Setup Python and dependencies
-      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.42.1
+      uses: atlanhq/application-sdk/.github/actions/setup-deps@v3.43.0
       with:
         python-version: ${{ inputs.expected-python-version }}
 
@@ -1443,7 +1443,7 @@ runs:
       id: upload-e2e-results
       if: always()
       continue-on-error: true
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         # artifact-suffix keeps parallel matrix legs from colliding on this
         # name (upload-artifact rejects duplicate names within a run); empty
@@ -1468,7 +1468,7 @@ runs:
 
     - name: Upload test results (retry)
       if: steps.upload-e2e-results.outcome == 'failure'
-      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
       with:
         # artifact-suffix keeps parallel matrix legs from colliding on this
         # name (upload-artifact rejects duplicate names within a run); empty

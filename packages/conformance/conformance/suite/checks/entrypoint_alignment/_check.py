@@ -247,10 +247,16 @@ def check_p016(
                 message=(
                     f"Entry point '{ep.name}' is defined in code but not in the "
                     f"contract (contract defines: {contract_list}). "
-                    f'Pin the name with @entrypoint(name="<contract-name>") to '
-                    "match the contract, or update contract/app.pkl and re-run pkl eval. "
-                    "Note: renaming is a breaking wire change "
-                    "(workflow_type and ?entrypoint= value both change)."
+                    "If it backs one of those tiles, rename it to the tile name with "
+                    '@entrypoint(name="<tile>") and keep its old workflow type '
+                    "dispatching with an alias: legacy_workflow_types = "
+                    f'{{"<app>:{ep.name}": "<tile>"}} on the App class, plus the same '
+                    "pair in legacyWorkflowTypes on every entrypoint contract in "
+                    "contract/app.pkl (K015 checks they agree). The alias covers "
+                    "Temporal workflow-type dispatch only: callers selecting "
+                    f"?entrypoint={ep.name} on /start must switch to the tile name. "
+                    "Otherwise add a tile "
+                    "for it in contract/app.pkl and re-run pkl eval, or remove it."
                 ),
                 directives=directives_by_file.get(ep.filename, _empty_directives()),
             )
@@ -271,8 +277,16 @@ def check_p016(
                     f"Entry point '{missing_name}' is defined in the contract "
                     f"(app/generated/{missing_name}/manifest.json) but not in code "
                     f"(code defines: {code_list}). "
-                    f'Add @entrypoint(name="{missing_name}") to your App subclass, '
-                    "or remove it from contract/app.pkl and re-run pkl eval."
+                    f'Add @entrypoint(name="{missing_name}") to your App subclass. '
+                    "If an existing entry point already backs this tile, rename it "
+                    f"to '{missing_name}' and declare its old workflow type as an "
+                    "alias in legacy_workflow_types (App class) and "
+                    "legacyWorkflowTypes (contract/app.pkl) so existing runs keep "
+                    "dispatching; callers selecting the old name with ?entrypoint= "
+                    f"on /start must switch to '{missing_name}', since the alias "
+                    "does not cover that selector. Otherwise remove the tile from "
+                    "contract/app.pkl "
+                    "and re-run pkl eval."
                 ),
                 directives=anchor_directives,
             )

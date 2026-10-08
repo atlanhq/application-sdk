@@ -83,9 +83,10 @@ module.exports = {
     // these entries — a `]` truncates the allowlist the guard parses, and a
     // backslash means something different to the JS string literal than to the
     // regex ("\d" is just "d" in JS, silently breaking the pattern at runtime).
-    "^renovate-uv-lock-bounded --window P3D --exempt atlan-application-sdk --exempt atlan-application-sdk-conformance --exempt pyatlan$",
+    "^renovate-uv-lock-bounded --window P3D --hold atlan-application-sdk --hold atlan-application-sdk-conformance --exempt pyatlan$",
     // The contract-ledger driver (FND-607): regenerates contract_schema.lock.json
-    // at the conformance version the branch just locked, so a release that adds a
+    // at the conformance version the branch just locked — on the conformance
+    // lane only since FND-3481, as the lock refresh no longer moves conformance — so a release that adds a
     // field to the SDK contract-base registry does not red B006 across the fleet
     // on the very lane that adopts it. Argument-free on purpose — the version has
     // to be read from uv.lock because Renovate does not shell-expand these

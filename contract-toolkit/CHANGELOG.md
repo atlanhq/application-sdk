@@ -6,6 +6,18 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.31.0] - 2026-10-07
+
+### Features
+
+- fill out TagsInput settings (#4220) ([a9122d3](https://github.com/atlanhq/application-sdk/commit/a9122d3))
+
+## [0.30.0] - 2026-10-07
+
+### Features
+
+- add placeholderText to TagsInput (#4215) ([f756182](https://github.com/atlanhq/application-sdk/commit/f756182))
+
 ## [0.29.0] - 2026-10-05
 
 ### Features

@@ -1,5 +1,19 @@
 # Changelog
 
+## v3.43.0 (October 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.1...v3.43.0
+
+### Features
+
+- fleet-wide signals on warn-mode asset validation telemetry (FND-3495) (#4226) (by @cmgrote in [8b712ee](https://github.com/atlanhq/application-sdk/commit/8b712ee))
+
+### Bug Fixes
+
+- pin daprd internal gRPC port so it cannot take the API port (#4181) (by @mitshah-atlan in [1e0d547](https://github.com/atlanhq/application-sdk/commit/1e0d547))
+- skip local sidecars when uploading a directory (#4222) (by @Dexters-Hub in [f444725](https://github.com/atlanhq/application-sdk/commit/f444725))
+
+
 ## v3.42.1 (October 06, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.0...v3.42.1

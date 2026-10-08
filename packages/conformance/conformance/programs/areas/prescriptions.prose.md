@@ -27,15 +27,25 @@ Postcondition (suggest-only — the loop proposes but does not apply):
 > `suite.runner --series P` exit code is therefore unchanged by this area —
 > only humans clear P-series findings.
 
-**Why suggest-only, not auto-applied (not an oversight):** P001
-`UnboundedContractFields` is suppress-only, and its only fix that clears the
-detector is adding `Annotated[..., MaxItems(N)]` or an inline suppression.
-`MaxItems` is a **declarative marker — not runtime-enforced** — so (a)
-`recheck-narrowest` is satisfied by *any* bound, including an absurd one, and
-(b) the orthogonal test gate is structurally blind: no behaviour changes with
-the bound, so no test can catch a hollow fix.  Per design §6.1, a rule whose
+**Why suggest-only, not auto-applied (not an oversight):** P001 has real
+non-suppression fixes. Make every declared field payload-safe: replace `Any`
+with a concrete type in the same outer shape (use `FilterMap` from
+`application_sdk.templates.contracts` for filter maps), bound a collection
+with `MaxItems` only when its element/value type is already payload-safe, and
+remove `allow_unbounded_fields=True`. Drop an app-level override or retire a
+dead field where those alternatives apply. Keep an opt-out with a justified
+inline suppression only as a last resort after those alternatives fail.
+
+`MaxItems` is a **declarative marker — not runtime-enforced**. Adding it alone
+neither makes `Any` acceptable nor clears an active opt-out finding. For a
+payload-safe collection, (a) `recheck-narrowest` is satisfied by *any* bound,
+including an absurd one, and (b) the orthogonal test gate is structurally blind
+to whether the chosen bound is adequate: runtime behaviour does not change with
+the bound, so no test can catch a hollow limit. Replacing a field's type also
+changes the payload shapes the contract accepts, which must be reviewed against
+actual producers and consumers as detailed below. Per design §6.1, a rule whose
 gaming move no gate can catch must **not** be auto-applied — that would
-normalise exactly the gaming the gate exists to prevent.  The safe form is
+normalise exactly the gaming the gate exists to prevent. The safe form is
 **propose, don't apply**: the model drafts a concrete diff, a human is the gate.
 When a gate that validates the bound exists (a runtime-enforced `MaxItems`, or
 a payload-size behavioural check), this area can graduate to the full
@@ -584,14 +594,19 @@ The lane applies nothing: return `not_remediable = true` with a
 
 - **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
   `Output` contract is a container of primitives or `Any`, bare or bounded
-  (`Annotated[dict[str, str], MaxItems(N)]`).  The bound satisfies P001 but the
-  keys and values still have no schema.  Containers of a typed class
+  (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
+  primitives, the bound satisfies payload safety without an opt-out, but the
+  keys and values still have no schema.  A bound never makes `Any` safe:
+  `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
+  without the opt-out and is still a P001 finding — replace the `Any` first
+  (see P001 above).  Containers of a typed class
   (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
   model (its fields read off how the app uses the container) and every reader
-  and writer of the field.  Keep the `MaxItems` bound: P001 still needs it.
+  and writer of the field.  Keep the `MaxItems` bound: payload safety still requires it on the
+  container.
   When the key set is genuinely open, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).

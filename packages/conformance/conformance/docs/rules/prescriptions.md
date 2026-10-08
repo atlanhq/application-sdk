@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**49 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -71,6 +71,7 @@ reassigned.
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
 | [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | — | 0.43.0 |
+| [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 
 ---
 
@@ -82,11 +83,13 @@ reassigned.
 
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
 Unbounded fields can silently grow past it in production, failing the workflow with a
-cryptic size error instead of a type error at import time. A justified inline
-suppression keeps every opt-out visible in review and auditable in SARIF. Customer
-impact: payload size scales with the customer's data, so the app that passed every test
-fails only in the tenant with the largest source system — the customer's crawl dies
-mid-run with a serialization error nothing in their configuration explains.
+cryptic size error instead of a type error at import time. Typing every field
+payload-safely and removing the opt-out restores that import-time check; an opt-out that
+genuinely cannot be removed carries a justified inline suppression, which keeps it
+visible in review and auditable in SARIF. Customer impact: payload size scales with the
+customer's data, so the app that passed every test fails only in the tenant with the
+largest source system — the customer's crawl dies mid-run with a serialization error
+nothing in their configuration explains.
 
 ### What correct looks like
 
@@ -110,11 +113,14 @@ mid-run with a serialization error nothing in their configuration explains.
   one. Narrowing in place is free only where _retype_is_compatible allows it: an
   inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
   SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
-  MaxItems clears P001 AND B005 but the class then raises PayloadSafetyError at import:
-  Any is refused unconditionally. Note also that an app-level OVERRIDE of a base-class
-  field is often what introduces the Any — the SDK's own ExtractionInput already models
-  its filters payload-safely — and dropping an override is not a retype of your contract
-  at all.
+  MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
+  inverse finding still reports the Any-typed field and class creation raises
+  PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
+  refused unconditionally. MaxItems bounds a collection only when its element/value type
+  is already payload-safe. Note also that an app-level OVERRIDE of a base-class field is
+  often what introduces the Any — the SDK's own ExtractionInput already models its
+  filters payload-safely — and dropping an override is not a retype of your contract at
+  all.
 - **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site is the
   fix ONLY once narrowing in source, dropping an app-level override, and retiring the
   field as sunset have each been tried and shown to fail — with the refusal quoted. It
@@ -129,9 +135,10 @@ declaration site (`# conformance: ignore[P001] <reason>`), so the carve-out is r
 and stays visible.
 
 Suppressed declarations are still emitted to the SARIF report (counted in their own
-category), so every opt-out is reported every single time. This rule is `BLOCK`
-(suppress-only): an unsuppressed declaration fails the conformance gate — the only
-sanctioned use is the justified inline suppression above — see BLDX-1428.
+category), so every opt-out is reported every single time. This rule is `BLOCK`: an
+unsuppressed active opt-out fails the conformance gate. Remove the opt-out once every
+declared field is payload-safe; only an unavoidable remaining opt-out requires the
+justified inline suppression above — see BLDX-1428.
 
 **The inverse is also a finding.** A contract that declares an `Any`-typed field and
 does NOT set `allow_unbounded_fields` raises `PayloadSafetyError` at class-definition
@@ -812,18 +819,28 @@ no-op.
 The contract `app/generated/` tree is the authoritative source; align code to it as the
 default fix:
 
-1. For each `@entrypoint` name in *code* that is not in the contract, pin it:
-`@entrypoint(name="<contract-name>")`.  Confirm the pairing (code name → contract name)
-intentionally — renaming an entry point is a **breaking wire change** (the Temporal
-workflow type and `?entrypoint=` value both change; coordinate with callers).
+1. For each `@entrypoint` name in *code* that backs a tile with a different name, rename
+the entry point to the tile name: `@entrypoint(name="<tile>")`. The tile name and the
+entry-point name are one identity — a tile cannot start a differently named entry point.
+Renaming changes the entry point's canonical Temporal workflow type, so keep the old
+type dispatching with an inbound-only alias, declared twice: `legacy_workflow_types =
+{"<app>:<old-name>": "<tile>"}` on the `App` class, and the same pair in
+`legacyWorkflowTypes` on every entrypoint contract in `contract/app.pkl` (K015 holds the
+two in agreement). An alias may stay for as long as callers still dispatch the old type.
+The alias covers Temporal workflow-type dispatch only, not the `/start` selector:
+`?entrypoint=` resolves entry-point names, so a caller selecting
+`?entrypoint=<old-name>` must switch to the tile name.
 
-2. For each contract name not matched in code, add or rename an
-`@entrypoint(name="<missing-name>")` on the corresponding App method.
+2. For each contract name not matched in code, add an
+`@entrypoint(name="<missing-name>")` on the corresponding App method, or rename the
+entry point that already backs that tile as in step 1.
 
 3. If the *code* name is the intended one and the contract is wrong, update the
 `entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and re-run
 `pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow — never
-hand-edit `app/generated/` (C002 catches stale generated artifacts).
+hand-edit `app/generated/` (C002 catches stale generated artifacts). On a released app,
+prefer step 1: a tile's name is its Marketplace card and configmap identity, and no
+alias covers renaming it.
 
 4. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
 `Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
@@ -2798,5 +2815,54 @@ in `finally`.
 calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception
 on the `with` line (the finding anchors there, not on the `run_in_executor` call) with
 `# conformance: ignore[P054] <reason>`.
+
+---
+
+## P055 — `OneToManyLinkFromParent` {#p055}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.44.0
+
+> Mapper populates the list end of a 1-to-N relationship instead of the child's single reference
+
+**Rationale:** Publish orders entities by type and sends the '1' side of a 1-to-N relationship first,
+relying on each child to reference its parent. A parent that lists its children instead
+names entities that do not exist yet, so Atlas returns ATLAS-404-00-00A and the run
+fails until a later run, after the children were created. Nothing at runtime stops a new
+connector from writing the link this way, so it recurs app by app; catching it in the
+mapper is the earliest point.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — the dashboard and question mappers link each
+  child to its collection from the child side (`asset.metabase_collection =
+  RelatedMetabaseCollection(...)`) and never populate
+  `MetabaseCollection.metabase_dashboards` / `metabase_questions`.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Already correct when:** A justified inline `# conformance: ignore[P055] <reason>` is correct only where the list
+  end is set on an asset that is never published ahead of its children — e.g. a value
+  built for a comparison or a test double. The reason must name why publish ordering
+  cannot apply. A directive on a mapper that writes the asset to transformed output is
+  unremediated.
+
+In a module importing `pyatlan_v9.model.assets`, the mapper sets the list end of a
+1-to-N relationship — the parent's `Process.fabric_activities` or `Table.columns` —
+instead of the single end on each child (`FabricActivity.fabric_process`,
+`Column.table`):
+
+* `X(..., a=...)` or `X.creator(..., a=...)`; * `x.a = ...`, `x.a += ...` or
+`x.a.append(...)` /   `.extend(...)` / `.insert(...)`, where `x` is bound in the same
+scope to `X(...)` / `X.creator(...)` or annotated `X`; * the same assignment or append
+on a receiver of unknown type, when   the value names the child type
+(`[RelatedColumn(...)]`,   `Column.ref_by_qualified_name(...)`) and that pairs with `a`.
+
+The list ends come from a table generated off the pinned pyatlan_v9 models
+(`gen-relationship-directions`): an end whose single-valued inverse is on the child
+type.  Many-to-many ends such as `Process.inputs` are not in it, and assigning `None` is
+not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first
+(O004).
+
+Fix: drop the list from the parent and set the single reference on each child, e.g.
+`activity.fabric_process = RelatedProcess(qualified_name=process_qn)`.  Publish then
+sends the parent first and each child references a parent that already exists.
 
 ---
