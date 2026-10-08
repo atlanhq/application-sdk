@@ -118,9 +118,9 @@ module docs.)
 
 The typed-boundary / state-seam / asset-modeling rules (P026–P028) are also
 P-series and suggest-only.  P026 (getattr-with-default on a typed contract param)
-has a concrete mechanical proposal — replace `getattr(input, "f", default)` with
-attribute access `input.f` — but whether the field is genuinely optional (and the
-default intended) is the developer's call.  P027 (app_state read with no
+is auto-fixable as `"judgment"`: it drafts attribute access `input.f` in place
+of `getattr(input, "f", default)` only where the swap cannot raise, and routes
+every other site to residue (see its entry below).  P027 (app_state read with no
 populating writer) describes a structural fix — route the data through the typed
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
@@ -658,6 +658,40 @@ The lane applies nothing: return `not_remediable = true` with a
   When the key set is genuinely open, propose
   `# conformance: ignore[P015] <reason>` instead.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package):
   `docs/concepts/contracts.md` (Payload Safety, MaxItems).
+
+**Typed-boundary read rule (P026)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  Backed by
+`suite.checks.prescriptions`.
+
+- **P026 GetattrOnTypedContractField** — inside an `@entrypoint` or `@task`
+  method, `getattr(param, "field", default)` reads a field of a param whose
+  annotation is not a primitive.  The detector unwraps `X | None` /
+  `Optional[X]` on purpose and does not check that the class is a contract,
+  that the field is declared, or that the param is unchanged, so check each
+  condition yourself.  Draft `param.field` only when **all** of these hold:
+  - the annotation resolves to a pydantic `Input` / `Output` contract;
+  - `field` is declared on that class or inherited, including from the SDK
+    base contracts;
+  - the annotation is not Optional (`X | None` / `Optional[X]`);
+  - the model is not `extra="allow"` with the read relying on an extra key;
+  - the param is not rebound in the function, and no nested function shadows
+    it.
+
+  Then the read is identical, because pydantic fills every declared field and
+  the default never fired.  Otherwise route to residue with the proposed
+  shape.  For an undeclared `field` the note is: "the contract drift already
+  happened: declare the field if a sender sends it (generated manifest args or
+  a constructor in the repo), else replace the read with the default value".
+
+  `param.field` is not `getattr` with the default removed.  It raises where
+  `getattr` returned the default for: a `None` param; an undeclared field; an
+  absent extra; a `TypedDict` annotation (a plain dict at runtime, so every
+  attribute read fails); a property that raises `AttributeError`; and an
+  instance built with `model_construct()`, which skips validation and leaves a
+  required field unset when it is not passed.  A site in any of these cases goes to residue.  Mirror
+  `atlan-openapi-app` `app/connector.py` (`extract_spec` reads
+  `input.spec_url`).  Cite as evidence the contract class and the line that
+  declares `field`.
 
 **Entrypoint-conformance rules (P017–P018)** — migration rules
 (`autofixable = false`), scope=app, WARN-tier; `classification` is always
