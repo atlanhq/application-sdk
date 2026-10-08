@@ -2,6 +2,16 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.45.0] - 2026-10-08
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) ([01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+
+### Bug fixes
+
+- K018 skips args wired to non-value widgets (SageV2 preflight) (#4242) ([3adaf46](https://github.com/atlanhq/application-sdk/commit/3adaf46))
+
 ## [0.44.1] - 2026-10-08
 
 ### Bug fixes
