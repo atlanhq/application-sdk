@@ -1550,13 +1550,19 @@ class AtlanLoggerAdapter(AtlanObservability[Any]):
         processed_msg, processed_kwargs = self.process(msg, local_kwargs)
         self.logger.bind(**processed_kwargs).log("TRACING", processed_msg, *args)
 
-    async def _log_sink(self, message: Any) -> None:
+    def _log_sink(self, message: Any) -> None:
         """Unified loguru sink: build the log-record dict once and fan out to active targets.
 
         Replaces separate ``objectstore_sink`` and ``otlp_sink`` loguru sink
         registrations.  When both the object-store sink and an OTLP exporter are
         configured, the record dict is built a single time — halving the per-record
         ``_make_log_record_dict`` CPU on that common path.
+
+        Deliberately synchronous. loguru runs a coroutine sink on the emitting
+        thread's running event loop and silently skips the record when that
+        thread has none, so an ``async`` sink dropped every line logged from a
+        sync activity (those run in the worker's thread pool). Both targets are
+        synchronous and thread-safe, so nothing here needs a loop.
 
         Args:
             message: Loguru message object passed by the loguru dispatcher.
