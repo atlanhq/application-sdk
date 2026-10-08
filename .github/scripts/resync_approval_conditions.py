@@ -471,6 +471,65 @@ def _normalise(line: str) -> str:
     return line.strip().rstrip(",").strip()
 
 
+_YAML_SUFFIXES = (".yaml", ".yml")
+_YAML_KEY_VALUE = re.compile(r"^((?:-\s+)?[\w.-]+:)\s+(\S.*)$")
+_YAML_INDICATORS = frozenset("-?:,[]{}#&*!|>'\"%@`")
+_YAML_KEYWORDS = frozenset(
+    {"~", "null", "true", "false", "yes", "no", "on", "off", "y", "n"}
+)
+_YAML_NUMBER_LIKE = re.compile(r"^[+.]?\d|^[+]?\.(inf|nan)$", re.IGNORECASE)
+_YAML_BLOCK_SCALAR = re.compile(r"^[|>][+-]?\d?[+-]?\s*(#.*)?$")
+
+
+def _unquote_yaml_scalar(value: str) -> str:
+    """``value`` without its quotes when YAML reads it the same either way."""
+    if len(value) < 3 or value[0] != value[-1] or value[0] not in "\"'":
+        return value
+    inner = value[1:-1]
+    if (
+        inner[0] in _YAML_INDICATORS
+        or inner != inner.strip()
+        or any(c in inner for c in ":#\\\"'")
+        or inner.lower() in _YAML_KEYWORDS
+        or _YAML_NUMBER_LIKE.search(inner)
+    ):
+        return value
+    return inner
+
+
+def _normalise_for(path: str, line: str) -> str:
+    norm = _normalise(line)
+    if not path.endswith(_YAML_SUFFIXES):
+        return norm
+    match = _YAML_KEY_VALUE.match(norm)
+    if not match:
+        return norm
+    return f"{match.group(1)} {_unquote_yaml_scalar(match.group(2))}"
+
+
+def _description_lines(path: str, text: str) -> set[int]:
+    """Indexes of ``description`` lines in a YAML or JSON file, including the
+    body of a YAML block-scalar description. Descriptions are template prose,
+    so a reworded one is not a lost setting."""
+    if not path.endswith((*_YAML_SUFFIXES, ".json")):
+        return set()
+    skip: set[int] = set()
+    block_indent: int | None = None
+    for i, line in enumerate(text.splitlines()):
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None and (not line.strip() or indent > block_indent):
+            skip.add(i)
+            continue
+        block_indent = None
+        if _setting_key(line) != "description":
+            continue
+        skip.add(i)
+        value = line.split(":", 1)[1].strip()
+        if path.endswith(_YAML_SUFFIXES) and _YAML_BLOCK_SCALAR.match(value):
+            block_indent = indent
+    return skip
+
+
 # Settings the canonical templates deliberately stopped carrying: a render
 # that drops one of these is the intended change, not a lost per-repo value.
 # Keyed by repo-relative path; matched on the YAML/JSON key. The lane imports
@@ -506,14 +565,19 @@ def still_lost(path: str, lost: list[str]) -> list[str]:
     return remaining
 
 
-def lost_setting_lines(backup_text: str, new_text: str) -> list[str]:
+def lost_setting_lines(backup_text: str, new_text: str, path: str = "") -> list[str]:
     """Non-comment lines in the ``.bak`` absent from its replacement
     (reorder-immune, counted per line so a duplicate elsewhere in the file
-    cannot stand in for a removed one). The lane imports this function."""
-    remaining = Counter(_normalise(x) for x in new_text.splitlines())
+    cannot stand in for a removed one). In a YAML or JSON ``path``,
+    descriptions are not compared, and in YAML a value that only gained or
+    lost its quotes still matches. The lane imports this function."""
+    remaining = Counter(_normalise_for(path, x) for x in new_text.splitlines())
+    skip = _description_lines(path, backup_text)
     lost: list[str] = []
-    for line in backup_text.splitlines():
-        norm = _normalise(line)
+    for i, line in enumerate(backup_text.splitlines()):
+        if i in skip:
+            continue
+        norm = _normalise_for(path, line)
         if not norm or norm.startswith("#") or norm.startswith("//"):
             continue
         if norm in {"{", "}", "[", "]", "},", "],"}:
@@ -617,6 +681,7 @@ def stage_like_the_lane(
                 lost_setting_lines(
                     bak.read_text(encoding="utf-8", errors="replace"),
                     original.read_text(encoding="utf-8", errors="replace"),
+                    rel,
                 ),
             )
             if missing:
