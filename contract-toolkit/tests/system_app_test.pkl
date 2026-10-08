@@ -1,0 +1,98 @@
+// FND-3570: `type = "system"` puts a contract into system-app mode. The app
+// renders no `entrypoints` block in `atlan.yaml` (an entrypoint with no
+// `marketplace_card` key is read downstream as a card), defaults
+// `marketplaceCard` and `hasCredentialConfig` to false, and refuses card
+// settings it would otherwise drop.
+
+amends "pkl:test"
+
+import "../examples/bundle/miner.pkl" as Miner
+import "../examples/minimal/app.pkl" as minimalApp
+import "../examples/system-app/app.pkl" as systemApp
+import "../src/App.pkl" as App
+
+local systemAtlanYaml: String = systemApp.output.files["atlan.yaml"].text
+
+local setupForm = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+local systemWithUi = (systemApp) {
+  uiConfig = setupForm
+}
+
+local systemWithCard = (systemApp) {
+  marketplaceCard = true
+}
+
+local systemBundle = (systemApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "miner"; contract = Miner }
+  }
+}
+
+local systemBundleWithPackage = (systemApp) {
+  entrypoints = new Listing {
+    new App.Entrypoint { name = "miner"; contract = Miner; packageId = "@atlan/miner" }
+  }
+}
+
+facts {
+  ["System app atlan.yaml keeps type: system and carries no entrypoints or card keys"] {
+    systemAtlanYaml.contains("\ntype: system\n")
+    !systemAtlanYaml.contains("entrypoints:")
+    !systemAtlanYaml.contains("package_id:")
+    !systemAtlanYaml.contains("marketplace_card:")
+  }
+
+  ["System app defaults marketplaceCard and hasCredentialConfig to false"] {
+    systemApp.marketplaceCard == false
+    systemApp.hasCredentialConfig == false
+    systemApp.credentialFieldName == null
+  }
+
+  ["System app without uiConfig renders no setup form, manifest or input model"] {
+    systemApp.output.files.keys == Set("atlan.yaml", "app.yaml", "app/generated/_e2e_base.py")
+  }
+
+  ["System app with uiConfig keeps its setup form, manifest and input model"] {
+    systemWithUi.output.files.containsKey("app/generated/system-app.json")
+    systemWithUi.output.files.containsKey("app/generated/manifest.json")
+    systemWithUi.output.files.containsKey("app/generated/_input.py")
+    !systemWithUi.output.files.containsKey("app/generated/atlan-connectors-system-app.json")
+    !systemWithUi.output.files["atlan.yaml"].text.contains("entrypoints:")
+    !systemWithUi.output.files["app/generated/_input.py"].text.contains("_credential")
+  }
+
+  ["System bundle renders entrypoint artifacts but no entrypoints block"] {
+    systemBundle.output.files.containsKey("app/generated/miner/manifest.json")
+    !systemBundle.output.files["atlan.yaml"].text.contains("entrypoints:")
+  }
+
+  ["System app refuses marketplaceCard = true"] {
+    module.catch(() -> systemWithCard.output.files).contains("marketplaceCard = true")
+  }
+
+  ["System app refuses packageId on an entrypoint"] {
+    module.catch(() -> systemBundleWithPackage.output.files).contains("packageId set on entrypoint(s) List(\"miner\")")
+  }
+
+  ["Non-system apps keep their entrypoints block and card"] {
+    minimalApp.output.files["atlan.yaml"].text.contains("entrypoints:")
+    minimalApp.output.files["atlan.yaml"].text.contains("marketplace_card: true")
+  }
+
+  ["Non-system apps keep the card and credential defaults"] {
+    (App) { name = "defaults"; icon = "https://example.com/icon.svg" }.marketplaceCard == true
+    (App) { name = "defaults"; icon = "https://example.com/icon.svg" }.hasCredentialConfig == true
+  }
+}

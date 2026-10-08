@@ -151,7 +151,26 @@ appId: String = ""
 creatorOrg: String?
 
 /// Marketplace app type (`connector`, `miner`, `utility`, `system`, ...).
+///
+/// Written to `atlan.yaml` as the top-level `type`. `"system"` also switches
+/// the contract into system-app mode: an app that runs only inside a tenant,
+/// invoked by other apps' DAG nodes, with no marketplace card. System-app mode:
+///
+///   - defaults `marketplaceCard` and `hasCredentialConfig` to `false`;
+///   - omits the `entrypoints` block from `atlan.yaml`, so no card can be
+///     expanded from it (an entrypoint with no `marketplace_card` key is read
+///     downstream as a card);
+///   - refuses `marketplaceCard = true` and any `Entrypoint.packageId`, both of
+///     which would otherwise be dropped without a word.
+///
+/// It does not change `manifest.json`, the workflow configmap or `_input.py`:
+/// those still follow `uiConfig`, so a system app with a setup form keeps it.
+/// It does not hide the app's own listing either. That is the Global
+/// Marketplace App row's `is_system_app` flag, which only a GM admin sets.
 type: String = "connector"
+
+/// (Derived) Whether this contract is in system-app mode. See `type`.
+local isSystemApp: Boolean = type == "system"
 
 /// Marketplace icon URL. Defaults to the app `icon` when not set.
 iconUrl: String? = icon
@@ -205,7 +224,11 @@ tags: Listing<String> = new Listing {}
 ///
 /// For multi-entrypoint apps this flag has no effect; control card presence
 /// per-entrypoint via `Entrypoint.packageId` instead.
-marketplaceCard: Boolean = true
+///
+/// Defaults to `false` when `type = "system"`, and a system app may not set it
+/// to `true`: system apps render no `entrypoints` block, so there is nothing to
+/// carry the card.
+marketplaceCard: Boolean = !isSystemApp
 
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
@@ -342,7 +365,11 @@ appServiceUrl: String = "http://\(name).\(name)-app.svc.cluster.local"
 // ── CREDENTIAL CONFIG ─────────────────────────────────────────────────────────
 
 /// Whether this app has a credential config.
-hasCredentialConfig: Boolean = true
+///
+/// Defaults to `false` when `type = "system"`: system apps run on the tenant's
+/// own identity rather than a user-supplied credential. Set it explicitly for
+/// the rare system app that does take one.
+hasCredentialConfig: Boolean = !isSystemApp
 
 /// Name for the credential configmap (e.g., "atlan-connectors-redshift").
 connectorConfigName: String = "atlan-connectors-\(name)"
@@ -4465,6 +4492,26 @@ local effectiveEntrypoints: Listing<Entrypoint> =
       }
     }
 
+/// Whether `atlan.yaml` carries an `entrypoints` block. A system app never does:
+/// downstream reads an entrypoint without `marketplace_card` as a card, and a
+/// system app's own listing is hidden by GM's `is_system_app`, which does not
+/// hide cards expanded from entrypoints. Omitting the block also keeps the
+/// top-level `type = "system"` out of the synthesized entrypoint: GM and CI
+/// publish do not accept `system` as an entrypoint type.
+local emitsEntrypointsBlock: Boolean = emitEntrypoints && !isSystemApp
+
+/// Refuses system-app settings that would be dropped without a word, because a
+/// system app renders no `entrypoints` block to carry them.
+local _systemAppCheck: Any =
+  if (!isSystemApp) null
+  else if (marketplaceCard)
+    throw("App.pkl: type = \"system\" with marketplaceCard = true. A system app renders no `entrypoints` block, so no card would be emitted. Remove marketplaceCard, or use a non-system type if the app needs a marketplace card.")
+  else
+    let (_withPkg = entrypoints.toList().filter((ep) -> ep.packageId != null))
+    if (!_withPkg.isEmpty)
+      throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app renders no `entrypoints` block, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
+    else null
+
 local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["name"] = name
   when (appId != "") { ["app_id"] = appId }
@@ -4481,7 +4528,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }
-  when (emitEntrypoints) {
+  when (emitsEntrypointsBlock) {
     ["entrypoints"] = new Listing {
       for (ep in effectiveEntrypoints) {
         renderEntrypoint(ep)
@@ -4890,6 +4937,9 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  // Forced here because nothing that renders atlan.yaml reads it, so it would
+  // otherwise never be evaluated.
+  let (_sysAppCheck = _systemAppCheck)
   // Forced here because a bundle root never evaluates manifestData, which is the only
   // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
   let (_legacyAliasPlacementCheck = _legacyWorkflowTypesPlacementCheck)

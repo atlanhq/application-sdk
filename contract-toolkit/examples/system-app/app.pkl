@@ -1,0 +1,17 @@
+/// System-app example — an app that runs only inside a tenant, invoked by
+/// other apps' DAG nodes, with no marketplace card.
+///
+/// `type = "system"` switches the contract into system-app mode:
+/// `marketplaceCard` and `hasCredentialConfig` default to `false`, and
+/// `atlan.yaml` carries no `entrypoints` block, so no card can be expanded
+/// from it. Without a `uiConfig` there is no setup form, workflow configmap,
+/// `manifest.json` or `_input.py` either: the callers' DAGs start the app.
+///
+/// Hiding the app's own listing is not the contract's job. A Global
+/// Marketplace admin sets `is_system_app` on the GM App row once.
+amends "../../src/App.pkl"
+
+name = "system-app"
+displayName = "System App Example"
+icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
+type = "system"

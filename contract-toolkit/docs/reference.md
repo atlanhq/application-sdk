@@ -93,7 +93,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `docsUrl` | String | `""` | Documentation link. Emitted as top-level `docs_url` in `atlan.yaml` (omitted when empty). |
 | `logo` | String | `icon` | Logo URL. |
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
-| `type` | String | `"connector"` | Marketplace type. |
+| `type` | String | `"connector"` | Marketplace type, emitted as top-level `type`. `"system"` switches on system-app mode; see [System Apps](#system-apps). |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
@@ -834,7 +834,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `hasCredentialConfig` | Boolean | `true` | Whether to generate credential JSON. |
+| `hasCredentialConfig` | Boolean | `true` (`false` when `type = "system"`) | Whether to generate credential JSON. |
 | `connectorConfigName` | String | `"atlan-connectors-{name}"` | Credential configmap name. Override to share credentials across entrypoints. |
 | `credentialConnectorType` | String | `"rest"` | Default connector type (`"jdbc"`, `"rest"`). |
 | `credentialCommonFields` | Listing<CredentialFieldEntry> | `[]` | Fields shared across all auth types. |
@@ -1015,6 +1015,21 @@ Use the typed `vpa` field rather than `overrides`: the chart key is `vpa`, and a
 
 For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
 
+### System Apps
+
+A system app runs only inside a tenant and is started by other apps' DAG nodes (popularity, publish, query intelligence, ...). It has no marketplace card. Set `type = "system"`:
+
+- `marketplaceCard` and `hasCredentialConfig` default to `false`.
+- `atlan.yaml` keeps `type: system` but carries **no `entrypoints` block**. Downstream reads an entrypoint with no `marketplace_card` key as a card, so no block is the only shape that cannot surface one. This matches the hand-written `atlan.yaml` of existing system apps.
+- `marketplaceCard = true`, or `packageId` on any `Entrypoint`, fails at `pkl eval`: with no `entrypoints` block they would be dropped silently.
+
+What does **not** change:
+
+- `manifest.json`, the workflow configmap and `_input.py` still follow `uiConfig`. A system app with a setup form keeps it; one without renders only `atlan.yaml`, `app.yaml` and the e2e base.
+- Hiding the app's own listing is the Global Marketplace App row's `is_system_app` flag. Only a GM admin sets it, so the toolkit does not emit it.
+
+See `examples/system-app/`.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
@@ -1022,7 +1037,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
-| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
+| `marketplaceCard` | Boolean | `true` (`false` when `type = "system"`) | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
 | `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
