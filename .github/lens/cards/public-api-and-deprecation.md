@@ -4,7 +4,8 @@
 - Flag: a deprecation that doesn't delegate, or the wrong marker: `@deprecated` or an `__init__` `DeprecationWarning` (classes/functions), `__deprecated_members__` (enum members), `_DEPRECATED_CONSTANTS` + `__getattr__` (constants; no module-scope re-export).
 - Flag: a deliberate break not declared `feat!:`/`BREAKING CHANGE:`; a new required param, changed default, or moved symbol without re-export.
 - Flag: a new public symbol not in `__all__`; a new `__init__.py` export with no test.
-- Flag: a new env var without `ATLAN_` (except `OTEL_`/`DAPR_`/`K8S_`); one removed/renamed without a fallback and `_REMOVED_ENV_VARS` entry (`docs/standards/env-vars.md`).
+- Flag: a new runtime env var without `ATLAN_` (except `OTEL_`/`DAPR_`/`K8S_`); one removed/renamed without a fallback and `_REMOVED_ENV_VARS` entry (`docs/standards/env-vars.md`).
+- Don't flag: the prefix or registry rules for a test-harness `E2E_*` variable read only under `application_sdk/testing/` — it is CI/test config, not runtime config ("Runtime vs test-harness variables" in `docs/standards/env-vars.md`). Do flag an `E2E_*` read outside `application_sdk/testing/`.
 - Flag: a value other repos read (served `task_queue`, error-envelope keys, persistent prefixes, preflight payloads) changed without `docs/standards/cross-repo-contracts.md`.
 - Flag (CI only warns): a notice without replacement and removal version (B002), or past its removal version (B003).
 - Don't flag (CI blocks): contract field removal/retype (B005/B006); `_` names.

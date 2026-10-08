@@ -545,6 +545,13 @@ on:
 
           Unset = the four single-tenant secrets below are used and the cloud
           fan-out is skipped, which is exactly the pre-FND-6 behaviour.
+      E2E_SYSTEM_TENANT_MATRIX_JSON:
+        required: false
+        description: |
+          Tenant map for system-app e2e (FND-3542), same shape as
+          E2E_TENANT_MATRIX_JSON. When set it is used instead of that secret
+          and the single-tenant fallback, so a system app's legs run only on
+          these tenants. Suites built on SystemAppE2ETest require it.
       SDR_TEST_TENANT:
         required: false
         description: |
@@ -1146,7 +1153,7 @@ jobs:
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
-      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+      HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       # Human breadcrumb correlating this dispatched run back to the SDK PR that
       # fired it. Emitted here (the first job in the e2e path) so it is visible
@@ -1228,10 +1235,12 @@ jobs:
         if: env.HAS_TENANT_MATRIX != ''
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
       - name: Discover suites
         id: discover
@@ -1255,7 +1264,7 @@ jobs:
           # so the natural form collapses the default (empty = SDK cloud list)
           # into "none" and quietly disables the matrix on every un-customised
           # caller. The negated form never evaluates the input for truthiness.
-          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          clouds: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           # ── The per-suite dimensions (FND-1865) ─────────────────────────────
           # Resolved here, once, and carried in the matrix — so a leg's source
           # availability and compose overlay arrive the same way its artifact
@@ -1287,7 +1296,7 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           clouds-only: "true"
-          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          clouds: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           # Same narrowing as the full matrix above, from the same step output:
           # prepare-tenant must install onto exactly the clouds the legs then
           # run against, and a cloud it prepared but no leg used (or vice versa)
@@ -1902,6 +1911,7 @@ jobs:
       contents: read
     env:
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ matrix.cloud }}
       FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
       FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
@@ -1967,6 +1977,7 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -1975,6 +1986,7 @@ jobs:
             --mask-only
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2222,6 +2234,7 @@ jobs:
       # tenant — a silent wrong-tenant run is indistinguishable from a right one
       # in the logs, since the host is masked. One writer, no precedence.
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ matrix.cloud }}
       FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
       FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
@@ -2303,6 +2316,7 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2311,6 +2325,7 @@ jobs:
             --mask-only
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2936,7 +2951,7 @@ jobs:
       # cannot reference the `secrets` context directly. Same shape as
       # discover-e2e, deliberately: both answer "is this repo wired for the
       # cross-CSP matrix", and two different answers would be a bug.
-      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+      HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - name: Install uv
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -3024,10 +3039,12 @@ jobs:
         if: inputs.enable-e2e && env.HAS_TENANT_MATRIX != ''
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
       # The same driver, the same `clouds` expression and the same narrowing as
       # discover-e2e — so `configured` is the list discovery WOULD resolve, not
@@ -3045,7 +3062,7 @@ jobs:
         if: inputs.enable-e2e
         continue-on-error: true
         env:
-          CLOUDS: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          CLOUDS: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           AVAILABLE_CLOUDS: ${{ steps.matrix-clouds.outputs.clouds }}
         run: |
           set -euo pipefail

@@ -62,6 +62,7 @@ __all__ = [
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
     "SeededConnectionNotSearchableError",
+    "TenantPoolMismatchError",
     "UnknownConnectorTypeError",
     "WorkerNotHealthyError",
 ]
@@ -123,6 +124,17 @@ class DeployedManifestMismatchError(DataIntegrityError):
     expectation: str | None = (
         "the published DAG's node identities match the local manifest's"
     )
+
+
+@dataclass(kw_only=True)
+class TenantPoolMismatchError(PreconditionError):
+    """The suite is not written for the tenant pool this run was placed in.
+
+    Raised from ``setup_method``, before anything touches the tenant. See
+    :mod:`application_sdk.testing.e2e.tenant_pool`.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_E2E_TENANT_POOL"
 
 
 @dataclass(kw_only=True)

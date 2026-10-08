@@ -137,6 +137,7 @@ from application_sdk.testing.e2e.payload import (
     build_ae_payload,
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
+from application_sdk.testing.e2e.tenant_pool import TenantPool, check_tenant_pool
 from application_sdk.testing.harness import atlas
 from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
@@ -760,6 +761,16 @@ class BaseE2ETest:
     mode: ClassVar[RunMode] = RunMode.DIRECT
     app_service_url: ClassVar[str] = ""
 
+    # Which of the above setup_method insists on, and which tenant pool the
+    # suite may run on (see application_sdk.testing.e2e.tenant_pool). Fixed per
+    # base class, not per suite: SystemAppE2ETest sets both.
+    _required_class_attrs: ClassVar[tuple[str, ...]] = (
+        "connector_short_name",
+        "argo_package_name",
+        "argo_template_name",
+    )
+    _tenant_pool: ClassVar[TenantPool] = TenantPool.CONNECTOR
+
     # --- source-availability tier --------------------------------------
     # Sourcing is the app owner's responsibility. When a connector has NO
     # extraction source provisioned in CI (no free container, and no
@@ -1294,17 +1305,18 @@ class BaseE2ETest:
                 not strictly below the poll ceiling, so the watchdog could never
                 fire.
             MissingHarnessEnvError: The environment carries no tenant.
+            TenantPoolMismatchError: The suite is not written for the tenant
+                pool this run is on.
         """
-        for required in (
-            "connector_short_name",
-            "argo_package_name",
-            "argo_template_name",
-        ):
+        for required in type(self)._required_class_attrs:
             if not getattr(type(self), required, ""):
                 raise MissingHarnessClassAttrError(
                     message=f"{type(self).__name__}: class attribute '{required}' must be set",
                     field=required,
                 )
+        check_tenant_pool(
+            type(self)._tenant_pool, os.environ, suite=type(self).__name__
+        )
 
         self._node_dispatch = {}
         self._queue_pollers = {}

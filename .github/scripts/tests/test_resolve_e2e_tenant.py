@@ -84,6 +84,7 @@ def test_selects_the_requested_cloud() -> None:
         "SDR_CLIENT_SECRET": "azure-secret",
         "ATLAN_API_KEY": "azure-key",
         "ATLAN_BASE_URL": "https://e2e-azure-main.example.com",
+        "E2E_TENANT_POOL": "connector",
     }
 
 
@@ -181,6 +182,89 @@ def test_error_messages_never_carry_a_credential_value() -> None:
             assert secret not in str(exc.value)
 
 
+# ── Tenant pools (FND-3542) ──────────────────────────────────────────────────
+
+_SYSTEM_MATRIX = {
+    "aws": {
+        "tenant": "e2e-sys-aws.example.com",
+        "client_id": "pool-client",
+        "client_secret": "pool-secret",
+        "api_key": "pool-key",
+    },
+}
+
+
+def test_system_matrix_wins_over_the_connector_matrix() -> None:
+    env = resolve(_json(), "aws", _FALLBACK, system_matrix_json=_json(_SYSTEM_MATRIX))
+    assert env["SDR_TEST_TENANT"] == "e2e-sys-aws.example.com"
+    assert env["ATLAN_BASE_URL"] == "https://e2e-sys-aws.example.com"
+    assert env["E2E_TENANT_POOL"] == "system"
+
+
+def test_system_leg_never_carries_connector_credentials() -> None:
+    rendered = json.dumps(
+        resolve(_json(), "aws", _FALLBACK, system_matrix_json=_json(_SYSTEM_MATRIX))
+    )
+    for value in (*_MATRIX["aws"].values(), *_FALLBACK.values()):
+        assert value not in rendered
+
+
+def test_system_pool_has_no_fallback_for_a_missing_cloud() -> None:
+    # A cloud the system matrix lacks must fail, not fall through to the
+    # connector matrix that does carry it: that would put a system-app leg on a
+    # connector tenant.
+    with pytest.raises(TenantMatrixError) as exc:
+        resolve(_json(), "azure", _FALLBACK, system_matrix_json=_json(_SYSTEM_MATRIX))
+    assert "E2E_SYSTEM_TENANT_MATRIX_JSON" in str(exc.value)
+
+
+@pytest.mark.parametrize("cloud", ["", "   "])
+def test_system_pool_has_no_single_tenant_fallback(cloud: str) -> None:
+    with pytest.raises(TenantMatrixError) as exc:
+        resolve(_json(), cloud, _FALLBACK, system_matrix_json=_json(_SYSTEM_MATRIX))
+    assert "no single-tenant fallback" in str(exc.value)
+
+
+@pytest.mark.parametrize("system", ["", "   "])
+def test_blank_system_matrix_is_the_connector_pool(system: str) -> None:
+    env = resolve(_json(), "aws", _FALLBACK, system_matrix_json=system)
+    assert env["SDR_TEST_TENANT"] == "e2e-aws-main.example.com"
+    assert env["E2E_TENANT_POOL"] == "connector"
+
+
+def test_system_matrix_errors_name_the_system_secret() -> None:
+    with pytest.raises(TenantMatrixError) as exc:
+        resolve("", "aws", system_matrix_json="{not json")
+    assert "E2E_SYSTEM_TENANT_MATRIX_JSON" in str(exc.value)
+
+
+def test_main_system_flag_writes_the_system_pool(capsys) -> None:
+    rc = main(
+        [
+            "--matrix-json",
+            _json(),
+            "--system-matrix-json",
+            _json(_SYSTEM_MATRIX),
+            "--cloud",
+            "aws",
+        ]
+    )
+    assert rc == 0
+    env = _parse_env(capsys.readouterr().out)
+    assert env["E2E_TENANT_POOL"] == "system"
+    assert env["SDR_TEST_TENANT"] == "e2e-sys-aws.example.com"
+
+
+def test_tenant_pool_is_written_but_not_masked(capsys) -> None:
+    # "system" / "connector" are not credentials, and masking is by substring.
+    main(
+        ["--system-matrix-json", _json(_SYSTEM_MATRIX), "--cloud", "aws", "--mask-only"]
+    )
+    masked = {ln[len("::add-mask::") :] for ln in capsys.readouterr().out.splitlines()}
+    assert "system" not in masked
+    assert "pool-secret" in masked
+
+
 # ── CLI ──────────────────────────────────────────────────────────────────────
 
 
@@ -195,6 +279,7 @@ def test_main_writes_heredoc_env_lines(capsys) -> None:
         "ATLAN_API_KEY": "gcp-key",
         "E2E_TENANT_DEPLOYMENT_NAME": "staging",
         "ATLAN_BASE_URL": "https://e2e-gcp-main1.example.com",
+        "E2E_TENANT_POOL": "connector",
     }
 
 
@@ -204,9 +289,10 @@ def test_main_mask_only_emits_masks_and_no_env_lines(capsys) -> None:
     out = capsys.readouterr().out
     assert "<<" not in out, "--mask-only must not write $GITHUB_ENV lines"
     masked = {ln[len("::add-mask::") :] for ln in out.splitlines()}
-    # Every resolved value is registered, including the derived base URL.
-    for value in resolve(_json(), "aws").values():
-        assert value in masked
+    # Every resolved credential is registered, including the derived base URL.
+    for name, value in resolve(_json(), "aws").items():
+        if name != "E2E_TENANT_POOL":
+            assert value in masked
 
 
 def test_deployment_name_is_written_but_not_masked(capsys) -> None:
@@ -244,7 +330,11 @@ def test_main_fallback_flags_reproduce_the_single_tenant_shape(capsys) -> None:
     )
     assert rc == 0
     env = _parse_env(capsys.readouterr().out)
-    assert env == {**_FALLBACK, "ATLAN_BASE_URL": "https://legacy.example.com"}
+    assert env == {
+        **_FALLBACK,
+        "ATLAN_BASE_URL": "https://legacy.example.com",
+        "E2E_TENANT_POOL": "connector",
+    }
 
 
 def test_main_reports_errors_as_workflow_commands(capsys) -> None:
@@ -258,14 +348,16 @@ def test_main_reports_errors_as_workflow_commands(capsys) -> None:
 def test_mask_and_write_passes_agree_on_the_value_set(capsys) -> None:
     """Every credential written to $GITHUB_ENV was registered by the mask pass.
 
-    azure carries no deployment_name, so here the two sets are exactly equal —
-    nothing is written that was not masked first.
+    azure carries no deployment_name, so the only unmasked value written is the
+    tenant pool — one of two fixed words, never a credential.
     """
     main(["--matrix-json", _json(), "--cloud", "azure", "--mask-only"])
     masked = {ln[len("::add-mask::") :] for ln in capsys.readouterr().out.splitlines()}
     main(["--matrix-json", _json(), "--cloud", "azure"])
-    written = set(_parse_env(capsys.readouterr().out).values())
+    env = _parse_env(capsys.readouterr().out)
+    written = {v for k, v in env.items() if k != "E2E_TENANT_POOL"}
     assert written <= masked
+    assert env["E2E_TENANT_POOL"] not in masked
 
 
 # ── Call-site ordering guard (twin of test_export_extra_env's) ───────────────

@@ -8,6 +8,37 @@ The SDK warns at startup when any removed/renamed env var is still set in
 the environment. To make sure your removal shows up in that warning, add
 the **old** env var name to the registry.
 
+## Runtime vs test-harness variables
+
+The SDK reads two kinds of environment variable, and the rules on this page apply
+to only one of them.
+
+| | Runtime variables | Test-harness variables |
+|---|---|---|
+| Prefix | `ATLAN_` (ADR-0009). Exempt: `OTEL_`, `DAPR_`, `K8S_` | `E2E_` |
+| Read by | App code, on production paths | Only code under `application_sdk/testing/` |
+| Set by | Helm charts, Dockerfiles, `ConfigMap`s on deployed apps | The SDK's reusable CI workflows and scripts, or a developer running tests locally |
+| Documented in | [`docs/configuration.md`](../configuration.md) | The harness docstrings and [`connector-ci-e2e.md`](connector-ci-e2e.md) |
+| Removal / rename | Registry below, with a startup warning | No registry. Nothing deployed sets them, and the startup warning runs in `run_main()`, which the test harness never calls |
+
+A test-harness variable describes a test run: which tenant, which pool, which
+worker to wait for, whether a source is available. A deployed app never reads one.
+That is why it does **not** take the `ATLAN_` prefix. The prefix marks a variable
+an operator can set on a production app, and giving it to a CI knob would advertise
+it as one.
+
+Two rules keep the line clear:
+
+- **Never read an `E2E_*` variable outside `application_sdk/testing/`.** If
+  production code needs the value, it is a runtime variable: name it `ATLAN_*` and
+  add it to `docs/configuration.md`.
+- **Never give a test-harness variable the `ATLAN_` prefix.** CI-only config
+  belongs in the `E2E_*` namespace beside its siblings (`E2E_SOURCE_AVAILABLE`,
+  `E2E_TEMPORAL_ADDRESS`, `E2E_TENANT_DEPLOYMENT_NAME`, `E2E_TENANT_POOL`, …).
+
+To list every test-harness variable in use:
+`grep -rhoE '"E2E_[A-Z_]+' application_sdk/testing | sort -u`.
+
 ## The registry
 
 `application_sdk/common/env_warnings.py`:

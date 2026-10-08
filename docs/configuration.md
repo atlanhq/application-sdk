@@ -4,6 +4,8 @@ The Application SDK reads configuration from environment variables at startup. V
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
+This page covers **runtime** variables only. Variables starting `E2E_` configure the test harness under `application_sdk/testing/`. CI sets them, and a deployed app never reads them. See [Runtime vs test-harness variables](standards/env-vars.md#runtime-vs-test-harness-variables).
+
 ---
 
 ## Application
