@@ -77,8 +77,8 @@ def probe(repo: str) -> tuple[str, str, str]:
     """
     endpoint = f"repos/{repo}"
     try:
-        proc = subprocess.run(
-            ["gh", "api", endpoint],
+        proc = subprocess.run(  # noqa: S603
+            ["gh", "api", endpoint],  # noqa: S607
             capture_output=True,
             text=True,
             check=False,
