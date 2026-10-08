@@ -332,10 +332,17 @@ class TestPayloadSafetyThroughTypeAliases:
         assert OkInput().mode == "other"
 
     def test_tree_selection_is_exported_from_the_package(self) -> None:
+        # The documented import path, and the package's public surface.
         import application_sdk.contracts as contracts
+        from application_sdk.contracts import TreeSelection as PackageTreeSelection
 
+        assert PackageTreeSelection is TreeSelection
         assert "TreeSelection" in contracts.__all__
-        assert contracts.TreeSelection is TreeSelection
+
+        class OkInput(Input):
+            selection: PackageTreeSelection = Field(default_factory=dict)
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
 
 
 # =============================================================================
