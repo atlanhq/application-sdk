@@ -626,7 +626,7 @@ def symlink_skipped(manifest: dict, root: pathlib.Path) -> list[str]:
         {
             p
             for p in manifest.get("touched") or []
-            if isinstance(p, str) and _via_symlink(root, p)
+            if isinstance(p, str) and not _unsafe_rel(p) and _via_symlink(root, p)
         }
     )
 

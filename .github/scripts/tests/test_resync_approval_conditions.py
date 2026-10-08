@@ -758,6 +758,8 @@ def test_symlink_skipped_lists_only_paths_under_a_symlinked_dir(tmp_path):
         ".claude/skills/r/SKILL.md",
         "a.yaml",
         ".claude",
+        ".agents/../.claude/skills/r/SKILL.md",
+        "/abs/.claude/x",
         7,
     ]
     assert resync.symlink_skipped({"touched": touched}, tmp_path) == [
