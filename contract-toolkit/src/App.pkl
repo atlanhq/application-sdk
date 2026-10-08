@@ -3452,7 +3452,12 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
       "\(k): str = \"\""
     else if (u is Widgets.ConditionalInput)
       (let (ci = u as Widgets.ConditionalInput)
-        if (ci.outputValueType == "object")
+        if (ci.treeSelection && ci.baseWidgetType != "apitree")
+          throw("ConditionalInput '\(k)' sets treeSelection with baseWidgetType = \"\(ci.baseWidgetType)\"; "
+            + "treeSelection applies only to baseWidgetType = \"apitree\".")
+        else if (ci.treeSelection)
+          getPyDefaultFactoryField(k, "TreeSelection", "dict")
+        else if (ci.outputValueType == "object")
           getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
         else
           "\(k): str = \"\(escapePyStr(if (ci.default != null) ci.default!!.toString() else ""))\"")
@@ -3461,6 +3466,8 @@ local function getInputPyField(k: String, u: Widgets.UIElement): String =
       // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
       // leaf values (e.g. booleans) to str during model construction.
       getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+    else if (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
+      getPyDefaultFactoryField(k, "TreeSelection", "dict")
     else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
       getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
     else
@@ -3664,6 +3671,9 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     }
     when (uiFieldLines.contains("MaxItems(")) {
       "MaxItems"
+    }
+    when (uiFieldLines.contains(": TreeSelection")) {
+      "TreeSelection"
     }
   }).toList()
   local firstPartyImportLines: String =

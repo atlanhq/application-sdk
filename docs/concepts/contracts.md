@@ -76,8 +76,11 @@ The framework rejects unsafe field types at class-definition time:
 | `bytearray` | Rejected | Use `FileReference` |
 | `list[T]` (unbounded) | Rejected | Use `Annotated[list[T], MaxItems(N)]` |
 | `dict[str, Any]` (unbounded) | Rejected | Use a typed Pydantic model |
+| `Annotated[dict[str, Any], MaxItems(N)]` | Rejected | `Any` is refused even inside a bound; for a nested tree-widget selection use `TreeSelection` |
 
 This prevents Temporal's 2 MB payload limit from being hit silently in production.
+
+Type aliases are checked through, not around: a `TypeAliasType` (or a Python 3.12 `type X = ...` alias) is unwrapped and its value checked like any other annotation, so an alias over `Any` or an unbounded dict is rejected too.
 
 ### MaxItems
 
@@ -89,7 +92,23 @@ class BatchInput(Input):
     ids: Annotated[list[str], MaxItems(500)]
 ```
 
-The `MaxItems` annotation enforces a maximum list length both at class-definition time and at runtime validation.
+`MaxItems` is a design-time declaration: the payload-safety check reads it at class-definition time to confirm the collection is bounded, but a payload is not rejected at runtime for exceeding it. Choose the bound to fit Temporal's 2 MB limit.
+
+### TreeSelection
+
+For a selection from a tree widget, such as an APITree, in the nested shape the widget emits:
+
+```python
+from application_sdk.contracts import Input, TreeSelection
+from pydantic import Field
+
+class ExtractInput(Input):
+    component_include_filter: TreeSelection = Field(default_factory=dict)
+
+ExtractInput(component_include_filter={"SAP": {"MM": {"MM-SRV": {}}, "FI": {}}})
+```
+
+Each key is a selected node and its value is the selection beneath it; `{}` is a node with nothing chosen beneath it. The value is a plain nested `dict`, identical in the app and on the wire to what an untyped `dict[str, Any]` field received, so stored configs validate unchanged. It is payload-safe because every level is bounded (`MaxItems(1000)` children per node) and every leaf must be a dict. For flat database/schema filters use `FilterMap` instead. In contract-toolkit, set `treeSelection = true` on an `APITree` or apitree `ConditionalInput` to generate this type.
 
 ---
 

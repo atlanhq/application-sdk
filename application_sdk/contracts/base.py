@@ -59,6 +59,7 @@ Evolution:
 import hashlib
 import posixpath
 import re
+import typing
 import warnings
 from enum import StrEnum
 from typing import (
@@ -74,6 +75,7 @@ from typing import (
 )
 
 import orjson
+import typing_extensions
 from pydantic import BaseModel, ConfigDict, model_validator
 from pydantic_core import PydanticUndefined
 
@@ -706,15 +708,43 @@ def _is_unbounded_list(field_type: type) -> bool:
     return _is_unbounded_collection(field_type, list)
 
 
-def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
+_TYPE_ALIAS_TYPES: tuple[type, ...] = tuple(
+    {
+        t
+        for t in (
+            getattr(typing, "TypeAliasType", None),
+            getattr(typing_extensions, "TypeAliasType", None),
+        )
+        if t is not None
+    }
+)
+
+
+def _is_forbidden_type(
+    field_type: type, _aliases: frozenset[int] = frozenset()
+) -> tuple[bool, str]:
     """Check if a type is forbidden in contracts.
 
     Args:
         field_type: The type to check.
+        _aliases: ids of the type aliases already being checked, so a recursive
+            alias (``TreeSelection``) is checked once rather than forever.
 
     Returns:
         Tuple of (is_forbidden, reason string).
     """
+    # A type alias (``TypeAliasType`` or a 3.12 ``type X = ...`` statement) has no
+    # origin and is not a class, so without unwrapping it every check below skips
+    # it and an alias over ``Any`` or an unbounded dict would pass. A recursive
+    # reference back to an alias already under check adds nothing new.
+    if isinstance(field_type, _TYPE_ALIAS_TYPES):
+        if id(field_type) in _aliases:
+            return False, ""
+        return _is_forbidden_type(
+            field_type.__value__,  # type: ignore[attr-defined]
+            _aliases | {id(field_type)},
+        )
+
     origin = get_origin(field_type)
 
     # Check for Any
@@ -747,13 +777,16 @@ def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
             if inner_origin in (list, dict):
                 inner_args = get_args(inner_type)
                 for arg in inner_args:
-                    if isinstance(arg, type) or get_origin(arg) is not None:
-                        is_forbidden, reason = _is_forbidden_type(arg)
+                    if (
+                        isinstance(arg, (type, *_TYPE_ALIAS_TYPES))
+                        or get_origin(arg) is not None
+                    ):
+                        is_forbidden, reason = _is_forbidden_type(arg, _aliases)
                         if is_forbidden:
                             return True, reason
             else:
                 # For other Annotated types, recurse normally
-                return _is_forbidden_type(inner_type)
+                return _is_forbidden_type(inner_type, _aliases)
         return False, ""
 
     # Recursively check generic args (e.g., list[dict[str, Any]])
@@ -761,8 +794,11 @@ def _is_forbidden_type(field_type: type) -> tuple[bool, str]:
         args = get_args(field_type)
         for arg in args:
             # Skip non-type args (like constraint instances)
-            if isinstance(arg, type) or get_origin(arg) is not None:
-                is_forbidden, reason = _is_forbidden_type(arg)
+            if (
+                isinstance(arg, (type, *_TYPE_ALIAS_TYPES))
+                or get_origin(arg) is not None
+            ):
+                is_forbidden, reason = _is_forbidden_type(arg, _aliases)
                 if is_forbidden:
                     return True, reason
 

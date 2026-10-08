@@ -559,10 +559,12 @@ setting and for what is not supported yet.
 | Class | Widget | Python Type |
 |---|---|---|
 | `Widgets.SqlTree` | `sqltree` | `dict[str, str]` |
-| `Widgets.APITree` | `apitree` | `dict[str, Any]` |
+| `Widgets.APITree` | `apitree` | `dict[str, Any]`; `TreeSelection` with `treeSelection = true` |
 | `Widgets.ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` |
 | `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` |
 | `Widgets.GlossarySelector` | `GlossarySelector` | `str` |
+
+`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not.
 
 ### Complex & Utility
 

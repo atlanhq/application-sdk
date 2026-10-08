@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
+from typing_extensions import TypeAliasType
 
 from application_sdk.contracts.base import (
     ContractMetadata,
@@ -21,7 +22,16 @@ from application_sdk.contracts.base import (
     is_backwards_compatible,
     validate_payload_safety,
 )
-from application_sdk.contracts.types import FileReference, MaxItems
+from application_sdk.contracts.types import FileReference, MaxItems, TreeSelection
+
+# Module-level: pydantic resolves a recursive alias's string self-reference
+# through the defining module's namespace.
+_AnyMap = TypeAliasType("_AnyMap", Annotated[dict[str, Any], MaxItems(10)])
+_UnboundedAnyMap = TypeAliasType("_UnboundedAnyMap", dict[str, Any])
+_UnboundedTree = TypeAliasType("_UnboundedTree", dict[str, "_UnboundedTree"])
+_BoundedTree = TypeAliasType(
+    "_BoundedTree", Annotated[dict[str, "_BoundedTree"], MaxItems(10)]
+)
 
 # =============================================================================
 # Input / Output subclassing
@@ -242,6 +252,50 @@ class TestPayloadSafetyValidation:
 
         obj = FlexOutput(data=42)
         assert obj.data == 42
+
+
+# =============================================================================
+# Type aliases are checked through, not skipped
+# =============================================================================
+
+
+class TestPayloadSafetyThroughTypeAliases:
+    # A TypeAliasType has no origin and is not a class, so the checker used to
+    # skip it entirely: an alias over Any or an unbounded dict passed.
+
+    def test_alias_over_any_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError) as exc_info:
+
+            class BadInput(Input):
+                mapping: _AnyMap
+
+        assert "mapping" in str(exc_info.value)
+
+    def test_unbounded_recursive_alias_raises(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                tree: _UnboundedTree
+
+    def test_alias_nested_in_a_bounded_collection_is_checked(self) -> None:
+        with pytest.raises(PayloadSafetyError):
+
+            class BadInput(Input):
+                maps: Annotated[list[_UnboundedAnyMap], MaxItems(10)]
+
+    def test_bounded_recursive_alias_passes(self) -> None:
+        # Recursion terminates: the self-reference is checked once.
+
+        class OkInput(Input):
+            tree: _BoundedTree = {}
+
+        assert OkInput(tree={"a": {"b": {}}}).tree == {"a": {"b": {}}}
+
+    def test_tree_selection_passes(self) -> None:
+        class OkInput(Input):
+            selection: TreeSelection = {}
+
+        assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
 
 
 # =============================================================================

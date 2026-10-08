@@ -1167,6 +1167,20 @@ class APITree extends UIElement {
 
   hidden cred: String = "credential-guid"
 
+  /// Types the generated `_input.py` field as the SDK's payload-safe
+  /// `TreeSelection` instead of `Annotated[dict[str, Any], MaxItems(1000)]`.
+  ///
+  /// Default `false` keeps the existing `dict[str, Any]` type, which the SDK's
+  /// payload-safety check refuses at import, so a contract with an `APITree`
+  /// field needs this to import at all. Set it to `true` for a tree selection
+  /// such as `{"SAP": {"MM": {}}}`. The value stays the same plain nested dict
+  /// (same wire format, same in-app value, stored configs validate unchanged);
+  /// only the declared type changes, to one that is bounded at every level and
+  /// rejects non-dict leaves. The workflow config, manifest and widget UI are
+  /// unchanged. Requires an SDK that exports
+  /// `application_sdk.contracts.types.TreeSelection`.
+  hidden treeSelection: Boolean = false
+
   fixed ui {
     widget = "apitree"
     flattenValue = flatten
@@ -1481,6 +1495,13 @@ class ConditionalInput extends UIElement {
   hidden validationRules: Listing<ValidationRule>?
 
   hidden outputValueType: String = if (baseWidgetType == "sqltree" || baseWidgetType == "apitree" || baseWidgetType == "apiTreeSelect" || baseWidgetType == "dsnTreeMap") "object" else "string"
+
+  /// For `baseWidgetType = "apitree"`: types the generated `_input.py` field as
+  /// the SDK's payload-safe `TreeSelection` instead of
+  /// `Annotated[dict[str, Any], MaxItems(1000)]`. Same behaviour and caveats as
+  /// `APITree.treeSelection`; evaluation fails if it is set with any other base
+  /// widget. Default `false` keeps the existing type.
+  hidden treeSelection: Boolean = false
 
   hidden uiType: String?
 

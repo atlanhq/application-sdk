@@ -1,0 +1,99 @@
+// Tests for `treeSelection` on `APITree` and apitree `ConditionalInput`.
+//
+// Background: tree widgets render as `Annotated[dict[str, Any], MaxItems(1000)]`,
+// which the SDK's payload-safety check refuses at import, so apps patched the
+// generated class to opt out of the check. `treeSelection = true` types the field
+// as the SDK's payload-safe `TreeSelection` instead; the value keeps the widget's
+// nested-dict shape, so nothing else about the field changes.
+
+amends "pkl:test"
+
+import "../src/App.pkl" as App
+import "../src/Connectors.pkl"
+
+local function treeApp(include: App.UIElement) = (App) {
+  name = "tree-selection-test"
+  displayName = "Tree Selection Test"
+  connector = Connectors.API
+  icon = "https://example.com/icon.svg"
+  credentialConnectorType = "rest"
+
+  credentialAuthOptions {
+    ["basic"] = new App.AuthOption {
+      label = "Basic"
+      fields {
+        new App.FieldSpec { name = "username"; displayName = "Username" }
+        new App.FieldSpec { name = "password"; displayName = "Password"; sensitive = true }
+      }
+    }
+  }
+
+  uiConfig = new App.UIConfig {
+    tasks {
+      ["Metadata"] {
+        inputs {
+          ["include-components"] = include
+        }
+      }
+    }
+  }
+}
+
+local function conditional(tree: Boolean, base: String) = new App.ConditionalInput {
+  title = "Include Components"
+  baseWidgetType = base
+  connectorConfig = "atlan-connectors-tree-selection-test"
+  credentialRef = "credential-guid"
+  additionalProperties = new Dynamic { type = "array" }
+  treeSelection = tree
+}
+
+local function apiTree(tree: Boolean) = new App.APITree {
+  title = "Include Components"
+  credentialType = "atlan-connectors-tree-selection-test"
+  treeSelection = tree
+}
+
+local function inputPy(app) = app.output.files["app/generated/_input.py"].text
+local function configJson(app) = app.output.files["app/generated/tree-selection-test.json"].text
+
+local conditionalOn = treeApp(conditional(true, "apitree"))
+local conditionalOff = treeApp(conditional(false, "apitree"))
+local apiTreeOn = treeApp(apiTree(true))
+local apiTreeOff = treeApp(apiTree(false))
+
+facts {
+  ["Default: tree widgets keep the existing dict[str, Any] type"] {
+    inputPy(conditionalOff).contains("include_components: Annotated[dict[str, Any], MaxItems(1000)]")
+    inputPy(apiTreeOff).contains("include_components: Annotated[dict[str, Any], MaxItems(1000)]")
+    !inputPy(conditionalOff).contains("TreeSelection")
+  }
+
+  ["ConditionalInput apitree: typed as TreeSelection and imported from the SDK"] {
+    inputPy(conditionalOn).contains("include_components: TreeSelection = Field(default_factory=dict)")
+    inputPy(conditionalOn).contains("from application_sdk.contracts.types import TreeSelection\n")
+    !inputPy(conditionalOn).contains("dict[str, Any]")
+  }
+
+  ["APITree: typed as TreeSelection"] {
+    inputPy(apiTreeOn).contains("include_components: TreeSelection = Field(default_factory=dict)")
+    !inputPy(apiTreeOn).contains("dict[str, Any]")
+  }
+
+  ["The class needs no payload-safety opt-out"] {
+    inputPy(conditionalOn).contains("\nclass AppInputContract(ExtractionInput):\n")
+    !inputPy(conditionalOn).contains("allow_unbounded_fields")
+  }
+
+  ["Only the Python type changes: workflow config and manifest are identical"] {
+    configJson(conditionalOn) == configJson(conditionalOff)
+    configJson(apiTreeOn) == configJson(apiTreeOff)
+    conditionalOn.output.files["app/generated/manifest.json"].text
+      == conditionalOff.output.files["app/generated/manifest.json"].text
+  }
+
+  ["treeSelection is refused on a non-apitree ConditionalInput"] {
+    module.catch(() -> inputPy(treeApp(conditional(true, "sqltree"))))
+      .contains("treeSelection applies only to baseWidgetType = \"apitree\"")
+  }
+}
