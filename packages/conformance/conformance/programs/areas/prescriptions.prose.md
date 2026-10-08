@@ -289,13 +289,16 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   fixed at their source; see step 7.  `@entrypoint` contracts are recorded in
   the contract ledger, so a retype there is B005-guarded.  Task contracts are
   not in the ledger and can be narrowed freely.  The finding lists the fields
-  this class declares that payload safety would refuse; start from them.
+  this class declares that block removing the opt-out, those the check
+  accepts that still bound nothing, and any whose type it cannot resolve;
+  start from them.
 
   Then propose, in this order (cheapest wire-preserving fix first):
 
-  1. **Nothing to fix: remove the keyword.**  When the finding says every
+  1. **Nothing to fix: remove the opt-out.**  When the finding says every
      declared field is already payload-safe, deleting `allow_unbounded_fields`
-     is the whole fix.  This is the most common case, and suppressions often
+     (or the `_allow_unbounded_fields` class attribute, here or on the mixin
+     it comes from) is the whole fix.  This is the most common case, and suppressions often
      hide it behind a reason that is wrong ("the base's FilterMap is
      unbounded", "AE sends extra keys").  Import the module afterwards: a
      base or mixin outside this file may still carry an `Any`.
@@ -325,7 +328,8 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   4. **Bound a collection of safe values** with
      `Annotated[list[T], MaxItems(N)]` / `Annotated[dict[K, V], MaxItems(N)]`,
      only when `T` / `V` is already a legal payload type.  Every nested
-     collection needs its own bound.  Choose `N` from the field's realistic
+     `dict` or `list` needs its own bound (a set or tuple of safe values
+     passes the check as it is).  Choose `N` from the field's realistic
      cardinality and **state that assumption** in the proposal (for example,
      ~10000 entries ≈ ~1MB of JSON).  Add `from typing import Annotated` and
      `from application_sdk.contracts.types import MaxItems` if missing.
@@ -365,7 +369,8 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   genuinely open.
 
   **Verify before proposing:** import the module; for an `@entrypoint` field
-  run the ledger commands (step 8); re-detect; and run
+  run the `gen-contract-ledger` / `ledger-guard` commands shown under step 8;
+  re-detect; and run
   `tools/migrate_v3/check_migration.py`, which fails on any remaining
   `allow_unbounded_fields=True`.  A proposal from steps 1–7 returns
   `outcome = "fix"`.

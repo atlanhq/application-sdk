@@ -918,6 +918,75 @@ def test_p001_class_attribute_opt_out_honours_a_directive() -> None:
     assert len(findings) == 1 and findings[0].suppressed
 
 
+def test_p001_resolves_a_same_file_alias_to_an_unsafe_type() -> None:
+    # Taking the alias name as safe told owners to drop the opt-out; get_type_hints resolves the
+    # alias, payload safety refuses it, and the module stops importing.
+    src = (
+        "Payload = list[str]\n"
+        "Value = Any\n"
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    payload: Payload = []\n"
+        "    value: Value = None\n"
+    )
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "payload: `list[...]` without MaxItems" in message
+    assert "value: `Any`" in message
+
+
+def test_p001_reads_a_quoted_forward_reference() -> None:
+    message = _p001_message(
+        'class C(Input, allow_unbounded_fields=True):\n    payload: "Any" = None\n'
+    )
+    assert "payload: `Any`" in message and "already payload-safe" not in message
+
+
+def test_p001_reports_a_type_it_cannot_resolve_as_unknown_not_safe() -> None:
+    src = "class C(Input, allow_unbounded_fields=True):\n    spec: ImportedSpec = None\n    name: str = ''\n"
+    message = _p001_message(src)
+    assert "already payload-safe" not in message
+    assert "spec: `ImportedSpec`, a type this file does not define" in message
+    assert "name:" not in message
+
+
+def test_p001_does_not_name_a_set_or_tuple_the_runtime_accepts() -> None:
+    # Payload safety bounds only dict and list; a set or tuple of safe values passes it.
+    src = "class C(Input, allow_unbounded_fields=True):\n    ids: set[int] = set()\n    pair: tuple[str, int] = ('', 0)\n"
+    assert "already payload-safe" in _p001_message(src)
+
+
+def test_p001_the_last_class_attribute_assignment_decides() -> None:
+    # The runtime reads the final value: an earlier falsy assignment does not hide a later truthy one.
+    src = (
+        "class C(Input):\n"
+        "    _allow_unbounded_fields = False\n"
+        "    _allow_unbounded_fields = True\n"
+        "    payload: bytes = b''\n"
+    )
+    message = _p001_message(src)
+    assert "class attribute (line 3)" in message and "payload: `bytes`" in message
+    assert (
+        _ids(
+            "class C(Input):\n    _allow_unbounded_fields = True\n    _allow_unbounded_fields = False\n"
+        )
+        == []
+    )
+
+
+def test_p001_fires_on_a_contract_inheriting_the_attribute_from_a_mixin() -> None:
+    src = (
+        "class OptOutMixin:\n"
+        "    _allow_unbounded_fields = True\n"
+        "class Q(Input, OptOutMixin):\n"
+        "    items: dict[str, str] = {}\n"
+    )
+    findings = [f for f in scan_text(src, "x.py") if f.rule_id == "P001"]
+    assert len(findings) == 1  # reported on the contract, not again on the mixin
+    assert findings[0].line == 3
+    assert "inherited from OptOutMixin" in findings[0].message
+    assert "items: `dict[...]` without MaxItems" in findings[0].message
+
+
 # ── P002 CategoryFieldOverride ─────────────────────────────────────────────────
 
 
