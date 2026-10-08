@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.43.0
-source-sha:    aacc3ec216b300b9d9846e8727b038aed578e112
-source-date:   2026-10-07T23:01:25Z
+source-sha:    69b7652dba6f62f93a74e5b9f5c4d19212af34b1
+source-date:   2026-10-08T10:17:11+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,7 +21,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 44 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
@@ -1186,6 +1186,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import BoundedList`
 - **Signature:** `BoundedList`
 - **Summary:** Bounded list type. Use: Annotated[list[T], MaxItems(N)]
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `TreeSelection`
+
+- **Import:** `from application_sdk.contracts import TreeSelection`
+- **Signature:** `TreeSelection`
+- **Summary:** A selection from a tree widget, in the nested shape the widget emits.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 ## `application_sdk.credentials`
