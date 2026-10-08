@@ -1,10 +1,17 @@
-/// Typed workflow inputs that have no setup-form widget.
+/// The typed input-field vocabulary: the one layer every `_input.py` field is
+/// rendered from.
 ///
-/// A system app's callers start it from their own DAG nodes, so its inputs have
-/// no `uiConfig` to be derived from. `App.inputs` declares them with these
-/// field classes instead, and the toolkit renders them into the app's
-/// `_input.py`. Every field renders to a type the SDK's payload-safety check
-/// accepts: collections always carry `MaxItems`, and there is no `Any`.
+/// Two sources produce these fields. `uiConfig` widgets derive one per form
+/// input (`App.pkl`'s `widgetInputField` maps each widget class to its field).
+/// `App.inputs` declares them directly for a system app, whose callers start
+/// it from their own DAG nodes and so have no form to derive them from. Either
+/// way, one renderer (`renderField`) writes the Python, so a type renders the
+/// same however it was declared.
+///
+/// Every field renders to a type the SDK's payload-safety check accepts:
+/// collections always carry `MaxItems`. `JsonObjectField` is the one opaque
+/// type (`dict[str, Any]`); it exists for widgets that post free-form JSON,
+/// and `App.inputs` refuses it.
 ///
 /// Default resolution is the same for every field, in this order:
 ///
@@ -53,6 +60,15 @@ abstract class InputField {
 
   /// Message for `deprecated=`; `True` when unset.
   lifecycleMessage: String?
+
+  /// Also accept the value as a JSON-encoded string and parse it into an
+  /// object first. Setup forms post some object-valued widgets that way; the
+  /// generated class adds one `field_validator` covering every field with
+  /// this set.
+  coerceJsonString: Boolean = false
+
+  /// Whether this field is, or contains, an opaque `JsonObjectField`.
+  hidden opaque: Boolean = false
 
   /// Python type expression, without `| None`.
   hidden pyType: String
@@ -143,7 +159,37 @@ class EnumField extends InputField {
   function accepts(value: ScalarValue): Boolean = value is String && values.toList().contains(value)
 }
 
-typealias ElementField = StringField | IntField | FloatField | BoolField | EnumField
+/// An SDK `ConnectionRef`: a reference to an Atlan connection.
+class ConnectionRefField extends InputField {
+  pyType = "ConnectionRef"
+}
+
+/// An SDK `FileReference`: a pointer to a file in the object store. Use it
+/// for large or binary payloads instead of inlining them.
+class FileReferenceField extends InputField {
+  pyType = "FileReference"
+}
+
+/// An SDK `TreeSelection`: the payload-safe shape of a tree widget's selection.
+class TreeSelectionField extends InputField {
+  pyType = "TreeSelection"
+  pyDefaultIsFactory = true
+  pyNaturalDefault = "dict"
+}
+
+/// A free-form JSON object: `Annotated[dict[str, Any], MaxItems(n)]`. The
+/// only opaque type, for widgets that post arbitrary JSON. `App.inputs`
+/// refuses it; declare an `ObjectField` or `MapField` instead.
+class JsonObjectField extends InputField {
+  maxItems: Int(isPositive) = 1000
+
+  pyType = "Annotated[dict[str, Any], MaxItems(\(maxItems))]"
+  pyDefaultIsFactory = true
+  pyNaturalDefault = "dict"
+  opaque = true
+}
+
+typealias ElementField = StringField | IntField | FloatField | BoolField | EnumField | ConnectionRefField
 
 /// A bounded list of scalars. Renders `Annotated[list[T], MaxItems(n)]`.
 class ListField extends InputField {
@@ -195,6 +241,7 @@ class ObjectField extends InputField {
   allowExtra: Boolean = false
 
   pyType = className
+  opaque = fields.toMap().values.any((f) -> f.opaque)
   pyDefaultIsFactory = true
   pyNaturalDefault =
     if (fields.toMap().values.every((f) -> !f.required)) className else null
@@ -202,19 +249,25 @@ class ObjectField extends InputField {
     fields.toMap().values.flatMap((f) -> f.nestedClasses).toList() + List(this)
 }
 
-/// The `Field(...)` deprecation kwargs for a field's lifecycle.
-const local function lifecycleKwargs(f: InputField): List<String> =
-  if (f.lifecycle == "active") List()
+/// The lifecycle kwargs appended to a field's `Field(...)`, with leading
+/// separator: `""` when active.
+const local function lifecycleSuffix(f: InputField): String =
+  if (f.lifecycle == "active") ""
   else
     let (dep = if (f.lifecycleMessage != null) "deprecated=\(pyStr(f.lifecycleMessage!!))" else "deprecated=True")
-    if (f.lifecycle == "sunset") List(dep, "json_schema_extra={\"x-lifecycle\": \"sunset\"}")
-    else List(dep)
+    if (f.lifecycle == "sunset") ", \(dep), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
+    else ", \(dep)"
 
 /// A docstring body: a literal `"""` would end it early.
 const local function pyDoc(s: String): String = s.replaceAll("\"\"\"", "\\\"\\\"\\\"")
 
-/// One rendered field: the annotation line plus its docstring, at `indent`.
-function renderField(name: String, f: InputField, indent: String): String =
+/// The field's annotation line(s), without indent or docstring.
+///
+/// The layout is fixed, because existing `_input.py` files were generated with
+/// it: a `default_factory` line longer than 84 characters breaks the call
+/// across lines, and lifecycle kwargs are appended inside the final `)` (or
+/// wrap a plain default as `Field(default=...)`).
+function renderFieldLine(name: String, f: InputField): String =
   let (typ = if (f.nullable) "\(f.pyType) | None" else f.pyType)
   let (explicit = f.pyExplicitDefault)
   let (dflt =
@@ -224,16 +277,27 @@ function renderField(name: String, f: InputField, indent: String): String =
     else if (f.pyNaturalDefault != null) f.pyNaturalDefault
     else throw("Input field `\(name)` has no default: set `default`, `required = true` or `nullable = true`."))
   let (isFactory = dflt != null && dflt != "None" && f.pyDefaultIsFactory)
-  let (kwargs =
-    (if (dflt == null) List()
-     else if (isFactory) List("default_factory=\(dflt)")
-     else List("default=\(dflt)"))
-    + f.pyConstraints + lifecycleKwargs(f))
-  let (rhs =
-    if (dflt == null && kwargs.isEmpty) ""
-    else if (!isFactory && dflt != null && kwargs.length == 1) " = \(dflt)"
-    else " = Field(\(kwargs.join(", ")))")
-  "\(indent)\(name): \(typ)\(rhs)\n" +
+  let (constraints = f.pyConstraints.join(", "))
+  let (base =
+    if (isFactory)
+      let (line = "\(name): \(typ) = Field(default_factory=\(dflt))")
+      if (line.length <= 84) line
+      else "\(name): \(typ) = Field(\n        default_factory=\(dflt)\n    )"
+    else if (dflt == null)
+      if (constraints.isEmpty) "\(name): \(typ)" else "\(name): \(typ) = Field(\(constraints))"
+    else if (constraints.isEmpty) "\(name): \(typ) = \(dflt)"
+    else "\(name): \(typ) = Field(default=\(dflt), \(constraints))")
+  let (suffix = lifecycleSuffix(f))
+  // Spliced by plain concatenation: a regex replacement string would read the
+  // `\` in an escaped default or message (and any `$`) as its own escapes.
+  if (suffix.isEmpty) base
+  else if (base.contains("= Field(")) base.dropLast(1) + suffix + ")"
+  else if (dflt == null) "\(base) = Field(\(suffix.drop(2)))"
+  else "\(name): \(typ) = Field(default=\(dflt)\(suffix))"
+
+/// One rendered field: the annotation line plus its docstring, at `indent`.
+function renderField(name: String, f: InputField, indent: String): String =
+  "\(indent)\(renderFieldLine(name, f))\n" +
     (if (f.doc != "") "\(indent)\"\"\"\(pyDoc(f.doc))\"\"\"\n" else "")
 
 /// One nested object's class definition.

@@ -1034,6 +1034,8 @@ See `examples/system-app/`.
 
 ### System App Inputs
 
+Every `_input.py` field is an `InputField` from `src/Inputs.pkl`, rendered by one renderer. A `uiConfig` widget derives its field: `TagsInput` becomes `ListField { items = new StringField {} }`, `NumericInput` becomes `IntField { default = 0 }`, and so on, so a type renders the same way wherever it was declared.
+
 A system app's inputs are the args its callers' DAG nodes pass, so there is no `uiConfig` to derive them from. Declare them in `inputs`, keyed by the arg name callers send (snake_case, used as-is). The toolkit renders them into `app/generated/_input.py` as `AppInputContract(Input)`. The app imports that class, subclassing it to add validators or properties, instead of hand-maintaining its own model.
 
 ```pkl
@@ -1058,8 +1060,10 @@ inputs {
 | `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are type-checked. |
 | `MapField` | `Annotated[dict[str, V], MaxItems(n)]` | `values` is a scalar field or a `ListField`. Its only default is `{}`. |
 | `ObjectField` | its own model class | `className` must be unique. `extra="forbid"` by default; `allowExtra = true` renders `extra="ignore"`. |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | the SDK types of the same name | `FileReferenceField` is the way to hand over large or binary payloads. |
+| `JsonObjectField` | `Annotated[dict[str, Any], MaxItems(n)]` | Opaque. Exists for widgets that post free-form JSON; `inputs` refuses it. |
 
-Every field also takes `doc` (rendered as a docstring), `required`, `nullable` (renders `T | None`) and `lifecycle` / `lifecycleMessage` (as on widgets).
+Every field also takes `doc` (rendered as a docstring), `required`, `nullable` (renders `T | None`), `lifecycle` / `lifecycleMessage` (as on widgets) and `coerceJsonString` (also accept the value as a JSON-encoded string, via one generated `field_validator`).
 
 **Defaults** resolve in one order for every field:
 
@@ -1080,6 +1084,7 @@ A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value,
 - `inputs` on a multi-entrypoint bundle root, which renders no `_input.py`.
 - A key that is also a `uiConfig` field, or that the generated class already declares (base, credential, publish or streaming fields).
 - Two different `ObjectField`s with the same `className`.
+- A `JsonObjectField`, at any depth. Declare the shape with an `ObjectField`, or a `MapField` of a known value type.
 
 ### Multi-Entrypoint Bundle
 

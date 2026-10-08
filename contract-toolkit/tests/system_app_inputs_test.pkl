@@ -135,6 +135,38 @@ facts {
       .contains("already declared by the generated input class (base Input")
   }
 
+  ["inputs refuses an opaque JsonObjectField, directly or nested"] {
+    module.catch(() -> withInput("blob", new App.JsonObjectField {}).output.files).contains("JsonObjectField")
+    module.catch(() -> withInput("o", new App.ObjectField {
+      className = "Holder"
+      fields { ["blob"] = new App.JsonObjectField {} }
+    }).output.files).contains("List(\"o\")")
+  }
+
+  ["A widget and the InputField it maps to render the same line"] {
+    // One renderer: a form's TagsInput and an `inputs` ListField of strings are
+    // the same field, so they must produce the same Python.
+    let (formApp = (minimalApp) {
+      uiConfig = new App.UIConfig {
+        tasks { ["T"] { inputs { ["tags"] = new App.TagsInput { title = "Tags" } } } }
+      }
+    })
+    inputLine(formApp, "tags")
+      == inputLine(withInput("tags", new App.ListField { items = new App.StringField {} }), "tags")
+  }
+
+  ["Widget lifecycle messages are escaped like every other string"] {
+    let (formApp = (minimalApp) {
+      uiConfig = new App.UIConfig {
+        tasks { ["T"] { inputs { ["old"] = (new App.TextInput { title = "Old" }) {
+          lifecycle = "deprecated"
+          lifecycleMessage = "use \"new\" instead"
+        } } } }
+      }
+    })
+    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated=\"use \\\"new\\\" instead\")"
+  }
+
   ["Distinct objects sharing a className are refused; one reused value is not"] {
     module.catch(() -> (bare) {
       inputs {

@@ -120,6 +120,10 @@ typealias EnumField = InputsPkg.EnumField
 typealias ListField = InputsPkg.ListField
 typealias MapField = InputsPkg.MapField
 typealias ObjectField = InputsPkg.ObjectField
+typealias ConnectionRefField = InputsPkg.ConnectionRefField
+typealias FileReferenceField = InputsPkg.FileReferenceField
+typealias TreeSelectionField = InputsPkg.TreeSelectionField
+typealias JsonObjectField = InputsPkg.JsonObjectField
 
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
@@ -512,6 +516,8 @@ local _inputsCheck: Any =
       throw("App.pkl: `inputs` key(s) \(clashBase.toList().sort()) are already declared by the generated input class (base \(inputBaseClass), credential, publish or streaming fields).")
     else if (!dupClasses.isEmpty)
       throw("App.pkl: different ObjectFields share className(s) \(dupClasses.toList().sort()). Give each nested object a unique className, or reuse one ObjectField value.")
+    else if (inputs.toMap().values.any((f) -> f.opaque))
+      throw("App.pkl: `inputs` field(s) \(inputs.toMap().filter((_, f) -> f.opaque).keys.toList().sort()) are or contain a JsonObjectField, an opaque dict[str, Any]. Declare the shape with an ObjectField, or a MapField of a known value type.")
     else if (inputAllObjects.any((o) -> o.className == "AppInputContract"))
       throw("App.pkl: ObjectField className `AppInputContract` clashes with the generated input class.")
     else null
@@ -3481,121 +3487,75 @@ local function toPyName(k: String): String = k.replaceAll("-", "_")
 local function toPyFieldName(k: String): String =
   toPyName(k).replaceFirst(Regex("^_+"), "")
 
-local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
-  let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
-  if (line.length <= 84)
-    line
-  else
-    "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
-
-/// Wrap a generated field line with a Pydantic lifecycle marker when the field is
-/// deprecated or sunset.  The existing default value is preserved inside Field(...).
+/// The `_input.py` field a setup-form widget declares.
 ///
-/// active  → pass through unchanged
-/// deprecated → `x: T = expr`          → `x: T = Field(default=expr, deprecated=True)`
-///              `x: T = Field(...)`     → `x: T = Field(..., deprecated=True)`
-/// sunset  → same as deprecated but also appends `json_schema_extra={"x-lifecycle": "sunset"}`
-local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
-  if (u.lifecycle == "active")
-    fieldLine
-  else
-    let (deprecatedKwarg =
-      if (u.lifecycleMessage != null)
-        "deprecated=\"\(u.lifecycleMessage!!)\""
-      else
-        "deprecated=True")
-    let (lifecycleKwargs =
-      if (u.lifecycle == "sunset")
-        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
-      else
-        ", \(deprecatedKwarg)")
-    if (fieldLine.contains("= Field("))
-      // Already has a Field(...) call — append lifecycle kwargs before the final closing )
-      fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")
-    else
-      // Simple `name: Type = expr` form — rewrite as Field(default=expr, ...)
-      fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
-
-local function getInputPyField(k: String, u: Widgets.UIElement): String =
-  let (k = toPyFieldName(k))
-  let (baseLine =
+/// Every widget maps onto the `Inputs.pkl` vocabulary, so a widget-derived field
+/// and an `inputs` field render through the same `InputsPkg.renderField`. Each
+/// mapping restates the type and default this widget has always generated:
+/// changing one changes every connector's `_input.py`.
+///
+/// Widgets that a setup form posts as a JSON-encoded string set
+/// `coerceJsonString`, which adds them to the generated `field_validator`.
+local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
+  let (base =
     if (u is Widgets.BooleanInput)
-      "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
+      new InputsPkg.BoolField { default = (u as Widgets.BooleanInput).default }
     else if (u is Widgets.Switcher)
-      "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
+      new InputsPkg.BoolField { default = (u as Widgets.Switcher).default }
     else if (u is Widgets.NumericInput)
-      "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
+      new InputsPkg.IntField {
+        default = if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0
+      }
     else if (u is Widgets.DateInput)
-      "\(k): int = 0"
+      new InputsPkg.IntField { default = 0 }
     else if (u is Widgets.FileUploader)
-      "\(k): FileReference | None = None"
+      new InputsPkg.FileReferenceField { nullable = true }
     else if (u is Widgets.ConnectionCreator)
-      "\(k): ConnectionRef | None = None"
+      new InputsPkg.ConnectionRefField { nullable = true }
     else if (u is Widgets.ConnectionRefInput)
       (if ((u as Widgets.ConnectionRefInput).multiSelect)
-        getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
+        new InputsPkg.ListField { items = new InputsPkg.ConnectionRefField {} }
       else
-        "\(k): ConnectionRef | None = None")
-    else if (u is Widgets.ConnectionSelector)
-      "\(k): str = \"\""
-    else if (u is Widgets.CredentialInput)
-      "\(k): str = \"\""
-    else if (u is Widgets.PasswordInput)
-      "\(k): str = \"\""
-    else if (u is Widgets.TagsInput)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-    else if (u is Widgets.InputRepeater)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+        new InputsPkg.ConnectionRefField { nullable = true })
+    else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
+      new InputsPkg.ListField { items = new InputsPkg.StringField {} }
     else if (u is Widgets.DropDown)
       (if ((u as Widgets.DropDown).multiSelect)
-        getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+        new InputsPkg.ListField { items = new InputsPkg.StringField {} }
       else
-        "\(k): str = \"\(escapePyStr(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else ""))\"")
+        new InputsPkg.StringField { default = (u as Widgets.DropDown).default ?? "" })
     else if (u is Widgets.Radio)
-      "\(k): str = \"\(escapePyStr(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else ""))\""
-    else if (u is Widgets.CloudProvider)
-      "\(k): str = \"\""
-    else if (u is Widgets.Sage || u is Widgets.SageV2)
-      "\(k): str = \"\""
-    else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
-      "\(k): str = \"\""
-    else if (u is Widgets.CustomWidget)
-      "\(k): str = \"\""
+      new InputsPkg.StringField { default = (u as Widgets.Radio).default ?? "" }
     else if (u is Widgets.TextInput)
-      "\(k): str = \"\(escapePyStr(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else ""))\""
-    else if (u is Widgets.TextBoxInput)
-      "\(k): str = \"\""
+      new InputsPkg.StringField { default = (u as Widgets.TextInput).default ?? "" }
     else if (u is Widgets.ConditionalInput)
       (let (ci = u as Widgets.ConditionalInput)
         // A non-apitree base with treeSelection is refused by
         // _treeSelectionWidgetCheck, which also covers fields not emitted here.
         if (ci.treeSelection && ci.baseWidgetType == "apitree")
-          getPyDefaultFactoryField(k, "TreeSelection", "dict")
+          new InputsPkg.TreeSelectionField { coerceJsonString = ci.outputValueType == "object" }
         else if (ci.outputValueType == "object")
-          getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+          new InputsPkg.JsonObjectField { coerceJsonString = true }
         else
-          "\(k): str = \"\(escapePyStr(if (ci.default != null) ci.default!!.toString() else ""))\"")
+          new InputsPkg.StringField { default = if (ci.default != null) ci.default!!.toString() else "" })
     else if (u is Widgets.SqlTree)
       // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
       // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
       // leaf values (e.g. booleans) to str during model construction.
-      getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+      new InputsPkg.MapField { values = new InputsPkg.StringField {}; coerceJsonString = true }
     else if (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
-      getPyDefaultFactoryField(k, "TreeSelection", "dict")
+      new InputsPkg.TreeSelectionField { coerceJsonString = true }
     else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-      getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+      new InputsPkg.JsonObjectField { coerceJsonString = true }
     else
-      "\(k): str = \"\"")
-  applyLifecycle(baseLine, u)
-
-local function needsJsonObjectStringCoercion(u: Widgets.UIElement): Boolean =
-  u is Widgets.NestedInput
-  || u is Widgets.APITree
-  || u is Widgets.ApiTreeSelect
-  || u is Widgets.DsnTreeMap
-  || u is Widgets.SqlTree
-  || u is Widgets.AgentSelector
-  || (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).outputValueType == "object")
+      // ConnectionSelector, CredentialInput, PasswordInput, TextBoxInput,
+      // CloudProvider, Sage, SageV2, InfoBanner, GlossarySelector, CustomWidget, ...
+      new InputsPkg.StringField { default = "" })
+  (base) {
+    doc = u.helpText
+    lifecycle = u.lifecycle
+    lifecycleMessage = u.lifecycleMessage
+  }
 
 local function pyQuotedCsv(values: List<String>): String =
   values.fold("", (acc: String, value: String) ->
@@ -3638,22 +3598,18 @@ local extractionInputProvidedFields: Listing<String> = new Listing {
 local function generateInputClassPy(): FileOutput = new FileOutput {
   local props = uiConfig?.properties ?? Map()
   local skipFields: Set<String> = inputBaseProvidedFields
-  local uiFieldLines: String = (new Listing {
+  // Every class field, in order: widget-derived first, then `inputs`.
+  local classFields: List<Pair<String, InputsPkg.InputField>> = (new Listing {
     for (k, u in props) {
-      if (u.includeInInput && !skipFields.contains(toPyFieldName(k)))
-        "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
-        (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
-      else
-        ""
-    }
-  }).toList().fold("", (acc: String, s: String) -> acc + s)
-  local objectStringCoercionFields: List<String> = (new Listing {
-    for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyFieldName(k)) && needsJsonObjectStringCoercion(u)) {
-        toPyFieldName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+        Pair(toPyFieldName(k), widgetInputField(u))
       }
     }
-  }).toList()
+  }).toList() + inputs.toMap().entries.toList()
+  local fieldLines: String =
+    classFields.fold("", (acc: String, e: Pair<String, InputsPkg.InputField>) -> acc + InputsPkg.renderField(e.first, e.second, "    "))
+  local objectStringCoercionFields: List<String> =
+    classFields.filter((e) -> e.second.coerceJsonString).map((e) -> e.first)
   local objectStringCoercionBlock: String = if (!objectStringCoercionFields.isEmpty)
     "    @field_validator(\(pyQuotedCsv(objectStringCoercionFields)), mode=\"before\")\n" +
     "    @classmethod\n" +
@@ -3676,14 +3632,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
-  local inputFieldLines: String =
-    inputs.toMap().fold("", (acc: String, k: String, f: InputsPkg.InputField) -> acc + InputsPkg.renderField(k, f, "    "))
   local nestedClassText: String =
     inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
   // Everything the module declares, for import detection.
-  local fieldText: String = uiFieldLines + inputFieldLines + nestedClassText
+  local fieldText: String = fieldLines + nestedClassText
   local objectStringCoercionSeparator: String =
-    if (!(uiFieldLines + inputFieldLines).isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!fieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
@@ -3747,8 +3701,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   else ""
   local classBody: String =
     publishHashExcludeBlock +
-    uiFieldLines +
-    inputFieldLines +
+    fieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
     credFieldLine +
@@ -3756,7 +3709,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     streamingFieldBlock
   local usesAnnotated: Boolean = fieldText.contains("Annotated[")
   local usesAny: Boolean = fieldText.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
-  local usesLiteral: Boolean = (inputFieldLines + nestedClassText).contains("Literal[")
+  local usesLiteral: Boolean = fieldText.contains("Literal[")
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
