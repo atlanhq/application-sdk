@@ -1,6 +1,6 @@
 """Unit tests for application_sdk.contracts.base."""
 
-from typing import Annotated, Any, ClassVar
+from typing import Annotated, Any, ClassVar, List, Literal
 from unittest.mock import patch
 
 import pytest
@@ -32,6 +32,21 @@ _UnboundedTree = TypeAliasType("_UnboundedTree", dict[str, "_UnboundedTree"])
 _BoundedTree = TypeAliasType(
     "_BoundedTree", Annotated[dict[str, "_BoundedTree"], MaxItems(10)]
 )
+# Quoted references to an unsafe alias, in both spellings Python produces:
+# list["X"] keeps a plain str, typing.List["X"] a ForwardRef.
+_UnsafeMap = TypeAliasType("_UnsafeMap", dict[str, Any])
+_QuotedStrOuter = TypeAliasType(
+    "_QuotedStrOuter", Annotated[list["_UnsafeMap"], MaxItems(10)]
+)
+_QuotedFwdOuter = TypeAliasType(
+    "_QuotedFwdOuter",
+    Annotated[List["_UnsafeMap"], MaxItems(10)],  # noqa: UP006
+)
+_SafeMap = TypeAliasType("_SafeMap", Annotated[dict[str, str], MaxItems(10)])
+_QuotedSafeOuter = TypeAliasType(
+    "_QuotedSafeOuter", Annotated[list["_SafeMap"], MaxItems(10)]
+)
+_LiteralAlias = TypeAliasType("_LiteralAlias", Literal["_UnsafeMap", "other"])
 
 # =============================================================================
 # Input / Output subclassing
@@ -287,15 +302,40 @@ class TestPayloadSafetyThroughTypeAliases:
         # Recursion terminates: the self-reference is checked once.
 
         class OkInput(Input):
-            tree: _BoundedTree = {}
+            tree: _BoundedTree = Field(default_factory=dict)
 
         assert OkInput(tree={"a": {"b": {}}}).tree == {"a": {"b": {}}}
 
     def test_tree_selection_passes(self) -> None:
         class OkInput(Input):
-            selection: TreeSelection = {}
+            selection: TreeSelection = Field(default_factory=dict)
 
         assert OkInput(selection={"SAP": {}}).selection == {"SAP": {}}
+
+    @pytest.mark.parametrize("outer", [_QuotedStrOuter, _QuotedFwdOuter])
+    def test_quoted_reference_to_an_unsafe_alias_raises(self, outer: Any) -> None:
+        # The quoted name is resolved against the alias's module, not skipped.
+        with pytest.raises(PayloadSafetyError):
+            type("BadInput", (Input,), {"__annotations__": {"maps": outer}})
+
+    def test_quoted_reference_to_a_safe_alias_passes(self) -> None:
+        class OkInput(Input):
+            maps: _QuotedSafeOuter = Field(default_factory=list)
+
+        assert OkInput(maps=[{"a": "b"}]).maps == [{"a": "b"}]
+
+    def test_literal_strings_are_values_not_references(self) -> None:
+        # "_UnsafeMap" here is a literal value; it must not be resolved.
+        class OkInput(Input):
+            mode: _LiteralAlias = "other"
+
+        assert OkInput().mode == "other"
+
+    def test_tree_selection_is_exported_from_the_package(self) -> None:
+        import application_sdk.contracts as contracts
+
+        assert "TreeSelection" in contracts.__all__
+        assert contracts.TreeSelection is TreeSelection
 
 
 # =============================================================================

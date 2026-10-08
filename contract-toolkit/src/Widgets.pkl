@@ -1177,8 +1177,10 @@ class APITree extends UIElement {
   /// (same wire format, same in-app value, stored configs validate unchanged);
   /// only the declared type changes, to one that is bounded at every level and
   /// rejects non-dict leaves. The workflow config, manifest and widget UI are
-  /// unchanged. Requires an SDK that exports
-  /// `application_sdk.contracts.types.TreeSelection`.
+  /// unchanged. Requires the first SDK release after 3.43.0: the generated
+  /// module imports `application_sdk.contracts.types.TreeSelection`, which
+  /// 3.43.0 and earlier do not have, so raise the app's SDK floor in the same
+  /// change.
   hidden treeSelection: Boolean = false
 
   fixed ui {

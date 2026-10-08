@@ -3821,7 +3821,7 @@ from application_sdk.contracts.types import TreeSelection
 - Default `false` keeps `dict[str, Any]`, so existing apps are unaffected until they opt in.
 - A value with a non-dict leaf (`{"SAP": true}`, `{"SAP": ["MM"]}`) is a validation error. Tree widgets emit dict leaves; check any hand-written test payloads.
 - On a `ConditionalInput`, evaluation fails unless `baseWidgetType = "apitree"`.
-- Requires an SDK release that exports `application_sdk.contracts.types.TreeSelection`.
+- **Minimum SDK: the first release after 3.43.0.** The generated `_input.py` imports `application_sdk.contracts.types.TreeSelection`, which 3.43.0 and earlier do not have, so an app pinned to `atlan-application-sdk<=3.43.0` generates the file and then fails to import it. Raise the app's SDK floor (e.g. `atlan-application-sdk>3.43.0`) in the same change that sets `treeSelection = true`. The toolkit's own SDK-import check runs against SDK HEAD, so it does not catch an older pin.
 - For flat database/schema filters use the SDK's `FilterMap`, which `ExtractionInput`'s `include_filter` already uses.
 
 ---

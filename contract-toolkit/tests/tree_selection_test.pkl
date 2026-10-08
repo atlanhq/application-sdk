@@ -96,4 +96,11 @@ facts {
     module.catch(() -> inputPy(treeApp(conditional(true, "sqltree"))))
       .contains("treeSelection applies only to baseWidgetType = \"apitree\"")
   }
+
+  // The refusal must not depend on the field being emitted into _input.py.
+  ["treeSelection is refused even when the field is excluded from _input.py"] {
+    local excluded = (conditional(true, "sqltree")) { includeInInput = false }
+    module.catch(() -> treeApp(excluded).output.files.keys)
+      .contains("treeSelection applies only to baseWidgetType = \"apitree\"")
+  }
 }

@@ -564,7 +564,7 @@ setting and for what is not supported yet.
 | `Widgets.DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` |
 | `Widgets.GlossarySelector` | `GlossarySelector` | `str` |
 
-`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not.
+`dict[str, Any]` fails the SDK's payload-safety check at import (`AAF-CTR-002`). For a tree selection, set `treeSelection = true` on `APITree` or an apitree `ConditionalInput`: the field is generated as the SDK's payload-safe `TreeSelection`, which keeps the widget's nested-dict value (`{"SAP": {"MM": {}}}`) unchanged in the app and on the wire. Only the Python type changes; the workflow config and manifest do not. Requires the first SDK release after 3.43.0 (which adds `TreeSelection`), so raise the app's SDK floor in the same change.
 
 ### Complex & Utility
 
