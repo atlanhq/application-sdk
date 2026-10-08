@@ -389,6 +389,143 @@ def test_lost_setting_lines_is_reorder_immune():
     ]
 
 
+TESTS_YAML = ".github/workflows/tests.yaml"
+
+
+def test_yaml_quoting_alone_is_not_a_lost_setting():
+    backup = (
+        "    with:\n"
+        "      services-script: .github/test/setup-services.sh\n"
+        "      e2e-test-path: 'tests/e2e/sdr'\n"
+    )
+    new = (
+        "    with:\n"
+        '      e2e-test-path: "tests/e2e/sdr"\n'
+        '      services-script: ".github/test/setup-services.sh"\n'
+    )
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+
+
+@pytest.mark.parametrize(
+    "old, new",
+    [
+        ('enable-e2e: "true"', "enable-e2e: true"),
+        ("timeout-minutes: 30", 'timeout-minutes: "30"'),
+        ('runtime-sdk-ref: ""', "runtime-sdk-ref:"),
+        ('runtime-sdk-ref: "~"', "runtime-sdk-ref: ~"),
+        ('args: "a\\tb"', "args: a\\tb"),
+        ('args: "-k slow"', "args: -k slow"),
+        ('args: "a: b"', "args: a: b"),
+    ],
+)
+def test_yaml_quotes_that_change_the_value_still_count_as_lost(old, new):
+    assert resync.lost_setting_lines(old + "\n", new + "\n", TESTS_YAML) == [old]
+
+
+def test_json_quoting_is_never_ignored():
+    backup = '{\n  "automerge": "true",\n  "groupName": "x"\n}\n'
+    new = '{\n  "automerge": true,\n  "groupName": "x"\n}\n'
+    assert resync.lost_setting_lines(backup, new, "renovate.json") == [
+        '"automerge": "true",'
+    ]
+
+
+def test_template_description_text_is_not_a_lost_setting():
+    backup = (
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      application_sdk_ref:\n"
+        "        description: |\n"
+        "          Branch/SHA of atlanhq/application-sdk.\n"
+        "\n"
+        "          Pins the SDK in the tests + e2e jobs.\n"
+        "        required: false\n"
+        "      run_e2e:\n"
+        "        description: \"Set to 'true' to trigger the e2e job.\"\n"
+        "        type: string\n"
+    )
+    new = (
+        "on:\n"
+        "  workflow_dispatch:\n"
+        "    inputs:\n"
+        "      application_sdk_ref:\n"
+        "        description: >-\n"
+        "          Pins SDK in tests + e2e jobs.\n"
+        "        required: false\n"
+        "      run_e2e:\n"
+        "        description: \"Set to 'true' to run e2e. Defaults to off.\"\n"
+        "        type: string\n"
+    )
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == []
+    json_backup = '{\n  "packageRules": [\n    {\n      "description": "old text",\n      "automerge": true\n    }\n  ]\n}\n'
+    json_new = '{\n  "packageRules": [\n    {\n      "description": "new text",\n      "automerge": true\n    }\n  ]\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == []
+
+
+def test_settings_next_to_a_description_are_still_checked():
+    backup = (
+        "      run_e2e:\n"
+        "        description: |\n"
+        "          Some text.\n"
+        "        required: false\n"
+        "        default: 'off'\n"
+    )
+    new = "      run_e2e:\n        description: |\n          Other text.\n"
+    assert resync.lost_setting_lines(backup, new, TESTS_YAML) == [
+        "required: false",
+        "default: 'off'",
+    ]
+    after_block = (
+        "    description: |\n"
+        "      Some text.\n"
+        "    with:\n"
+        "      services-script: .github/test/setup-services.sh\n"
+    )
+    assert resync.lost_setting_lines(
+        after_block, "    description: |\n      Other.\n    with:\n", TESTS_YAML
+    ) == ["services-script: .github/test/setup-services.sh"]
+    json_backup = '{\n  "description": "a",\n  "automerge": true\n}\n'
+    json_new = '{\n  "description": "b"\n}\n'
+    assert resync.lost_setting_lines(json_backup, json_new, "renovate.json") == [
+        '"automerge": true'
+    ]
+
+
+def test_description_and_quotes_count_in_files_that_are_not_yaml_or_json():
+    backup = 'description: old\nname: "x"\n'
+    new = "description: new\nname: x\n"
+    assert resync.lost_setting_lines(backup, new, ".claude/skills/r/SKILL.md") == [
+        "description: old",
+        'name: "x"',
+    ]
+    assert resync.lost_setting_lines(backup, new) == [
+        "description: old",
+        'name: "x"',
+    ]
+
+
+def test_stage_like_the_lane_does_not_hold_on_quoting_or_description(tmp_path):
+    work = str(tmp_path)
+    subprocess.run(["git", "init", "-q"], cwd=work, check=True)
+    wf = tmp_path / ".github" / "workflows"
+    wf.mkdir(parents=True)
+    (wf / "tests.yaml.bak").write_text(
+        "    with:\n      services-script: .github/test/setup-services.sh\n"
+    )
+    (wf / "tests.yaml").write_text(
+        '    with:\n      services-script: ".github/test/setup-services.sh"\n'
+    )
+    (tmp_path / "renovate.json.bak").write_text(
+        '{\n  "description": "old",\n  "automerge": true\n}\n'
+    )
+    (tmp_path / "renovate.json").write_text(
+        '{\n  "description": "new",\n  "automerge": true\n}\n'
+    )
+    manifest = {"touched": [TESTS_YAML, "renovate.json"]}
+    assert resync.stage_like_the_lane(work, manifest, subprocess.run) == {}
+
+
 def test_safe_touched_drops_escapes_backups_and_symlinked_dirs(tmp_path):
     (tmp_path / "real").mkdir()
     (tmp_path / "linked").symlink_to(tmp_path / "real")
