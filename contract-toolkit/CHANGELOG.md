@@ -6,6 +6,12 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.32.0] - 2026-10-08
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) ([01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+
 ## [0.31.0] - 2026-10-07
 
 ### Features
