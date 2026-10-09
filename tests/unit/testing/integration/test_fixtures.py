@@ -28,6 +28,9 @@ from application_sdk.testing.integration.fixtures import (
 
 _APP_NAME = "kit-test-app"
 
+# The debugging opt-in. The default (``KitOptions()``) runs cleanup.
+_PRESERVE = KitOptions(preserve_artifacts=True)
+
 # What an adopting conftest gets from ``from ...integration.fixtures import *``.
 # Aliased here because this module imports the kit rather than star-importing it.
 http_fake_source_factory = fixtures.http_fake_source_factory
@@ -295,7 +298,7 @@ class TestArtifactPreservation:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.delenv(CLEANUP_INTERCEPTOR_ENV, raising=False)
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             assert os.environ[CLEANUP_INTERCEPTOR_ENV] == "false"
 
     def test_the_default_does_not_outlive_the_worker(
@@ -309,7 +312,7 @@ class TestArtifactPreservation:
         (BLDX-1283).
         """
         monkeypatch.delenv(CLEANUP_INTERCEPTOR_ENV, raising=False)
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             pass
         assert CLEANUP_INTERCEPTOR_ENV not in os.environ
 
@@ -317,7 +320,7 @@ class TestArtifactPreservation:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, "true")
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             assert os.environ[CLEANUP_INTERCEPTOR_ENV] == "true"
         assert os.environ[CLEANUP_INTERCEPTOR_ENV] == "true"
 
@@ -326,7 +329,7 @@ class TestArtifactPreservation:
     ) -> None:
         warnings = _capture_warnings(monkeypatch)
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, "true")
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             pass
         assert len(warnings) == 1
         assert CLEANUP_INTERCEPTOR_ENV in warnings[0]
@@ -334,7 +337,7 @@ class TestArtifactPreservation:
     def test_explicit_false_is_silent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         warnings = _capture_warnings(monkeypatch)
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, "false")
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             pass
         assert warnings == []
 
@@ -354,7 +357,7 @@ class TestArtifactPreservation:
         assert fixtures._cleanup_enabled(value), "premise: SDK leaves cleanup on"
         warnings = _capture_warnings(monkeypatch)
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             pass
         assert len(warnings) == 1
         assert CLEANUP_INTERCEPTOR_ENV in warnings[0]
@@ -370,7 +373,7 @@ class TestArtifactPreservation:
         cause — the one combination with no signal at all. Treat it as unset.
         """
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             assert os.environ[CLEANUP_INTERCEPTOR_ENV] == "false"
 
     def test_an_empty_value_is_restored_not_deleted(
@@ -378,7 +381,7 @@ class TestArtifactPreservation:
     ) -> None:
         """Taking ownership of the value is not taking ownership of the key."""
         monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, "")
-        with fixtures._artifact_preservation(KitOptions()):
+        with fixtures._artifact_preservation(_PRESERVE):
             pass
         assert os.environ[CLEANUP_INTERCEPTOR_ENV] == ""
 
@@ -407,13 +410,54 @@ class TestArtifactPreservation:
             sdk_leaves_cleanup_on = value.lower() not in ("0", "false", "no")
             assert fixtures._cleanup_enabled(value) is sdk_leaves_cleanup_on, value
 
-    def test_declining_leaves_the_environment_alone(
+    def test_cleanup_runs_by_default(self) -> None:
+        """Suites assert on post-cleanup storage unless they opt out.
+
+        With cleanup off in every CI tier, a run whose end-of-run cleanup
+        deleted its own publish hand-off passed them all. The integration tier
+        is the cheapest place to run it.
+        """
+        assert KitOptions().preserve_artifacts is False
+
+    def test_the_default_leaves_the_environment_alone(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
+        """Unset means the SDK's own default — cleanup on — inside the block."""
+        warnings = _capture_warnings(monkeypatch)
         monkeypatch.delenv(CLEANUP_INTERCEPTOR_ENV, raising=False)
-        with fixtures._artifact_preservation(KitOptions(preserve_artifacts=False)):
+        with fixtures._artifact_preservation(KitOptions()):
             assert CLEANUP_INTERCEPTOR_ENV not in os.environ
         assert CLEANUP_INTERCEPTOR_ENV not in os.environ
+        assert warnings == []
+
+    @pytest.mark.parametrize("value", ["false", "0", "no", "FALSE"])
+    def test_the_default_warns_when_the_env_disables_cleanup(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        """A copied ``setdefault(..., "false")`` must not silently drop coverage.
+
+        The explicit value still wins — the kit never forces a value — but the
+        suite then asserts on intermediates a production run deletes, so say so.
+        """
+        assert not fixtures._cleanup_enabled(value), "premise: SDK turns cleanup off"
+        warnings = _capture_warnings(monkeypatch)
+        monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
+        with fixtures._artifact_preservation(KitOptions()):
+            assert os.environ[CLEANUP_INTERCEPTOR_ENV] == value
+        assert os.environ[CLEANUP_INTERCEPTOR_ENV] == value
+        assert len(warnings) == 1
+        assert CLEANUP_INTERCEPTOR_ENV in warnings[0]
+        assert "preserve_artifacts=True" in warnings[0]
+
+    @pytest.mark.parametrize("value", ["true", "1", "", "   "])
+    def test_the_default_is_silent_when_cleanup_stays_on(
+        self, monkeypatch: pytest.MonkeyPatch, value: str
+    ) -> None:
+        warnings = _capture_warnings(monkeypatch)
+        monkeypatch.setenv(CLEANUP_INTERCEPTOR_ENV, value)
+        with fixtures._artifact_preservation(KitOptions()):
+            assert os.environ[CLEANUP_INTERCEPTOR_ENV] == value
+        assert warnings == []
 
 
 class TestInfrastructureFixture:

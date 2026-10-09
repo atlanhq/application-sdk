@@ -91,22 +91,34 @@ both ``asyncio_default_fixture_loop_scope`` and
 ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` is read at run time, not at
 import, so the kit can own it. It defaults to ``true`` in the SDK, and with it
 on ``App.on_complete()`` deletes the run's local files and every tracked
-``TRANSIENT`` object-store ref after each run — so a suite that opens output
-files and asserts on their contents needs it off.
-``KitOptions.preserve_artifacts`` (on by default) **defaults** the variable to
-``"false"`` when it is unset or empty; an explicit value in the environment wins,
-and one that leaves cleanup *enabled* is logged as a warning so a CI job that
-exports it does not fail every artifact assertion with "output file missing" and
-nothing pointing at the cause. "Enabled" is decided by the same denylist the SDK
-itself reads (:func:`_cleanup_enabled`) rather than by a second, re-derived
-predicate — an allowlist here diverged for ``"off"``, ``"disabled"``,
-``"  false  "`` and ``""``, staying silent in exactly the cases that delete the
-artifacts. The default is scoped to the ``worker`` fixture's lifetime and the
-prior value restored on teardown: ``pytest tests/`` runs integration and unit
-tests in one process, and a cleanup-asserting unit test scheduled after this
-fixture would otherwise silently observe cleanup disabled (BLDX-1283). The option
-is one-way: ``preserve_artifacts=False`` leaves the variable untouched rather
-than forcing ``"true"``.
+``TRANSIENT`` object-store ref after each run. The kit leaves it on by default
+(``KitOptions.preserve_artifacts=False``), so a suite asserts on the storage a
+run leaves behind *as production leaves it* — the ``RETAINED`` publish tree
+after cleanup, not the intermediates cleanup deletes. With cleanup off in every
+CI tier, a run whose end-of-run cleanup deleted its own publish hand-off passed
+unit, integration and e2e alike: unit has no object store, the integration kit
+switched cleanup off, and e2e runs in SDR mode, where upload and cleanup target
+different stores. The integration tier runs on every PR, so it is where that
+seam is cheapest to cover.
+
+An explicit value that *disables* cleanup wins, and is logged as a warning: a
+conftest that copied the old ``setdefault(..., "false")`` line otherwise loses
+the post-cleanup coverage with nothing saying so.
+
+``KitOptions(preserve_artifacts=True)`` is the opt-in for debugging a run's
+intermediates. It **defaults** the variable to ``"false"`` when it is unset or
+empty; an explicit value in the environment wins, and one that leaves cleanup
+*enabled* is logged as a warning so a CI job that exports it does not fail every
+artifact assertion with "output file missing" and nothing pointing at the cause.
+"Enabled" is decided by the same denylist the SDK itself reads
+(:func:`_cleanup_enabled`) rather than by a second, re-derived predicate — an
+allowlist here diverged for ``"off"``, ``"disabled"``, ``"  false  "`` and
+``""``, staying silent in exactly the cases that delete the artifacts. The
+default is scoped to the ``worker`` fixture's lifetime and the prior value
+restored on teardown: ``pytest tests/`` runs integration and unit tests in one
+process, and a cleanup-asserting unit test scheduled after this fixture would
+otherwise silently observe cleanup disabled (BLDX-1283). Neither setting forces
+a value over an explicit one.
 
 ``store_root`` covers the object store a run writes through. The local scratch
 tree it also writes — the ``{TEMPORARY_PATH}/artifacts/apps/{APPLICATION_NAME}``
@@ -189,8 +201,8 @@ DEPLOYMENT_NAME_ENV = "ATLAN_DEPLOYMENT_NAME"
 #: An allowlist here instead (``{"1", "true", "yes", "on"}``) diverged for
 #: ``"off"``, ``"disabled"``, ``"  false  "`` and ``""`` — the SDK deleted the
 #: run's artifacts while this module stayed silent, which is exactly the
-#: "output file missing" failure :attr:`KitOptions.preserve_artifacts` exists to
-#: prevent. Note the SDK does *not* strip, so ``"  false  "`` enables cleanup.
+#: "output file missing" failure ``KitOptions(preserve_artifacts=True)`` exists
+#: to prevent. Note the SDK does *not* strip, so ``"  false  "`` enables cleanup.
 _CLEANUP_DISABLED = frozenset({"0", "false", "no"})
 
 
@@ -222,9 +234,12 @@ class KitOptions:
             under ``pytest -n auto --dist=loadfile`` — one process per test
             file, all racing for that port. A test client needs no metrics.
         log_level: Embedded dev-server log level.
-        preserve_artifacts: Default ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR``
-            to ``"false"`` when unset, so the run's output files survive for the
-            suite to assert on. An explicit environment value always wins.
+        preserve_artifacts: Off by default, so ``App.on_complete()`` cleanup
+            runs and the suite asserts on post-cleanup storage — what a
+            production run leaves behind. ``True`` is a debugging opt-in: it
+            defaults ``APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR`` to
+            ``"false"`` when unset, so the run's intermediates survive. An
+            explicit environment value always wins.
         store_root_prefix: ``tmp_path_factory`` prefix for the LocalStore root.
         temporary_path_prefix: ``tmp_path_factory`` prefix for the local run
             scratch root handed out by :func:`temporary_path`.
@@ -233,7 +248,7 @@ class KitOptions:
     data_converter: bool = True
     enable_prometheus: bool = False
     log_level: str = "error"
-    preserve_artifacts: bool = True
+    preserve_artifacts: bool = False
     store_root_prefix: str = "sdk-store"
     temporary_path_prefix: str = "sdk-local"
 
@@ -466,8 +481,14 @@ def _verify_infrastructure(expected: InfrastructureContext | None) -> None:
 
 @contextmanager
 def _artifact_preservation(options: KitOptions) -> Iterator[None]:
-    """Default the cleanup interceptor off for the block, then restore it.
+    """Apply :attr:`KitOptions.preserve_artifacts` for the block, then restore it.
 
+    With ``preserve_artifacts=False`` (the default) the variable is left
+    untouched — the SDK's own default is cleanup on — and an explicit value
+    that *disables* cleanup is warned about, because the suite then asserts on
+    intermediates a production run deletes.
+
+    With ``preserve_artifacts=True`` the cleanup interceptor is defaulted off.
     Scoped rather than assigned once, because this variable decides whether
     ``App.on_complete()`` deletes a run's artifacts and the whole process reads
     it. A plain ``os.environ[...] = "false"`` from a session fixture leaks into
@@ -489,10 +510,20 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
     "the user decided" would disable preservation while suppressing the warning
     that names the cause. ``export VAR=`` and ``env: VAR: ""`` both produce it.
     """
+    current = os.environ.get(CLEANUP_INTERCEPTOR_ENV)
     if not options.preserve_artifacts:
+        if current is not None and current.strip() and not _cleanup_enabled(current):
+            logger.warning(
+                "%s=%r is set in the environment, so App.on_complete() cleanup "
+                "is off and this suite asserts on files a production run "
+                "deletes. Remove it to assert on post-cleanup storage, or "
+                "return KitOptions(preserve_artifacts=True) from "
+                "integration_options to keep intermediates on purpose.",
+                CLEANUP_INTERCEPTOR_ENV,
+                current,
+            )
         yield
         return
-    current = os.environ.get(CLEANUP_INTERCEPTOR_ENV)
     if current is not None and current.strip():
         if _cleanup_enabled(current):
             logger.warning(
@@ -500,7 +531,7 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
                 "delete each run's output files and this suite's artifact "
                 "assertions will fail with 'output file missing'. Unset it, or "
                 "set it to 'false', to preserve artifacts as "
-                "KitOptions.preserve_artifacts intends.",
+                "KitOptions(preserve_artifacts=True) intends.",
                 CLEANUP_INTERCEPTOR_ENV,
                 current,
             )
