@@ -709,6 +709,8 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
 
+A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 
 Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
@@ -1028,6 +1030,7 @@ What does **not** change:
 
 - `manifest.json` and the workflow configmap still follow `uiConfig`. A system app with a setup form keeps it; one without renders no manifest.
 - `_input.py` is rendered from `uiConfig`, from `inputs` (below), or both. A system app's input class extends the SDK's `Input` rather than `ExtractionInput`.
+- `_e2e_base.py` extends `SystemAppE2ETest` and omits the `argo_*` names and `app_service_url`; see [E2E Test Harness](#e2e-test-harness).
 - Hiding the app's own listing is the Global Marketplace App row's `is_system_app` flag. Only a GM admin sets it, so the toolkit does not emit it.
 
 See `examples/system-app/`.
