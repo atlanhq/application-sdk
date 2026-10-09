@@ -1349,7 +1349,10 @@ path component, and this rule governs that package's sources too).
      `query_history` or `s3`) now raises `CredentialRoutingError` naming the
      cause instead of resolving to a fallback; `resolve_or_none` also read only
      the generic `credential_ref`, so a toolkit-generated `<app>_credential`
-     now wins too.  **Precondition:** the entry-point input class carries the
+     now wins too.  The injected preflight gate still resolves leniently
+     (`CredentialRef.resolve_or_none`), so a misrouted input still passes
+     preflight and now fails in the task, mid-run, not at the gate; name that
+     too.  **Precondition:** the entry-point input class carries the
      credential triple (`credential_guid`, `agent_json`, `extraction_method`)
      at the top level, or the app sets `credential_guid` from
      `connection.attributes.defaultCredentialGuid` where it constructs the
@@ -1432,7 +1435,7 @@ path component, and this rule governs that package's sources too).
 
   **Say what the migration changes.**  The local copies disagreed on
   behaviour, not just shape, and each shape above names its change: agent mode
-  starting to work (3), a lenient fallback becoming a raise (2), a pre-built
+  starting to work (3), a lenient fallback becoming a raise that the preflight gate does not catch (2), a pre-built
   ref winning first (1, 3), the inline key shape (4).  A proposal that does not
   name which of these applies is not reviewable.  Never claim the edit is
   mechanical.
