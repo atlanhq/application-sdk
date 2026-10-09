@@ -5,7 +5,7 @@
 
 # Test-Quality Rules (T-series)
 
-**25 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), `suite.checks.asyncio_loop_scope` (T019), `suite.checks.e2e_workflow_shape` (T020-T022), `suite.checks.e2e_generated_harness` (T023-T024), and `suite.checks.entrypoint_e2e_coverage` (T025) (AST/TOML/YAML-based)
+**26 rules** · Checker: `suite.checks.integration_marking` (T001), `suite.checks.sdr_test_checks` (T002-T003), `suite.checks.dev_entrypoint` (T004), `suite.checks.test_quality` (T005-T009), `suite.checks.test_structure` (T010-T013), `suite.checks.coverage_config` (T014-T015), `suite.checks.e2e_deployment_name` (T016), `suite.checks.e2e_agent_spec` (T017), `suite.checks.integration_deselect` (T018), `suite.checks.asyncio_loop_scope` (T019), `suite.checks.e2e_workflow_shape` (T020-T022), `suite.checks.e2e_generated_harness` (T023-T024), `suite.checks.entrypoint_e2e_coverage` (T025), and `suite.checks.e2e_system_app_base` (T026) (AST/TOML/YAML-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -40,6 +40,7 @@ Suppress a finding on the violating line or the line directly above it:
 | [T023](#t023) | `E2EHarnessScaffoldHandWritten` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T024](#t024) | `E2ERunModeUnset` | `warn` | `app` | `e2e-ci` | yes | 0.18.0 |
 | [T025](#t025) | `EntrypointWithoutE2ECoverage` | `warn` | `app` | `test-tier-coverage` | — | 0.22.0 |
+| [T026](#t026) | `E2EHarnessTenantPoolMismatch` | `warn` | `app` | `e2e-tenant-pool` | — | 0.46.0 |
 
 ---
 
@@ -1563,5 +1564,80 @@ Suppress a single entrypoint instead with `# conformance: ignore[T025:<entrypoin
 the `miner` finding while the others stay reported. A bare `ignore[T025]` suppresses
 every entrypoint's finding at once. Each finding carries its entrypoint as a fingerprint
 discriminator, so per-entrypoint findings never share a SARIF fingerprint.
+
+---
+
+## T026 — `E2EHarnessTenantPoolMismatch` {#t026}
+
+**Tier:** `warn` · **Scope:** `app` · **Fix belongs in:** `tests` · **Category:** `e2e-tenant-pool` · **Autofixable:** — · **Since:** 0.46.0
+
+> An e2e test class's harness base does not match the app's declared marketplace type
+
+**Rationale:** The e2e tenants are split into a connector pool and a system-app pool (FND-3542). The
+harness enforces the split at runtime, but only once a suite has picked its base: a
+SystemAppE2ETest suite refuses to run unless E2E_TENANT_POOL=system, and every other
+suite refuses the system pool. Two regressions slip past that gate. A system app that
+adopts the harness on plain BaseE2ETest (or a generated base built before its contract
+was typed 'system') never opts into the system pool, so it runs on the connector tenants
+and turns a connector's test bed into a system app's (FND-438). A connector that adopts
+SystemAppE2ETest claims a pool reserved for system apps. The app's declared marketplace
+type in atlan.yaml is the one signal the app itself owns, so the rule compares the two
+instead of keeping a list of app names. Customer impact: a system app tested against
+connector tenants can ship a regression its own tenants would have caught, and a
+connector on the system pool can break the system apps' test beds.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/testing/e2e/system_app.py — `SystemAppE2ETest` sets `_tenant_pool =
+  TenantPool.SYSTEM`, which is what binds a suite to the system-app tenant pool; the
+  toolkit's contract-toolkit/examples/system-app/app/generated/_e2e_base.py shows the
+  generated base a `type = "system"` contract emits, already parented to it. None of the
+  reference apps is a system app.
+- **Migrate with:** [`programs/areas/tests.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/tests.prose.md)
+
+A person has to close a `system` finding, not the remediation lane: switching the base
+is only half of it, and the suite will not run until the repo is also added to the
+system-app tenant secret.
+
+The top-level `type` in `atlan.yaml` (generated from `contract/app.pkl`) is compared
+case-insensitively against the base of every SDK-harness e2e test class — a collectable
+`Test*` class under `tests/e2e/` that reaches `BaseE2ETest`, `SQLAppE2ETest` or
+`SystemAppE2ETest`, directly, through a repo-local base, or through a generated
+`*GeneratedE2EBase`:
+
+* `system` — the class **must** inherit `SystemAppE2ETest`. * `utility` — either base is
+allowed. Some system apps keep   `utility` because they have a marketplace tile and can
+be run   directly, but only ever inside a tenant; for them inheriting
+`SystemAppE2ETest` *is* the declaration, and the runtime pool gate   holds the suite
+there. A utility that never adopts it cannot be told   apart from any other utility, so
+it is not flagged. * `connector` — the class **must not** inherit `SystemAppE2ETest`. *
+any other type, or no `atlan.yaml` — not graded.
+
+A base counts as the SDK class only when it is imported from
+`application_sdk.testing.e2e`; a same-named class from anywhere else is resolved against
+the repo's own classes.
+
+**Remediation (system):** in this order —
+
+1. Make `SystemAppE2ETest` the first base. For a toolkit-generated    base, regenerating
+(`pkl eval -m . contract/app.pkl`) from a    contract typed `system` emits it already:
+
+```python
+from application_sdk.testing.e2e import SystemAppE2ETest
+
+class MyAppGeneratedE2EBase(SystemAppE2ETest):
+    ...
+```
+
+2. Get the repo added to the selected repositories of the
+`E2E_SYSTEM_TENANT_MATRIX_JSON` secret, so CI places its legs on    the system-app pool.
+
+**Remediation (connector):** base the suite on the generated `<Name>GeneratedE2EBase`
+(or `BaseE2ETest` / `SQLAppE2ETest`). If the app really is a system app, fix `type` in
+`contract/app.pkl` and regenerate instead.
+
+See `docs/standards/connector-ci-e2e.md` → *System apps*.
+
+Suppress with `# conformance: ignore[T026] <reason>` on the `class` line.
 
 ---

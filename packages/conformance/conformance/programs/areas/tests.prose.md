@@ -13,7 +13,8 @@ description: >
   loop scope (T019), full-DAG e2e CI wiring (T020 bespoke sdr-e2e workflow,
   T021 suites nothing runs, T022 missing two-store posture on an SDR app), and
   the e2e harness scaffold being hand-written rather than generated from
-  contract/app.pkl (T023) or running without a declared RunMode (T024).
+  contract/app.pkl (T023) or running without a declared RunMode (T024), plus
+  e2e harness bases that disagree with the app's declared type (T026).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -819,6 +820,32 @@ residue for a human to apply, not an applied edit:
   `mode`, and the entrypoint it covers — never an applied edit.  Never draft a
   suite with no assertions or a stubbed body: that trades T025 for T005/T006
   and leaves the entrypoint just as unproven.
+
+  `classification` is always `"judgment"`.
+
+- **T026 E2EHarnessTenantPoolMismatch** — `atlan.yaml`'s top-level `type`
+  (compared case-insensitively) disagrees with the base of a collectable e2e
+  test class under `tests/e2e/`: a `system` app whose suite does not reach
+  `SystemAppE2ETest`, or a `connector` whose suite does.  `utility` is never
+  flagged; any other type, or no `atlan.yaml`, is not graded.
+
+  Fix (`system`): make `SystemAppE2ETest` (from `application_sdk.testing.e2e`)
+  the first base.  When the suite subclasses the generated
+  `<Name>GeneratedE2EBase`, the base itself is stale — the toolkit emits a
+  `SystemAppE2ETest` parent for a `type = "system"` contract — so the fix is
+  regeneration (`pkl eval -m . contract/app.pkl`), never a hand edit of
+  `app/generated/`.  Then the repo must be added to the selected repositories
+  of the `E2E_SYSTEM_TENANT_MATRIX_JSON` secret; until it is, CI cannot place
+  the suite on the system-app pool and the harness refuses to run it.  That
+  step is a human onboarding decision, so say so in the residue.
+
+  Fix (`connector`): base the suite on the generated `<Name>GeneratedE2EBase`
+  (or `BaseE2ETest` / `SQLAppE2ETest`).  If the app genuinely is a system app,
+  the declared `type` in `contract/app.pkl` is what is wrong — propose that
+  change instead, and never suppress to keep a connector on the system pool.
+
+  **Route to residue.** The write scope excludes `tests/`, and the `system`
+  fix needs secret onboarding no edit can do.
 
   `classification` is always `"judgment"`.
 

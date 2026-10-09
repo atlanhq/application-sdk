@@ -44,6 +44,7 @@ from conformance.suite.checks import (
     e2e_agent_spec,
     e2e_deployment_name,
     e2e_generated_harness,
+    e2e_system_app_base,
     e2e_workflow_shape,
     entrypoint,
     entrypoint_alignment,
@@ -237,6 +238,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=entrypoint_e2e_coverage.discover,
         scan_path=entrypoint_e2e_coverage.scan_path,
         scan_all=entrypoint_e2e_coverage.scan_all,
+    ),
+    CheckRegistration(
+        series=e2e_system_app_base.SERIES,
+        discover=e2e_system_app_base.discover,
+        scan_path=e2e_system_app_base.scan_path,
+        scan_all=e2e_system_app_base.scan_all,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,
