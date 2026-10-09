@@ -1270,7 +1270,7 @@ wheels = [
 
 [[package]]
 name = "cyclopts"
-version = "5.1.1"
+version = "5.2.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "attrs" },
@@ -1278,9 +1278,9 @@ dependencies = [
     { name = "rich" },
     { name = "rich-rst" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/85/8c/7a7f5a3af1845cb6b9c28bf2a6db1bc510a6b9661109138c70ab6d8d650a/cyclopts-5.1.1.tar.gz", hash = "sha256:252fe37b01a80f10933f91c312db551e4e86ffd87bee401ab2ed091769135426", size = 237903, upload-time = "2026-10-01T00:00:02.762Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/28/c1/3debeeb6e0eb74a51d6f8cf1f273ed7c479e3321631cbf89fb9700e65e28/cyclopts-5.2.0.tar.gz", hash = "sha256:b63c1b1beaadf3ead19214385a0f90b990f152c4107c174e1724c45dc71e9541", size = 246542, upload-time = "2026-10-06T15:02:39.212Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2a/37/1afff6923395f2f0ce730bae8851371b7418be17dc44d90ba80f72799240/cyclopts-5.1.1-py3-none-any.whl", hash = "sha256:ff0da67b2d2d8fe716d20ab82c698277ef30a8fb75d24e9b38a06f56c44931fd", size = 279527, upload-time = "2026-10-01T00:00:00.485Z" },
+    { url = "https://files.pythonhosted.org/packages/d4/dd/3f73d04c95f6acc6a54700011637e49362e337139b518be895edf4786f87/cyclopts-5.2.0-py3-none-any.whl", hash = "sha256:5da2a5d65164e03008621fc4795946b88a722b881398b5dfa58afa6218342cff", size = 289196, upload-time = "2026-10-06T15:02:37.57Z" },
 ]
 
 [[package]]
@@ -1932,11 +1932,11 @@ wheels = [
 
 [[package]]
 name = "griffelib"
-version = "2.3.0"
+version = "2.3.2"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/27/af/018c10bc9edd42b6ef6db2e96b09542050d5253f9b195e74bc910b2d13ab/griffelib-2.3.0.tar.gz", hash = "sha256:7b0952caf5bca6afa4bb5ee8c6a2d183fe3f21b62efc5f6c7243cb2b26d2d115", size = 234534, upload-time = "2026-09-04T15:08:17.472Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2b/27/b55f1a5278918be765fb2fd8b20966bc72bbdd3f789f031937cceea7834a/griffelib-2.3.2.tar.gz", hash = "sha256:df00c7a0dee3d86268d76788997a1859272cb1fb7b865658e043d2c0c3d52e60", size = 234729, upload-time = "2026-10-06T09:54:37.222Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/41/63/e876e789525063c840ccfa8857febdabd6523bcef9ce7eb979b9305ea895/griffelib-2.3.0-py3-none-any.whl", hash = "sha256:1b8f9cd525681c26b1d6d574faa1371651e8459ca51d209684f50b8096ae06e0", size = 169423, upload-time = "2026-09-04T15:08:12.956Z" },
+    { url = "https://files.pythonhosted.org/packages/04/e5/0ae74c83c1cab2c14daadf28bd0143eb14bb81503834af987b66badc7b61/griffelib-2.3.2-py3-none-any.whl", hash = "sha256:8e710afededd5607f95bf3c8ccc175ee306e7084459faf27b9f9f44ef2a7a274", size = 169420, upload-time = "2026-10-06T09:54:32.038Z" },
 ]
 
 [[package]]
@@ -4367,7 +4367,7 @@ wheels = [
 
 [[package]]
 name = "pyatlan"
-version = "11.4.0"
+version = "11.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "authlib" },
@@ -4383,9 +4383,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "tenacity" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/37/d7/6a26d57e7eb6e6334900c9b16f207c6c0c759bf3162d321dc07eb781059e/pyatlan-11.4.0.tar.gz", hash = "sha256:b9ab9c504758090a991fff6187f51214685670b3268c59700943d6e7d9f2137a", size = 3832831, upload-time = "2026-09-18T09:13:48.491Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a2/01/8ff14b5735483e9bba2e30bbfa1f285eb1d36fd6ba3d56c48b55eb298145/pyatlan-11.4.1.tar.gz", hash = "sha256:a986e464f24a6af3112fc3ebcf5605ba832bb7174767dd2c935be89b772781b4", size = 3971847, upload-time = "2026-10-09T07:35:08.27Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/cd/3871269a203c67173350dab96cce03de3ff9c25f4899b9173b1613b0699f/pyatlan-11.4.0-py3-none-any.whl", hash = "sha256:8d683eb308fffa7a599c1be60b6a1428a61bd3a4c9e1ac51e0051aa5fdcf7bc4", size = 5702950, upload-time = "2026-09-18T09:13:46.554Z" },
+    { url = "https://files.pythonhosted.org/packages/d0/cd/df6a9f9e86a1096048b8a90bccb14705655dfeaa938a0ca3d7080f14f9ed/pyatlan-11.4.1-py3-none-any.whl", hash = "sha256:85563a1adb96845cc0f08087413156e06e0507198217f6706548a4a8918be986", size = 5853817, upload-time = "2026-10-09T07:35:06.293Z" },
 ]
 
 [[package]]
