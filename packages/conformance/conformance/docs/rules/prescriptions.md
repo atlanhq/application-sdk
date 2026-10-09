@@ -2054,15 +2054,12 @@ fixed version the finding is a guaranteed runtime parse failure, not a style pre
 **Version scope — fixed at the root from SDK 3.28.0.**  The transformer now quotes a
 `source_query` that resolved as a plain column reference, so a reserved keyword renders
 as valid SQL with no template change at all; the `source_columns`-driven route, which
-carries arbitrary SQL, is left unquoted.  This rule therefore describes only apps pinned
-**below** that version and is marked `superseded_by: sdk>=3.28.0` rather than dropped —
-an app on an older SDK still fails at runtime, and dropping the rule would take the only
-static signal away from exactly that population.
-
-The marker names the next SDK *minor* rather than the exact patch: the patch number is
-assigned by release CI at merge time, and erring late only keeps the rule firing on some
-already-fixed apps, never the reverse.  Retire the rule (set `until`) once the fleet
-floor has crossed it.
+carries arbitrary SQL, is left unquoted.  This rule therefore fires only when the app's
+`uv.lock` resolves `atlan-application-sdk` **below** 3.28.0 — its `superseded_by:
+sdk>=3.28.0` applied per app.  An app on an older SDK still fails at runtime, and this
+is the only static signal for it.  When the locked version cannot be resolved (no
+`uv.lock`, the SDK absent from it, or an unparseable version) the rule still fires: the
+template shape is proven and nothing proves the fix.
 
 **Do not hand-remediate templates that the version bump fixes.** Embedding quotes in the
 value was the interim advice and it is worse than it looks on an unfixed SDK: below

@@ -1108,8 +1108,9 @@ which scans template YAML, not Python.
   **The fix is the SDK bump, not the template.**  From SDK 3.28.0 the
   transformer quotes a `source_query` that resolved as a plain column
   reference, so the keyword renders as valid SQL with no template change; the
-  rule carries `superseded_by: sdk>=3.28.0` and describes only apps pinned
-  below it.  Propose raising the `atlan-application-sdk` floor to `>=3.28.0`
+  rule carries `superseded_by: sdk>=3.28.0` and fires only when the app's
+  `uv.lock` resolves `atlan-application-sdk` below it (or the version cannot be
+  resolved).  Propose raising the `atlan-application-sdk` floor to `>=3.28.0`
   and relocking.
 
   Only when the app genuinely cannot move off an older SDK, fall back to

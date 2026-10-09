@@ -289,3 +289,60 @@ def test_p040_scan_path_relativises_file(tmp_path: Path) -> None:
     findings = scan_path(target, tmp_path)
     assert findings
     assert findings[0].file == "app/transformers/column.yaml"
+
+
+def _lock(version: str) -> str:
+    return (
+        "version = 1\n\n"
+        "[[package]]\n"
+        'name = "atlan-application-sdk"\n'
+        f'version = "{version}"\n'
+    )
+
+
+def _template_repo(tmp_path: Path, lock: str | None) -> Path:
+    target = tmp_path / "app" / "transformers" / "column.yaml"
+    target.parent.mkdir(parents=True)
+    target.write_text(_TEMPLATE_WITH_RESERVED, encoding="utf-8")
+    if lock is not None:
+        (tmp_path / "uv.lock").write_text(lock, encoding="utf-8")
+    return target
+
+
+@pytest.mark.parametrize("version", ["3.27.9", "3.27.0", "3.22.1"])
+def test_p040_fires_when_locked_sdk_is_below_3_28(tmp_path: Path, version: str) -> None:
+    target = _template_repo(tmp_path, _lock(version))
+    findings = scan_path(target, tmp_path)
+    assert findings
+    assert {f.rule_id for f in findings} == {"P040"}
+    assert f"resolves atlan-application-sdk to {version}" in findings[0].message
+    assert "fleet floor" not in findings[0].message
+
+
+@pytest.mark.parametrize("version", ["3.28.0", "3.28.3", "3.39.0", "4.0.0"])
+def test_p040_silent_when_locked_sdk_quotes_keywords(
+    tmp_path: Path, version: str
+) -> None:
+    target = _template_repo(tmp_path, _lock(version))
+    assert scan_path(target, tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "lock",
+    [
+        None,
+        'version = 1\n\n[[package]]\nname = "pandas"\nversion = "2.2.0"\n',
+        _lock("not-a-version"),
+        "this is not toml [",
+    ],
+    ids=["no-lock", "sdk-not-locked", "unparseable-version", "unparseable-lock"],
+)
+def test_p040_fires_when_locked_sdk_is_unresolvable(
+    tmp_path: Path, lock: str | None
+) -> None:
+    """No proof of the fix, so the proven template shape still fires."""
+    target = _template_repo(tmp_path, lock)
+    findings = scan_path(target, tmp_path)
+    assert findings
+    assert {f.rule_id for f in findings} == {"P040"}
+    assert "could not be resolved" in findings[0].message

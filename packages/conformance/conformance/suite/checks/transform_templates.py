@@ -21,9 +21,13 @@ Version scope
 -------------
 SDK 3.28.0 fixes this at the root: the transformer quotes a ``source_query``
 that resolved as a plain column reference, so a reserved keyword renders as
-valid SQL with no template change.  This check therefore describes apps pinned
-**below** that version (``superseded_by: sdk>=3.28.0`` on the rule) — an older
-SDK still fails at runtime, and that population has no other static signal.
+valid SQL with no template change.  This check therefore fires only for an app
+whose ``uv.lock`` resolves ``atlan-application-sdk`` **below** that version
+(``superseded_by: sdk>=3.28.0`` on the rule, applied per app) — an older SDK
+still fails at runtime, and that population has no other static signal.  When
+the locked version cannot be resolved (no lock, the SDK absent from it, or an
+unparseable version) the check still fires: the template shape is proven and
+nothing proves the fix.
 
 The embedded-quote remediation this check's message prescribes is interim
 advice for that population only, and it is worse than it looks: below 3.28.0
@@ -93,10 +97,19 @@ from conformance.suite.checks._ast_common import (
     make_toml_finding,
     parse_toml_suppressions,
 )
+from conformance.suite.checks._version import (
+    SDK_DISTRIBUTION,
+    locked_sdk_version,
+    parse_version,
+    version_reached,
+)
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
 RULE_P040 = "P040"
+
+_SDK_QUOTES_KEYWORDS = (3, 28, 0)
+_SDK_QUOTES_KEYWORDS_STR = "3.28.0"
 
 __all__ = ["SERIES", "discover", "main", "scan_path", "scan_text"]
 
@@ -278,15 +291,33 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
-def scan_text(text: str, file: str) -> list[Finding]:
+def _sdk_quotes_keywords(locked: str | None) -> bool:
+    """Whether the locked SDK version is known to be 3.28.0 or later."""
+    parsed = parse_version(locked) if locked is not None else None
+    return parsed is not None and version_reached(_SDK_QUOTES_KEYWORDS, parsed)
+
+
+def scan_text(text: str, file: str, locked: str | None = None) -> list[Finding]:
     """Scan one transform-template *text* for P040 findings.
 
     Only ``source_query`` entries **inside a ``columns:`` block** are inspected
     (tracked by indentation), so a ``source_query`` under some unrelated
-    top-level key is not graded.
+    top-level key is not graded.  *locked* is the app's locked SDK version, used
+    only for the message; the version gate is applied in :func:`scan_path`.
     """
     if not _is_transform_template(text):
         return []
+    if locked is not None:
+        version_note = (
+            f"This app's uv.lock resolves {SDK_DISTRIBUTION} to {locked}, below "
+            f"{_SDK_QUOTES_KEYWORDS_STR}."
+        )
+    else:
+        version_note = (
+            f"The app's {SDK_DISTRIBUTION} version could not be resolved from "
+            f"uv.lock, so it cannot be confirmed as {_SDK_QUOTES_KEYWORDS_STR} or "
+            "later."
+        )
 
     suppressions = parse_toml_suppressions(text)
     findings: list[Finding] = []
@@ -316,21 +347,19 @@ def scan_text(text: str, file: str) -> list[Finding]:
                 column=1,
                 message=(
                     f"{file}:{lineno}: transform template {key} '{identifier}' is a "
-                    "DuckDB reserved keyword used as a bare column reference. On an "
-                    "SDK below 3.28.0 it reaches the generated SELECT unquoted (the "
-                    "query transformer renders '{source_query} AS {name}' and only "
-                    "auto-quotes dotted identifiers), so every transform of this "
-                    "entity type fails at runtime with a DuckDB ParserException — "
-                    "latent until the first real pipeline run. On SDK >= 3.28.0 the "
-                    "transformer quotes a source_query that resolved as a plain "
-                    "column reference, so this template resolves correctly as-is — "
-                    "suppress or ignore this finding there (the rule fires until the "
-                    "fleet floor crosses 3.28.0; it does not resolve the app's SDK "
-                    "version). The fix for the below-3.28.0 population is upgrading "
-                    "atlan-application-sdk; only if the app is pinned below that "
-                    "version, embed SQL quotes in the value so they survive YAML "
-                    f"parsing ({key}: '\"{identifier}\"') — note that on an SDK "
-                    "below 3.28.0 the transformer matches that value as raw text, "
+                    f"DuckDB reserved keyword used as a bare column reference. "
+                    f"{version_note} On an SDK below 3.28.0 it reaches the generated "
+                    "SELECT unquoted (the query transformer renders "
+                    "'{source_query} AS {name}' and only auto-quotes dotted "
+                    "identifiers), so every transform of this entity type fails at "
+                    "runtime with a DuckDB ParserException — latent until the first "
+                    "real pipeline run. SDK 3.28.0 quotes a source_query that "
+                    "resolved as a plain column reference, so the fix is upgrading "
+                    "atlan-application-sdk to >= 3.28.0 and relocking; this finding "
+                    "then clears. Only if the app must stay below that version, "
+                    "embed SQL quotes in the value so they survive YAML parsing "
+                    f"({key}: '\"{identifier}\"') — note that on an SDK below "
+                    "3.28.0 the transformer matches that value as raw text, "
                     "resolves nothing, and drops the attribute from published "
                     "output instead of raising."
                 ),
@@ -366,7 +395,14 @@ def discover(root: Path) -> list[Path]:
 
 
 def scan_path(path: Path, root: Path) -> list[Finding]:
-    """Scan a single transform-template file for P040 findings."""
+    """Scan a single transform-template file for P040 findings.
+
+    Silent when the app's ``uv.lock`` resolves ``atlan-application-sdk`` to
+    3.28.0 or later; an unresolvable version still fires.
+    """
+    locked = locked_sdk_version(root)
+    if _sdk_quotes_keywords(locked):
+        return []
     try:
         text = path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -375,7 +411,8 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel))
+    readable = locked if locked is not None and parse_version(locked) else None
+    return scan_text(text, str(rel), readable)
 
 
 main = make_cli_main(
