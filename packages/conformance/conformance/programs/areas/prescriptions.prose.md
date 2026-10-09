@@ -671,7 +671,9 @@ The lane applies nothing: return `not_remediable = true` with a
   condition yourself.  Draft `param.field` only when **all** of these hold:
   - the annotation resolves to a pydantic `Input` / `Output` contract;
   - `field` is declared on that class or inherited, including from the SDK
-    base contracts;
+    base contracts, under that attribute name (a pydantic alias is not an
+    attribute: `getattr(input, "specUrl", d)` on `spec_url = Field(alias="specUrl")`
+    goes to residue);
   - the annotation is not Optional (`X | None` / `Optional[X]`);
   - the model is not `extra="allow"` with the read relying on an extra key;
   - the param is not rebound in the function, and no nested function shadows
@@ -688,7 +690,8 @@ The lane applies nothing: return `not_remediable = true` with a
   absent extra; a `TypedDict` annotation (a plain dict at runtime, so every
   attribute read fails); a property that raises `AttributeError`; and an
   instance built with `model_construct()`, which skips validation and leaves a
-  required field unset when it is not passed.  A site in any of these cases goes to residue.  Mirror
+  required field unset when it is not passed.  A site in any of these cases
+  goes to residue.  Mirror
   `atlan-openapi-app` `app/connector.py` (`extract_spec` reads
   `input.spec_url`).  Cite as evidence the contract class and the line that
   declares `field`.
