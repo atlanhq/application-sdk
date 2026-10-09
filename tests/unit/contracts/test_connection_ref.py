@@ -662,3 +662,15 @@ class TestConnectionQualifiedNameDefect:
         defect = connection_qualified_name_defect(qualified_name)
         assert defect is not None
         assert reason in defect
+
+
+class TestPackageExports:
+    """The shared rule is reachable from the package, not only from ``types``."""
+
+    def test_rule_is_exported_from_the_package(self) -> None:
+        import application_sdk.contracts as contracts
+        from application_sdk.contracts import types
+
+        for name in ("connection_qualified_name_defect", "CONNECTION_QN_MIN_SEGMENTS"):
+            assert name in contracts.__all__
+            assert getattr(contracts, name) is getattr(types, name)

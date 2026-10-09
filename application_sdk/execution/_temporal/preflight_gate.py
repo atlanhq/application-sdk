@@ -87,8 +87,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
-        connection_qualified_name,
         persist_check_result,
+        raw_connection_qualified_name,
     )
 
     # Handler-side since FND-3280 so ``/check`` can emit its row without
@@ -1369,14 +1369,16 @@ def _unidentifiable_connection(snapshot: dict[str, Any]) -> PreflightOutput | No
     """The block verdict for a workflow whose Connection cannot be addressed.
 
     ``None`` when the snapshot names its connection by a well-formed qualified
-    name in any shape :func:`connection_qualified_name` reads, or names no
+    name in any shape :func:`raw_connection_qualified_name` reads, or names no
     connection at all. A name that is present but fails
     :func:`connection_qualified_name_defect` blocks like a missing one: pyatlan
     and atlan-publish-app both refuse it, only after every extraction activity.
     This is input validation, not a readiness opinion on the source, so the gate
     blocks on it in every mode (CONNECT-1738).
     """
-    qualified_name = connection_qualified_name(snapshot)
+    # Untrimmed: the stored row trims, but a padded first or last segment is
+    # exactly what the run would carry into pyatlan, so it must reach the rule.
+    qualified_name = raw_connection_qualified_name(snapshot)
     if qualified_name is not None:
         defect = connection_qualified_name_defect(qualified_name)
         if defect is None:

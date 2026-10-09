@@ -22,7 +22,7 @@ from application_sdk.execution.errors import ApplicationError
 from application_sdk.handler.base import DefaultHandler
 from application_sdk.handler.contracts import PreflightOutput, PreflightStatus
 from application_sdk.templates.contracts.sql_metadata import ExtractionInput
-from application_sdk.testing.preflight import first_outcome_or_none
+from application_sdk.testing.preflight import PreflightOutcomeCapture
 
 _GATE = "application_sdk.execution._temporal.preflight_gate"
 _QN = "default/snowflake/1700000000"
@@ -68,17 +68,18 @@ def mode(request: pytest.FixtureRequest) -> PreflightGateMode:
 
 class TestUnidentifiableConnectionBlocks:
     async def test_incident_payload_blocks_in_every_mode(
-        self, mode: PreflightGateMode
+        self,
+        mode: PreflightGateMode,
+        capture_preflight_outcomes: PreflightOutcomeCapture,
     ) -> None:
         handler = _handler()
         gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
-        with _patches(), mock.patch(f"{_GATE}.logger") as ml:
-            with pytest.raises(ApplicationError) as exc_info:
-                await gate(_gate_input(connection=_INCIDENT_CONNECTION))
+        with _patches(), pytest.raises(ApplicationError) as exc_info:
+            await gate(_gate_input(connection=_INCIDENT_CONNECTION))
 
         assert exc_info.value.type == "PreflightFailed"
         assert exc_info.value.non_retryable
-        row = first_outcome_or_none(ml)
+        row = capture_preflight_outcomes.one
         assert row["outcome"] == "blocked"
         assert row["failure.check"] == "connection_qualified_name"
         assert "no qualifiedName" in row["failure.message"]
@@ -94,10 +95,21 @@ class TestUnidentifiableConnectionBlocks:
 
     @pytest.mark.parametrize(
         "qualified_name",
-        ["default/mongodb", "default/mongodb/", "default//1700000000"],
+        [
+            "default/mongodb",
+            "default/mongodb/",
+            "default//1700000000",
+            # Padded outer segments: the stored row trims these, so the gate
+            # must read the name before that trim or they pass as well-formed.
+            " default/mongodb/1700000000",
+            "default/mongodb/1700000000 ",
+        ],
     )
     async def test_malformed_qualified_name_blocks(
-        self, qualified_name: str, mode: PreflightGateMode
+        self,
+        qualified_name: str,
+        mode: PreflightGateMode,
+        capture_preflight_outcomes: PreflightOutcomeCapture,
     ) -> None:
         handler = _handler()
         gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
@@ -105,26 +117,34 @@ class TestUnidentifiableConnectionBlocks:
             "typeName": "Connection",
             "attributes": {"qualifiedName": qualified_name, "name": "example"},
         }
-        with _patches(), mock.patch(f"{_GATE}.logger") as ml:
-            with pytest.raises(ApplicationError):
-                await gate(_gate_input(connection=connection))
+        with _patches(), pytest.raises(ApplicationError):
+            await gate(_gate_input(connection=connection))
 
-        row = first_outcome_or_none(ml)
+        row = capture_preflight_outcomes.one
         assert row["outcome"] == "blocked"
         assert "not well-formed" in row["failure.message"]
         handler.preflight_check.assert_not_called()
 
+    @pytest.mark.parametrize(
+        "qualified_name",
+        ["default/mongodb", " default/mongodb/1700000000", ["default/mongodb/1 "]],
+        ids=["two-part", "padded-first", "padded-last-list-of-one"],
+    )
     async def test_malformed_bare_qualified_name_blocks(
-        self, mode: PreflightGateMode
+        self,
+        qualified_name: str | list[str],
+        mode: PreflightGateMode,
+        capture_preflight_outcomes: PreflightOutcomeCapture,
     ) -> None:
         handler = _handler()
         gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
         gate_input = _with_snapshot_keys(
             _gate_input(connection=_INCIDENT_CONNECTION),
-            connection_qualified_name="default/mongodb",
+            connection_qualified_name=qualified_name,
         )
         with _patches(), pytest.raises(ApplicationError):
             await gate(gate_input)
+        assert capture_preflight_outcomes.one["outcome"] == "blocked"
         handler.preflight_check.assert_not_called()
 
 
