@@ -167,6 +167,19 @@ class TestGetAllAppWorkflows:
         with pytest.raises(EntryPointContractError, match="reserved"):
             get_all_app_workflows()
 
+    def test_rejects_sdk_reserved_store_assert_workflow_type(self) -> None:
+        from application_sdk.app.entrypoint import EntryPointContractError, entrypoint
+
+        class ReservedApp(App):
+            legacy_workflow_types = {"sdk:store-assert": "extract"}
+
+            @entrypoint
+            async def extract(self, input: _WfInput) -> _WfOutput:
+                return _WfOutput()
+
+        with pytest.raises(EntryPointContractError, match="SDK built-in"):
+            get_all_app_workflows()
+
     def test_post_definition_alias_assignment_fails_at_worker_startup(self) -> None:
         """A declaration written after class definition never registered — the
         worker must refuse to start rather than boot without the alias (the

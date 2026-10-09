@@ -408,6 +408,35 @@ The ``secrets=`` parameter is keyword-only and optional, so existing call sites 
 public sync API are unchanged.  Secret values are never logged — the startup resolution log
 emits ``endpoint_configured=<bool>`` rather than the resolved endpoint.
 
+### SDK built-in workflow: `sdk:store-assert`
+
+Every worker built by `create_worker` also registers `sdk:store-assert`; no
+handler is needed. It exists for system-app e2e (see
+`docs/standards/connector-ci-e2e.md`): the harness appends it as a DAG node on the
+app's own task queue. There it checks claims of the form `prefix → ABSENT | PRESENT
+| COUNT == n | RECORDS` against the worker's deployment object store, and returns a
+verdict made of counts and booleans. `RECORDS` counts the rows in the parquet or
+JSONL files under a prefix, optionally only rows meeting field conditions.
+
+It is registered everywhere, so worker start-up is the same on every tenant, but
+it is gated at run time. Unless the pod has `ATLAN_STORE_ASSERT_ENABLED=true`, the
+node touches nothing and returns `enabled=False`. The SDK's e2e install sets that
+variable for the one tenant it installs to, through `deploy.env_overrides`; a
+customer tenant never has it. When enabled:
+
+- It never writes or deletes. `ABSENT`, `PRESENT` and `COUNT` only LIST, plus one
+  HEAD for `ABSENT`. `RECORDS` also reads the parquet or JSONL files under its
+  prefix, one at a time: at most 1,000 files, 128 MiB per file and 512 MiB per
+  check. It returns counts, never values.
+- Parquet checks load pyarrow only when they run, so pyarrow stays an optional
+  extra. On a worker without it, a parquet check fails with a clear message.
+- Prefixes must sit strictly below `artifacts/apps/`, `persistent-artifacts/` or
+  `connection-cache/`.
+- One run checks at most 20 prefixes and scans at most 10,000 keys per prefix.
+
+Its workflow type and activity name are reserved: an app that registers either
+fails at worker startup.
+
 ### SDR: Interactive Activity Timeouts
 
 The three interactive SDR operations (`sdr:test_auth`, `sdr:preflight_check`, `sdr:fetch_metadata`)

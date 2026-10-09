@@ -828,6 +828,34 @@ def create_worker(
             resolved_app_name,
         )
 
+    # The e2e object-store assertion node (FND-3571). Registered on every
+    # worker so start-up is identical on every tenant; the activity itself
+    # refuses to read anything unless ATLAN_STORE_ASSERT_ENABLED is set — see
+    # store_assert's module docstring.
+    from application_sdk.execution._temporal.store_assert import (  # noqa: PLC0415 — lazy: loaded with the other SDK-owned workflows
+        STORE_ASSERT_ACTIVITY_NAME,
+        StoreAssertWorkflow,
+        store_assert_activity,
+    )
+
+    if STORE_ASSERT_ACTIVITY_NAME in task_activity_names:
+        from application_sdk.execution._temporal._activity_errors import (  # noqa: PLC0415
+            WorkerActivityNameCollisionError,
+        )
+
+        raise WorkerActivityNameCollisionError(
+            message=(
+                f"An app task registers activity name '{STORE_ASSERT_ACTIVITY_NAME}', "
+                "which the SDK reserves for its object-store assertion workflow. "
+                "Rename the task. A worker cannot register two activities with "
+                "the same name."
+            ),
+            field="task_name",
+        )
+
+    app_workflows = [*app_workflows, StoreAssertWorkflow]
+    task_activities = [*task_activities, store_assert_activity]
+
     interceptor_settings = load_interceptor_settings()
 
     # The three observability interceptors are unconditional and run first so

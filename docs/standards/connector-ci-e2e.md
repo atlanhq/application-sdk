@@ -55,6 +55,41 @@ routing, polling, grading and teardown are unchanged.
   when `E2E_TENANT_POOL=system`, and every other suite refuses that pool. CI sets
   the variable when it places a leg; for a local run against a system-app
   tenant, export it yourself.
+- To prove what the app left in the tenant's object store, override
+  `store_expectations()` to return `StoreAbsent(prefix)`,
+  `StorePresent(prefix)` or `StoreCount(prefix, count)` claims, all from
+  `application_sdk.testing.e2e`. The runner can't see the store,
+  so the harness appends an `sdk-store-assert` node after every other node. It
+  runs on the app's own task queue, which means the same pod and store binding
+  the app used. The harness then reads that node's verdict back from AE and
+  grades it. If the verdict can't be read, the test fails as unreadable, never
+  as a pass.
+  - Prefixes must sit strictly below `artifacts/apps/`, `persistent-artifacts/`
+    or `connection-cache/`.
+  - A suite can declare at most 20 claims.
+  - `ABSENT` is strict: it also counts zero-byte folder markers, including one
+    at the prefix itself.
+  - `PRESENT` and `COUNT` use the `list_keys` view the app sees.
+  - `StoreRecords(prefix, format, where, count | at_least)` counts rows in the
+    parquet or JSONL files under the prefix. `where` is up to 10
+    `FieldCondition`s, all of which must hold: `EQ`, `IN`, `PRESENT` (not
+    missing, null or empty) or `MISSING`. A field is a dotted path such as
+    `entity.attributes.qualifiedName`. The first segment is a column or JSONL
+    key, or a Hive partition directory (`type_name=Table/`) when the file has
+    no such column. Later segments walk structs, JSON objects and string
+    columns holding JSON. Comparisons are type-aware: `true` never equals `1`.
+    To check that every row has field X, use `where=[X MISSING]` with
+    `count=0`.
+  - Every SDK worker serves the `sdk:store-assert` workflow behind the node. It
+    only LISTs, plus one HEAD for `ABSENT`, and returns counts, never keys or
+    contents.
+  - The node reads nothing unless the app's pod has
+    `ATLAN_STORE_ASSERT_ENABLED=true`. `e2e_tenant_app.py install` sets it for
+    the leased tenant through `deploy.env_overrides`, so it applies only when
+    the run installs the app itself (`install-app-to-tenant`, the default) or
+    you use the E2E Tenant Install workflow. Otherwise the test fails with
+    `StoreAssertDisabledError`, never as a pass.
+  - If the DAG spans several task queues, override `store_assert_task_queue()`.
 
 Which base an app's suites use follows from the top-level `type` it declares in
 `atlan.yaml` (generated from `contract/app.pkl`). Conformance rule

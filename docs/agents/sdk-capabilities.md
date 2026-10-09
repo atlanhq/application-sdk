@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.44.0
-source-sha:    227767bcb87f0c4d6380b6e68339192431ad6c62
-source-date:   2026-10-09T10:03:45+01:00
+source-sha:    801721f4adbd80cd75b93bb7e53b7d6af7f1cb34
+source-date:   2026-10-09T13:35:24+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -35,7 +35,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
 | `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
 | `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 410 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 419 |
 | `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
@@ -4183,6 +4183,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A route was registered with no HTTP methods.
 - **Defined in:** `application_sdk/testing/_errors.py`
 
+#### `FieldCondition`
+
+- **Import:** `from application_sdk.testing.e2e import FieldCondition`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class FieldCondition`
+- **Summary:** One test on one field of a record.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing import FieldDiff`
@@ -4190,6 +4198,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FieldDiff(field_path: str, golden_value: Any, ours_value: Any)`
 - **Summary:** One field whose value differs between the golden fixture and ours.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `FieldOp`
+
+- **Import:** `from application_sdk.testing.e2e import FieldOp`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class FieldOp`
+- **Summary:** How a condition tests a field.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
 #### `Finding`
 
@@ -4572,6 +4588,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A workflow to dispatch straight onto a Temporal task queue.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
+#### `RecordFormat`
+
+- **Import:** `from application_sdk.testing.e2e import RecordFormat`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class RecordFormat`
+- **Summary:** File format a ``RECORDS`` check reads.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.testing.integration import ReferentialFailure`
@@ -4800,6 +4824,38 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class Stalled(*, ...)`
 - **Summary:** Work started, then stopped making observable progress.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
+
+#### `StoreAbsent`
+
+- **Import:** `from application_sdk.testing.e2e import StoreAbsent`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreAbsent`
+- **Summary:** No object of any kind under the prefix, directory markers included.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StoreCount`
+
+- **Import:** `from application_sdk.testing.e2e import StoreCount`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreCount`
+- **Summary:** Exactly ``count`` objects under the prefix, in the default listing view.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StorePresent`
+
+- **Import:** `from application_sdk.testing.e2e import StorePresent`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StorePresent`
+- **Summary:** At least one object under the prefix, in the default listing view.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StoreRecords`
+
+- **Import:** `from application_sdk.testing.e2e import StoreRecords`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreRecords`
+- **Summary:** How many records — all, or those meeting every condition in ``where`` —
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
 #### `SubmitRetry`
 
@@ -6607,6 +6663,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SEED_PUBLISH_NODE_ID`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
+
+#### `STORE_ASSERT_NODE_ID`
+
+- **Import:** `from application_sdk.testing.e2e.system_app import STORE_ASSERT_NODE_ID`
+- **Signature:** `STORE_ASSERT_NODE_ID`
+- **Summary:** DAG node id of the appended assertion node.
+- **Defined in:** `application_sdk/testing/e2e/system_app.py`
+
+#### `StoreExpectation`
+
+- **Import:** `from application_sdk.testing.e2e import StoreExpectation`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `StoreExpectation`
+- **Summary:** One claim about one prefix: a model per kind, tagged by ``kind``, so a kind
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
 #### `SUPPORTED_SUFFIXES`
 

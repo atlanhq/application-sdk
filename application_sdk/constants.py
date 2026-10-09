@@ -480,6 +480,14 @@ STORAGE_WRITE_SIDECARS = (
     os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
 )
 
+#: Opt-in for the e2e ``sdk:store-assert`` node (FND-3571). The workflow is
+#: registered on every worker so worker start-up is identical everywhere; with
+#: this unset the node reads nothing and reports itself disabled. Only e2e
+#: installs set it, per tenant, through ``deploy.env_overrides``.
+STORE_ASSERT_ENABLED = (
+    os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.

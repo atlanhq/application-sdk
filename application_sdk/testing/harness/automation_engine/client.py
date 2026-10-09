@@ -1777,6 +1777,53 @@ class AEClient:
             nodes=nodes,
         )
 
+    async def get_node_outputs(self, run_id: str, node_id: str) -> dict[str, Any]:
+        """GET ``/automation/api/v1/runs/<run_id>`` and return one node's outputs.
+
+        ``native-status`` carries each node's status but not its outputs; AE's
+        own run read does — it is what the AE UI renders as a node's output
+        preview. A child workflow's return value becomes that node's
+        ``outputs``.
+
+        Args:
+            run_id: AE's run id.
+            node_id: The DAG node whose outputs to return.
+
+        Returns:
+            The node's ``outputs`` object.
+
+        Raises:
+            AtlanApiHttpError: AE answered non-2xx, or the response has no
+                ``outputs`` object for *node_id*. Never an empty dict standing
+                in for "could not read": a caller grading the outputs must be
+                able to tell the two apart.
+        """
+        status, body = await self._request(
+            "GET", f"/automation/api/v1/runs/{quote(run_id, safe='')}"
+        )
+        target = f"GET /automation/api/v1/runs/{{run_id}} HTTP {status}"
+        if status >= 300 or not isinstance(body, dict):
+            raise AtlanApiHttpError(
+                message=f"AE run read failed: HTTP {status}\nresponse={body!r}",
+                target=target,
+                retry_after_seconds=requested_retry_after(body),
+            )
+        # The envelope is not contractual: accept the run at the top level or
+        # under ``data``, as the other AE reads here do.
+        run = body.get("data", body)
+        dag = run.get("dag") if isinstance(run, dict) else None
+        node = dag.get(node_id) if isinstance(dag, dict) else None
+        outputs = node.get("outputs") if isinstance(node, dict) else None
+        if not isinstance(outputs, dict):
+            raise AtlanApiHttpError(
+                message=(
+                    f"AE run {run_id} has no outputs object for node "
+                    f"{node_id!r} (node present: {isinstance(node, dict)})"
+                ),
+                target=target,
+            )
+        return outputs
+
     async def poll_native_status(
         self,
         run_id: str,
