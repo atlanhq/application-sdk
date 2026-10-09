@@ -641,14 +641,18 @@ The lane applies nothing: return `not_remediable = true` with a
   and pointers as P013.
 
 - **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
-  `Output` contract is a container of primitives or `Any`, bare or bounded
+  `Output` contract is a dict of primitives or a container of `Any` (a bare
+  `list` / `set` / `dict` counts as `Any`), bare or bounded
   (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
   primitives, the bound satisfies payload safety without an opt-out, but the
   keys and values still have no schema.  A bound never makes `Any` safe:
   `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
   without the opt-out and is still a P001 finding — replace the `Any` first
   (see P001 above).  Containers of a typed class
-  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists, sets and
+  tuples of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`), such
+  as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
+  are exempt too: they have no keys to model.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested

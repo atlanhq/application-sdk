@@ -2338,19 +2338,54 @@ def _p015_ids(src: str) -> list[str]:
     [
         "dict",
         "dict[str, str]",
+        "dict[str, int]",
         "Dict[str, Any]",
+        "Mapping[str, str]",
+        "Annotated[dict[str, bool], MaxItems(10)]",
+        "list",
+        "List",
+        "set",
+        "list[Any]",
+        "List[Any]",
+        "set[Any]",
+        "frozenset[object]",
+        "Sequence[Any]",
+        "list[bytearray]",
+        "Annotated[list[Any], MaxItems(10)]",
+        "list[dict[str, str]]",
+        "list[list[Any]]",
+    ],
+)
+def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
+    """Dict of primitives, container of Any, or bare container → P015."""
+    src = f"class MyInput(Input):\n    data: {annotation}\n"
+    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
         "list[str]",
         "List[int]",
         "set[str]",
         "Set[str]",
-        "Mapping[str, str]",
-        "Sequence[str]",
+        "frozenset[float]",
+        "FrozenSet[bool]",
+        "Sequence[bytes]",
+        "tuple[str, ...]",
+        "Tuple[int, int]",
+        "Annotated[list[str], MaxItems(100)]",
+        "Optional[Annotated[set[int], MaxItems(100)]]",
+        "list[str] | None",
+        "list[Annotated[str, MaxLen(64)]]",
+        "Annotated[list[Annotated[list[str], MaxItems(500)]], MaxItems(200)]",
+        "list[set[int]]",
     ],
 )
-def test_p015_fires_on_unmodeled_container(annotation: str) -> None:
-    """Container of primitives/Any on a contract field → P015."""
+def test_p015_silent_on_scalar_collection(annotation: str) -> None:
+    """List/set/tuple of a scalar primitive has no keys to model → no P015."""
     src = f"class MyInput(Input):\n    data: {annotation}\n"
-    assert _p015_ids(src) == ["P015"], f"Expected P015 for annotation '{annotation}'"
+    assert _p015_ids(src) == [], f"Expected no P015 for annotation '{annotation}'"
 
 
 def test_p015_fires_on_bounded_annotated_dict(tmp_path: Path) -> None:

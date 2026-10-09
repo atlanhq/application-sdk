@@ -141,6 +141,8 @@ def check_p015(
 
     Containers of a typed class (``list[FooModel]``, ``dict[str, FooModel]``)
     are exempt: a collection of models is the canonical bounded pattern.
+    List/set-like containers of a scalar primitive (``list[str]``,
+    ``set[int]``) are exempt too: they have no keys to model.
     """
     findings: list[Finding] = []
     foreign = collect_foreign_contract_names(tree)
