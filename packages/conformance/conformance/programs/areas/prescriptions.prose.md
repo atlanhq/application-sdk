@@ -872,8 +872,13 @@ the blind gate cannot tell a correct hop from a plausible one.
   (FND-2873).  Draft by default a dedicated executor created **without**
   `with` — the same `ThreadPoolExecutor(...)` constructor arguments, including
   `max_workers` — with `executor.shutdown(wait=False)` in `finally`.  That shape
-  is correct whether or not the calls need thread affinity (some DB-API cursors
-  break when `execute` and `fetchmany` run on different threads).  Draft
+  removes the join on cancel and keeps today's thread behaviour: the calls stay
+  on one thread only when `max_workers=1` (some DB-API cursors break when
+  `execute` and `fetchmany` run on different threads), so never change
+  `max_workers`.  The `shutdown(wait=False)` goes last, in a `finally` that
+  wraps every use of the pool, after any cleanup that still offloads to it
+  (for example an inner `finally` that closes the cursor through the pool, as
+  an async generator that yields batches does).  Draft
   `await run_in_thread(fn, arg)` instead (the SDK seam, and it does not join on
   cancel) only when the block makes a single offload call with no thread
   affinity; pick `self.run_in_thread` or the module-level

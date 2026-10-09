@@ -8,8 +8,9 @@ on the event loop thread.  If the awaiting task is cancelled while the executor 
 running a blocking driver call, that ``wait=True`` blocks the loop until the call
 returns and freezes the entire worker.  A dedicated executor created without
 ``with`` and shut down with ``executor.shutdown(wait=False)`` in ``finally`` lets
-the cancel return immediately while the call finishes unjoined; that shape is
-correct with or without thread affinity (FND-2873).  For a single offload call
+the cancel return immediately while the call finishes unjoined, and keeps the
+pool's thread behaviour (one thread only with ``max_workers=1``; FND-2873).  For
+a single offload call
 with no thread affinity, ``run_in_thread(fn, ...)`` is the SDK seam and the
 simpler fix.
 
