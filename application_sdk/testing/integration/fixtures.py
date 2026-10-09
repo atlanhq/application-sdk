@@ -115,10 +115,12 @@ artifact assertion with "output file missing" and nothing pointing at the cause.
 allowlist here diverged for ``"off"``, ``"disabled"``, ``"  false  "`` and
 ``""``, staying silent in exactly the cases that delete the artifacts. The
 default is scoped to the ``worker`` fixture's lifetime and the prior value
-restored on teardown: ``pytest tests/`` runs integration and unit tests in one
-process, and a cleanup-asserting unit test scheduled after this fixture would
-otherwise silently observe cleanup disabled (BLDX-1283). Neither setting forces
-a value over an explicit one.
+restored on teardown — but ``worker`` is session-scoped, so that lifetime runs
+to the end of the pytest session. Under a mixed-tier ``pytest tests/``, unit
+tests collected after the first kit test observe cleanup disabled (the shape of
+BLDX-1283). Use the opt-in for a local debugging run of the integration
+directory, not in a run that also executes cleanup-asserting tests. Neither
+setting forces a value over an explicit one.
 
 ``store_root`` covers the object store a run writes through. The local scratch
 tree it also writes — the ``{TEMPORARY_PATH}/artifacts/apps/{APPLICATION_NAME}``
@@ -488,15 +490,12 @@ def _artifact_preservation(options: KitOptions) -> Iterator[None]:
     that *disables* cleanup is warned about, because the suite then asserts on
     intermediates a production run deletes.
 
-    With ``preserve_artifacts=True`` the cleanup interceptor is defaulted off.
-    Scoped rather than assigned once, because this variable decides whether
-    ``App.on_complete()`` deletes a run's artifacts and the whole process reads
-    it. A plain ``os.environ[...] = "false"`` from a session fixture leaks into
-    every later test in the same process — ``pytest tests/`` runs integration
-    and unit tests together, and cleanup-asserting unit tests scheduled after
-    this fixture would silently observe cleanup disabled. That is the shape of
-    BLDX-1283, which the repo's own ``tests/integration/conftest.py`` restores
-    per-test to avoid.
+    With ``preserve_artifacts=True`` the cleanup interceptor is defaulted off
+    for the block and the prior value restored after it, so nothing outlives
+    the block. The block is the session-scoped ``worker`` fixture, though, so
+    it still spans every later test in the same pytest session — including
+    unit tests under a mixed-tier ``pytest tests/`` (the shape of BLDX-1283).
+    That is why the opt-in is a local debugging switch rather than the default.
 
     An explicit environment value always wins and is left untouched; one that
     leaves cleanup *enabled* is warned about, because it silently defeats

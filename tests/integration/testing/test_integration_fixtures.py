@@ -72,7 +72,9 @@ class PublishApp(App):
 
     @task
     async def write(self, input: EchoInput) -> PublishOutput:
-        root = Path(tempfile.mkdtemp())
+        # Under the child suite's cwd — the outer test's tmp_path — so pytest
+        # prunes it; tempfile.mkdtemp() would leave a tree on the host per run.
+        root = Path(tempfile.mkdtemp(dir=Path.cwd()))
         (root / "intermediate.json").write_text("{}")
         (root / "published.json").write_text("{}")
         return PublishOutput(
@@ -136,7 +138,6 @@ async def test_the_app_runs_through_the_kit(executor):
     )
 
 
-@pytest.mark.asyncio(loop_scope="session")
 async def test_artifact_assertions_see_post_cleanup_storage(executor, store_root):
     # on_complete() runs inside the workflow, so by the time the result is
     # back its cleanup has run: the store holds what production leaves.
@@ -313,12 +314,9 @@ def integration_options():
 """
 
 _PRESERVE_TEST = """
-import pytest
-
 from kit_smoke_app import EchoInput, PublishApp
 
 
-@pytest.mark.asyncio(loop_scope="session")
 async def test_the_opt_in_keeps_intermediates(executor, store_root):
     output = await executor.execute_app(PublishApp, EchoInput())
     assert (store_root / output.intermediate.storage_path).is_file()
