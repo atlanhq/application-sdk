@@ -206,6 +206,14 @@ helper and lists their lines.
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
   instead; never re-encode the grammar there.
+- **not an identity** — an f-string that embeds a qualifiedName but is not an
+  asset identity: an object-store key or prefix that starts with the qn
+  (`f"{connection_qn}/lineage_current_state"`), a trailing-`/` match prefix
+  (`f"{qn}/"` used with `startswith`), or a log/exception message or display
+  text. Suppress it on the line with
+  `# conformance: ignore[P028] <reason>`, where the reason names what the
+  string is (for example `object-store key, not a qualifiedName`). Never
+  rewrite it through a creator.
 - **centralise** — no creator owns the grammar. Move every such f-string into
   one `app/qualified_names.py` with one helper per shape and one justified
   ignore per helper.
@@ -234,7 +242,8 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    **creator** sites, `generate_qualified_name` helpers for the **process**
    sites, and the f-string helpers with their ignores for the **centralise**
    sites. Call sites use the helpers. In a dict-mapper app the helpers return
-   strings only, and the emitted dicts keep their shape. Leave **identity
+   strings only, and the emitted dicts keep their shape. Give each
+   **not an identity** site its reasoned ignore in place. Leave **identity
    change** and **decode** sites untouched and **unsuppressed**: they stay
    P028 findings, listed in the PR description, until the owner decides (for
    example to reject blank ids in `run()`, which makes the creator rewrite
