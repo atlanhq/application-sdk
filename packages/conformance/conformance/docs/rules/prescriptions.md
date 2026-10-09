@@ -70,7 +70,7 @@ reassigned.
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
-| [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | — | 0.43.0 |
+| [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | yes | 0.43.0 |
 | [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
 
 ---
@@ -2788,7 +2788,7 @@ entry-point input — records that with a justified `# conformance: ignore[P053]
 
 ## P054 — `ScopedExecutorJoinedOnCancel` {#p054}
 
-**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** — · **Since:** 0.43.0
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.43.0
 
 > A `with`-scoped ThreadPoolExecutor joined on cancel blocks the event loop
 
@@ -2805,8 +2805,9 @@ thread affinity.
 - **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
   `_execute_async_read_operation` offload every driver call with `run_in_thread` instead
   of a `with`-scoped executor, so cancelling the awaiting task never joins a blocked
-  driver call on the event loop.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+  driver call on the event loop. atlan-openapi-app app/connector.py offloads blocking
+  work with `self.run_in_thread` the same way.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `async def`, a `with` statement constructs a `ThreadPoolExecutor` bound to a
 name and the body offloads work to it with `.run_in_executor(<that name>, ...)`, e.g.
@@ -2816,17 +2817,22 @@ A task cancelled inside that `with` block leaves through `pool.shutdown(wait=Tru
 which runs on the event loop thread and blocks until the driver call returns — freezing
 the whole worker, not just the cancelled task.
 
-Fix (a): use `run_in_thread(fn, ...)`, which dispatches onto the SDK's dedicated pool
+Fix (a): keep a dedicated executor created **without** `with` (same constructor
+arguments) and call `executor.shutdown(wait=False)` in `finally`, after any cleanup that
+still offloads to the pool.  It keeps today's thread behaviour: the calls stay on one
+thread only when `max_workers=1` (some DB-API cursors break when `execute` and
+`fetchmany` run on different threads). Fix (b): for a single offload call with no thread
+affinity, use `run_in_thread(fn, ...)`, which dispatches onto the SDK's dedicated pool
 and does not join on cancel — the shape `application_sdk/clients/sql.py`
-`BaseSQLClient.run_query` uses. Fix (b): when the calls must stay on one thread (some
-DB-API cursors break when `execute` and `fetchmany` run on different threads), keep a
-dedicated executor created **without** `with` and call `executor.shutdown(wait=False)`
-in `finally`.
+`BaseSQLClient.run_query` uses.
 
 `run_in_executor(None, ...)` is P031, not this rule; a `with`-scoped executor that only
-calls `pool.submit(...)` is out of scope.  Land as `WARN`; suppress a reviewed exception
-on the `with` line (the finding anchors there, not on the `run_in_executor` call) with
-`# conformance: ignore[P054] <reason>`.
+calls `pool.submit(...)` is out of scope.
+
+Remediation is a restructure, so each site gets a drafted fix that a human reviews, not
+a mechanical rewrite.  Land as `WARN`; suppress a reviewed exception on the `with` line
+(the finding anchors there, not on the `run_in_executor` call) with `# conformance:
+ignore[P054] <reason>`.
 
 ---
 
