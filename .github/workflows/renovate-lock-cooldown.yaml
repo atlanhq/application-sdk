@@ -29,6 +29,14 @@ name: Bound the Renovate lock refresh
 # whole — take the bounded resolve, or restore the base branch's lock verbatim.
 # See renovate_npm_lock_bounded's docstring for the measurements behind that.
 #
+# When the bounded lock moves pyatlan, the driver also regenerates the
+# conformance package's relationship_directions.json, which a drift test pins to
+# the locked pyatlan. That installs and imports the freshly-resolved release, so
+# the lane is two jobs: `bound` resolves and regenerates holding only a read-only
+# GITHUB_TOKEN, and `publish` — the only job that ever sees the App token —
+# copies the declared output paths out of its artifact, commits and pushes. No
+# resolver and no third-party install runs where the push credential lives.
+#
 # All logic lives in the tested driver .github/scripts/bound_lock_branch.py; this
 # workflow provides the toolchain, the baseline ref, and the push.
 
@@ -89,41 +97,18 @@ jobs:
     if: >-
       ${{ contains(fromJSON('["atlan-app-fleet[bot]", "renovate[bot]"]'), github.actor)
       && !startsWith(github.event.head_commit.message, 'chore(deps): bound the refreshed locks') }}
+    # Read-only, and no App token or secret anywhere in this job: it runs the
+    # resolver and, when pyatlan moved, installs and imports the new release.
     permissions:
-      contents: write
-      # For the carry-forward below. Written with GITHUB_TOKEN rather than the
-      # App token: publishing a commit status needs no identity that re-triggers
-      # anything, so the narrower credential is the right one.
-      statuses: write
+      contents: read
     steps:
-      # A real (non-github-actions[bot]) identity is required: the push below must
-      # re-trigger the PR's required checks against the new commit, which a push
-      # made with the default GITHUB_TOKEN does not. Confirmed empirically on this
-      # repo's renovate/** branches — an App-token push does re-trigger them.
-      - name: Mint fleet App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
-        with:
-          app-id: ${{ secrets.FLEET_APP_ID }}
-          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
-          owner: atlanhq
-          repositories: application-sdk
-          # Down-scope to the one permission this lane uses (FND-395). An
-          # installation token has no *branch* scope — that is what the `bot
-          # branches` ruleset is for — but it does have a permission scope, and
-          # by default this step mints the App's whole installation grant on
-          # this repo. Since the workflow definition and the scripts it runs
-          # both come from the pushed branch, whatever the token can do is
-          # reachable from that branch: contents-only is a materially smaller
-          # blast radius than the full grant. The commit status published below
-          # is written with GITHUB_TOKEN, so `statuses` is deliberately absent
-          # here rather than an omission.
-          permission-contents: write
-
+      # The pushed SHA, not the branch: `publish` commits onto this same SHA, so
+      # a branch that moves in between makes its push non-fast-forward instead
+      # of landing these outputs on top of a newer refresh.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          token: ${{ steps.app-token.outputs.token }}
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
 
       # The baseline the bound is computed against — see the driver's
       # baseline_lock_text docstring. Only the tree at the tip of the base branch
@@ -162,16 +147,134 @@ jobs:
         # interpreter is not a promise GitHub makes. Without it every ordinary
         # upgrade reads as a regression. `--no-project` keeps this off the repo's
         # own environment — the bound must not depend on a full dev sync.
+        # `--no-commit`: committing is `publish`'s job, below.
         run: |
           uv run --no-project --with 'packaging==26.3' \
             python .github/scripts/bound_lock_branch.py \
             --window P3D \
-            --baseline-ref "origin/$BASE_BRANCH"
+            --baseline-ref "origin/$BASE_BRANCH" \
+            --no-commit
 
-      # No-op when the locks were already inside the window (the driver commits
-      # nothing), so this needs no condition of its own.
+      # Exactly the driver's OUTPUT_PATHS — a drift test pins the two together.
+      # Every one of them exists on every run, so a missing file is an error,
+      # not something to upload around.
+      - name: Upload the bounded locks
+        id: upload-locks
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bounded-locks
+          path: |
+            uv.lock
+            packages/conformance/uv.lock
+            packages/conformance/conformance/package-lock.json
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+      # Same retry shape as conformance-reusable.yaml's SARIF uploads: a wait,
+      # then a DISTINCT name (a failed finalize holds the first name for the
+      # run), which `publish` picks up by `bounded-locks*` glob. No
+      # continue-on-error: a second failure fails here, not as a confusing
+      # missing-artifact error in `publish`.
+      - name: Wait before the upload retry
+        if: steps.upload-locks.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the bounded locks (retry)
+        if: steps.upload-locks.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bounded-locks-retry
+          path: |
+            uv.lock
+            packages/conformance/uv.lock
+            packages/conformance/conformance/package-lock.json
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: Commit and push the bounded locks
+    needs: bound
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      # For the carry-forward below. Written with GITHUB_TOKEN rather than the
+      # App token: publishing a commit status needs no identity that re-triggers
+      # anything, so the narrower credential is the right one.
+      statuses: write
+    steps:
+      # A real (non-github-actions[bot]) identity is required: the push below must
+      # re-trigger the PR's required checks against the new commit, which a push
+      # made with the default GITHUB_TOKEN does not. Confirmed empirically on this
+      # repo's renovate/** branches — an App-token push does re-trigger them.
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+          repositories: application-sdk
+          # Down-scope to the one permission this lane uses (FND-395). An
+          # installation token has no *branch* scope — that is what the `bot
+          # branches` ruleset is for — but it does have a permission scope, and
+          # by default this step mints the App's whole installation grant on
+          # this repo. Since the workflow definition and the scripts it runs
+          # both come from the pushed branch, whatever the token can do is
+          # reachable from that branch: contents-only is a materially smaller
+          # blast radius than the full grant. The commit status published below
+          # is written with GITHUB_TOKEN, so `statuses` is deliberately absent
+          # here rather than an omission.
+          permission-contents: write
+
+      # The same SHA `bound` resolved against — see the comment on its checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          ref: ${{ github.sha }}
+
+      # Outside the checkout, so the artifact's paths cannot overwrite anything
+      # in it except through the driver's allowlisted copy.
+      - name: Download the bounded locks
+        id: download-locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
+        with:
+          # Glob, not the bare name: the upload's retry lands under
+          # `bounded-locks-retry`. Both uploads overwrite, so exactly one is live.
+          pattern: bounded-locks*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bounded-locks
+
+      - name: Wait before the download retry
+        if: steps.download-locks.outcome == 'failure'
+        run: sleep 20
+
+      # No continue-on-error: a second failure fails the job rather than
+      # committing nothing.
+      - name: Download the bounded locks (retry)
+        if: steps.download-locks.outcome == 'failure'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: bounded-locks*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bounded-locks
+
+      # Stdlib only, on the runner's python3: no resolver, no install, nothing
+      # from the refreshed dependency set runs beside the App token.
+      - name: Commit the bounded locks
+        run: python3 .github/scripts/bound_lock_branch.py --apply-from "$RUNNER_TEMP/bounded-locks"
+
+      # Unchanged outputs commit nothing, so HEAD is still the pushed SHA and this
+      # is a no-op. A branch that moved since `bound` rejects it as
+      # non-fast-forward, and the newer push's own run takes over.
       - name: Push
-        run: git push
+        run: git push origin "HEAD:$GITHUB_REF"
 
       # Commit statuses are per-SHA and Renovate stamps only its own commits, so
       # our push moves the head off the SHA `renovate/artifacts` lives on — which
