@@ -458,7 +458,7 @@ jobs:
       - name: "Set up uv"
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
-          version: "0.12.23"
+          version: "0.12.24"
 
       # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
       # would redirect every atlanhq URL — including a git-ref conformance
