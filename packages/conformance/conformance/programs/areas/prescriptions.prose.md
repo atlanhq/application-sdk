@@ -1358,7 +1358,10 @@ path component, and this rule governs that package's sources too).
      route to residue with the note "add the lift of
      `connection.attributes.defaultCredentialGuid` into `credential_guid` at
      input construction first, then route strictly".  Otherwise return
-     `outcome = "fix"`.
+     `outcome = "fix"`.  In a `SqlApp` subclass that only needs the ref, draft
+     `self.resolve_credential_ref(input)` instead: it is the template's routing
+     seam, shared with the preflight gate, and its fallback is SDK-owned, not
+     app code.
 
   3. **`CredentialRef(credential_guid=<x>.credential_guid)`** where `<x>` is the
      typed entry-point input (directly, or passed unchanged into a helper) —
@@ -1366,7 +1369,10 @@ path component, and this rule governs that package's sources too).
      an input with `extraction_method="agent"` now resolves through
      `agent_json` instead of the vault, and on a `CredentialResolvable` input
      an `extraction_method` outside `direct` / `query_history` / `s3` now
-     raises.  This is also the fix for a P037 finding at the same site.
+     raises.  As in shape 1, a pre-built ref on `<x>` now wins over the GUID,
+     and an empty `credential_guid` now gives `ref = None` instead of a ref
+     with an empty GUID, so thread `inline` too and read through step 7.
+     This is also the fix for a P037 finding at the same site.
      Return `outcome = "fix"`.  The dict-access forms
      (`<x>['credential_guid']`, `<x>.get('credential_guid')`, or a local bound
      from one) read an untyped payload that `route_credentials` cannot route,
@@ -1427,7 +1433,7 @@ path component, and this rule governs that package's sources too).
   **Say what the migration changes.**  The local copies disagreed on
   behaviour, not just shape, and each shape above names its change: agent mode
   starting to work (3), a lenient fallback becoming a raise (2), a pre-built
-  ref winning first (1), the inline key shape (4).  A proposal that does not
+  ref winning first (1, 3), the inline key shape (4).  A proposal that does not
   name which of these applies is not reviewable.  Never claim the edit is
   mechanical.
 
