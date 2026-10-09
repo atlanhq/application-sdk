@@ -28,6 +28,8 @@ class AppInputContract(Input):
     input_prefix: str
     """Object-store prefix the upstream node wrote its output to."""
     connection_name: str = ""
+    source_tag: str | None = "atlan"
+    """Tag stamped on processed assets; None stamps none."""
     window_days: int = Field(default=30, ge=1)
     """Look-back window, in days."""
     sample_ratio: float = Field(default=1.0, ge=0.0, le=1.0)

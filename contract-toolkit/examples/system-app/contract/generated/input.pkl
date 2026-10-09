@@ -16,6 +16,9 @@ open class SystemAppNode extends App.DAGNode {
 
   connectionName: String?
 
+  /// Tag stamped on processed assets; None stamps none.
+  sourceTag: (String|App.ExplicitNull)?
+
   /// Look-back window, in days.
   windowDays: (Int(this >= 1)|App.DagRef)?
 
@@ -40,10 +43,14 @@ open class SystemAppNode extends App.DAGNode {
   workflowType = "system-app"
   appName = "system-app"
   taskQueue = "atlan-system-app-{deployment_name}"
-  args {
+  args = inputArgs
+
+  /// The args the typed properties render to.
+  hidden fixed inputArgs: Mapping<String, Any> = new {
     ["connection_qualified_name"] = connectionQualifiedName
     ["input_prefix"] = inputPrefix
     when (connectionName != null) { ["connection_name"] = connectionName!! }
+    when (sourceTag != null) { ["source_tag"] = if (sourceTag!! is App.ExplicitNull) new RenderDirective { text = "null" } else sourceTag!! }
     when (windowDays != null) { ["window_days"] = windowDays!! }
     when (sampleRatio != null) { ["sample_ratio"] = sampleRatio!! }
     when (lakeProvider != null) { ["lake_provider"] = lakeProvider!! }
@@ -54,14 +61,18 @@ open class SystemAppNode extends App.DAGNode {
     when (legacyMode != null) { ["legacy_mode"] = legacyMode!! }
   }
 
-  // Every arg must be one the app declares.
+  // Every arg must be one the app declares, set through its typed property.
   _nodeArgsCheck =
     let (undeclared = args.keys.toList().filter((k) -> !argNames.contains(k)))
-    if (undeclared.isEmpty) null
-    else throw("SystemAppNode.args sets \(undeclared), which `system-app` does not declare. Its inputs are \(argNames.toList()).")
+    let (overridden = args.keys.toList().filter((k) -> argNames.contains(k) && args[k] != inputArgs.getOrNull(k)))
+    if (!undeclared.isEmpty)
+      throw("SystemAppNode.args sets \(undeclared), which `system-app` does not declare. Its inputs are \(argNames.toList()).")
+    else if (!overridden.isEmpty)
+      throw("SystemAppNode.args sets \(overridden) directly, bypassing their typed properties. Set the properties instead.")
+    else null
 }
 
-const local argNames: Set<String> = Set("connection_qualified_name", "input_prefix", "connection_name", "window_days", "sample_ratio", "lake_provider", "column_mapping", "include_filter", "types_to_ignore", "dry_run", "legacy_mode")
+const local argNames: Set<String> = Set("connection_qualified_name", "input_prefix", "connection_name", "source_tag", "window_days", "sample_ratio", "lake_provider", "column_mapping", "include_filter", "types_to_ignore", "dry_run", "legacy_mode")
 
 /// SQL expressions mapping source columns to the canonical schema.
 class ColumnMapping {
@@ -70,7 +81,7 @@ class ColumnMapping {
   queryText: String?
 
   /// Optional per-row payload column; unset for sources without one.
-  nativePayload: String?
+  nativePayload: (String|App.ExplicitNull)?
 
   caseInsensitiveMatch: (Boolean|App.DagRef)?
 }
@@ -82,6 +93,6 @@ const local function renderColumnMapping(v: ColumnMapping|App.DagRef): Mapping<S
     new Mapping {
       when (o.queryId != null) { ["query_id"] = o.queryId!! }
       when (o.queryText != null) { ["query_text"] = o.queryText!! }
-      when (o.nativePayload != null) { ["native_payload"] = o.nativePayload!! }
+      when (o.nativePayload != null) { ["native_payload"] = if (o.nativePayload!! is App.ExplicitNull) new RenderDirective { text = "null" } else o.nativePayload!! }
       when (o.caseInsensitiveMatch != null) { ["case_insensitive_match"] = o.caseInsensitiveMatch!! }
     }

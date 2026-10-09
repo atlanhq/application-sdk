@@ -521,6 +521,15 @@ inputContractPath: String = "contract/generated/input.pkl"
 /// file in place (as the toolkit's own example does) sets this.
 inputContractToolkitImport: String = "../App.pkl"
 
+/// (Derived) Names `_input.py` declares or imports at module level. A nested
+/// object class of one of these names would shadow it: an `Input` class, for
+/// one, would replace the SDK base `AppInputContract` extends.
+local inputReservedClassNames: Set<String> = Set(
+  "AppInputContract", "Input", "ExtractionInput", "BaseModel", "ConfigDict",
+  "Field", "ConnectionRef", "FileReference", "MaxItems", "TreeSelection",
+  "CredentialRef", "Annotated", "Any", "ClassVar", "Literal"
+)
+
 /// Refuses `inputs` declarations that would be dropped or would clash.
 local _inputsCheck: Any =
   if (inputs.isEmpty) null
@@ -538,6 +547,7 @@ local _inputsCheck: Any =
       + (if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)) Set("batch_key") else Set()))
     let (clashUi = keys.filter((k) -> uiNames.contains(k)))
     let (clashBase = keys.filter((k) -> reserved.contains(k)))
+    let (clashPyNames = inputAllObjects.map((o) -> o.className).toSet().filter((c) -> inputReservedClassNames.contains(c)))
     let (dupClasses = inputAllObjects
       .filter((o) -> inputAllObjects.any((p) -> p.className == o.className && p != o))
       .map((o) -> o.className).toSet())
@@ -549,8 +559,8 @@ local _inputsCheck: Any =
       throw("App.pkl: different ObjectFields share className(s) \(dupClasses.toList().sort()). Give each nested object a unique className, or reuse one ObjectField value.")
     else if (inputs.toMap().values.any((f) -> f.opaque))
       throw("App.pkl: `inputs` field(s) \(inputs.toMap().filter((_, f) -> f.opaque).keys.toList().sort()) are or contain a JsonObjectField, an opaque dict[str, Any]. Declare the shape with an ObjectField, or a MapField of a known value type.")
-    else if (inputAllObjects.any((o) -> o.className == "AppInputContract"))
-      throw("App.pkl: ObjectField className `AppInputContract` clashes with the generated input class.")
+    else if (!clashPyNames.isEmpty)
+      throw("App.pkl: ObjectField className(s) \(clashPyNames.toList().sort()) would shadow a class `_input.py` declares or imports. Rename the object(s).")
     else null
 
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
@@ -1046,6 +1056,11 @@ open class DAGNode {
 /// parameter placeholder (`{{window-days}}`). Generated caller nodes accept one
 /// wherever an input's own type is not already a string.
 typealias DagRef = String(matches(Regex(#"\$\..+|\{\{[A-Za-z0-9][A-Za-z0-9_-]*\}\}"#)))
+
+/// An explicit `None` for a nullable system-app input. A generated caller
+/// property set to `new App.ExplicitNull {}` sends its arg as JSON `null`;
+/// leaving the property unset omits the arg, so the app applies its default.
+class ExplicitNull
 
 /// Error handling / retry / timeout configuration for a DAG node.
 class ErrorHandlingConfig {
@@ -3790,7 +3805,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local pydanticImportLines: String =
     if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
   local sdkTypeImports: List<String> = (new Listing {
-    when (fieldText.contains(": ConnectionRef") || fieldText.contains("list[ConnectionRef]")) {
+    when (fieldText.contains(": ConnectionRef") || fieldText.contains("[ConnectionRef]") || fieldText.contains(", ConnectionRef]")) {
       "ConnectionRef"
     }
     when (fieldText.contains(": FileReference")) {

@@ -25,12 +25,22 @@
 /// value, and inventing one (`""`, `0`) would hide a missing argument.
 module com.atlan.app.contract.Inputs
 
-/// A Python field name: snake_case, starting with a letter. This is the arg
-/// name callers pass, so it is used as-is.
-typealias FieldName = String(matches(Regex("[a-z][a-z0-9_]*")))
+/// Python keywords that fit `FieldName` or `ClassName`. Either would render
+/// a field or class `_input.py` cannot declare.
+const local pythonKeywords: Set<String> = Set(
+  "False", "None", "True", "and", "as", "assert", "async", "await", "break",
+  "class", "continue", "def", "del", "elif", "else", "except", "finally", "for",
+  "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not",
+  "or", "pass", "raise", "return", "try", "while", "with", "yield"
+)
 
-/// A Python class name for a nested object: PascalCase.
-typealias ClassName = String(matches(Regex("[A-Z][A-Za-z0-9]*")))
+/// A Python field name: snake_case, starting with a letter, and not a Python
+/// keyword. This is the arg name callers pass, so it is used as-is.
+typealias FieldName = String(matches(Regex("[a-z][a-z0-9_]*")), !pythonKeywords.contains(this))
+
+/// A Python class name for a nested object: PascalCase, and not a Python
+/// keyword.
+typealias ClassName = String(matches(Regex("[A-Z][A-Za-z0-9]*")), !pythonKeywords.contains(this))
 
 typealias ScalarValue = String | Int | Float | Boolean
 
@@ -41,6 +51,20 @@ const local function pyLiteral(v: ScalarValue): String =
   if (v is String) pyStr(v)
   else if (v is Boolean) (if (v) "True" else "False")
   else v.toString()
+
+const local function inBounds(v: Number, min: Number?, max: Number?): Boolean =
+  (min == null || v >= min!!) && (max == null || v <= max!!)
+
+/// A numeric field's default as Python, refused when it is outside the
+/// field's bounds. The generated model does not validate defaults, so an
+/// out-of-range default would reach the app unchecked.
+const local function checkedDefault(kind: String, default: Number?, min: Number?, max: Number?): String? =
+  if (min != null && max != null && min!! > max!!)
+    throw("\(kind) min = \(min) is greater than max = \(max).")
+  else if (default == null) null
+  else if (!inBounds(default!!, min, max))
+    throw("\(kind) default \(default) is outside its bounds (min = \(min), max = \(max)).")
+  else default!!.toString()
 
 /// Base of every input field.
 abstract class InputField {
@@ -110,12 +134,12 @@ class IntField extends InputField {
   max: Int?
 
   pyType = "int"
-  pyExplicitDefault = if (default != null) default!!.toString() else null
+  pyExplicitDefault = checkedDefault("IntField", default, min, max)
   pyConstraints = List(
     if (min != null) "ge=\(min)" else null,
     if (max != null) "le=\(max)" else null
   ).filterNonNull()
-  function accepts(value: ScalarValue): Boolean = value is Int
+  function accepts(value: ScalarValue): Boolean = value is Int && inBounds(value, min, max)
 }
 
 class FloatField extends InputField {
@@ -128,12 +152,12 @@ class FloatField extends InputField {
   max: Float?
 
   pyType = "float"
-  pyExplicitDefault = if (default != null) default!!.toString() else null
+  pyExplicitDefault = checkedDefault("FloatField", default, min, max)
   pyConstraints = List(
     if (min != null) "ge=\(min)" else null,
     if (max != null) "le=\(max)" else null
   ).filterNonNull()
-  function accepts(value: ScalarValue): Boolean = value is Float
+  function accepts(value: ScalarValue): Boolean = value is Float && inBounds(value, min, max)
 }
 
 class BoolField extends InputField {
@@ -208,7 +232,7 @@ class ListField extends InputField {
     else
       let (bad = default!!.toList().filter((v) -> !items.accepts(v)))
       if (!bad.isEmpty)
-        throw("ListField default element(s) \(bad) do not match its items type \(items.pyType).")
+        throw("ListField default element(s) \(bad) do not match its items field (\(items.pyType), within any bounds).")
       else if (default!!.length > maxItems)
         throw("ListField default has \(default!!.length) elements, more than maxItems = \(maxItems).")
       else if (default!!.isEmpty) "list"
@@ -291,7 +315,7 @@ function renderFieldLine(name: String, f: InputField): String =
   // Spliced by plain concatenation: a regex replacement string would read the
   // `\` in an escaped default or message (and any `$`) as its own escapes.
   if (suffix.isEmpty) base
-  else if (base.contains("= Field(")) base.dropLast(1) + suffix + ")"
+  else if (isFactory || !constraints.isEmpty) base.dropLast(1) + suffix + ")"
   else if (dflt == null) "\(base) = Field(\(suffix.drop(2)))"
   else "\(name): \(typ) = Field(default=\(dflt)\(suffix))"
 

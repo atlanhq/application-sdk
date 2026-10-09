@@ -107,7 +107,7 @@ facts {
     catchRender(withInput("p", new App.EnumField { values { "a"; "b" }; default = "c" }))
       .contains("not one of its values")
     catchRender(withInput("l", new App.ListField { items = new App.IntField {}; default { "x" } }))
-      .contains("do not match its items type int")
+      .contains("do not match its items field (int, within any bounds)")
     catchRender(withInput("l", new App.ListField { items = new App.StringField {}; maxItems = 1; default { "a"; "b" } }))
       .contains("more than maxItems = 1")
   }
@@ -178,5 +178,41 @@ facts {
     let (shared = new App.ObjectField { className = "Shared"; fields { ["x"] = new App.BoolField { default = true } } })
     (bare) { inputs { ["a"] = shared; ["b"] = shared } }
       .output.files["app/generated/_input.py"].text.split("class Shared(").length == 2
+  }
+
+  ["Python keywords are refused as field and class names"] {
+    module.catch(() -> withInput("class", new App.StringField { default = "" }).output.files)
+      .contains("pythonKeywords")
+    module.catch(() -> withInput("o", new App.ObjectField { className = "None"; fields {} }).output.files)
+      .contains("pythonKeywords")
+  }
+
+  ["A numeric default outside its bounds is refused"] {
+    catchRender(withInput("n", new App.IntField { default = 0; min = 1 }))
+      .contains("IntField default 0 is outside its bounds (min = 1, max = null).")
+    catchRender(withInput("r", new App.FloatField { default = 1.5; max = 1.0 }))
+      .contains("FloatField default 1.5 is outside its bounds")
+    catchRender(withInput("n", new App.IntField { required = true; min = 2; max = 1 }))
+      .contains("IntField min = 2 is greater than max = 1.")
+    catchRender(withInput("l", new App.ListField { items = new App.IntField { min = 1 }; default { 0 } }))
+      .contains("do not match its items field")
+  }
+
+  ["A lifecycle wraps a default by structure, not by its text"] {
+    inputLine(withInput("s", new App.StringField { default = "= Field("; lifecycle = "deprecated" }), "s")
+      == "    s: str = Field(default=\"= Field(\", deprecated=True)"
+  }
+
+  ["A map of ConnectionRef values imports ConnectionRef"] {
+    withInput("conns", new App.MapField { values = new App.ConnectionRefField {} })
+      .output.files["app/generated/_input.py"].text
+      .contains("from application_sdk.contracts.types import ConnectionRef, MaxItems\n")
+  }
+
+  ["An object class may not shadow a name _input.py declares or imports"] {
+    module.catch(() -> withInput("o", new App.ObjectField { className = "Input"; fields {} }).output.files)
+      .contains("className(s) List(\"Input\") would shadow a class `_input.py` declares or imports.")
+    module.catch(() -> withInput("o", new App.ObjectField { className = "Field"; fields {} }).output.files)
+      .contains("would shadow")
   }
 }

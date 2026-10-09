@@ -1057,10 +1057,10 @@ inputs {
 | Field class | Renders | Notes |
 |---|---|---|
 | `StringField` | `str` | |
-| `IntField` / `FloatField` | `int` / `float` | `min` / `max` render `ge=` / `le=`. |
+| `IntField` / `FloatField` | `int` / `float` | `min` / `max` render `ge=` / `le=`. A `default` outside them fails at `pkl eval`: the generated model does not validate defaults, so it would reach the app unchecked. |
 | `BoolField` | `bool` | |
 | `EnumField` | `Literal[...]` | `default` must be one of `values`. |
-| `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are type-checked. |
+| `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are checked against `items`, bounds included. |
 | `MapField` | `Annotated[dict[str, V], MaxItems(n)]` | `values` is a scalar field or a `ListField`. Its only default is `{}`. |
 | `ObjectField` | its own model class | `className` must be unique. `extra="forbid"` by default; `allowExtra = true` renders `extra="ignore"`. |
 | `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | the SDK types of the same name | `FileReferenceField` is the way to hand over large or binary payloads. |
@@ -1086,7 +1086,8 @@ A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value,
 - `inputs` on a non-system app. No manifest arg would pass them, so every run would see only their defaults.
 - `inputs` on a multi-entrypoint bundle root, which renders no `_input.py`.
 - A key that is also a `uiConfig` field, or that the generated class already declares (base, credential, publish or streaming fields).
-- Two different `ObjectField`s with the same `className`.
+- Two different `ObjectField`s with the same `className`, or a `className` that would shadow a name `_input.py` declares or imports (`Input`, `AppInputContract`, `Field`, `ConnectionRef`, ...).
+- A field name or `className` that is a Python keyword (`class`, `lambda`, `None`, ...).
 - A `JsonObjectField`, at any depth. Declare the shape with an `ObjectField`, or a `MapField` of a known value type.
 
 ### System App Input Contract
@@ -1116,6 +1117,7 @@ How each input becomes a property:
 | Name | camelCase of the arg name (`window_days` → `windowDays`), rendered under the arg name. A Pkl keyword is quoted with backticks. |
 | `required = true` | No default: a caller that does not set it fails to render. Adding a required input to the app fails every caller's render until the caller sets it. |
 | Otherwise | Nullable, default `null`, and rendered only when set; the app applies its own default. |
+| `nullable = true` | Also accepts `new App.ExplicitNull {}`, which sends the arg as `None`. An unset property cannot: it omits the arg. A required nullable input stays required. |
 | `StringField` | `String` |
 | `IntField` / `FloatField` | `Int` / `Number`, with `min` / `max` as a constraint |
 | `BoolField` | `Boolean` |
@@ -1131,12 +1133,12 @@ The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<task
 
 **Refused:**
 
-- At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, and a value outside its input's type or bounds.
-- At the system app's render: an input whose property name would override a `DAGNode` property (`depends_on` → `dependsOn`), and two inputs mapping to the same property.
+- At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, a raw `args` entry for one it does (set the property instead), and a value outside its input's type or bounds.
+- At the system app's render: an input whose property name would override a node property (`depends_on` → `dependsOn`, or `inputArgs`), two inputs mapping to the same property, and an `ObjectField` whose `className` is the node class or a Pkl type the module uses (`String`, `Listing`, `App`, ...).
 
 **Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, which resolves from the synced home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it).
 
-**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input (the contract ledger refuses both) and no new required input.
+**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input and no new required input. The toolkit does not compare one release's inputs with the last. The app repo's `B005` conformance rule does, checking the generated `AppInputContract` against its `contract_schema.lock.json`, and it blocks only where that repo's conformance is enforced.
 
 **What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app's contract is synced into `src/system/`.
 

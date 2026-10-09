@@ -45,6 +45,11 @@ inputs {
     doc = "Object-store prefix the upstream node wrote its output to."
   }
   ["connection_name"] = new StringField { default = "" }
+  ["source_tag"] = new StringField {
+    default = "atlan"
+    nullable = true
+    doc = "Tag stamped on processed assets; None stamps none."
+  }
   ["window_days"] = new IntField {
     default = 30
     min = 1

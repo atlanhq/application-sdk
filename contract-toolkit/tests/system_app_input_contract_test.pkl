@@ -113,8 +113,8 @@ facts {
 
   ["Input names map to camelCase properties, quoting Pkl keywords"] {
     InputContract.propertyName("connection_qualified_name") == "connectionQualifiedName"
-    (systemApp) { inputs { ["import"] = new App.StringField { default = "x" } } }
-      .output.files["contract/generated/input.pkl"].text.contains("  `import`: String?\n")
+    (systemApp) { inputs { ["when"] = new App.StringField { default = "x" } } }
+      .output.files["contract/generated/input.pkl"].text.contains("  `when`: String?\n")
   }
 
   ["An input that would override a DAGNode property is refused"] {
@@ -137,5 +137,47 @@ facts {
     text.contains("  displayName = \"Say \\\"hi\\\" \\\\ now\"\n")
       && text.contains("  /// line one\n  /// line two\n")
       && text.contains("(\"a\\\"b\"|App.DagRef)?")
+  }
+
+  ["A nullable input accepts an explicit None, at the top level and nested"] {
+    let (args = systemNodeArgs(callerWith((minimalNode) {
+      sourceTag = new App.ExplicitNull {}
+      columnMapping = new Caller.ColumnMapping { nativePayload = new App.ExplicitNull {} }
+    })))
+    args.containsKey("source_tag") && args["source_tag"] == null
+      && args["column_mapping"].toMap() == Map("native_payload", null)
+    !systemNodeArgs(callerWith(minimalNode)).containsKey("source_tag")
+    module.catch(() -> manifestOf(callerWith((minimalNode) { windowDays = new App.ExplicitNull {} })))
+      .contains("Expected value of type")
+  }
+
+  ["A required nullable input stays required and accepts an explicit None"] {
+    (systemApp) { inputs { ["owner"] = new App.StringField { required = true; nullable = true } } }
+      .output.files["contract/generated/input.pkl"].text
+      .contains("  owner: String|App.ExplicitNull\n")
+  }
+
+  ["A caller cannot set a declared arg through args, bypassing its type"] {
+    module.catch(() -> manifestOf(callerWith((minimalNode) { args { ["window_days"] = 0 } })))
+      .contains("SystemAppNode.args sets List(\"window_days\") directly, bypassing their typed properties.")
+    module.catch(() -> manifestOf(callerWith((minimalNode) { args { ["input_prefix"] = "elsewhere" } })))
+      .contains("bypassing their typed properties")
+  }
+
+  ["An object class may not reuse the node class or a name the module uses"] {
+    module.catch(() -> (systemApp) {
+      inputs { ["o"] = new App.ObjectField { className = "SystemAppNode"; fields {} } }
+    }.output.files["contract/generated/input.pkl"].text)
+      .contains("ObjectField className(s) List(\"SystemAppNode\") clash with the input contract's node class `SystemAppNode`")
+    module.catch(() -> (systemApp) {
+      inputs { ["o"] = new App.ObjectField { className = "String"; fields {} } }
+    }.output.files["contract/generated/input.pkl"].text)
+      .contains("List(\"String\") clash")
+  }
+
+  ["An input may not take the generated inputArgs property"] {
+    module.catch(() -> (systemApp) { inputs { ["input_args"] = new App.StringField { default = "" } } }
+      .output.files["contract/generated/input.pkl"].text)
+      .contains("would become input-contract properties List(\"inputArgs\")")
   }
 }
