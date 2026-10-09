@@ -250,10 +250,16 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
                             f"'{rel_schemas_path}' — it is a pkl eval output and "
                             f"the next toolkit run reverts the edit. Internal "
                             f"'@task' contracts are exempt from this rule; "
-                            f"entry-point contracts are not. Suppress with "
+                            f"entry-point contracts are not. If no consumer "
+                            f"(another app or a DAG/manifest node) reads this "
+                            f"file, it is not a public hand-off: move it to an "
+                            f"internal '@task' contract (or stop returning it) "
+                            f"and mark the removed field 'sunset' in the "
+                            f"contract ledger. Suppress with "
                             f"'# conformance: ignore[K016] <reason>' on the "
                             f"field (or on the contract class, for a field "
-                            f"inherited from a base)."
+                            f"inherited from a base) only when a consumer reads "
+                            f"a format artifactSchemas cannot describe."
                         ),
                         directives=directives,
                     )

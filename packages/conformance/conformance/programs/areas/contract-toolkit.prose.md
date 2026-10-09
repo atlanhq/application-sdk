@@ -30,7 +30,11 @@ description: >
   schema its own writer contradicts) are the artifact-schema pair: K016 is fixed by
   declaring the shape in contract/app.pkl and regenerating -- except on a field
   carrying the SDK's AssetArtifact marker, which is already declared by the Asset
-  model and is a no-action case; K017 is fixed on
+  model and is a no-action case.  If no consumer (another app or a DAG/manifest
+  node) reads the file, it is not a public hand-off: move the field off the
+  entrypoint contract (to an internal @task contract, or do not return it) and
+  mark the removed field `sunset` in the contract ledger.  Suppress K016 only
+  when a consumer reads a format artifactSchemas cannot describe.  K017 is fixed on
   whichever side is wrong -- the declaration or the writer.
   K018 (the extract node sends a flat arg the entrypoint's Input contract cannot
   receive), K019 (a uiConfig form key with no matching {{...}} placeholder),
@@ -710,6 +714,13 @@ schema.
    entry is the correct edit: the declaration is ignored at runtime (the model
    wins), so deleting it changes no behaviour.
 
+   **Next, check that a consumer reads the file.**  Look for another app or a
+   DAG/manifest node that reads it.  If none does, it is not a public hand-off;
+   it sits on the entrypoint contract by accident.  Move the field off the
+   entrypoint contract (to an internal `@task` contract, which K016 exempts, or
+   stop returning it) and mark the removed field `sunset` in the contract
+   ledger.  Do not declare a schema for it and do not suppress.
+
 1. **Find what writes the field.**  Follow the `FileReference` named in the
    finding to the code that populates it — the writer's columns (parquet) or
    record keys (NDJSON) are the declaration's field list.  If the artifact is an
@@ -746,9 +757,10 @@ schema.
    **requires `pkl`.**  Verified by the `pkl-eval` gate.
 4. **Suppression** (strict mode): `# conformance: ignore[K016] <reason>` on the
    field declaration, or on the contract class definition for a field inherited
-   from a base.  Legitimate when the hand-off is deliberately unchecked — which is
-   defensible for an artifact no other app reads, and the wrong call for one that
-   crosses an app boundary.  Route every suppression to residue.
+   from a base.  Legitimate only when a consumer reads the file in a format
+   `artifactSchemas` cannot describe; the reason names the consumer and the
+   format.  A file no consumer reads is moved off the entrypoint contract
+   instead (see step 0).  Route every suppression to residue.
 
 If `pkl` is unavailable the declaration cannot be regenerated or gate-verified;
 route to residue with the proposed field list in the note rather than
