@@ -106,8 +106,14 @@ with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
 
 - **B005 NonAdditiveContractChange** (app source, the contract class) — a field
-  the ledger records is absent from the live contract, or its type changed.
-  Work in this order and stop at the first step that applies:
+  the ledger records is absent from the live contract, its type changed, or
+  source marks it `sunset` while the ledger still records `active`.
+  A skipped deprecation (`sunset` over `active`) has one fix: change the
+  source marker from `sunset` to `deprecated`, regenerate, and leave `sunset`
+  to a later PR.  Report `classification = "mechanical"`; never hand-edit the
+  ledger to `sunset` — `ledger-guard` refuses `active` → `sunset` too.
+  For a removal or retype, work in this order and stop at the first step that
+  applies:
   1. **Suspect a false positive before proposing anything.**  The ledger keys
      entries by **bare class name**, which is not unique, and three independent
      families make a B005 finding noise rather than a real removal: the same
@@ -132,7 +138,8 @@ human audit):
      Report `classification = "mechanical"` only when the finding names the
      field and the ledger type round-trips; the recheck gate confirms.
   3. **Otherwise route to residue** proposing the owner's choice: restore the
-     field, or deprecate and sunset it.
+     field, or deprecate it (and sunset it in a later PR, once the
+     deprecation has merged).
   **Never propose a sunset for a field still referenced anywhere in the repo.**
   Grep the whole tree first, including `scripts/` and `*.sh` JSONPath arguments
   such as `$.extract.outputs.<field>`: a field removed from the contract while a

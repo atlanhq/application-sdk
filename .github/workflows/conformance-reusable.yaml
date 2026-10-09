@@ -967,10 +967,10 @@ jobs:
           overwrite: true
 
       # ── Contract ledger append-only guard ───────────────────────────────────
-      # Verifies that no entry was deleted from the committed contract ledger
-      # and no recorded type was changed between origin/main and HEAD.  Adding
-      # entries and status changes (active→deprecated→sunset) are always
-      # allowed.  Uses `uvx atlan-application-sdk-conformance ledger-guard` so
+      # Verifies that no entry was deleted from the committed contract ledger,
+      # no recorded type was changed, and no entry moved straight from active
+      # to sunset between origin/main and HEAD.  Adding entries and other
+      # status changes are allowed; B005 is what blocks a skipped deprecation.  Uses `uvx atlan-application-sdk-conformance ledger-guard` so
       # the guard travels with the published package.  Skipped on push to main
       # (no base-ref diff).
       #
@@ -1005,7 +1005,7 @@ jobs:
         if: >-
           !cancelled()
           && (steps.ledger-published.outcome == 'failure' || steps.ledger-ref.outcome == 'failure')
-        run: echo "::error title=Contract ledger guard::An entry was removed from, or a recorded type changed in, the contract ledger. Not merge-blocking; see the guard step's log."
+        run: echo "::error title=Contract ledger guard::An entry was removed from, a recorded type changed in, or an entry moved straight from active to sunset in, the contract ledger. Not merge-blocking; see the guard step's log."
 
       # Per-series visibility in one place.  Straight-line by design
       # (docs/standards/ci.md): an outcome is `success`, `failure` or `skipped`

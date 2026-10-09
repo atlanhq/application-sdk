@@ -192,3 +192,72 @@ def test_multiple_violations_all_reported() -> None:
     assert len(errors) == 2
     assert any("DELETED" in e for e in errors)
     assert any("TYPE CHANGED" in e for e in errors)
+
+
+# ── check: sunset requires a prior deprecation ───────────────────────────────
+
+
+def test_active_to_sunset_blocked() -> None:
+    """Skipping 'deprecated' fails and names the field and the missing step."""
+    base = {
+        "fields": [
+            {"contract": "MyInput", "field": "url", "type": "str", "status": "active"}
+        ]
+    }
+    head = {
+        "fields": [
+            {"contract": "MyInput", "field": "url", "type": "str", "status": "sunset"}
+        ]
+    }
+    passed, errors = check(base, head)
+    assert not passed
+    assert len(errors) == 1
+    assert "MyInput.url" in errors[0]
+    assert "'active' → 'sunset'" in errors[0]
+    assert "'deprecated' first" in errors[0]
+
+
+def test_absent_status_counts_as_active() -> None:
+    """A base row without 'status' reads as active, as the ledger loader does."""
+    base = {"fields": [{"contract": "X", "field": "f", "type": "str"}]}
+    head = {
+        "fields": [{"contract": "X", "field": "f", "type": "str", "status": "sunset"}]
+    }
+    passed, errors = check(base, head)
+    assert not passed
+    assert "X.f" in errors[0]
+
+
+def test_active_deprecated_sunset_across_prs_passes() -> None:
+    """The intended path passes at each step when the steps land separately."""
+    rows = [
+        {"fields": [{"contract": "X", "field": "f", "type": "str", "status": s}]}
+        for s in ("active", "deprecated", "sunset")
+    ]
+    for base, head in zip(rows, rows[1:]):
+        passed, errors = check(base, head)
+        assert passed, errors
+
+
+def test_new_entry_recorded_as_sunset_allowed() -> None:
+    """An entry absent from base has no prior status to skip over."""
+    base: dict = {"fields": []}
+    head = {
+        "fields": [{"contract": "X", "field": "f", "type": "str", "status": "sunset"}]
+    }
+    passed, errors = check(base, head)
+    assert passed
+    assert errors == []
+
+
+def test_reactivation_allowed() -> None:
+    """Moving back toward 'active' restores a field, which is additive."""
+    base = {
+        "fields": [{"contract": "X", "field": "f", "type": "str", "status": "sunset"}]
+    }
+    head = {
+        "fields": [{"contract": "X", "field": "f", "type": "str", "status": "active"}]
+    }
+    passed, errors = check(base, head)
+    assert passed
+    assert errors == []

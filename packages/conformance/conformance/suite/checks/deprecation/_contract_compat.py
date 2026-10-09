@@ -692,7 +692,8 @@ def scan_contract_compat(
                                 f"(ledger type: '{lf.type}', status: '{lf.status}') "
                                 "was removed from the contract. Entrypoint contract "
                                 "fields are permanent — mark it 'deprecated' and keep "
-                                "it, or mark it 'sunset' to retire it. An unmarked "
+                                "it; once that has merged, mark it 'sunset' to retire "
+                                "it. An unmarked "
                                 "removal breaks every consumer that already serializes "
                                 "this field. "
                                 "Suppress with '# conformance: ignore[B005] <reason>' "
@@ -701,7 +702,37 @@ def scan_contract_compat(
                             directives=directives,
                         )
                     )
-                elif live.canonical_type != lf.type:
+                    continue
+                if (
+                    live.status == "sunset"
+                    and lf.status == "active"
+                    and (lf.field, lf.type) not in retired_upstream
+                ):
+                    # The generator refuses to record this move, so the ledger
+                    # still says 'active': the source skipped the deprecation
+                    # window callers rely on. An SDK retirement is excused —
+                    # the SDK's own B005 run enforces the order there.
+                    findings.append(
+                        make_finding(
+                            filename=rel,
+                            rule_id="B005",
+                            node=live.node or class_node,
+                            message=(
+                                f"Contract field '{class_node.name}.{lf.field}' "
+                                "is marked 'sunset' but the ledger records it "
+                                "'active'. A field retires through 'active' → "
+                                "'deprecated' → 'sunset' in separate PRs, so "
+                                "callers see a deprecation before it is withdrawn. "
+                                "Mark it 'deprecated', regenerate with "
+                                f"'{regen}' and merge that; mark it 'sunset' in a "
+                                "later PR. "
+                                "Suppress with '# conformance: ignore[B005] <reason>' "
+                                "only if this contract has no deployed consumers."
+                            ),
+                            directives=directives,
+                        )
+                    )
+                if live.canonical_type != lf.type:
                     if _retype_is_compatible(
                         lf.type, live.canonical_type, inherited=live.node is None
                     ):
@@ -953,8 +984,8 @@ def _renamed_bundle_input_findings(
             change = (
                 f"(ledger type: '{lf.type}', status: '{lf.status}') was removed "
                 "from the contract. Entrypoint contract fields are permanent — "
-                "mark it 'deprecated' and keep it, or mark it 'sunset' to retire "
-                "it. "
+                "mark it 'deprecated' and keep it; once that has merged, mark it "
+                "'sunset' to retire it. "
             )
         findings.append(
             make_finding(

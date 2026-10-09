@@ -477,3 +477,41 @@ def test_generator_records_a_contract_exposed_under_a_module_alias(
     assert ("AppInputContract", "include_database_regex") in recorded
     assert ("AppInputContract", "app_name") in recorded
     assert not any(contract == "MyInput" for contract, _ in recorded)
+
+
+_SUNSET_KWARGS = 'deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}'
+
+
+@pytest.mark.parametrize(
+    ("recorded", "source_kwargs", "expected"),
+    [
+        ("active", "deprecated=True", "deprecated"),
+        ("deprecated", _SUNSET_KWARGS, "sunset"),
+        ("active", _SUNSET_KWARGS, "active"),
+    ],
+    ids=["deprecate", "sunset-after-deprecation", "refuses-direct-sunset"],
+)
+def test_generator_never_records_active_to_sunset(
+    tmp_path: Path, recorded: str, source_kwargs: str, expected: str
+) -> None:
+    """Regeneration may not launder a skipped deprecation into the ledger.
+
+    The ledger keeps 'active' so B005 reports the skip against the source's
+    'sunset' marker; recording it would leave nothing single-checkout to catch.
+    """
+    (tmp_path / "app.py").write_text(
+        "from pydantic import BaseModel, Field\n"
+        "from application_sdk.app import App\n\n"
+        "class MyInput(BaseModel):\n"
+        f"    name: str = Field(default='', {source_kwargs})\n\n"
+        "class MyApp(App):\n"
+        "    async def run(self, input: MyInput) -> None:\n        pass\n",
+        encoding="utf-8",
+    )
+    existing = ContractLedger(
+        version=LEDGER_VERSION,
+        fields=[ContractField("MyInput", "name", "str", recorded)],
+    )
+    ledger = build_ledger(tmp_path, existing)
+    (row,) = [f for f in ledger.fields if f.field == "name"]
+    assert row.status == expected

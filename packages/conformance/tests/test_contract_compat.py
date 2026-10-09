@@ -1084,6 +1084,49 @@ def test_b005_active_field_must_still_be_present(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_EP_LIFECYCLE = """\
+from pydantic import BaseModel, Field
+from application_sdk.app import App
+
+class MyInput(BaseModel):
+    name: str = Field(default="", {kwargs})
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+_SUNSET_KWARGS = 'deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}'
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "ledger_status", "fires"),
+    [
+        (_SUNSET_KWARGS, "active", True),
+        (_SUNSET_KWARGS, "deprecated", False),
+        (_SUNSET_KWARGS, "sunset", False),
+        ("deprecated=True", "active", False),
+    ],
+    ids=["active-to-sunset", "deprecated-to-sunset", "sunset-noop", "deprecate"],
+)
+def test_b005_sunset_requires_a_recorded_deprecation(
+    tmp_path: Path, kwargs: str, ledger_status: str, fires: bool
+) -> None:
+    """Source 'sunset' over a ledger 'active' skipped the deprecation window.
+
+    The generator refuses to record that move, so this is the state a direct
+    sunset leaves behind — and B005, unlike ledger-guard, blocks the merge.
+    """
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", ledger_status))
+    src = _EP_LIFECYCLE.format(kwargs=kwargs)
+    findings = [
+        f for f in _scan(tmp_path, {"app.py": src}, ledger) if f.rule_id == "B005"
+    ]
+    assert bool(findings) is fires
+    if fires:
+        assert "MyInput.name" in findings[0].message
+        assert "'deprecated'" in findings[0].message
+
+
 def test_b005_widening_is_not_a_break(tmp_path: Path) -> None:
     """str -> str | list[...] keeps every payload that validated before."""
     findings = _scan_typed(tmp_path, "str | list[dict[str, object]]", "str")
@@ -1881,6 +1924,47 @@ def test_b005_sdk_retired_inherited_field_is_not_this_apps_break(
         tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
     )
     assert "B005" not in _ids(findings)
+
+
+@pytest.mark.parametrize("sdk_retired", [True, False], ids=["sdk-sunset", "no-record"])
+def test_b005_inherited_sdk_sunset_is_not_this_apps_skipped_deprecation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sdk_retired: bool
+) -> None:
+    """An inherited field the SDK marks 'sunset' is the SDK's to order.
+
+    The app's ledger still says 'active' because the app's generator refuses the
+    move; the SDK's own B005 run enforced active → deprecated → sunset there.
+    Without the SDK ledger's 'sunset' record, the same state still fires.
+    """
+    from conformance.suite.checks._sdk_contract_mixins import (
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        SdkField,
+    )
+
+    monkeypatch.setitem(
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        "ExtractionInput",
+        tuple(
+            SdkField(f.name, f.canonical_type, "sunset")
+            if f.name == "credential_guid"
+            else f
+            for f in SDK_TEMPLATE_CONTRACT_FIELDS["ExtractionInput"]
+        ),
+    )
+    sdk_ledger = _make_ledger(
+        *(
+            [ContractField("ExtractionInput", "credential_guid", "str", "sunset")]
+            if sdk_retired
+            else []
+        )
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, sdk_ledger
+    )
+    assert ("B005" in _ids(findings)) is not sdk_retired
 
 
 _SDK_TASK_INPUT_APP = """\
