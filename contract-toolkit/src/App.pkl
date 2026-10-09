@@ -3843,10 +3843,13 @@ local function pascalCase(s: String): String =
     for (seg in s.split(Regex("[^A-Za-z0-9]+"))) { capitalizeFirst(seg) }
   }).toList().join("")
 
-// SQL-family categories drive SQLAppE2ETest / SQLMustacheSubstitutions selection.
+// A system app's suite submits straight to AE on the system-app tenant pool
+// (`SystemAppE2ETest`). Otherwise SQL-family categories drive SQLAppE2ETest /
+// SQLMustacheSubstitutions selection.
 local function e2eBaseClass(): String =
   let (cat = connector?.category)
-  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+  if (isSystemApp) "SystemAppE2ETest"
+  else if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
     "SQLAppE2ETest"
   else "BaseE2ETest"
 
@@ -3976,11 +3979,21 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
-    "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
-    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    // SystemAppE2ETest submits straight to AE and never sends the Heracles
+    // envelope these name, so a system app's base leaves them out.
+    (if (isSystemApp) "" else
+      "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
+      "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
+      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
-    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
+    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "") +
+    // No manifest.json is generated without a uiConfig, so the harness's
+    // default manifest_path names a file that does not exist.
+    (if (isSystemApp && uiConfig == null)
+      "    # This app generates no manifest.json: its callers declare its DAG node.\n" +
+      "    # Set manifest_path in the suite to a fixture DAG copied from a calling\n" +
+      "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n"
+    else "")
 }
 
 // ── Bundle (multi-entrypoint) e2e base ────────────────────────────────────────
@@ -4084,7 +4097,9 @@ local function epTemplateName(ep: Entrypoint): String =
 
 local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOutput {
   local c = ep.contract!!
-  local baseClass = e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
+  local baseClass =
+    if (isSystemApp) "SystemAppE2ETest"
+    else e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
   local cname = pascalCase(ep.name)
   // Identity is the BUNDLE's, not the entrypoint's: every entrypoint of a bundle
   // is served by one deployed app service, and `connector_short_name` drives the
@@ -4111,9 +4126,11 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
-    "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
-    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    // As for a single-entrypoint system app: no Heracles envelope is sent.
+    (if (isSystemApp) "" else
+      "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
+      "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
+      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
     (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
     (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
     "    connector_config_name = \"\(escapePyStr(configName))\"\n" +

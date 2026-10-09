@@ -1,10 +1,10 @@
 # Generated from contract/app.pkl via contract-toolkit. DO NOT EDIT.
 # Regenerate with: pkl eval -m . contract/app.pkl
-from application_sdk.testing.e2e import BaseE2ETest
+from application_sdk.testing.e2e import SystemAppE2ETest
 
 
-class SystemAppGeneratedE2EBase(BaseE2ETest):
+class SystemAppGeneratedE2EBase(SystemAppE2ETest):
     connector_short_name = "system-app"
-    argo_package_name = "@atlan/system-app"
-    argo_template_name = "atlan-system-app"
-    app_service_url = "http://system-app.system-app-app.svc.cluster.local"
+    # This app generates no manifest.json: its callers declare its DAG node.
+    # Set manifest_path in the suite to a fixture DAG copied from a calling
+    # connector's manifest, and required_dag_nodes to the nodes it runs.

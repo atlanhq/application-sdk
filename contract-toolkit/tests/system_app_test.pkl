@@ -48,6 +48,9 @@ local systemBundleWithPackage = (systemApp) {
   }
 }
 
+local systemE2eBase: String = systemApp.output.files["app/generated/_e2e_base.py"].text
+local bundleE2eBase: String = systemBundle.output.files["app/generated/miner/_e2e_base.py"].text
+
 facts {
   ["System app atlan.yaml keeps type: system and carries no entrypoints or card keys"] {
     systemAtlanYaml.contains("\ntype: system\n")
@@ -79,6 +82,35 @@ facts {
   ["System bundle renders entrypoint artifacts but no entrypoints block"] {
     systemBundle.output.files.containsKey("app/generated/miner/manifest.json")
     !systemBundle.output.files["atlan.yaml"].text.contains("entrypoints:")
+  }
+
+  ["System app e2e base extends SystemAppE2ETest and names no Heracles envelope"] {
+    systemE2eBase.contains("from application_sdk.testing.e2e import SystemAppE2ETest\n")
+    systemE2eBase.contains("\nclass SystemAppGeneratedE2EBase(SystemAppE2ETest):\n")
+    systemE2eBase.contains("    connector_short_name = \"system-app\"\n")
+    !systemE2eBase.contains("argo_package_name")
+    !systemE2eBase.contains("argo_template_name")
+    !systemE2eBase.contains("app_service_url")
+    // No manifest is generated, so the suite is told to supply one.
+    systemE2eBase.contains("Set manifest_path in the suite")
+  }
+
+  ["System app with a manifest is not told to supply one"] {
+    !systemWithUi.output.files["app/generated/_e2e_base.py"].text.contains("Set manifest_path")
+    systemWithUi.output.files["app/generated/_e2e_base.py"].text.contains("(SystemAppE2ETest):")
+  }
+
+  ["System bundle e2e base extends SystemAppE2ETest and keeps its entrypoint wiring"] {
+    bundleE2eBase.contains("\nclass MinerGeneratedE2EBase(SystemAppE2ETest):\n")
+    !bundleE2eBase.contains("argo_package_name")
+    !bundleE2eBase.contains("app_service_url")
+    bundleE2eBase.contains("    manifest_path = \"app/generated/miner/manifest.json\"\n")
+    bundleE2eBase.contains("    entrypoint = \"miner\"\n")
+  }
+
+  ["Non-system e2e base is unchanged"] {
+    minimalApp.output.files["app/generated/_e2e_base.py"].text.contains("(BaseE2ETest):")
+    minimalApp.output.files["app/generated/_e2e_base.py"].text.contains("    argo_package_name = \"@atlan/minimal\"\n")
   }
 
   ["System app refuses marketplaceCard = true"] {
