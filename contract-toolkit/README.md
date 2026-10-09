@@ -99,7 +99,7 @@ The `examples/` directory contains executable contracts that teach stable toolki
 - [`examples/bundle/`](examples/bundle/) — multi-entrypoint app (crawler + miner); shared credential configmap; per-entrypoint artifact subfolders.
 - [`examples/card-split/`](examples/card-split/) — two entrypoints where only one is a marketplace UI card (`packageId` on the card entrypoint; route-only entrypoint has none).
 - [`examples/behind-the-scenes/`](examples/behind-the-scenes/) — single-entrypoint app with `marketplaceCard = false`; routable but no marketplace card or `package_id` emitted.
-- [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config; without a `uiConfig` it renders only `atlan.yaml`, `app.yaml` and the e2e base.
+- [`examples/system-app/`](examples/system-app/) — `type = "system"`: an in-tenant app started by other apps' DAG nodes. No `entrypoints` block, no card, no credential config, no manifest. Typed `inputs` (string, number, enum, bounded list/map, nested object) render `_input.py` without a `uiConfig`.
 - [`examples/deploy/`](examples/deploy/) — single-pool deployment: KEDA, resources, env, and per-pool `overrides` under `deploy.pools["default"]`.
 - [`examples/pools/`](examples/pools/) — `pools` map (preferred): named hot/cold worker pools with per-pool KEDA `cooldownPeriod` and resources.
 - [`examples/connection-ref/`](examples/connection-ref/) — `ConnectionRefInput` widget, `pipeline.publish = null`.

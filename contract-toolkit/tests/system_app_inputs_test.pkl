@@ -1,0 +1,181 @@
+// FND-3570: `inputs` declares a system app's typed inputs without a uiConfig.
+// They render into `_input.py` (base `Input`, nested objects as their own
+// classes) with no manifest or configmap. Declarations that would be dropped,
+// clash with generated fields, or have no resolvable default are refused.
+
+amends "pkl:test"
+
+import "../examples/bundle/miner.pkl" as Miner
+import "../examples/minimal/app.pkl" as minimalApp
+import "../examples/system-app/app.pkl" as systemApp
+import "../src/App.pkl" as App
+
+local files = systemApp.output.files
+local inputPy: String = files["app/generated/_input.py"].text
+
+local bare = (systemApp) { inputs = new Mapping {} }
+
+local function withInput(name: String, field: App.InputField) = (bare) {
+  inputs { [name] = field }
+}
+
+local function inputLine(app, name: String): String =
+  app.output.files["app/generated/_input.py"].text.split("\n")
+    .filter((l) -> l.startsWith("    \(name):")).first
+
+local setupForm = new App.UIConfig {
+  tasks {
+    ["Configuration"] {
+      inputs {
+        ["target"] = new App.TextInput {
+          title = "Target"
+          placeholderText = "my-target"
+        }
+      }
+    }
+  }
+}
+
+local function catchRender(app): String = module.catch(() -> app.output.files["app/generated/_input.py"].text)
+
+facts {
+  ["Inputs render _input.py and __init__.py without a manifest or configmap"] {
+    files.keys == Set(
+      "atlan.yaml", "app.yaml", "app/generated/_e2e_base.py",
+      "app/generated/_input.py", "app/generated/__init__.py")
+  }
+
+  ["System app input model extends Input, not ExtractionInput"] {
+    inputPy.contains("from application_sdk.contracts.base import Input\n")
+    inputPy.contains("\nclass AppInputContract(Input):\n")
+    !inputPy.contains("ExtractionInput")
+  }
+
+  ["Publish scaffold fields stay out of an inputs-only model"] {
+    !inputPy.contains("output_dir")
+    !inputPy.contains("_config_hash_exclude")
+  }
+
+  ["Nested object renders as a closed model class before the input class"] {
+    inputPy.contains("\nclass ColumnMapping(BaseModel):\n")
+    inputPy.contains("    model_config = ConfigDict(extra=\"forbid\")\n")
+    inputPy.indexOf("class ColumnMapping(") < inputPy.indexOf("class AppInputContract(")
+    inputLine(systemApp, "column_mapping") == "    column_mapping: ColumnMapping = Field(default_factory=ColumnMapping)"
+  }
+
+  ["allowExtra renders extra=ignore, never allow"] {
+    (bare) {
+      inputs {
+        ["m"] = new App.ObjectField {
+          className = "Loose"
+          allowExtra = true
+          fields { ["a"] = new App.StringField { default = "x" } }
+        }
+      }
+    }.output.files["app/generated/_input.py"].text.contains("extra=\"ignore\"")
+  }
+
+  ["Default resolution: required, explicit, nullable, natural empty"] {
+    inputLine(systemApp, "input_prefix") == "    input_prefix: str"
+    inputLine(systemApp, "connection_name") == "    connection_name: str = \"\""
+    inputLine(withInput("note", new App.StringField { nullable = true }), "note") == "    note: str | None = None"
+    inputLine(withInput("note", new App.StringField { nullable = true; required = true }), "note") == "    note: str | None"
+    inputLine(withInput("tags", new App.ListField { items = new App.StringField {} }), "tags")
+      == "    tags: Annotated[list[str], MaxItems(1000)] = Field(default_factory=list)"
+  }
+
+  ["A scalar with no default, required or nullable is refused"] {
+    catchRender(withInput("window", new App.IntField {})).contains("Input field `window` has no default")
+  }
+
+  ["An object whose fields need values has no natural default"] {
+    catchRender(withInput("m", new App.ObjectField {
+      className = "Strict"
+      fields { ["a"] = new App.StringField { required = true } }
+    })).contains("Input field `m` has no default")
+  }
+
+  ["Constraints and lifecycle render as Field kwargs"] {
+    inputLine(systemApp, "window_days") == "    window_days: int = Field(default=30, ge=1)"
+    inputLine(withInput("n", new App.IntField { required = true; min = 1 }), "n") == "    n: int = Field(ge=1)"
+    inputLine(withInput("old", new App.BoolField { default = false; lifecycle = "sunset" }), "old")
+      == "    old: bool = Field(default=False, deprecated=True, json_schema_extra={\"x-lifecycle\": \"sunset\"})"
+  }
+
+  ["Enum and list defaults are checked against their types"] {
+    catchRender(withInput("p", new App.EnumField { values { "a"; "b" }; default = "c" }))
+      .contains("not one of its values")
+    catchRender(withInput("l", new App.ListField { items = new App.IntField {}; default { "x" } }))
+      .contains("do not match its items type int")
+    catchRender(withInput("l", new App.ListField { items = new App.StringField {}; maxItems = 1; default { "a"; "b" } }))
+      .contains("more than maxItems = 1")
+  }
+
+  ["A docstring cannot end itself early"] {
+    inputLine(withInput("d", new App.StringField { default = ""; doc = "uses \"\"\" quotes" }), "d") == "    d: str = \"\""
+    withInput("d", new App.StringField { default = ""; doc = "uses \"\"\" quotes" })
+      .output.files["app/generated/_input.py"].text.contains("    \"\"\"uses \\\"\\\"\\\" quotes\"\"\"\n")
+  }
+
+  ["inputs on a non-system app is refused"] {
+    module.catch(() -> (minimalApp) { inputs { ["x"] = new App.StringField { default = "" } } }.output.files)
+      .contains("only supported on system apps")
+  }
+
+  ["inputs on a bundle root is refused"] {
+    module.catch(() -> (systemApp) {
+      entrypoints { new App.Entrypoint { name = "miner"; contract = Miner } }
+    }.output.files).contains("multi-entrypoint bundle root")
+  }
+
+  ["An input that clashes with a uiConfig or base field is refused"] {
+    module.catch(() -> (withInput("target", new App.StringField { default = "" })) { uiConfig = setupForm }.output.files)
+      .contains("also uiConfig fields")
+    module.catch(() -> withInput("workflow_id", new App.StringField { default = "" }).output.files)
+      .contains("already declared by the generated input class (base Input")
+  }
+
+  ["inputs refuses an opaque JsonObjectField, directly or nested"] {
+    module.catch(() -> withInput("blob", new App.JsonObjectField {}).output.files).contains("JsonObjectField")
+    module.catch(() -> withInput("o", new App.ObjectField {
+      className = "Holder"
+      fields { ["blob"] = new App.JsonObjectField {} }
+    }).output.files).contains("List(\"o\")")
+  }
+
+  ["A widget and the InputField it maps to render the same line"] {
+    // One renderer: a form's TagsInput and an `inputs` ListField of strings are
+    // the same field, so they must produce the same Python.
+    let (formApp = (minimalApp) {
+      uiConfig = new App.UIConfig {
+        tasks { ["T"] { inputs { ["tags"] = new App.TagsInput { title = "Tags" } } } }
+      }
+    })
+    inputLine(formApp, "tags")
+      == inputLine(withInput("tags", new App.ListField { items = new App.StringField {} }), "tags")
+  }
+
+  ["Widget lifecycle messages are escaped like every other string"] {
+    let (formApp = (minimalApp) {
+      uiConfig = new App.UIConfig {
+        tasks { ["T"] { inputs { ["old"] = (new App.TextInput { title = "Old" }) {
+          lifecycle = "deprecated"
+          lifecycleMessage = "use \"new\" instead"
+        } } } }
+      }
+    })
+    inputLine(formApp, "old") == "    old: str = Field(default=\"\", deprecated=\"use \\\"new\\\" instead\")"
+  }
+
+  ["Distinct objects sharing a className are refused; one reused value is not"] {
+    module.catch(() -> (bare) {
+      inputs {
+        ["a"] = new App.ObjectField { className = "Same"; fields { ["x"] = new App.BoolField { default = true } } }
+        ["b"] = new App.ObjectField { className = "Same"; fields { ["y"] = new App.BoolField { default = true } } }
+      }
+    }.output.files).contains("share className(s) List(\"Same\")")
+    let (shared = new App.ObjectField { className = "Shared"; fields { ["x"] = new App.BoolField { default = true } } })
+    (bare) { inputs { ["a"] = shared; ["b"] = shared } }
+      .output.files["app/generated/_input.py"].text.split("class Shared(").length == 2
+  }
+}

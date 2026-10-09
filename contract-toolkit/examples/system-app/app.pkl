@@ -4,8 +4,13 @@
 /// `type = "system"` switches the contract into system-app mode:
 /// `marketplaceCard` and `hasCredentialConfig` default to `false`, and
 /// `atlan.yaml` carries no `entrypoints` block, so no card can be expanded
-/// from it. Without a `uiConfig` there is no setup form, workflow configmap,
-/// `manifest.json` or `_input.py` either: the callers' DAGs start the app.
+/// from it. Without a `uiConfig` there is no setup form, workflow configmap
+/// or `manifest.json`: the callers' DAGs start the app.
+///
+/// `inputs` declares the args those callers pass. They render into
+/// `app/generated/_input.py` as `AppInputContract(Input)`, which the app
+/// imports (and may subclass to add validators) instead of hand-maintaining
+/// its own model.
 ///
 /// Hiding the app's own listing is not the contract's job. A Global
 /// Marketplace admin sets `is_system_app` on the GM App row once.
@@ -15,3 +20,58 @@ name = "system-app"
 displayName = "System App Example"
 icon = "https://assets.atlan.com/assets/ph-gear-light.svg"
 type = "system"
+
+local columnMapping = new ObjectField {
+  className = "ColumnMapping"
+  doc = "SQL expressions mapping source columns to the canonical schema."
+  fields {
+    ["query_id"] = new StringField { default = "QUERY_ID" }
+    ["query_text"] = new StringField { default = "QUERY_TEXT" }
+    ["native_payload"] = new StringField {
+      nullable = true
+      doc = "Optional per-row payload column; unset for sources without one."
+    }
+    ["case_insensitive_match"] = new BoolField { default = true }
+  }
+}
+
+inputs {
+  ["connection_qualified_name"] = new StringField {
+    required = true
+    doc = "Qualified name of the connection to process."
+  }
+  ["input_prefix"] = new StringField {
+    required = true
+    doc = "Object-store prefix the upstream node wrote its output to."
+  }
+  ["connection_name"] = new StringField { default = "" }
+  ["window_days"] = new IntField {
+    default = 30
+    min = 1
+    doc = "Look-back window, in days."
+  }
+  ["sample_ratio"] = new FloatField {
+    default = 1.0
+    min = 0.0
+    max = 1.0
+  }
+  ["lake_provider"] = new EnumField {
+    values { "local"; "aws"; "gcp"; "azure" }
+    default = "local"
+  }
+  ["column_mapping"] = columnMapping
+  ["include_filter"] = new MapField {
+    values = new ListField { items = new StringField {} }
+    doc = "Database name to the schema names to include."
+  }
+  ["types_to_ignore"] = new ListField {
+    items = new StringField {}
+    default { "SHOW"; "DESCRIBE" }
+  }
+  ["dry_run"] = new BoolField { default = false }
+  ["legacy_mode"] = new BoolField {
+    default = false
+    lifecycle = "deprecated"
+    lifecycleMessage = "Ignored; will be removed."
+  }
+}
