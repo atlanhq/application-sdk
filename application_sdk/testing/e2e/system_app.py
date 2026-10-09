@@ -57,6 +57,20 @@ sets for the leased tenant. It only LISTs, only under ``artifacts/apps/``,
                 ),
                 StoreCount(prefix="connection-cache/kept", count=3),
             ]
+
+``StoreRecords`` reads the parquet or JSONL files under a prefix and counts
+records, optionally only those meeting every condition. It returns counts,
+never values::
+
+    StoreRecords(
+        prefix=f"persistent-artifacts/publish/{self.connection_qualified_name}",
+        format=RecordFormat.PARQUET,
+        where=[
+            FieldCondition(field="type_name", op=FieldOp.EQ, value="Table"),
+            FieldCondition(field="qualified_name", op=FieldOp.PRESENT),
+        ],
+        count=12,
+    )
 """
 
 from __future__ import annotations
@@ -68,6 +82,9 @@ from typing import Any, ClassVar
 from application_sdk.errors.base import AppError
 from application_sdk.execution._temporal.store_assert import (
     STORE_ASSERT_WORKFLOW_TYPE,
+    FieldCondition,
+    FieldOp,
+    RecordFormat,
     StoreAbsent,
     StoreAssertInput,
     StoreAssertOutput,
@@ -76,6 +93,7 @@ from application_sdk.execution._temporal.store_assert import (
     StoreExpectationKind,
     StoreObservation,
     StorePresent,
+    StoreRecords,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
@@ -92,10 +110,14 @@ logger = get_logger(__name__)
 
 __all__ = [
     "STORE_ASSERT_NODE_ID",
+    "FieldCondition",
+    "FieldOp",
+    "RecordFormat",
     "StoreAbsent",
     "StoreCount",
     "StoreExpectation",
     "StorePresent",
+    "StoreRecords",
     "SystemAppE2ETest",
 ]
 
@@ -316,10 +338,17 @@ def _render_observation(observation: StoreObservation) -> str:
     """One line per prefix: the claim, what was seen, and the verdict."""
     mark = "ok  " if observation.passed else "FAIL"
     claim = observation.kind.value.upper()
-    if observation.kind is StoreExpectationKind.COUNT:
+    if observation.expected_count is not None:
         claim += f" == {observation.expected_count}"
+    elif observation.expected_at_least is not None:
+        claim += f" >= {observation.expected_at_least}"
     if observation.problem:
         seen = observation.problem
+    elif observation.kind is StoreExpectationKind.RECORDS:
+        seen = (
+            f"records matched={observation.records_matched} of "
+            f"{observation.records_scanned} in {observation.files_scanned} file(s)"
+        )
     else:
         seen = f"objects (incl. markers)={observation.objects_all}"
         if observation.objects_data is not None:

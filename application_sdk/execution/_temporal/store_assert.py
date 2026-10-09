@@ -14,12 +14,14 @@ tenant, but gated at run time: unless ``ATLAN_STORE_ASSERT_ENABLED`` is set
 nothing and returns ``enabled=False``. Only the e2e install sets it, per
 tenant, through ``deploy.env_overrides``. Within an enabled run:
 
-* LIST, plus one HEAD for ``ABSENT`` — no GET, PUT or DELETE, and never
-  object contents.
+* Never PUT or DELETE. ``ABSENT``, ``PRESENT`` and ``COUNT`` only LIST (plus
+  one HEAD for ``ABSENT``); ``RECORDS`` also GETs the parquet / JSONL files
+  under its prefix, one at a time, within :data:`MAX_RECORD_FILES`,
+  :data:`MAX_RECORD_FILE_BYTES` and :data:`MAX_RECORD_BYTES`.
 * Prefixes must sit strictly below one of :data:`STORE_ASSERT_ROOTS`.
 * Bounded: at most :data:`MAX_STORE_EXPECTATIONS` checks per run and at most
   :data:`MAX_KEYS_SCANNED` keys per prefix.
-* The output carries counts and booleans, never keys.
+* The output carries counts and booleans, never keys or values.
 
 Cross-cloud LIST semantics: obstore strips trailing slashes, and the SDK's
 default listing view drops a zero-byte object only when it has children, so a
@@ -36,7 +38,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from temporalio import activity, workflow
 from temporalio.common import RetryPolicy
 
@@ -47,6 +49,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk._runtime.offload import run_in_thread
     from application_sdk.contracts.base import Input, Output, SerializableEnum
     from application_sdk.contracts.types import MaxItems
+    from application_sdk.execution._temporal import _store_records
     from application_sdk.observability.logger_adaptor import get_logger
     from application_sdk.storage.ops import (
         _drop_directory_markers,
@@ -79,7 +82,9 @@ MAX_KEYS_SCANNED = 10_000
 """Most keys listed per prefix. A prefix holding more is reported as truncated
 and a ``COUNT`` against it fails, rather than the scan running unbounded."""
 
-_START_TO_CLOSE = timedelta(minutes=5)
+# RECORDS checks can read up to MAX_RECORD_BYTES each; listing-only runs finish
+# in seconds.
+_START_TO_CLOSE = timedelta(minutes=20)
 _RETRY = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
 
 
@@ -92,6 +97,107 @@ class StoreExpectationKind(SerializableEnum):
     """At least one object in the default listing view."""
     COUNT = "count"
     """Exactly ``count`` objects in the default listing view."""
+    RECORDS = "records"
+    """A number of records, optionally only those matching conditions, across
+    the parquet or JSONL files under the prefix."""
+
+
+class RecordFormat(SerializableEnum):
+    """File format a ``RECORDS`` check reads."""
+
+    PARQUET = "parquet"
+    """``*.parquet``. Needs pyarrow on the app's worker."""
+    JSONL = "jsonl"
+    """``*.jsonl``, ``*.ndjson`` and ``*.json``, one JSON object per line (the
+    SDK's JSON writer)."""
+
+
+RECORD_FILE_SUFFIXES: dict[RecordFormat, tuple[str, ...]] = {
+    RecordFormat.PARQUET: (".parquet",),
+    RecordFormat.JSONL: (".jsonl", ".ndjson", ".json"),
+}
+"""Keys under the prefix a ``RECORDS`` check reads; every other key is ignored."""
+
+
+class FieldOp(SerializableEnum):
+    """How a condition tests a field."""
+
+    EQ = "eq"
+    """Equals ``value``. Type-aware: ``true`` never equals ``1``."""
+    IN = "in"
+    """Equals one of ``values``."""
+    PRESENT = "present"
+    """Has a value: in the record, not null, not empty."""
+    MISSING = "missing"
+    """The opposite of ``PRESENT``."""
+
+
+MAX_RECORD_CONDITIONS = 10
+"""Most conditions on one ``RECORDS`` check."""
+
+MAX_IN_VALUES = 20
+"""Most values one ``IN`` condition lists."""
+
+MAX_RECORD_FILES = 1_000
+"""Most files one ``RECORDS`` check reads. More fails the check as ungradable."""
+
+MAX_RECORD_FILE_BYTES = 128 * 1024 * 1024
+"""Largest single file a ``RECORDS`` check reads; files are read one at a time,
+so this bounds the node's memory."""
+
+MAX_RECORD_BYTES = 512 * 1024 * 1024
+"""Most bytes one ``RECORDS`` check reads across all its files."""
+
+Scalar = str | int | float | bool
+"""A value a condition compares against. Null is not one: use ``MISSING``."""
+
+
+class FieldCondition(BaseModel):
+    """One test on one field of a record."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    field: str = Field(min_length=1, max_length=256)
+    """Dotted path: ``type_name``, ``attributes.qualifiedName``. The first
+    segment is a column or JSONL key, falling back to a Hive partition directory
+    (``type_name=Table/``) when the file lacks it. Later segments walk structs,
+    JSON objects, and string columns holding JSON."""
+    op: FieldOp
+    # Pydantic's default "smart" union keeps the exact JSON type: true stays a
+    # bool and "3" stays a string, which equals() then compares strictly.
+    value: Scalar | None = None
+    """Required for ``EQ`` and rejected otherwise."""
+    values: Annotated[list[Scalar], MaxItems(MAX_IN_VALUES)] | None = Field(
+        default=None, min_length=1, max_length=MAX_IN_VALUES
+    )
+    """Required for ``IN`` and rejected otherwise."""
+
+    @model_validator(mode="after")
+    def _check_shape(self) -> FieldCondition:
+        if any(not segment for segment in self.field.split(".")):
+            raise ValueError(f"field {self.field!r} has an empty path segment")
+        if (self.value is not None) != (self.op is FieldOp.EQ):
+            raise ValueError("value is required for EQ and only valid there")
+        if (self.values is not None) != (self.op is FieldOp.IN):
+            raise ValueError("values is required for IN and only valid there")
+        for v in [self.value, *(self.values or ())]:
+            if isinstance(v, str) and len(v) > 1024:
+                raise ValueError("a compared string is longer than 1024 characters")
+        return self
+
+    @property
+    def path(self) -> tuple[str, ...]:
+        return tuple(self.field.split("."))
+
+    def holds(self, value: object) -> bool:
+        """Whether *value* (or ``MISSING``) satisfies this condition."""
+        if self.op is FieldOp.PRESENT:
+            return _store_records.has_value(value)
+        if self.op is FieldOp.MISSING:
+            return not _store_records.has_value(value)
+        if self.op is FieldOp.EQ:
+            return _store_records.equals(value, self.value)
+        return any(_store_records.equals(value, v) for v in self.values or ())
 
 
 class _PrefixCheck(BaseModel):
@@ -123,8 +229,32 @@ class StoreCount(_PrefixCheck):
     count: int = Field(ge=0)
 
 
+class StoreRecords(_PrefixCheck):
+    """How many records — all, or those meeting every condition in ``where`` —
+    the ``format`` files under the prefix hold.
+
+    Exactly one of ``count`` (exactly) or ``at_least`` is required. "Every
+    record has field X" is ``where=[X MISSING]`` with ``count=0``.
+    """
+
+    kind: Literal[StoreExpectationKind.RECORDS] = StoreExpectationKind.RECORDS
+    format: RecordFormat
+    where: Annotated[list[FieldCondition], MaxItems(MAX_RECORD_CONDITIONS)] = Field(
+        default_factory=list, max_length=MAX_RECORD_CONDITIONS
+    )
+    count: int | None = Field(default=None, ge=0)
+    at_least: int | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _one_bound(self) -> StoreRecords:
+        if (self.count is None) == (self.at_least is None):
+            raise ValueError("exactly one of count or at_least is required")
+        return self
+
+
 StoreExpectation = Annotated[
-    StoreAbsent | StorePresent | StoreCount, Field(discriminator="kind")
+    StoreAbsent | StorePresent | StoreCount | StoreRecords,
+    Field(discriminator="kind"),
 ]
 """One claim about one prefix: a model per kind, tagged by ``kind``, so a kind
 added later never changes the shape of an existing one."""
@@ -145,6 +275,14 @@ class StoreObservation(BaseModel):
     when not computed — an ``ABSENT`` check stops at the first object."""
     truncated: bool = False
     """The listing hit :data:`MAX_KEYS_SCANNED` before it ended."""
+    expected_at_least: int | None = None
+    """``RECORDS`` only: the lower bound, when the check gave one."""
+    files_scanned: int | None = None
+    """``RECORDS`` only: files of the check's format read in full."""
+    records_scanned: int | None = None
+    """``RECORDS`` only: rows across those files."""
+    records_matched: int | None = None
+    """``RECORDS`` only: rows meeting every condition (all rows when none)."""
     problem: str = ""
     """Why the check could not be evaluated, when it could not. Never carries
     store internals — a rejected prefix says which rule, a failed listing names
@@ -240,6 +378,85 @@ async def _root_marker_exists(store: object, listing_prefix: str) -> bool:
     return True
 
 
+async def _count_records(
+    expectation: StoreRecords,
+    store: object,
+    listing_prefix: str,
+    data: list[tuple[str, int, str | None]],
+) -> dict[str, object]:
+    """Read the check's files one at a time and count matching records.
+
+    Returns:
+        Observation fields: the counts and ``passed``, or ``problem`` when the
+        files exceed a cap or one cannot be read or parsed.
+    """
+    suffixes = RECORD_FILE_SUFFIXES[expectation.format]
+    files = [(key, size) for key, size, _ in data if key.endswith(suffixes)]
+    if len(files) > MAX_RECORD_FILES:
+        return {
+            "problem": f"more than {MAX_RECORD_FILES} {expectation.format.value} "
+            "files under the prefix; RECORDS cannot be graded"
+        }
+    if any(size > MAX_RECORD_FILE_BYTES for _, size in files):
+        return {
+            "problem": f"a file is larger than {MAX_RECORD_FILE_BYTES} bytes; "
+            "RECORDS cannot be graded"
+        }
+    if sum(size for _, size in files) > MAX_RECORD_BYTES:
+        return {
+            "problem": f"the files total more than {MAX_RECORD_BYTES} bytes; "
+            "RECORDS cannot be graded"
+        }
+
+    counter = (
+        _store_records.count_parquet
+        if expectation.format is RecordFormat.PARQUET
+        else _store_records.count_jsonl
+    )
+    scanned = matched = 0
+    for key, _ in files:
+        try:
+            result = await obstore.get_async(store, key)  # type: ignore[arg-type]
+            payload = bytes(await result.bytes_async())
+        # conformance: ignore[E004] the failure is the observation: reported in the verdict, which the harness grades as not passed
+        except Exception as exc:
+            logger.warning(
+                "store-assert could not read a file (%s)",
+                type(exc).__name__,
+                exc_info=True,
+            )
+            return {"problem": f"reading a file failed: {type(exc).__name__}"}
+        partitions = _store_records.partition_fields(key, listing_prefix)
+        try:
+            rows, hits = await run_in_thread(
+                counter, payload, expectation.where, partitions
+            )
+        except _store_records.ParquetUnavailableError:
+            return {
+                "problem": "parquet checks need pyarrow, which this app does "
+                "not install"
+            }
+        except _store_records.MalformedRecordsError as exc:
+            return {
+                "problem": f"a {expectation.format.value} file could not be "
+                f"read as records: {exc}"
+            }
+        scanned += rows
+        matched += hits
+        del payload
+
+    if expectation.count is not None:
+        passed = matched == expectation.count
+    else:
+        passed = matched >= (expectation.at_least or 0)
+    return {
+        "files_scanned": len(files),
+        "records_scanned": scanned,
+        "records_matched": matched,
+        "passed": passed,
+    }
+
+
 async def evaluate_expectation(
     expectation: StoreExpectation, store: object
 ) -> StoreObservation:
@@ -257,7 +474,12 @@ async def evaluate_expectation(
         prefix=expectation.prefix,
         kind=expectation.kind,
         expected_count=(
-            expectation.count if isinstance(expectation, StoreCount) else None
+            expectation.count
+            if isinstance(expectation, (StoreCount, StoreRecords))
+            else None
+        ),
+        expected_at_least=(
+            expectation.at_least if isinstance(expectation, StoreRecords) else None
         ),
     )
     try:
@@ -307,6 +529,15 @@ async def evaluate_expectation(
         "objects_data": len(data),
         "truncated": truncated,
     }
+    if isinstance(expectation, StoreRecords):
+        if truncated:
+            update["problem"] = (
+                f"more than {MAX_KEYS_SCANNED} objects under the prefix; "
+                "RECORDS cannot be graded"
+            )
+            return observation.model_copy(update=update)
+        update.update(await _count_records(expectation, store, listing_prefix, data))
+        return observation.model_copy(update=update)
     if isinstance(expectation, StorePresent):
         update["passed"] = bool(data)
     else:

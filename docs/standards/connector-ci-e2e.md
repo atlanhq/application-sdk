@@ -70,6 +70,16 @@ routing, polling, grading and teardown are unchanged.
   - `ABSENT` is strict: it also counts zero-byte folder markers, including one
     at the prefix itself.
   - `PRESENT` and `COUNT` use the `list_keys` view the app sees.
+  - `StoreRecords(prefix, format, where, count | at_least)` counts rows in the
+    parquet or JSONL files under the prefix. `where` is up to 10
+    `FieldCondition`s, all of which must hold: `EQ`, `IN`, `PRESENT` (not
+    missing, null or empty) or `MISSING`. A field is a dotted path such as
+    `entity.attributes.qualifiedName`. The first segment is a column or JSONL
+    key, or a Hive partition directory (`type_name=Table/`) when the file has
+    no such column. Later segments walk structs, JSON objects and string
+    columns holding JSON. Comparisons are type-aware: `true` never equals `1`.
+    To check that every row has field X, use `where=[X MISSING]` with
+    `count=0`.
   - Every SDK worker serves the `sdk:store-assert` workflow behind the node. It
     only LISTs, plus one HEAD for `ABSENT`, and returns counts, never keys or
     contents.
