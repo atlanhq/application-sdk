@@ -712,6 +712,54 @@ def test_post_graphql_wraps_timeouts_as_runtime_error(monkeypatch):
         assert "timed out" in str(exc)
 
 
+def test_post_graphql_wraps_a_truncated_body_as_runtime_error(monkeypatch):
+    # GitHub closing the connection mid-body raises IncompleteRead from
+    # resp.read(). It is not a URLError, so before this was wrapped it escaped
+    # every handler and failed the whole dashboard run.
+    class _Truncated:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            raise rfs.http.client.IncompleteRead(b"x" * 10, 5)
+
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Truncated()
+    )
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "IncompleteRead" in str(exc)
+        assert rfs._is_retryable(exc)
+
+
+def test_post_graphql_wraps_a_reset_during_read_as_runtime_error(monkeypatch):
+    # A reset after the status line raises ConnectionResetError directly, unlike
+    # a reset during connect, which urlopen wraps in URLError.
+    class _Reset:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Reset()
+    )
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert rfs._is_retryable(exc)
+
+
 def test_fetch_lock_texts_survives_a_transport_failure(capsys):
     # The whole point of the wrap: an enrichment pass degrades to "no signal for
     # this PR", never to a dashboard that skipped every repo.
@@ -841,6 +889,49 @@ def _http_error(status: int, body: bytes, headers: dict | None = None):
     return rfs.urllib.error.HTTPError(
         rfs.GRAPHQL_URL, status, "Forbidden", hdrs, io.BytesIO(body)
     )
+
+
+class _TruncatedBody(io.RawIOBase):
+    """An HTTPError body whose connection closes before it is fully read."""
+
+    def read(self, *args):
+        raise rfs.http.client.IncompleteRead(b"{", 40)
+
+
+def _truncated_http_error(status: int):
+    return rfs.urllib.error.HTTPError(
+        rfs.GRAPHQL_URL, status, "Error", email.message.Message(), _TruncatedBody()
+    )
+
+
+def test_a_truncated_error_body_keeps_its_status_and_retries(monkeypatch):
+    # A 502 whose body is cut short must still classify as a 502. Before, the
+    # IncompleteRead escaped the HTTPError handler and bypassed retry entirely.
+    def boom(req, timeout=None):
+        raise _truncated_http_error(502)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "failed: 502 " in str(exc)
+        assert rfs._is_retryable(exc)
+
+
+def test_a_truncated_error_body_does_not_make_an_auth_failure_retryable(
+    monkeypatch,
+):
+    def boom(req, timeout=None):
+        raise _truncated_http_error(401)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "failed: 401 " in str(exc)
+        assert not rfs._is_retryable(exc)
 
 
 class _ScriptedUrlopen:
@@ -982,6 +1073,22 @@ def test_retries_a_read_timeout(monkeypatch):
     post = _ScriptedPost(
         [
             RuntimeError("GraphQL request failed: The read operation timed out"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_retries_a_truncated_response(monkeypatch):
+    post = _ScriptedPost(
+        [
+            RuntimeError(
+                "GraphQL response cut short: IncompleteRead: "
+                "IncompleteRead(211544 bytes read, 135875 more expected)"
+            ),
             {"ok": 1},
         ]
     )
