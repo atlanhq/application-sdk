@@ -676,8 +676,9 @@ The lane applies nothing: return `not_remediable = true` with a
     goes to residue);
   - the annotation is not Optional (`X | None` / `Optional[X]`);
   - the model is not `extra="allow"` with the read relying on an extra key;
-  - the param is not rebound in the function, and no nested function shadows
-    it.
+  - the param is not rebound in the function, no `del param.field` (or
+    `delattr`) removes `field` from the instance before this read, and no
+    nested function shadows it.
 
   Then the read is identical, because pydantic fills every declared field and
   the default never fired.  Otherwise route to residue with the proposed
@@ -688,9 +689,10 @@ The lane applies nothing: return `not_remediable = true` with a
   `param.field` is not `getattr` with the default removed.  It raises where
   `getattr` returned the default for: a `None` param; an undeclared field; an
   absent extra; a `TypedDict` annotation (a plain dict at runtime, so every
-  attribute read fails); a property that raises `AttributeError`; and an
+  attribute read fails); a property that raises `AttributeError`; an
   instance built with `model_construct()`, which skips validation and leaves a
-  required field unset when it is not passed.  A site in any of these cases
+  required field unset when it is not passed; and an instance whose field was
+  removed with `del` (the models are mutable).  A site in any of these cases
   goes to residue.  Mirror
   `atlan-openapi-app` `app/connector.py` (`extract_spec` reads
   `input.spec_url`).  Cite as evidence the contract class and the line that
