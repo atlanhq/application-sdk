@@ -23,9 +23,14 @@ In ``pyproject.toml``, run the generator through the pinned binary::
     generate.shell = \"\"\"
       PKL="$(python -m application_sdk.dev.pkl path)"
       "$PKL" eval --project-dir contract -m . contract/app.pkl
-      uvx ruff check --fix --select F401 --quiet app/generated/*.py
-      uvx ruff format app/generated/*.py
+      uvx ruff check --fix --quiet --force-exclude app/generated/*.py
+      uvx ruff format --force-exclude app/generated/*.py
     \"\"\"
+
+The ruff calls must match the freshness gate's exactly (no ``--select``, so
+your own rule set applies; ``--force-exclude``, so an ``exclude`` covering
+``app/generated`` is honoured for these explicit paths). Anything else
+produces output the gate reports as stale.
 
 Or, equivalently, without capturing the path::
 
