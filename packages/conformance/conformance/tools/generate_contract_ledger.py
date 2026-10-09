@@ -39,7 +39,8 @@ like fields declared directly on the contract.
 
 **Append-only invariant**: the generator can add new entries and update the
 ``status`` of existing entries (active → deprecated → sunset), but it NEVER
-deletes an entry or changes a recorded ``type``.  This means regenerating after
+deletes an entry, changes a recorded ``type``, or moves an entry straight from
+``active`` to ``sunset`` (it keeps ``active`` and B005 reports the skip).  This means regenerating after
 a removal does NOT launder the removal — B005 will still fire against the
 persisted ledger entry.
 """
@@ -157,12 +158,18 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     for key, existing_field in existing_by_key.items():
         live = live_entries.get(key)
         if live is not None:
-            # Refresh status from source; type is frozen on first record
+            # Refresh status from source; type is frozen on first record.
+            # 'active' never moves straight to 'sunset': the ledger keeps
+            # 'active' so B005 reports the skipped deprecation instead of the
+            # regeneration recording it.
+            status = live.status
+            if existing_field.status == "active" and status == "sunset":
+                status = existing_field.status
             merged[key] = ContractField(
                 contract=existing_field.contract,
                 field=existing_field.field,
                 type=existing_field.type,  # NEVER change the recorded type
-                status=live.status,
+                status=status,
             )
         else:
             # Field removed from source — keep in ledger (B005 will flag it)

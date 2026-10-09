@@ -692,7 +692,8 @@ def scan_contract_compat(
                                 f"(ledger type: '{lf.type}', status: '{lf.status}') "
                                 "was removed from the contract. Entrypoint contract "
                                 "fields are permanent — mark it 'deprecated' and keep "
-                                "it, or mark it 'sunset' to retire it. An unmarked "
+                                "it; once that has merged, mark it 'sunset' to retire "
+                                "it. An unmarked "
                                 "removal breaks every consumer that already serializes "
                                 "this field. "
                                 "Suppress with '# conformance: ignore[B005] <reason>' "
@@ -701,7 +702,29 @@ def scan_contract_compat(
                             directives=directives,
                         )
                     )
-                elif live.canonical_type != lf.type:
+                    continue
+                if (
+                    live.status == "sunset"
+                    and lf.status != "sunset"
+                    and (lf.field, lf.type) not in retired_upstream
+                ):
+                    # The generator records 'sunset' only over 'deprecated', so
+                    # any other ledger status under a source 'sunset' is either
+                    # a skipped deprecation or a ledger not regenerated (or
+                    # hand-edited) since. An SDK retirement is excused — the
+                    # SDK's own B005 run enforces the order there.
+                    findings.append(
+                        make_finding(
+                            filename=rel,
+                            rule_id="B005",
+                            node=live.node or class_node,
+                            message=_unrecorded_sunset_message(
+                                f"{class_node.name}.{lf.field}", lf.status, regen
+                            ),
+                            directives=directives,
+                        )
+                    )
+                if live.canonical_type != lf.type:
                     if _retype_is_compatible(
                         lf.type, live.canonical_type, inherited=live.node is None
                     ):
@@ -797,12 +820,36 @@ def scan_contract_compat(
             by_name_all,
             ledger_by_contract,
             root,
+            regen,
+            {pair for pairs in sdk_retired.values() for pair in pairs},
         )
     )
     return findings
 
 
 _LEGACY_BUNDLE_INPUT = "AppInputContract"
+
+
+def _unrecorded_sunset_message(qualified: str, ledger_status: str, regen: str) -> str:
+    """B005 text for a field source marks 'sunset' that the ledger does not."""
+    if ledger_status == "deprecated":
+        remedy = (
+            f"Regenerate with '{regen}' to record 'sunset' over the 'deprecated' "
+            "the ledger already holds. "
+        )
+    else:
+        remedy = (
+            "Mark it 'deprecated', regenerate with "
+            f"'{regen}' and merge that; mark it 'sunset' in a later PR. "
+        )
+    return (
+        f"Contract field '{qualified}' is marked 'sunset' but the ledger records "
+        f"it '{ledger_status}'. A field retires through 'active' → 'deprecated' → "
+        "'sunset' in separate PRs, so callers see a deprecation before it is "
+        f"withdrawn. {remedy}"
+        "Suppress with '# conformance: ignore[B005] <reason>' "
+        "only if this contract has no deployed consumers."
+    )
 
 
 def _rel(path: Path, root: Path) -> str:
@@ -890,6 +937,8 @@ def _renamed_bundle_input_findings(
     by_name_all: dict[str, list[ClassRecord]],
     ledger_by_contract: dict[str, list[ContractField]],
     root: Path,
+    regen: str,
+    sdk_retired: set[tuple[str, str]],
 ) -> list[Finding]:
     """B005 for ledger rows recorded under the pre-rename bundle input name.
 
@@ -899,19 +948,24 @@ def _renamed_bundle_input_findings(
     were recorded across every entrypoint's class, so they are checked against
     the renamed classes and any class still named ``AppInputContract``
     together: a row is removed when none of them has the field, and retyped
-    when every one that has it changed its type. A field on a class still named
+    when every one that has it changed its type, and sunset early when one marks
+    it 'sunset' over a ledger status the generator would not have recorded it
+    from (*sdk_retired* excuses an SDK retirement, as in the main pass). A
+    field on a class still named
     ``AppInputContract`` is left to the main pass, which checks that class.
     """
     rows = ledger_by_contract.get(_LEGACY_BUNDLE_INPUT)
     renamed = _renamed_bundle_inputs(file_trees)
     if not rows or not renamed:
         return []
-    live: dict[str, list[tuple[str, bool]]] = {}
+    live: dict[str, list[tuple[str, bool, str]]] = {}
     for path, node in renamed:
         for f in resolve_contract_fields(
             node, file_aliases.get(path, {}), by_name, by_name_all=by_name_all
         ):
-            live.setdefault(f.name, []).append((f.canonical_type, f.node is None))
+            live.setdefault(f.name, []).append(
+                (f.canonical_type, f.node is None, f.status)
+            )
     still_named: set[str] = set()
     real = [
         rec
@@ -933,19 +987,47 @@ def _renamed_bundle_input_findings(
     anchor_path, anchor_node = anchor
     listed = ", ".join(sorted(names - {_LEGACY_BUNDLE_INPUT}))
     findings: list[Finding] = []
+    legacy_note = (
+        f"The ledger recorded it under '{_LEGACY_BUNDLE_INPUT}' before "
+        "contract-toolkit named bundle input classes per entrypoint; "
+        f"it is checked against {listed}. "
+    )
+
+    def emit(message: str) -> None:
+        findings.append(
+            make_finding(
+                filename=_rel(anchor_path, root),
+                rule_id="B005",
+                node=anchor_node,
+                message=message,
+                directives=file_directives.get(anchor_path, {}),
+            )
+        )
+
     for lf in rows:
         types = live.get(lf.field)
         if lf.status == "sunset" or lf.field in still_named or (real and not types):
             continue
+        if (
+            types
+            and any(status == "sunset" for _, _, status in types)
+            and (lf.field, lf.type) not in sdk_retired
+        ):
+            emit(
+                legacy_note
+                + _unrecorded_sunset_message(
+                    f"{_LEGACY_BUNDLE_INPUT}.{lf.field}", lf.status, regen
+                )
+            )
         if types and any(
             t == lf.type or _retype_is_compatible(lf.type, t, inherited=inherited)
-            for t, inherited in types
+            for t, inherited, _ in types
         ):
             continue
         if types:
             change = (
                 f"changed type from '{lf.type}' (ledger) to "
-                f"{', '.join(sorted({repr(t) for t, _ in types}))} (current). "
+                f"{', '.join(sorted({repr(t) for t, _, _ in types}))} (current). "
                 "Type changes break serialized payloads. Revert the type, or "
                 "deprecate/sunset this field and add a new one with the new type. "
             )
@@ -953,23 +1035,13 @@ def _renamed_bundle_input_findings(
             change = (
                 f"(ledger type: '{lf.type}', status: '{lf.status}') was removed "
                 "from the contract. Entrypoint contract fields are permanent — "
-                "mark it 'deprecated' and keep it, or mark it 'sunset' to retire "
-                "it. "
+                "mark it 'deprecated' and keep it; once that has merged, mark it "
+                "'sunset' to retire it. "
             )
-        findings.append(
-            make_finding(
-                filename=_rel(anchor_path, root),
-                rule_id="B005",
-                node=anchor_node,
-                message=(
-                    f"Contract field '{_LEGACY_BUNDLE_INPUT}.{lf.field}' {change}"
-                    f"The ledger recorded it under '{_LEGACY_BUNDLE_INPUT}' before "
-                    "contract-toolkit named bundle input classes per entrypoint; "
-                    f"it is checked against {listed}. "
-                    "Suppress with '# conformance: ignore[B005] <reason>' "
-                    "only if this contract has no deployed consumers."
-                ),
-                directives=file_directives.get(anchor_path, {}),
-            )
+        emit(
+            f"Contract field '{_LEGACY_BUNDLE_INPUT}.{lf.field}' {change}"
+            f"{legacy_note}"
+            "Suppress with '# conformance: ignore[B005] <reason>' "
+            "only if this contract has no deployed consumers."
         )
     return findings
