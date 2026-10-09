@@ -10,6 +10,7 @@ an unbounded lock.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import tomllib
@@ -506,6 +507,25 @@ class TestTwoJobHandoff:
         (artifact / missing).unlink()
 
         with pytest.raises(FileNotFoundError, match=missing):
+            orchestrator.main(["--apply-from", str(artifact)])
+        assert head_subject(in_repo) == "base"
+        assert git(in_repo, "status", "--porcelain").stdout == ""
+
+    def test_apply_from_refuses_a_symlinked_parent_directory(
+        self, in_repo, tmp_path_factory
+    ):
+        """A link on any component, not just the last, escapes the artifact.
+
+        Here `packages/` points at a directory outside it holding a complete
+        tree, so every leaf is a regular file and a leaf-only check passes.
+        """
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        outside = tmp_path_factory.mktemp("elsewhere")
+        shutil.move(str(artifact / "packages"), str(outside / "packages"))
+        (outside / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="outside"))
+        (artifact / "packages").symlink_to(outside / "packages")
+
+        with pytest.raises(ValueError, match="symlink"):
             orchestrator.main(["--apply-from", str(artifact)])
         assert head_subject(in_repo) == "base"
         assert git(in_repo, "status", "--porcelain").stdout == ""

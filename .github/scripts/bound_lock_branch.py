@@ -242,13 +242,17 @@ def apply_outputs(source: Path, root: Path) -> None:
     a branch that auto-merges. Every one must be present: `bound` uploads all of
     them on every run, so a missing one means a broken handoff, and skipping it
     would leave Renovate's unbounded lock on the branch behind a green publish.
-    A symlink is refused rather than followed: it would commit whatever file on
-    the runner it points at. Everything is checked before anything is copied.
+    A symlink anywhere along the path is refused rather than followed — a
+    symlinked parent such as `packages/` would otherwise smuggle in files from
+    outside the artifact under allowlisted names. Everything is checked before
+    anything is copied.
     """
     for path in OUTPUT_PATHS:
-        src = source / path
-        if src.is_symlink():
-            raise ValueError(f"refusing symlinked artifact entry: {path}")
+        src = source
+        for part in Path(path).parts:
+            src = src / part
+            if src.is_symlink():
+                raise ValueError(f"refusing symlinked artifact entry: {path}")
         if not src.is_file():
             raise FileNotFoundError(f"missing artifact output: {path}")
     for path in OUTPUT_PATHS:
