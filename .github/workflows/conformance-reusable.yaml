@@ -457,9 +457,9 @@ jobs:
       # Unconditional: the ledger guard needs uv on every non-push event, and
       # a run where every series is skipped is a few seconds either way.
       - name: "Set up uv"
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.24"
+          version: "0.13.0"
 
       # The flag promises a token; with ORG_PAT_GITHUB absent the rewrite below
       # would redirect every atlanhq URL — including a git-ref conformance
