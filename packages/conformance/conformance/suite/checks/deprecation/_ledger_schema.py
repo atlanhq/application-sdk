@@ -2,7 +2,7 @@
 
 The committed ledger (``contract_schema.lock.json``) is the append-only baseline
 that B005 uses to detect non-additive contract changes (field removal, type
-change).  B006 fires when a live field is not in the ledger (stale).
+change, a skipped deprecation, a field callers must newly send).  B006 fires when a live field is not in the ledger (stale).
 
 This module is the single definition of the ledger's shape, its on-disk
 location, and how it is built from contract source — shared by the generator
@@ -65,7 +65,9 @@ def _ledger_path() -> Path:
 
 
 LEDGER_PATH = _ledger_path()
-LEDGER_VERSION = 1
+# 2 added ``required`` per field (FND-3597). A version-1 ledger reads with
+# every ``required`` unknown, and the next regeneration backfills it.
+LEDGER_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -76,6 +78,13 @@ class ContractField:
     field: str
     type: str  # canonical normalized annotation string, frozen on first record
     status: str  # "active" | "deprecated" | "sunset"
+    #: Whether callers must send the field (Pydantic: no default). May move
+    #: from ``True`` to ``False`` but never back, and a field added to a
+    #: contract the ledger already records is recorded ``False`` — so B005
+    #: reports a source that requires it.  ``None`` is unknown: a ledger
+    #: written before this key existed, or a field mirrored from an SDK
+    #: registry that does not record defaults.
+    required: bool | None = None
 
 
 @dataclass
@@ -107,6 +116,8 @@ def _parse(payload: dict) -> ContractLedger:
             # An explicit null reads as active, like an absent key: left as
             # None it would match neither 'active' nor 'sunset' in B005.
             status=r.get("status") or "active",
+            # Anything but a JSON boolean reads as unknown.
+            required=r.get("required") if isinstance(r.get("required"), bool) else None,
         )
         for r in payload.get("fields", [])
     ]

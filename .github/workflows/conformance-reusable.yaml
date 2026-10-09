@@ -203,7 +203,8 @@ on:
         description: >
           Repo-relative path to the app's committed contract ledger
           (contract_schema.lock.json).  The guard compares this file between
-          origin/main and HEAD and blocks any deletion or type change.
+          origin/main and HEAD and blocks any deletion, type change, skipped
+          deprecation, or field that became required on an existing contract.
           Default: contract_schema.lock.json (repo root — the convention for app
           repos and the SDK alike; the SDK's conformance wheel packages its root
           ledger at build time).
@@ -968,11 +969,14 @@ jobs:
 
       # ── Contract ledger append-only guard ───────────────────────────────────
       # Verifies that no entry was deleted from the committed contract ledger,
-      # no recorded type was changed, and no entry moved straight from active
-      # to sunset between origin/main and HEAD.  Adding entries and other
-      # status changes are allowed; B005 is what blocks a skipped deprecation.  Uses `uvx atlan-application-sdk-conformance ledger-guard` so
-      # the guard travels with the published package.  Skipped on push to main
-      # (no base-ref diff).
+      # no recorded type was changed, no entry moved straight from active to
+      # sunset, no required entry was added to an existing contract, and no
+      # entry moved from not required to required between origin/main and
+      # HEAD.  Adding optional entries, new contracts and other status changes
+      # are allowed; B005 is what blocks these in source.  Uses
+      # `uvx atlan-application-sdk-conformance ledger-guard` so the guard
+      # travels with the published package.  Skipped on push to main (no
+      # base-ref diff).
       #
       # `continue-on-error`: this was its own `Contracts` job, which the old
       # gate did NOT depend on and no ruleset requires, so a ledger violation
@@ -1005,7 +1009,7 @@ jobs:
         if: >-
           !cancelled()
           && (steps.ledger-published.outcome == 'failure' || steps.ledger-ref.outcome == 'failure')
-        run: echo "::error title=Contract ledger guard::An entry was removed from, a recorded type changed in, or an entry moved straight from active to sunset in, the contract ledger. Not merge-blocking; see the guard step's log."
+        run: echo "::error title=Contract ledger guard::An entry was removed from, a recorded type changed in, an entry moved straight from active to sunset in, or a field became required on an existing contract in, the contract ledger. Not merge-blocking; see the guard step's log."
 
       # Per-series visibility in one place.  Straight-line by design
       # (docs/standards/ci.md): an outcome is `success`, `failure` or `skipped`

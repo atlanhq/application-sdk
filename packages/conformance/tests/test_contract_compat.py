@@ -484,7 +484,7 @@ def test_classvar_on_base_class_excluded_from_resolution(tmp_path: Path) -> None
 _DIAMOND_A_FILE = """\
 class A:
     shared: str
-    unique_a: str
+    unique_a: str = ""
 """
 
 _DIAMOND_B_FILE = """\
@@ -561,7 +561,7 @@ class MyInput:
     url: str
 
 class MyOutput(PublishInputMixin):
-    custom: str
+    custom: str = ""
 
 class MyApp(App):
     @entrypoint
@@ -1622,7 +1622,7 @@ class Base:
     status: {ann}
 
 class MyInput(Base):
-    own: str
+    own: str = ""
 
 class MyApp(App):
     async def run(self, input: MyInput) -> None:
@@ -1654,7 +1654,7 @@ def test_b005_locally_declared_type_change_still_fires(tmp_path: Path) -> None:
 _GENERATED_CONTRACT = """\
 class AppInputContract:
     include_database_regex: str
-    exclude_database_regex: str | None
+    exclude_database_regex: str | None = None
 """
 
 _ALIAS_MODULE = """\
@@ -2291,3 +2291,215 @@ def test_sdk_contract_bases_are_ledger_contracts_only_where_the_sdk_declares_the
         [src], tmp_path, _make_ledger(), sdk_ledger=_make_ledger()
     )
     assert _contract_fields_reported(findings, "B006") == expected
+
+
+# ── Requiredness: no new required field, no optional becoming required ───────
+
+_EP_REQUIRED = """\
+from typing import Annotated
+from pydantic import BaseModel, Field
+from application_sdk.app import App
+
+class MyInput(BaseModel):
+    name: str = ""
+    extra: {decl}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_required(tmp_path: Path, decl: str, extra_row: ContractField | None) -> list:
+    rows = [ContractField("MyInput", "name", "str", "active", False)]
+    if extra_row is not None:
+        rows.append(extra_row)
+    return _scan(
+        tmp_path, {"app.py": _EP_REQUIRED.format(decl=decl)}, _make_ledger(*rows)
+    )
+
+
+def _required_findings(findings: list) -> list:
+    return [f for f in findings if f.rule_id == "B005" and "required" in f.message]
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        "str",
+        "str | None",
+        "str = Field()",
+        "str = Field(...)",
+        "str = Field(default=...)",
+        'Annotated[str, Field(description="d")]',
+    ],
+)
+def test_b005_new_required_field_on_existing_contract_fires(
+    tmp_path: Path, decl: str
+) -> None:
+    """A field with no default added to a recorded contract fails, naming it.
+
+    ``Optional`` does not help: Pydantic v2 requires any field without a
+    default.  It fires before regeneration too, beside B006, since the
+    generator records the field not-required and the finding would survive.
+    """
+    findings = _scan_required(tmp_path, decl, None)
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message
+    assert "Give it a default" in finding.message
+    assert "B006" in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        'str = ""',
+        "str | None = None",
+        'str = Field(default="")',
+        'str = Field("")',
+        "list[str] = Field(default_factory=list)",
+        'Annotated[str, Field(default="")]',
+    ],
+)
+def test_b005_new_field_with_default_on_existing_contract_passes(
+    tmp_path: Path, decl: str
+) -> None:
+    findings = _scan_required(tmp_path, decl, None)
+    assert "B005" not in _ids(findings)
+    assert "B006" in _ids(findings)
+
+
+def test_b005_optional_field_becoming_required_fires(tmp_path: Path) -> None:
+    """A ledger 'required: false' under a source with no default fails."""
+    findings = _scan_required(
+        tmp_path, "str", ContractField("MyInput", "extra", "str", "active", False)
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is required" in finding.message
+    assert "records it as not required" in finding.message
+    assert "B006" not in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    ("decl", "recorded"),
+    [("str", True), ('str = ""', True), ('str = ""', False), ("str", None)],
+    ids=["still-required", "relaxed", "still-optional", "unknown-v1-ledger"],
+)
+def test_b005_requiredness_that_callers_already_meet_passes(
+    tmp_path: Path, decl: str, recorded: bool | None
+) -> None:
+    """Only not-required → required is a break; unknown is not checked."""
+    findings = _scan_required(
+        tmp_path, decl, ContractField("MyInput", "extra", "str", "active", recorded)
+    )
+    assert _ids(findings) == []
+
+
+def test_b005_new_contract_may_declare_required_fields(tmp_path: Path) -> None:
+    """A contract the ledger does not record yet has no callers to break."""
+    findings = _scan(
+        tmp_path,
+        {"app.py": _EP_REQUIRED.format(decl="str")},
+        _make_ledger(ContractField("OtherInput", "x", "str", "active", False)),
+    )
+    assert "B005" not in _ids(findings)
+    assert "B006" in _ids(findings)
+
+
+def test_b005_new_required_field_suppressible(tmp_path: Path) -> None:
+    findings = _scan_required(
+        tmp_path, "str  # conformance: ignore[B005] no deployed callers yet", None
+    )
+    assert [f.suppressed for f in _required_findings(findings)] == [True]
+
+
+_EP_REQUIRED_ALIASED = _EP_REQUIRED.replace(
+    "from pydantic import BaseModel, Field",
+    "from pydantic import BaseModel, Field as F",
+)
+
+
+@pytest.mark.parametrize(
+    ("decl", "required"),
+    [
+        ("str = F()", True),
+        ("str = F(...)", True),
+        ('Annotated[str, F(description="d")]', True),
+        ('str = F(default="")', False),
+        ('Annotated[str, F(default="")]', False),
+    ],
+)
+def test_b005_reads_field_imported_under_an_alias(
+    tmp_path: Path, decl: str, required: bool
+) -> None:
+    """``from pydantic import Field as F`` makes ``F(...)`` a ``Field`` call."""
+    findings = _scan(
+        tmp_path,
+        {"app.py": _EP_REQUIRED_ALIASED.format(decl=decl)},
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    assert len(_required_findings(findings)) == int(required)
+
+
+def test_b005_reads_field_alias_of_a_base_in_another_file(tmp_path: Path) -> None:
+    """An inherited field reads ``Field`` through its own file's alias."""
+    findings = _scan(
+        tmp_path,
+        {
+            "base.py": (
+                "from pydantic import BaseModel, Field as F\n\n"
+                "class Base(BaseModel):\n"
+                "    extra: str = F(...)\n"
+            ),
+            "app.py": (
+                "from base import Base\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Base):\n"
+                '    name: str = ""\n\n'
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            ),
+        },
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message
+
+
+def test_b005_first_own_field_on_a_fieldless_input_contract_fires(
+    tmp_path: Path,
+) -> None:
+    """A contract with no fields of its own is still recorded, via ``Input``'s.
+
+    The SDK refuses an entrypoint input that does not subclass ``Input``, so a
+    recorded contract always has the inherited rows a regeneration wrote; its
+    first own field is a new field on an existing contract.
+    """
+    findings = _scan(
+        tmp_path,
+        {
+            "app.py": (
+                "from application_sdk.contracts import Input\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Input):\n"
+                "    extra: str\n\n"
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            )
+        },
+        _make_ledger(
+            *(
+                ContractField("MyInput", name, "str", "active", None)
+                for name in (
+                    "workflow_id",
+                    "correlation_id",
+                    "app_name",
+                    "workflow_slug",
+                )
+            )
+        ),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message

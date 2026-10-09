@@ -36,7 +36,7 @@ import ast
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
@@ -56,6 +56,7 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
     collect_import_aliases,
+    field_call_names,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -233,6 +234,74 @@ class _FieldInfo(NamedTuple):
     #: Trailing with a default so every existing positional construction of this
     #: tuple keeps working.
     model_declared: bool = False
+    #: Whether a payload must carry this field: Pydantic v2 requires a field
+    #: with no default, ``Optional`` or not. ``None`` means unknown — a field
+    #: mirrored from an SDK registry, whose defaults are not recorded there.
+    required: bool | None = None
+
+
+#: The names that call ``Field`` when a file imports it under no alias.
+_FIELD_CALL_NAMES = frozenset({"Field"})
+
+
+def _is_field_call(
+    node: ast.expr | None, field_names: frozenset[str]
+) -> TypeGuard[ast.Call]:
+    """Whether *node* calls ``Field`` — by any of *field_names*, or ``x.Field``."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id in field_names) or (
+        isinstance(func, ast.Attribute) and func.attr == "Field"
+    )
+
+
+def _field_call_has_default(call: ast.Call) -> bool:
+    """Whether a ``Field(...)`` call supplies a default.
+
+    ``Field()`` and ``Field(...)`` (an Ellipsis default) leave the field
+    required; any other positional default, ``default=`` (other than
+    Ellipsis) or ``default_factory=`` supplies one.
+    """
+    if call.args:
+        first = call.args[0]
+        return not (isinstance(first, ast.Constant) and first.value is Ellipsis)
+    for kw in call.keywords:
+        if kw.arg == "default_factory":
+            return True
+        if kw.arg == "default":
+            return not (
+                isinstance(kw.value, ast.Constant) and kw.value.value is Ellipsis
+            )
+    return False
+
+
+def _field_required(ann_node: ast.AnnAssign, field_names: frozenset[str]) -> bool:
+    """Whether Pydantic v2 requires this field in every payload.
+
+    A field is required when nothing supplies a default: no value, a
+    ``Field(...)`` value without one, or no value with an ``Annotated``
+    ``Field(...)`` that supplies none. ``Optional[X]`` does not make a field
+    optional in Pydantic v2 — only a default does. *field_names* are the local
+    names the defining file binds to ``Field``, so ``F(...)`` after
+    ``from pydantic import Field as F`` reads as the call it is.
+    """
+    value = ann_node.value
+    if value is None:
+        annotation = ann_node.annotation
+        if isinstance(annotation, ast.Subscript) and _is_named(
+            annotation.value, "Annotated"
+        ):
+            sl = annotation.slice
+            metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
+            return not any(
+                _is_field_call(m, field_names) and _field_call_has_default(m)
+                for m in metadata
+            )
+        return True
+    if _is_field_call(value, field_names):
+        return not _field_call_has_default(value)
+    return False
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -282,11 +351,14 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
     return "active"
 
 
-def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
+def _iter_fields(
+    classdef: ast.ClassDef, field_names: frozenset[str] = _FIELD_CALL_NAMES
+) -> list[_FieldInfo]:
     """Return annotated field info declared directly on *classdef*'s own body.
 
     Does not resolve fields inherited from a base class or mixin — use
-    :func:`resolve_contract_fields` for that.
+    :func:`resolve_contract_fields` for that. *field_names* are the local names
+    *classdef*'s file binds to ``Field``.
     """
     result = []
     for stmt in classdef.body:
@@ -306,6 +378,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
+                required=_field_required(stmt, field_names),
             )
         )
     return result
@@ -409,7 +482,7 @@ def resolve_contract_fields(
                 # overwrite below.
                 for base_name in reversed(rec.bases):
                     merge_ancestor(base_name, visiting)
-                for fi in _iter_fields(rec.node):
+                for fi in _iter_fields(rec.node, rec.field_call_names):
                     fields_by_name[fi.name] = _keep_model_declared(
                         fi._replace(node=None), fields_by_name.get(fi.name)
                     )
@@ -446,7 +519,7 @@ def resolve_contract_fields(
 
     # Fields declared directly on classdef always win over inherited ones —
     # except for the marker, which is sticky (see `_keep_model_declared`).
-    for fi in _iter_fields(classdef):
+    for fi in _iter_fields(classdef, field_call_names(aliases)):
         fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())

@@ -74,6 +74,10 @@ class ClassRecord:
     imports resolved against the defining file."""
     rebound: bool = False
     """Whether the defining module binds :attr:`name` more than once."""
+    field_call_names: frozenset[str] = frozenset({"Field"})
+    """Local names the defining module binds to ``Field`` (``Field`` itself
+    plus any ``from … import Field as F``). File-local like the other import
+    facts, so captured here for a subclass scanned from another file."""
 
 
 # The ONE method that, when overridden, takes the emitted code out of ``code``'s
@@ -468,9 +472,17 @@ def collect_classes(
                 non_sdk_bases=non_sdk_bases,
                 base_modules=base_modules,
                 rebound=node.name not in single,
+                field_call_names=field_call_names(aliases),
             )
         )
     return records
+
+
+def field_call_names(aliases: Mapping[str, str]) -> frozenset[str]:
+    """Local names that call ``Field``, given a file's import *aliases*."""
+    return frozenset({"Field"}) | {
+        local for local, original in aliases.items() if original == "Field"
+    }
 
 
 def resolve_leaf_prefix(
