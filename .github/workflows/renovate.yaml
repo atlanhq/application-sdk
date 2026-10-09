@@ -216,9 +216,9 @@ jobs:
 
       # Provides `uv`/`uvx` — used by Renovate's native uv manager to refresh
       # uv.lock AND by the driver's `uvx ruff` formatting of generated Python.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.24"
+          version: "0.13.0"
 
       # Version omitted deliberately — as it now is at every call site: the
       # action resolves the single pin in application_sdk/pkl_version.py, so no

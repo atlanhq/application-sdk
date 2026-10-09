@@ -2447,9 +2447,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.24"
+          version: "0.13.0"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2954,9 +2954,9 @@ jobs:
       HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.24"
+          version: "0.13.0"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
