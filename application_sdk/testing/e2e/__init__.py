@@ -45,7 +45,11 @@ from application_sdk.testing.e2e.logs import LogCollector
 from application_sdk.testing.e2e.payload import RunMode
 from application_sdk.testing.e2e.portforward import kube_http_call
 from application_sdk.testing.e2e.sql_app import SQLAppE2ETest
-from application_sdk.testing.e2e.system_app import SystemAppE2ETest
+from application_sdk.testing.e2e.system_app import (
+    StoreExpectation,
+    StoreExpectationKind,
+    SystemAppE2ETest,
+)
 from application_sdk.testing.e2e.tenant_pool import TenantPool
 from application_sdk.testing.e2e.workflows import run_workflow, wait_for_workflow
 
@@ -65,6 +69,8 @@ __all__ = [
     "ResolvedDAG",
     "RunMode",
     "SQLAppE2ETest",
+    "StoreExpectation",
+    "StoreExpectationKind",
     "SystemAppE2ETest",
     "TenantPool",
 ]

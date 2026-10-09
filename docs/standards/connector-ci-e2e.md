@@ -55,6 +55,24 @@ routing, polling, grading and teardown are unchanged.
   when `E2E_TENANT_POOL=system`, and every other suite refuses that pool. CI sets
   the variable when it places a leg; for a local run against a system-app
   tenant, export it yourself.
+- To prove what the app left in the tenant's object store, override
+  `store_expectations()` to return `StoreExpectation(prefix, kind, count)`
+  claims: `ABSENT`, `PRESENT` or `COUNT == n`. The runner can't see the store,
+  so the harness appends an `sdk-store-assert` node after every other node. It
+  runs on the app's own task queue, which means the same pod and store binding
+  the app used. The harness then reads that node's verdict back from AE and
+  grades it. If the verdict can't be read, the test fails as unreadable, never
+  as a pass.
+  - Prefixes must sit strictly below `artifacts/apps/`, `persistent-artifacts/`
+    or `connection-cache/`.
+  - A suite can declare at most 20 claims.
+  - `ABSENT` is strict: it also counts zero-byte folder markers, including one
+    at the prefix itself.
+  - `PRESENT` and `COUNT` use the `list_keys` view the app sees.
+  - Every SDK worker serves the `sdk:store-assert` workflow behind the node. It
+    only LISTs, plus one HEAD for `ABSENT`, and returns counts, never keys or
+    contents.
+  - If the DAG spans several task queues, override `store_assert_task_queue()`.
 
 ### The SDR base class
 

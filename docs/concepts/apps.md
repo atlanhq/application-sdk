@@ -408,6 +408,28 @@ The ``secrets=`` parameter is keyword-only and optional, so existing call sites 
 public sync API are unchanged.  Secret values are never logged — the startup resolution log
 emits ``endpoint_configured=<bool>`` rather than the resolved endpoint.
 
+### SDK built-in workflow: `sdk:store-assert`
+
+Every worker built by `create_worker` also registers `sdk:store-assert`. There is
+no flag and no handler is needed. It exists for system-app e2e (see
+`docs/standards/connector-ci-e2e.md`): the harness appends it as a DAG node on the
+app's own task queue. There it checks claims of the form `prefix → ABSENT | PRESENT
+| COUNT == n` against the worker's deployment object store, and returns a verdict
+made of counts and booleans.
+
+It is ungated on purpose. An e2e-only switch would have to be injected through the
+install path, and e2e exists to prove that path matches production. What keeps it
+safe in production instead:
+
+- It only LISTs, plus one HEAD for `ABSENT`. It never reads contents, writes or
+  deletes.
+- Prefixes must sit strictly below `artifacts/apps/`, `persistent-artifacts/` or
+  `connection-cache/`.
+- One run checks at most 20 prefixes and scans at most 10,000 keys per prefix.
+
+Its workflow type and activity name are reserved: an app that registers either
+fails at worker startup.
+
 ### SDR: Interactive Activity Timeouts
 
 The three interactive SDR operations (`sdr:test_auth`, `sdr:preflight_check`, `sdr:fetch_metadata`)

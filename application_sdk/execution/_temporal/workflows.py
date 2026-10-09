@@ -16,6 +16,8 @@ with workflow.unsafe.imports_passed_through():
 _RESERVED_SDR_WORKFLOW_TYPES = frozenset(
     {"sdr:test_auth", "sdr:preflight_check", "sdr:fetch_metadata"}
 )
+# Registered on every worker by create_worker; see store_assert.py.
+_RESERVED_SDK_WORKFLOW_TYPES = frozenset({"sdk:store-assert"})
 
 
 def _require_declaration_matches_registration(
@@ -69,6 +71,12 @@ def get_all_app_workflows() -> list[type]:
                     f"App '{app_name}' registers Temporal workflow type "
                     f"'{workflow_type}', which is reserved for the SDK's SDR "
                     "handler workflows. Choose a different legacy alias."
+                )
+            if workflow_type in _RESERVED_SDK_WORKFLOW_TYPES:
+                raise EntryPointContractError(
+                    f"App '{app_name}' registers Temporal workflow type "
+                    f"'{workflow_type}', which is reserved for an SDK built-in "
+                    "workflow. Choose a different legacy alias."
                 )
             claimed_by = claimed_types.get(workflow_type)
             if claimed_by is not None and claimed_by != app_name:

@@ -205,6 +205,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
     from obstore.store import ObjectStore
     from pyatlan.client.aio.client import AsyncAtlanClient
 
+    from application_sdk.execution._temporal.store_assert import StoreAssertOutput
     from application_sdk.testing.harness.temporal import PollerInfo
 
 logger = get_logger(__name__)
@@ -575,6 +576,10 @@ class FullDAGOutcome:
     :attr:`succeeded` can tell "the connection is missing" apart from "this
     entrypoint was never going to publish one". Defaults True, so an outcome
     built without it grades exactly as before."""
+    store_assert_read: StoreAssertOutput | Unreadable | None = None
+    """The object-store assertion node's verdict, the fact that it could not be
+    read, or ``None`` when the run declared no store expectations. Set only by
+    :class:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest`."""
 
     @property
     def succeeded(self) -> bool:
