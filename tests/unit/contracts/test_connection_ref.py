@@ -20,7 +20,11 @@ import pytest
 from pyatlan_v9.model.transform import get_type, to_atlas_format
 from pydantic import ValidationError
 
-from application_sdk.contracts.types import ConnectionAttributes, ConnectionRef
+from application_sdk.contracts.types import (
+    ConnectionAttributes,
+    ConnectionRef,
+    connection_qualified_name_defect,
+)
 
 
 def _make_conn(
@@ -602,6 +606,13 @@ class TestIsUnidentifiable:
         )
         assert ref.is_unidentifiable
 
+    @pytest.mark.parametrize("qualified_name", ["default/mongodb", "default/x/"])
+    def test_populated_with_malformed_qualified_name(self, qualified_name: str) -> None:
+        ref = ConnectionRef.model_validate(
+            {"attributes": {"qualifiedName": qualified_name}}
+        )
+        assert ref.is_unidentifiable
+
     def test_default_ref_names_no_connection(self) -> None:
         assert not ConnectionRef().is_unidentifiable
 
@@ -615,3 +626,39 @@ class TestIsUnidentifiable:
             {"attributes": {key: "default/snowflake/1", "defaultCredentialGuid": "g"}}
         )
         assert not ref.is_unidentifiable
+
+
+class TestConnectionQualifiedNameDefect:
+    """The one well-formedness rule the gate, incremental and seed paths share."""
+
+    @pytest.mark.parametrize(
+        "qualified_name",
+        [
+            "default/snowflake/1700000000",
+            # A programmatically provisioned connection names its last segment
+            # (CONNECT-1136); those crawl, so the rule must not reject them.
+            "default/oracle/rppsfj",
+            "a/b/c/12345",
+        ],
+    )
+    def test_well_formed(self, qualified_name: str) -> None:
+        assert connection_qualified_name_defect(qualified_name) is None
+
+    @pytest.mark.parametrize(
+        ("qualified_name", "reason"),
+        [
+            ("", "empty"),
+            ("   ", "empty"),
+            ("just-one", "1 segment"),
+            ("default/mongodb", "2 segment"),
+            ("default//123", "segment 2 is empty"),
+            ("default/oracle/", "segment 3 is empty"),
+            ("/oracle/123", "segment 1 is empty"),
+            ("default/snowflake/ 123", "segment 3 is padded"),
+            ("default/ snowflake/123", "segment 2 is padded"),
+        ],
+    )
+    def test_malformed(self, qualified_name: str, reason: str) -> None:
+        defect = connection_qualified_name_defect(qualified_name)
+        assert defect is not None
+        assert reason in defect

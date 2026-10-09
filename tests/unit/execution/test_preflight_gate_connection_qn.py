@@ -92,6 +92,41 @@ class TestUnidentifiableConnectionBlocks:
         with _patches(), pytest.raises(ApplicationError):
             await gate(_gate_input(connection=connection))
 
+    @pytest.mark.parametrize(
+        "qualified_name",
+        ["default/mongodb", "default/mongodb/", "default//1700000000"],
+    )
+    async def test_malformed_qualified_name_blocks(
+        self, qualified_name: str, mode: PreflightGateMode
+    ) -> None:
+        handler = _handler()
+        gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
+        connection = {
+            "typeName": "Connection",
+            "attributes": {"qualifiedName": qualified_name, "name": "example"},
+        }
+        with _patches(), mock.patch(f"{_GATE}.logger") as ml:
+            with pytest.raises(ApplicationError):
+                await gate(_gate_input(connection=connection))
+
+        row = first_outcome_or_none(ml)
+        assert row["outcome"] == "blocked"
+        assert "not well-formed" in row["failure.message"]
+        handler.preflight_check.assert_not_called()
+
+    async def test_malformed_bare_qualified_name_blocks(
+        self, mode: PreflightGateMode
+    ) -> None:
+        handler = _handler()
+        gate = build_preflight_gate_activity(handler, app_name="myapp", mode=mode)
+        gate_input = _with_snapshot_keys(
+            _gate_input(connection=_INCIDENT_CONNECTION),
+            connection_qualified_name="default/mongodb",
+        )
+        with _patches(), pytest.raises(ApplicationError):
+            await gate(gate_input)
+        handler.preflight_check.assert_not_called()
+
 
 class TestIdentifiableOrAbsentConnectionProceeds:
     async def _assert_proceeds(

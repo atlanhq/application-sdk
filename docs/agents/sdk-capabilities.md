@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
 sdk-version:   3.44.0
-source-sha:    fee27c45d60aa64ecadf6a89298766fefa1f34ad
-source-date:   2026-10-09T03:21:00+05:30
+source-sha:    227767bcb87f0c4d6380b6e68339192431ad6c62
+source-date:   2026-10-09T10:03:45+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -21,7 +21,7 @@ do-not-edit:   re-run the skill instead of hand-editing
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
 | `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 44 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
 | `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
@@ -1130,6 +1130,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Check whether *new_cls* is backwards-compatible with *old_cls*.
 - **Defined in:** `application_sdk/contracts/compat.py`
 
+#### `connection_qualified_name_defect`
+
+- **Import:** `from application_sdk.contracts import connection_qualified_name_defect`
+- **Signature:** `connection_qualified_name_defect(qualified_name: str)`
+- **Summary:** Why *qualified_name* cannot address a Connection, or ``None`` when it can.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `field_lifecycle`
 
 - **Import:** `from application_sdk.contracts.compat import field_lifecycle`
@@ -1186,6 +1193,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import BoundedList`
 - **Signature:** `BoundedList`
 - **Summary:** Bounded list type. Use: Annotated[list[T], MaxItems(N)]
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `CONNECTION_QN_MIN_SEGMENTS`
+
+- **Import:** `from application_sdk.contracts import CONNECTION_QN_MIN_SEGMENTS`
+- **Signature:** `CONNECTION_QN_MIN_SEGMENTS`
+- **Summary:** Segments in the shortest addressable connection QN: ``default/<connector>/<id>``.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `TreeSelection`
@@ -7297,7 +7311,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `type_name: str` `= Field(default='Connection')`
   - `attributes: ConnectionAttributes` `= Field(default_factory=ConnectionAttributes)`
-  - `is_unidentifiable: bool` — Whether this names a Connection but carries no qualified name.
+  - `is_unidentifiable: bool` — Whether this names a Connection but its qualified name cannot address it.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `ContractMetadata`

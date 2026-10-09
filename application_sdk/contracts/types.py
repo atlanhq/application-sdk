@@ -527,6 +527,47 @@ class GitReference(BaseModel, frozen=True):
     credential: CredentialRef | None = None
 
 
+CONNECTION_QN_MIN_SEGMENTS = 3
+"""Segments in the shortest addressable connection QN: ``default/<connector>/<id>``."""
+
+
+def connection_qualified_name_defect(qualified_name: str) -> str | None:
+    """Why *qualified_name* cannot address a Connection, or ``None`` when it can.
+
+    The one definition of a well-formed connection qualified name; every reader
+    that rejects one (the preflight gate, the incremental marker path, the seed
+    harness) routes through here so they cannot disagree. Well-formed means at
+    least :data:`CONNECTION_QN_MIN_SEGMENTS` ``/``-separated segments, each
+    non-empty and unpadded. pyatlan's ``get_connector_name`` and
+    atlan-publish-app both refuse anything shorter, and an empty or padded
+    segment composes asset QNs no ref will ever match.
+
+    The last segment is not required to be a numeric epoch: connections
+    provisioned programmatically carry names there and crawl normally.
+
+    Args:
+        qualified_name: The candidate connection qualified name.
+
+    Returns:
+        A short reason fit for an error message (it does not repeat the value),
+        or ``None`` when the name is well-formed.
+    """
+    if not qualified_name.strip():
+        return "it is empty"
+    segments = qualified_name.split("/")
+    if len(segments) < CONNECTION_QN_MIN_SEGMENTS:
+        return (
+            f"it has {len(segments)} segment(s), not the "
+            f"{CONNECTION_QN_MIN_SEGMENTS} of 'default/<connector>/<id>'"
+        )
+    for position, segment in enumerate(segments, start=1):
+        if not segment:
+            return f"segment {position} is empty"
+        if segment != segment.strip():
+            return f"segment {position} is padded with whitespace"
+    return None
+
+
 class ConnectionAttributes(BaseModel, frozen=True):
     """Minimal normalized attributes from an AE Connection object.
 
@@ -670,19 +711,24 @@ class ConnectionRef(BaseModel, frozen=True):
 
     @property
     def is_unidentifiable(self) -> bool:
-        """Whether this names a Connection but carries no qualified name.
+        """Whether this names a Connection but its qualified name cannot address it.
 
         The absent-key half of the identity rule on :class:`ConnectionAttributes`:
         an explicit ``null`` is rejected at validation, but an absent key falls
-        through to ``""``. Empty ``attributes`` is not this case — it is the
-        default of an input with no connection widget, a workflow naming no
-        connection at all. Exposed as a predicate rather than a validator because
-        a raise while Temporal deserializes the workflow input is a task failure
-        that retries forever; the preflight gate turns it into a terminal one.
+        through to ``""``. A present but malformed name is the same failure — see
+        :func:`connection_qualified_name_defect`. Empty ``attributes`` is not this
+        case — it is the default of an input with no connection widget, a
+        workflow naming no connection at all. Exposed as a predicate rather than
+        a validator because a raise while Temporal deserializes the workflow
+        input is a task failure that retries forever; the preflight gate turns
+        it into a terminal one.
         """
         attrs = self.attributes
         populated = bool(attrs.model_fields_set or attrs.model_extra)
-        return populated and not attrs.qualified_name.strip()
+        return (
+            populated
+            and connection_qualified_name_defect(attrs.qualified_name) is not None
+        )
 
     @staticmethod
     def from_connection(conn: Any) -> ConnectionRef:

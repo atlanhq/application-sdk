@@ -57,7 +57,10 @@ with workflow.unsafe.imports_passed_through():
         PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
     )
     from application_sdk.contracts.base import SerializableEnum
-    from application_sdk.contracts.types import ConnectionRef
+    from application_sdk.contracts.types import (
+        ConnectionRef,
+        connection_qualified_name_defect,
+    )
     from application_sdk.credentials.errors import (
         CredentialNotFoundError,
         CredentialRoutingError,
@@ -1363,28 +1366,37 @@ def _gate_error(
 
 
 def _unidentifiable_connection(snapshot: dict[str, Any]) -> PreflightOutput | None:
-    """The block verdict for a workflow whose Connection carries no qualified name.
+    """The block verdict for a workflow whose Connection cannot be addressed.
 
-    ``None`` when the snapshot names its connection in any shape
-    :func:`connection_qualified_name` reads, or names no connection at all.
-    This is input validation, not a readiness opinion on the source, so the
-    gate blocks on it in every mode (CONNECT-1738).
+    ``None`` when the snapshot names its connection by a well-formed qualified
+    name in any shape :func:`connection_qualified_name` reads, or names no
+    connection at all. A name that is present but fails
+    :func:`connection_qualified_name_defect` blocks like a missing one: pyatlan
+    and atlan-publish-app both refuse it, only after every extraction activity.
+    This is input validation, not a readiness opinion on the source, so the gate
+    blocks on it in every mode (CONNECT-1738).
     """
-    if connection_qualified_name(snapshot) is not None:
-        return None
-    try:
-        ref = ConnectionRef.model_validate(snapshot.get("connection") or {})
-    except ValidationError:
-        return None
-    if not ref.is_unidentifiable:
-        return None
-    error = InvalidInputError(
-        message=(
+    qualified_name = connection_qualified_name(snapshot)
+    if qualified_name is not None:
+        defect = connection_qualified_name_defect(qualified_name)
+        if defect is None:
+            return None
+        message = (
+            f"The workflow's Connection qualifiedName {qualified_name!r} is not "
+            f"well-formed: {defect}. Re-create the workflow from the setup wizard."
+        )
+    else:
+        try:
+            ref = ConnectionRef.model_validate(snapshot.get("connection") or {})
+        except ValidationError:
+            return None
+        if not ref.is_unidentifiable:
+            return None
+        message = (
             "The workflow's Connection has no qualifiedName, so nothing can be "
             "crawled into it. Re-create the workflow from the setup wizard."
-        ),
-        field="connection",
-    ).to_failure_details()
+        )
+    error = InvalidInputError(message=message, field="connection").to_failure_details()
     return PreflightOutput(
         status=PreflightStatus.NOT_READY,
         checks=[
