@@ -829,7 +829,7 @@ class TestConnectionPrefix:
         )
         assert _prefix_errors(report) == [
             f"inputs reference '{bad}' lacks its connection prefix "
-            "'default/<connector>/<epoch>/'"
+            "'default/<connector>/<id>/'"
         ]
 
     def test_bad_references_report_once_per_field(self, tmp_path: Path) -> None:
@@ -841,8 +841,47 @@ class TestConnectionPrefix:
         )
         assert _prefix_errors(report) == [
             "inputs reference '/DB/SCHEMA/T0' lacks its connection prefix "
-            "'default/<connector>/<epoch>/' (and 2 more)"
+            "'default/<connector>/<id>/' (and 2 more)"
         ]
+
+    @pytest.mark.parametrize(
+        "upstream",
+        [
+            "default/oracle/some-name/db/public/src",  # programmatically provisioned
+            "default/oracle/some-name",  # the connection itself
+        ],
+    )
+    def test_non_numeric_connection_id_is_well_formed(
+        self, tmp_path: Path, upstream: str
+    ) -> None:
+        # The shared connection-QN rule accepts a named, non-numeric <id>; so must
+        # this check, or a reference into such a connection fails for nothing.
+        _write_raw(
+            tmp_path,
+            "Process",
+            [_process(f"{CONN}/p1", [_ref("Table", upstream)], [])],
+        )
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert _prefix_errors(report) == []
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["/DB/SCHEMA/T1", "default//123/DB", "default/snow", "T1"],
+    )
+    def test_malformed_connection_segment_is_invalid(
+        self, tmp_path: Path, bad: str
+    ) -> None:
+        _write_raw(
+            tmp_path, "Process", [_process(f"{CONN}/p1", [_ref("Table", bad)], [])]
+        )
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert len(_prefix_errors(report)) == 1
 
     def test_unscoped_reference_types_are_exempt(self, tmp_path: Path) -> None:
         _write_raw(tmp_path, "Table", [_table_with_meaning()])

@@ -64,6 +64,10 @@ from pyatlan_v9.model.transform import from_atlas_json
 
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
+from application_sdk.contracts.types import (
+    CONNECTION_QN_MIN_SEGMENTS,
+    connection_qualified_name_defect,
+)
 from application_sdk.observability.logger_adaptor import (
     ASSET_VALIDATION_MATRIX_KEY,
     ASSET_VALIDATION_SUMMARY_KEY,
@@ -316,14 +320,26 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 # Connection scoping of qualifiedNames (FND-3523)
 # ---------------------------------------------------------------------------
 #
-# Every connection-scoped Atlas qualifiedName starts ``default/<connector>/<epoch>``.
+# Every connection-scoped Atlas qualifiedName starts ``default/<connector>/<id>``.
 # A connector that builds one without that prefix — or points at a same-connection
 # parent it never emits — gets ``ATLAS-404-00-00A`` from publish, on every run, until
 # the connector is fixed. pyatlan's per-type patterns catch neither: most types have
 # no pattern, and the ones that do check segment counts, not the prefix.
 
-_CONNECTION_SCOPED_QN = re.compile(r"\Adefault/[a-z0-9-]+/\d+(?:/|\Z)")
-"""A well-formed connection-scoped qualifiedName: the connection itself, or under it."""
+
+def _is_connection_scoped(qualified_name: str) -> bool:
+    """True when ``qualified_name`` is a connection, or sits under one.
+
+    Its first three segments must form a well-formed connection qualifiedName by
+    :func:`~application_sdk.contracts.types.connection_qualified_name_defect` — the
+    one definition every reader shares. That rule accepts a non-numeric ``<id>``
+    (programmatically provisioned connections carry names there), so this must too:
+    a stricter local pattern would fail references those connections publish fine.
+    """
+    head = qualified_name.split("/", CONNECTION_QN_MIN_SEGMENTS)
+    connection = "/".join(head[:CONNECTION_QN_MIN_SEGMENTS])
+    return connection_qualified_name_defect(connection) is None
+
 
 _UNSCOPED_TYPE_NAMES: Final = frozenset(
     {
@@ -346,7 +362,7 @@ _UNSCOPED_TYPE_NAMES: Final = frozenset(
 exempt from the prefix check. An allowlist on purpose: a new exception is added
 here when it turns up, rather than inferred from the type model."""
 
-_CONNECTION_PREFIX_EXAMPLE: Final = "default/<connector>/<epoch>/"
+_CONNECTION_PREFIX_EXAMPLE: Final = "default/<connector>/<id>/"
 
 
 def _connection_prefix_errors(
@@ -381,7 +397,7 @@ def _connection_prefix_errors(
         )
     bad_refs: dict[str, list[str]] = {}
     for rel_name, target_tn, target_qn in refs:
-        if target_tn in _UNSCOPED_TYPE_NAMES or _CONNECTION_SCOPED_QN.match(target_qn):
+        if target_tn in _UNSCOPED_TYPE_NAMES or _is_connection_scoped(target_qn):
             continue
         bad_refs.setdefault(rel_name, []).append(target_qn)
     for rel_name, target_qns in bad_refs.items():
@@ -531,7 +547,7 @@ def validate_transformed_dir(
 
     * **Prefix** (per-asset, always on): an asset's own ``qualifiedName`` must start
       with its ``connectionQualifiedName + "/"``, and every reference qualifiedName
-      must be well-formed ``default/<connector>/<epoch>/...`` — it may name another
+      must be well-formed ``default/<connector>/<id>/...`` — it may name another
       connection. A miss is an ``invalid`` failure with a ``connection_prefix:<field>``
       rule key.
     * **Same-connection references exist**: the orphan pass only checks references
