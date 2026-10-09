@@ -1090,17 +1090,11 @@ A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value,
 
 A system app has no manifest of its own: each caller declares the app's DAG node. Hand-written node classes such as `PopularityNode` restate the app's args and drift from them. A system app with `inputs` therefore also renders `contract/generated/input.pkl`: the node class callers add to their `extraNodes`, with one typed property per input.
 
-The file sits in the app's `contract/` Pkl project, so it ships in the app's published Pkl package, and each caller pins the version it imports:
+The file is synced into the toolkit as `src/system/<name>.pkl`. Any connector, whether internal, public or partner-built, then imports it through the toolkit dependency it already has, and the toolkit version it pins fixes the contract version:
 
 ```pkl
-// caller's contract/PklProject
-dependencies {
-  ["app-contract-toolkit"] { uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<VERSION>" }
-  ["popularity"] { uri = "package://<popularity package base URI>@<VERSION>" }
-}
-
 // caller's contract/app.pkl
-import "@popularity/generated/input.pkl" as Popularity
+import "@app-contract-toolkit/system/popularity.pkl" as Popularity
 
 extraNodes {
   ["popularity"] = new Popularity.PopularityNode {
@@ -1137,11 +1131,11 @@ The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<task
 - At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, and a value outside its input's type or bounds.
 - At the system app's render: an input whose property name would override a `DAGNode` property (`depends_on` → `dependsOn`), and two inputs mapping to the same property.
 
-**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `@app-contract-toolkit/App.pkl`; only a contract that imports the toolkit by relative path changes it).
+**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, which resolves from the synced home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it).
 
-The generated module imports `@app-contract-toolkit/App.pkl` through the app's own package dependency. Pkl resolves one version of a package per major version across the caller's dependency graph (toolkit versions are all `0.x`), so the node is a `DAGNode` of the caller's own toolkit.
+**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input (the contract ledger refuses both) and no new required input.
 
-**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app publishes its contract package.
+**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app's contract is synced into `src/system/`.
 
 ### Multi-Entrypoint Bundle
 

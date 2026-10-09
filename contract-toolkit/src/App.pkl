@@ -503,26 +503,23 @@ inputContractClassName: InputsPkg.ClassName =
 /// Where the generated caller node is written, relative to the repo root.
 ///
 /// A system app with `inputs` renders the Pkl class its callers add to their
-/// `extraNodes`, with one typed property per input. The default sits inside
-/// the `contract/` Pkl project, so the app's published Pkl package carries it
-/// and each caller imports it at a pinned version:
+/// `extraNodes`, with one typed property per input. The file is synced into
+/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
+/// public or partner-built) imports it through the toolkit dependency it
+/// already has:
 ///
 /// ```pkl
-/// // caller's PklProject
-/// dependencies { ["popularity"] { uri = "package://.../popularity@1.4.0" } }
-///
-/// // caller's app.pkl
-/// import "@popularity/generated/input.pkl" as Popularity
+/// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
 /// extraNodes { ["popularity"] = new Popularity.PopularityNode { ... } }
 /// ```
 inputContractPath: String = "contract/generated/input.pkl"
 
-/// How the generated caller node imports the toolkit. Leave the default: it
-/// resolves through the app's own `app-contract-toolkit` dependency, which
-/// Pkl unifies with the caller's to one version, so the node is the caller's
-/// `DAGNode`. Only a contract that imports the toolkit by relative path (as
-/// the toolkit's own examples do) sets this.
-inputContractToolkitImport: String = "@app-contract-toolkit/App.pkl"
+/// How the generated caller node imports the toolkit. The default,
+/// `../App.pkl`, resolves from the file's synced home in the toolkit,
+/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
+/// sync source and is not evaluated there. Only a contract that evaluates the
+/// file in place (as the toolkit's own example does) sets this.
+inputContractToolkitImport: String = "../App.pkl"
 
 /// Refuses `inputs` declarations that would be dropped or would clash.
 local _inputsCheck: Any =

@@ -76,7 +76,9 @@ inputs {
   }
 }
 
-// The generated caller node (`contract/generated/input.pkl`) imports the
-// toolkit the way this example does: by relative path. A real app leaves
-// `inputContractToolkitImport` at its `@app-contract-toolkit/App.pkl` default.
+// The toolkit's tests evaluate the generated caller node
+// (`contract/generated/input.pkl`) in place, so it imports the toolkit by
+// this example's own relative path. A real app leaves
+// `inputContractToolkitImport` at its `../App.pkl` default, which resolves
+// once the file is synced into the toolkit as `src/system/<name>.pkl`.
 inputContractToolkitImport = "../../../../src/App.pkl"
