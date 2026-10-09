@@ -186,7 +186,7 @@ ref = FileReference(
 
 | Tier | Path prefix | Cleanup |
 |------|------------|---------|
-| `TRANSIENT` | `file_refs/` | Always removed at end of run |
+| `TRANSIENT` | `file_refs/` | Always removed at end of run, unless a `RETAINED`/`PERSISTENT` ref in the same run points at the same key |
 | `RETAINED` | `{run_prefix}/file_refs/` | Removed only when `include_prefix_cleanup=True` (opt-in) |
 | `PERSISTENT` | `persistent-artifacts/apps/{app_name}/…` | Never deleted by cleanup |
 

@@ -2260,10 +2260,15 @@ class App(ABC):
         1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
            intermediary files (``StorageTier.TRANSIENT``, the default).
            Each key and its ``.sha256`` sidecar are deleted.
-           ``RETAINED`` and ``PERSISTENT`` tier refs are skipped.
+           ``RETAINED`` and ``PERSISTENT`` tier refs are skipped, and so is
+           any key a ``TRANSIENT`` ref shares with one of them — a file key,
+           its sidecar, or a key under a durable directory ref. Each such
+           clash counts as skipped and logs a WARNING.
         2. **Run-scoped prefix** (opt-in via ``input.include_prefix_cleanup``):
            all objects under ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}/``,
-           which includes any ``RETAINED``-tier refs from this run.
+           which includes any ``RETAINED``-tier refs from this run. This pass
+           deliberately ignores tracked tiers: opting in is the documented
+           way to remove ``RETAINED`` refs.
 
         Objects under ``persistent-artifacts/`` are never deleted.
 
@@ -2309,7 +2314,40 @@ class App(ABC):
                     return False
 
         # 1. Delete tracked transient objects.
-        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY)
+        tracked_refs = TaskStateAccessor().get(TRACKED_FILE_REFS_KEY) or ()
+
+        # Keys a RETAINED/PERSISTENT ref in this run points at. A TRANSIENT ref
+        # can alias one of them (an app that hand-builds a TRANSIENT ref on a key
+        # ``upload_refs`` delivered as RETAINED), and deleting through the alias
+        # would destroy what the durable ref promises downstream. The durable
+        # tier wins: such keys are skipped, never deleted, by this pass.
+        durable_keys: set[str] = set()
+        durable_prefixes: list[str] = []
+        for ref in tracked_refs:
+            durable_path: str | None = getattr(ref, "storage_path", None)
+            if not durable_path:
+                continue
+            if getattr(ref, "tier", StorageTier.TRANSIENT) == StorageTier.TRANSIENT:
+                continue
+            if durable_path.endswith("/"):
+                durable_prefixes.append(durable_path)
+            else:
+                durable_keys.update((durable_path, durable_path + ".sha256"))
+
+        def _is_durable(key: str) -> bool:
+            return key in durable_keys or any(
+                key.startswith(p) for p in durable_prefixes
+            )
+
+        def _warn_durable_alias(storage_path: str, count: int) -> None:
+            _task_logger.warning(
+                "Not deleting %d key(s) of TRANSIENT ref %s: a RETAINED or "
+                "PERSISTENT ref in this run points at the same key(s). Track "
+                "each key under a single tier",
+                count,
+                storage_path,
+            )
+
         if tracked_refs:
             for ref in tracked_refs:
                 storage_path: str | None = getattr(ref, "storage_path", None)
@@ -2326,6 +2364,7 @@ class App(ABC):
                     # Directory ref — stream-and-delete sub-keys.
                     import obstore as obs  # noqa: PLC0415 — lazy: heavy Rust ext; keep out of the workflow-sandbox import set
 
+                    aliased = 0
                     for batch in obs.list(resolved, prefix=storage_path):
                         tasks = []
                         for item in batch:
@@ -2335,6 +2374,10 @@ class App(ABC):
                             ):
                                 skipped += 1
                                 continue
+                            if _is_durable(key):
+                                skipped += 1
+                                aliased += 1
+                                continue
                             tasks.append(_delete_one(key))
                         results = await asyncio.gather(*tasks)
                         for ok in results:
@@ -2342,13 +2385,22 @@ class App(ABC):
                                 deleted += 1
                             else:
                                 errors += 1
+                    if aliased:
+                        _warn_durable_alias(storage_path, aliased)
                 else:
                     # Single file — delete key and .sha256 sidecar.
+                    aliased = 0
                     for key in (storage_path, storage_path + ".sha256"):
+                        if _is_durable(key):
+                            skipped += 1
+                            aliased += 1
+                            continue
                         if await _delete_one(key):
                             deleted += 1
                         else:
                             errors += 1
+                    if aliased:
+                        _warn_durable_alias(storage_path, aliased)
 
         # 2. Delete run-scoped prefix (opt-in).
         if input.include_prefix_cleanup:
