@@ -105,7 +105,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="credential-seam",
-        autofixable=True,
+        autofixable=False,
         orthogonal_gate="tests",
         since="0.40.0",
         rule_interactions=(
@@ -115,7 +115,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "still the right fix and this rule is silent; from 3.40.0 this rule "
             "flags that call and P037 also accepts `route_credentials` as "
             "agent-aware, so migrating onto the seam clears both rather than trading "
-            "one finding for the other. P053's draft for a "
+            "one finding for the other. P053's guide for a "
             "`CredentialRef(credential_guid=...)` site is that migration, so it is "
             "also the fix for a P037 finding at the same site."
         ),
@@ -204,7 +204,7 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p053",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.PRESCRIPTION,
+            kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),

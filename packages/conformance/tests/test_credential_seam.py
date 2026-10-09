@@ -52,7 +52,7 @@ def test_p053_rule_metadata() -> None:
     assert rule.scope == RuleScope.APP
     assert rule.mechanism == RuleMechanism.STATIC
     assert rule.category == "credential-seam"
-    assert rule.autofixable is True
+    assert rule.autofixable is False
     assert rule.since == "0.40.0"
     assert rule.help_uri and rule.help_uri.endswith("prescriptions.md#p053")
     assert "route_credentials" in rule.full_description

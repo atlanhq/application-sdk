@@ -1311,8 +1311,11 @@ path component, and this rule governs that package's sources too).
   `CredentialValue` / `CredentialMap` / `InlineCredentials` / `Bounded*Credential*`
   alias.  It only fires when the app's `uv.lock` resolves
   `atlan-application-sdk` >= 3.40.0, so the seam is importable; below that it is
-  silent and there is nothing to draft.  `classification` is always
-  `"judgment"`: several shapes change which credential an input resolves to.
+  silent.  It is a migration rule (`autofixable = false`) and `classification`
+  is always `"judgment"`: several shapes change which credential an input
+  resolves to.  The lane applies nothing: return `not_remediable = true` with a
+  `migration_brief`.  The recipe below is the migration guide a person or the
+  `/remediate` skill follows, and the app owner reviews each site's proposal.
 
   The seam, all from `application_sdk.credentials`: `route_credentials(input)`
   returns `ResolvedCredentials(ref, inline)`.  In order: a pre-built
@@ -1323,9 +1326,9 @@ path component, and this rule governs that package's sources too).
   strict `CredentialRef.resolve`; otherwise `credentials` is normalized by
   `normalize_inline_credentials` and `ref` is `None`.  It never falls back.
 
-  Draft, by shape.  A function that has several shapes is one finding: draft
+  Migration, by shape.  A function that has several shapes is one finding: cover
   every shape, and if any one of them routes to residue, the whole finding
-  does, with the drafts attached.
+  does, with the proposals attached.
 
   1. **`CredentialRef.resolve(input)`** — replace with
      `route_credentials(input).ref`, or `ref, inline = route_credentials(input)`
