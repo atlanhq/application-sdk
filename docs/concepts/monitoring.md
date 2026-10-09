@@ -471,9 +471,9 @@ row is `{"kind", "type_name", "detail", "count"}`:
 
 | `kind` | `detail` | `count` |
 |--------|----------|---------|
-| `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
+| `invalid` | rule key: `required:<field>`, `required_for_creation:<field>`, `one_of_required_for_creation:<a>\|<b>`, `pattern:<field>`, `connection_prefix:<field>` (the asset's own `qualified_name`, or a relationship whose reference lacks `default/<connector>/<epoch>/`), or `other` | assets breaking that rule (an asset breaking several rules counts in each) |
 | `undeserializable` | `decode:<reason>` — `malformed_json`, `schema_mismatch:<field path>` (e.g. `schema_mismatch:columnCount`), or the exception class; `type_name` is probed from the raw record | records |
-| `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type | distinct missing targets, plus `references` |
+| `orphan` | the relationship the missing target was referenced through; `type_name` is the missing target's type. Only targets under the referrer's own connection count — cross-connection lineage and unscoped targets (glossary terms) are not orphans | distinct missing targets, plus `references` |
 | `truncated` | empty | summed count of rows past the cap (100), plus `references` summed over the orphan groups among them |
 
 Rule keys never carry record values (a `pattern:` row drops the offending qualifiedName). Fleet-wide

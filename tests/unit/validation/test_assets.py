@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import msgspec
+import orjson
 import pytest
 from pyatlan_v9.model.assets import Column, Database, Schema, Table, View
 
@@ -715,3 +716,217 @@ def test_scalar_gaps_are_not_claimed_to_be_fixed():
     # ...but the missing scalars are still correctly reported.
     assert any("schema_name is required" in e for e in errors), errors
     assert any("database_name is required" in e for e in errors), errors
+
+
+# ---------------------------------------------------------------------------
+# Connection scoping of qualifiedNames (FND-3523)
+# ---------------------------------------------------------------------------
+
+
+def _ref(type_name: str, qualified_name: str) -> dict[str, object]:
+    return {
+        "typeName": type_name,
+        "uniqueAttributes": {"qualifiedName": qualified_name},
+    }
+
+
+def _write_raw(base: Path, entity: str, records: list[dict[str, object]]) -> None:
+    """Write raw transformed records — the shape connectors emit, relationships in
+    ``attributes`` — for cases a pyatlan creator refuses to build."""
+    out_dir = base / "transformed" / entity
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "entities.json").write_bytes(
+        b"".join(orjson.dumps(record) + b"\n" for record in records)
+    )
+
+
+def _process(
+    qualified_name: str, inputs: list[object], outputs: list[object]
+) -> dict[str, object]:
+    return {
+        "typeName": "Process",
+        "attributes": {
+            "name": "p",
+            "qualifiedName": qualified_name,
+            "connectionQualifiedName": CONN,
+            "inputs": inputs,
+            "outputs": outputs,
+        },
+    }
+
+
+def _table_with_meaning() -> dict[str, object]:
+    table = orjson.loads(_table().to_nested_bytes())
+    table["attributes"]["meanings"] = [_ref("AtlasGlossaryTerm", "term@glossary")]
+    return table
+
+
+def _write_hierarchy(base: Path) -> None:
+    _write(base, "Database", [_database()])
+    _write(base, "Schema", [_schema()])
+    _write(base, "Table", [_table()])
+
+
+def _prefix_errors(report: AssetValidationReport) -> list[str]:
+    return [e for f in report.failures for e in f.errors if "connection prefix" in e]
+
+
+class TestConnectionPrefix:
+    def test_full_hierarchy_has_no_prefix_errors(self, tmp_path: Path) -> None:
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write(tmp_path, "Table", [_table()])
+        _write(tmp_path, "Column", [_column("C1", TABLE_QN)])
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert _prefix_errors(report) == []
+        assert report.ok
+
+    def test_own_qualified_name_outside_its_connection_is_invalid(
+        self, tmp_path: Path
+    ) -> None:
+        table = _table()
+        table.qualified_name = "DB/SCHEMA/T1"  # connection prefix dropped
+        _write(tmp_path, "Table", [table])
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert _prefix_errors(report) == [
+            f"qualified_name 'DB/SCHEMA/T1' lacks its connection prefix '{CONN}/'"
+        ]
+        assert report.passed == 0
+        assert not report.ok
+
+    def test_sibling_connection_with_shared_stem_is_not_a_prefix(
+        self, tmp_path: Path
+    ) -> None:
+        # ``default/snow/1234`` starts with ``default/snow/123`` as a string; the
+        # trailing "/" is what stops it passing as that connection's child.
+        table = _table()
+        table.qualified_name = f"{CONN}4/DB/SCHEMA/T1"
+        _write(tmp_path, "Table", [table])
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert len(_prefix_errors(report)) == 1
+
+    def test_reference_without_connection_prefix_is_invalid(
+        self, tmp_path: Path
+    ) -> None:
+        # The shape of a production publish-lineage ATLAS-404: a reference QN built
+        # from an empty connection QN, so it starts with "/" instead of "default/".
+        bad = "/DB/SCHEMA/T1"
+        _write_raw(
+            tmp_path,
+            "Process",
+            [_process(f"{CONN}/p1", [_ref("Table", bad)], [_ref("Table", TABLE_QN)])],
+        )
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert _prefix_errors(report) == [
+            f"inputs reference '{bad}' lacks its connection prefix "
+            "'default/<connector>/<epoch>/'"
+        ]
+
+    def test_bad_references_report_once_per_field(self, tmp_path: Path) -> None:
+        refs: list[object] = [_ref("Table", f"/DB/SCHEMA/T{i}") for i in range(3)]
+        _write_raw(tmp_path, "Process", [_process(f"{CONN}/p1", refs, [])])
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert _prefix_errors(report) == [
+            "inputs reference '/DB/SCHEMA/T0' lacks its connection prefix "
+            "'default/<connector>/<epoch>/' (and 2 more)"
+        ]
+
+    def test_unscoped_reference_types_are_exempt(self, tmp_path: Path) -> None:
+        _write_raw(tmp_path, "Table", [_table_with_meaning()])
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        assert _prefix_errors(report) == []
+
+    def test_summary_rule_key_names_the_field(self, tmp_path: Path) -> None:
+        _write_raw(
+            tmp_path,
+            "Process",
+            [_process(f"{CONN}/p1", [_ref("Table", "/DB/SCHEMA/T1")], [])],
+        )
+
+        report = validate_transformed_dir(
+            tmp_path / "transformed", check_referential_integrity=False
+        )
+        rows = orjson.loads(assets_module.asset_validation_summary_json(report))
+        assert {
+            "kind": "invalid",
+            "type_name": "Process",
+            "detail": "connection_prefix:inputs",
+            "count": 1,
+        } in rows
+
+
+class TestSameConnectionReferences:
+    def test_cross_connection_lineage_is_not_an_orphan(self, tmp_path: Path) -> None:
+        # Lineage from another connection's table: well-formed, and that table
+        # lives outside this output, so its absence is expected.
+        upstream = "default/postgres/999/db/public/src"
+        _write_hierarchy(tmp_path)
+        _write_raw(
+            tmp_path,
+            "Process",
+            [
+                _process(
+                    f"{CONN}/p1", [_ref("Table", upstream)], [_ref("Table", TABLE_QN)]
+                )
+            ],
+        )
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert report.orphans == []
+        assert _prefix_errors(report) == []
+
+    def test_absent_same_connection_target_is_an_orphan(self, tmp_path: Path) -> None:
+        missing = f"{SCHEMA_QN}/T_MISSING"
+        _write_hierarchy(tmp_path)
+        _write_raw(
+            tmp_path,
+            "Process",
+            [
+                _process(
+                    f"{CONN}/p1", [_ref("Table", missing)], [_ref("Table", TABLE_QN)]
+                )
+            ],
+        )
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert [o.missing_qualified_name for o in report.orphans] == [missing]
+        assert report.orphans[0].relationship == "inputs"
+
+    def test_unscoped_target_is_not_an_orphan(self, tmp_path: Path) -> None:
+        _write(tmp_path, "Database", [_database()])
+        _write(tmp_path, "Schema", [_schema()])
+        _write_raw(tmp_path, "Table", [_table_with_meaning()])
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert report.orphans == []
+
+    def test_referrer_without_connection_checks_every_reference(
+        self, tmp_path: Path
+    ) -> None:
+        # No connectionQualifiedName to scope by: keep the original behaviour and
+        # flag any absent target.
+        missing = "default/postgres/999/db/public/src"
+        process = _process(f"{CONN}/p1", [_ref("Table", missing)], [])
+        attributes = process["attributes"]
+        assert isinstance(attributes, dict)
+        del attributes["connectionQualifiedName"]
+        _write_raw(tmp_path, "Process", [process])
+
+        report = validate_transformed_dir(tmp_path / "transformed")
+        assert [o.missing_qualified_name for o in report.orphans] == [missing]

@@ -313,6 +313,101 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Connection scoping of qualifiedNames (FND-3523)
+# ---------------------------------------------------------------------------
+#
+# Every connection-scoped Atlas qualifiedName starts ``default/<connector>/<epoch>``.
+# A connector that builds one without that prefix — or points at a same-connection
+# parent it never emits — gets ``ATLAS-404-00-00A`` from publish, on every run, until
+# the connector is fixed. pyatlan's per-type patterns catch neither: most types have
+# no pattern, and the ones that do check segment counts, not the prefix.
+
+_CONNECTION_SCOPED_QN = re.compile(r"\Adefault/[a-z0-9-]+/\d+(?:/|\Z)")
+"""A well-formed connection-scoped qualifiedName: the connection itself, or under it."""
+
+_UNSCOPED_TYPE_NAMES: Final = frozenset(
+    {
+        "AtlasGlossary",
+        "AtlasGlossaryCategory",
+        "AtlasGlossaryTerm",
+        "AuthPolicy",
+        "Badge",
+        "DataDomain",
+        "DataProduct",
+        "Link",
+        "Persona",
+        "Purpose",
+        "Readme",
+        "Stakeholder",
+        "StakeholderTitle",
+    }
+)
+"""Types whose qualifiedName is not under a connection, so a reference to one is
+exempt from the prefix check. An allowlist on purpose: a new exception is added
+here when it turns up, rather than inferred from the type model."""
+
+_CONNECTION_PREFIX_EXAMPLE: Final = "default/<connector>/<epoch>/"
+
+
+def _connection_prefix_errors(
+    qualified_name: str,
+    connection_qualified_name: str,
+    type_name: str,
+    refs: Sequence[tuple[str, str, str]],
+) -> list[str]:
+    """Messages for qualifiedNames that do not carry their connection prefix.
+
+    * The asset's own ``qualifiedName`` must start ``connectionQualifiedName + "/"``.
+      Only checked when the record states its connection — a record without one
+      (a relationship-only update, a glossary term) has nothing to compare against.
+    * Every reference qualifiedName must be well-formed and connection-scoped. It
+      may point at another connection (cross-connection lineage); only the shape is
+      checked here. References carrying no qualifiedName (guid- or ARS-identity
+      references) never reach this — :func:`_iter_relationship_refs` skips them.
+
+    Reference failures are reported once per relationship field, with a count, so an
+    asset carrying thousands of malformed list entries yields one message per field.
+    """
+    errors: list[str] = []
+    if (
+        connection_qualified_name
+        and qualified_name
+        and type_name != "Connection"
+        and not qualified_name.startswith(connection_qualified_name + "/")
+    ):
+        errors.append(
+            f"qualified_name '{qualified_name}' lacks its connection prefix "
+            f"'{connection_qualified_name}/'"
+        )
+    bad_refs: dict[str, list[str]] = {}
+    for rel_name, target_tn, target_qn in refs:
+        if target_tn in _UNSCOPED_TYPE_NAMES or _CONNECTION_SCOPED_QN.match(target_qn):
+            continue
+        bad_refs.setdefault(rel_name, []).append(target_qn)
+    for rel_name, target_qns in bad_refs.items():
+        more = f" (and {len(target_qns) - 1} more)" if len(target_qns) > 1 else ""
+        errors.append(
+            f"{rel_name} reference '{target_qns[0]}' lacks its connection prefix "
+            f"'{_CONNECTION_PREFIX_EXAMPLE}'{more}"
+        )
+    return errors
+
+
+def _is_same_connection(target_qn: str, connection_qualified_name: str) -> bool:
+    """True when the referential pass must find ``target_qn`` in the batch.
+
+    A reference under the referrer's own connection points at something this run
+    should have emitted. Anything else — cross-connection lineage, the connection
+    itself, an unscoped type such as a glossary term — exists outside this output,
+    so its absence here is not an orphan. A referrer that states no connection keeps
+    the original behaviour: every reference is checked.
+    """
+    if not connection_qualified_name:
+        return True
+    return target_qn.startswith(connection_qualified_name + "/")
+
+
+# ---------------------------------------------------------------------------
 # Deserialization
 # ---------------------------------------------------------------------------
 
@@ -431,6 +526,20 @@ def validate_transformed_dir(
     from the data, not a hard-coded list. **Every line is always scanned** — the
     report reflects the full batch, not a sample.
 
+    Two connection-scoping checks ride the same walk (FND-3523), because a miss on
+    either fails publish with ``ATLAS-404-00-00A``:
+
+    * **Prefix** (per-asset, always on): an asset's own ``qualifiedName`` must start
+      with its ``connectionQualifiedName + "/"``, and every reference qualifiedName
+      must be well-formed ``default/<connector>/<epoch>/...`` — it may name another
+      connection. A miss is an ``invalid`` failure with a ``connection_prefix:<field>``
+      rule key.
+    * **Same-connection references exist**: the orphan pass only checks references
+      under the referrer's own connection. Cross-connection lineage and unscoped
+      targets (glossary terms, the connection itself) live outside this output and
+      are not orphans. Run it on a full extract: an incremental run that skips
+      unchanged parents will report them.
+
     Args:
         path: A transformed-output directory (e.g. ``.../transformed``) or file,
             or a sequence of them read as one batch — the declared parts of a
@@ -506,8 +615,15 @@ def validate_transformed_dir(
 
             type_name = _usable_str(getattr(asset, "type_name", None)) or ""
             qualified_name = _usable_str(getattr(asset, "qualified_name", None)) or ""
+            connection_qn = (
+                _usable_str(getattr(asset, "connection_qualified_name", None)) or ""
+            )
+            refs = tuple(_iter_relationship_refs(asset))
 
             errors = validate_asset(asset, for_creation=for_creation)
+            errors += _connection_prefix_errors(
+                qualified_name, connection_qn, type_name, refs
+            )
             if errors:
                 report.failures.append(
                     AssetValidationFailure(
@@ -527,7 +643,9 @@ def validate_transformed_dir(
                 # Record every relationship target, deduped by target key: keep a
                 # representative referencing asset and count the references so a
                 # single missing parent is reported once, not once per child.
-                for rel_name, target_tn, target_qn in _iter_relationship_refs(asset):
+                for rel_name, target_tn, target_qn in refs:
+                    if not _is_same_connection(target_qn, connection_qn):
+                        continue
                     target_key = _compound_key(target_tn, target_qn)
                     existing = referenced.get(target_key)
                     if existing is None:
@@ -851,6 +969,10 @@ _ONE_OF_REQUIRED = re.compile(r"^one of ((?:\w+, )*\w+) is required( for creatio
 _PATTERN_MISMATCH = re.compile(
     r"^(\w+) '.*' does not match expected pattern: ", re.DOTALL
 )
+_CONNECTION_PREFIX = re.compile(
+    r"^(\w+)(?: reference)? '.*' lacks its connection prefix ", re.DOTALL
+)
+"""The SDK's own connection-prefix messages (see :func:`_connection_prefix_errors`)."""
 _RULE_OTHER: Final = "other"
 
 
@@ -864,6 +986,8 @@ def _validation_rule(message: str) -> str:
         return f"{check}:{match.group(1).replace(', ', '|')}"
     if match := _PATTERN_MISMATCH.match(message):
         return f"pattern:{match.group(1)}"
+    if match := _CONNECTION_PREFIX.match(message):
+        return f"connection_prefix:{match.group(1)}"
     return _RULE_OTHER
 
 

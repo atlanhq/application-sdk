@@ -791,7 +791,7 @@ skill for the full adoption flow.
 ### Asset-Validation Outcome
 
 `App.upload()` runs a **warn-only** validation of transformed asset NDJSON against the pyatlan_v9
-`.validate()` backbone (plus a referential/orphan pass) before the SDR→Atlan handoff. It never blocks
+`.validate()` backbone (plus a connection-prefix check on every qualifiedName and a same-connection referential/orphan pass) before the SDR→Atlan handoff. It never blocks
 and never fails the upload — invalid or orphaned assets are reported, not rejected.
 
 The results are surfaced as a structured outcome event (the sibling of the preflight gate's outcome
