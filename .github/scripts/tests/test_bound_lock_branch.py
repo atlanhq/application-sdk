@@ -10,8 +10,10 @@ an unbounded lock.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -43,18 +45,31 @@ def git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def uv_lock(pyatlan: str | None = "11.4.0", marker: str = "base") -> str:
+    """A minimal uv.lock. `marker` stands in for whatever else a bound rewrites."""
+    text = (
+        f'version = 1\n# {marker}\n\n[[package]]\nname = "boto3"\nversion = "1.0.0"\n'
+    )
+    if pyatlan is not None:
+        text += f'\n[[package]]\nname = "pyatlan"\nversion = "{pyatlan}"\n'
+    return text
+
+
 @pytest.fixture
 def repo(tmp_path: Path) -> Path:
-    """A repo shaped like application-sdk: two uv projects and one npm project.
-    All three files the refresh lane rewrites."""
-    (tmp_path / "uv.lock").write_text("root lock\n")
+    """A repo shaped like application-sdk: two uv projects, one npm project and
+    the relationship table. Every file the refresh lane may rewrite."""
+    (tmp_path / "uv.lock").write_text(uv_lock(marker="root"))
     sub = tmp_path / "packages" / "conformance"
     sub.mkdir(parents=True)
-    (sub / "uv.lock").write_text("sub lock\n")
+    (sub / "uv.lock").write_text(uv_lock(marker="sub"))
     npm_project = tmp_path / orchestrator.NPM_PROJECT
     npm_project.mkdir(parents=True, exist_ok=True)
     (npm_project / "package.json").write_text('{"name": "remediation"}\n')
     (npm_project / "package-lock.json").write_text('{"lockfileVersion": 3}\n')
+    table = tmp_path / orchestrator.RELATIONSHIP_DIRECTIONS
+    table.parent.mkdir(parents=True, exist_ok=True)
+    table.write_text('{"table": "11.4.0"}\n')
     git(tmp_path, "init", "-q")
     git(tmp_path, "add", "-A")
     git(tmp_path, "commit", "-qm", "base")
@@ -241,12 +256,16 @@ class TestMain:
     that nothing reaches a commit unless every project was bounded successfully."""
 
     def _stub_bound(self, monkeypatch, *, rewrite: bool = True, npm_code: int = 0):
-        """Stand in for both drivers. `rewrite=False` models an already-bound branch."""
+        """Stand in for both drivers. `rewrite=False` models an already-bound branch.
+
+        The rewrite leaves pyatlan where it was, so the regeneration is stubbed
+        to fail loudly: none of these tests should reach it.
+        """
 
         def fake_main(argv: list[str]) -> int:
             directory = Path(argv[argv.index("--project-dir") + 1])
             if rewrite:
-                (directory / "uv.lock").write_text("bounded\n")
+                (directory / "uv.lock").write_text(uv_lock(marker="bounded"))
             return 0
 
         def fake_npm_main(argv: list[str]) -> int:
@@ -257,6 +276,11 @@ class TestMain:
 
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
         monkeypatch.setattr(orchestrator.npm_bounded, "main", fake_npm_main)
+        monkeypatch.setattr(
+            orchestrator,
+            "regenerate_relationship_directions",
+            lambda root: pytest.fail("pyatlan did not move; nothing to regenerate"),
+        )
 
     def test_one_commit_carries_every_lock(self, monkeypatch, in_repo):
         """One commit, not three: each push re-fires the PR's whole check suite."""
@@ -294,7 +318,7 @@ class TestMain:
 
         def fake_main(argv: list[str]) -> int:
             directory = Path(argv[argv.index("--project-dir") + 1])
-            (directory / "uv.lock").write_text("bounded\n")
+            (directory / "uv.lock").write_text(uv_lock(marker="bounded"))
             return 0 if directory.name != "conformance" else 1
 
         monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
@@ -343,3 +367,247 @@ class TestOwnsItsCommit:
         project = orchestrator.PROJECTS[0]
         assert orchestrator.bound_project(project, "P3D", "origin/main", Path(".")) == 0
         assert "--caller-owns-commit" in seen[0], seen[0]
+
+
+class TestPyatlanVersion:
+    def test_reads_the_locked_version(self):
+        assert orchestrator.pyatlan_version(uv_lock("11.4.1")) == "11.4.1"
+
+    def test_absent_is_none_not_an_error(self):
+        assert orchestrator.pyatlan_version(uv_lock(None)) is None
+
+    def test_an_unparseable_lock_raises_rather_than_reading_as_unchanged(self):
+        # Answering "no pyatlan" for a corrupt lock would compare equal to another
+        # corrupt read and skip the regeneration without a word.
+        with pytest.raises(tomllib.TOMLDecodeError):
+            orchestrator.pyatlan_version("not = [toml\n")
+
+
+class TestRegeneration:
+    """The relationship table follows the BOUNDED lock's pyatlan, in the same
+    commit, and a failed rebuild commits nothing."""
+
+    def _stub(self, monkeypatch, *, pyatlan: str, regen_code: int = 0):
+        calls: list[Path] = []
+
+        def fake_main(argv: list[str]) -> int:
+            directory = Path(argv[argv.index("--project-dir") + 1])
+            (directory / "uv.lock").write_text(uv_lock(pyatlan, marker="bounded"))
+            return 0
+
+        def fake_regen(root: Path) -> int:
+            calls.append(root)
+            if regen_code == 0:
+                (root / orchestrator.RELATIONSHIP_DIRECTIONS).write_text(
+                    f'{{"table": "{pyatlan}"}}\n'
+                )
+            return regen_code
+
+        monkeypatch.setattr(orchestrator.bounded, "main", fake_main)
+        monkeypatch.setattr(orchestrator.npm_bounded, "main", lambda argv: 0)
+        monkeypatch.setattr(
+            orchestrator, "regenerate_relationship_directions", fake_regen
+        )
+        return calls
+
+    def test_a_pyatlan_move_regenerates_and_commits_the_table(
+        self, monkeypatch, in_repo
+    ):
+        calls = self._stub(monkeypatch, pyatlan="11.4.1")
+
+        assert orchestrator.main(["--window", "P3D", "--baseline-ref", "HEAD"]) == 0
+        assert calls == [in_repo]
+        assert orchestrator.RELATIONSHIP_DIRECTIONS in head_files(in_repo)
+        assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
+
+    def test_an_unmoved_pyatlan_does_not_regenerate(self, monkeypatch, in_repo):
+        calls = self._stub(monkeypatch, pyatlan="11.4.0")
+
+        assert orchestrator.main(["--window", "P3D", "--baseline-ref", "HEAD"]) == 0
+        assert calls == []
+
+    def test_a_failed_regeneration_commits_nothing(self, monkeypatch, in_repo):
+        # Locks without their table are the red PR this exists to prevent.
+        self._stub(monkeypatch, pyatlan="11.4.1", regen_code=1)
+
+        assert orchestrator.main(["--window", "P3D", "--baseline-ref", "HEAD"]) == 1
+        assert head_subject(in_repo) == "base"
+
+    def test_the_regeneration_never_relocks(self, monkeypatch, tmp_path):
+        """`uv run` without --frozen may rewrite the lock the bound just wrote."""
+        seen: list[list[str]] = []
+
+        def fake_run(cmd, **kwargs):
+            seen.append(cmd)
+            return subprocess.CompletedProcess(cmd, 0)
+
+        monkeypatch.setattr(orchestrator.subprocess, "run", fake_run)
+        orchestrator.regenerate_relationship_directions(tmp_path)
+
+        (cmd,) = seen
+        assert cmd[:3] == ["uv", "run", "--frozen"]
+        assert cmd[-1] == "gen-relationship-directions"
+
+
+class TestTwoJobHandoff:
+    """`--no-commit` in the job without the token, `--apply-from` in the one with."""
+
+    def test_no_commit_leaves_the_outputs_uncommitted(self, monkeypatch, in_repo):
+        TestMain()._stub_bound(monkeypatch)
+
+        argv = ["--window", "P3D", "--baseline-ref", "HEAD", "--no-commit"]
+        assert orchestrator.main(argv) == 0
+        assert head_subject(in_repo) == "base"
+        assert "bounded" in (in_repo / "uv.lock").read_text()
+
+    def test_apply_from_commits_the_artifact(self, in_repo, tmp_path_factory):
+        artifact = tmp_path_factory.mktemp("artifact")
+        for path in orchestrator.OUTPUT_PATHS:
+            (artifact / path).parent.mkdir(parents=True, exist_ok=True)
+            (artifact / path).write_text(f"from artifact: {path}\n")
+
+        assert orchestrator.main(["--apply-from", str(artifact)]) == 0
+        assert head_files(in_repo) == set(orchestrator.OUTPUT_PATHS)
+        assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
+
+    @staticmethod
+    def _unchanged_artifact(in_repo: Path, tmp_path_factory) -> Path:
+        """Every output present, byte-identical to the checkout."""
+        artifact = tmp_path_factory.mktemp("artifact")
+        for path in orchestrator.OUTPUT_PATHS:
+            (artifact / path).parent.mkdir(parents=True, exist_ok=True)
+            (artifact / path).write_bytes((in_repo / path).read_bytes())
+        return artifact
+
+    def test_apply_from_copies_only_the_declared_paths(self, in_repo, tmp_path_factory):
+        # The publishing job holds the push token; the artifact must not be able
+        # to widen what it commits.
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
+        (artifact / ".github" / "workflows").mkdir(parents=True)
+        (artifact / ".github" / "workflows" / "evil.yaml").write_text("x\n")
+
+        assert orchestrator.main(["--apply-from", str(artifact)]) == 0
+        assert head_files(in_repo) == {"uv.lock"}
+        assert not (in_repo / ".github" / "workflows" / "evil.yaml").exists()
+
+    @pytest.mark.parametrize("missing", orchestrator.OUTPUT_PATHS)
+    def test_apply_from_rejects_an_incomplete_artifact(
+        self, in_repo, tmp_path_factory, missing
+    ):
+        """A missing output is a broken handoff, not "unchanged".
+
+        Skipping it would leave Renovate's unbounded lock on the branch behind a
+        green publish. Nothing is copied either: the check runs before any copy.
+        """
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
+        if missing == "uv.lock":
+            (artifact / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="x"))
+        (artifact / missing).unlink()
+
+        with pytest.raises(FileNotFoundError, match=missing):
+            orchestrator.main(["--apply-from", str(artifact)])
+        assert head_subject(in_repo) == "base"
+        assert git(in_repo, "status", "--porcelain").stdout == ""
+
+    def test_apply_from_refuses_a_symlinked_parent_directory(
+        self, in_repo, tmp_path_factory
+    ):
+        """A link on any component, not just the last, escapes the artifact.
+
+        Here `packages/` points at a directory outside it holding a complete
+        tree, so every leaf is a regular file and a leaf-only check passes.
+        """
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        outside = tmp_path_factory.mktemp("elsewhere")
+        shutil.move(str(artifact / "packages"), str(outside / "packages"))
+        (outside / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="outside"))
+        (artifact / "packages").symlink_to(outside / "packages")
+
+        with pytest.raises(ValueError, match="symlink"):
+            orchestrator.main(["--apply-from", str(artifact)])
+        assert head_subject(in_repo) == "base"
+        assert git(in_repo, "status", "--porcelain").stdout == ""
+
+    def test_apply_from_refuses_a_symlink(self, in_repo, tmp_path_factory):
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        outside = tmp_path_factory.mktemp("elsewhere") / "runner-file"
+        outside.write_text("not ours\n")
+        (artifact / "uv.lock").unlink()
+        (artifact / "uv.lock").symlink_to(outside)
+
+        with pytest.raises(ValueError, match="symlink"):
+            orchestrator.main(["--apply-from", str(artifact)])
+        assert head_subject(in_repo) == "base"
+
+    def test_an_unchanged_artifact_commits_nothing(self, in_repo, tmp_path_factory):
+        artifact = tmp_path_factory.mktemp("artifact")
+        for path in orchestrator.OUTPUT_PATHS:
+            (artifact / path).parent.mkdir(parents=True, exist_ok=True)
+            (artifact / path).write_bytes((in_repo / path).read_bytes())
+
+        assert orchestrator.main(["--apply-from", str(artifact)]) == 0
+        assert head_subject(in_repo) == "base"
+
+    def test_bounding_still_requires_window_and_baseline(self):
+        with pytest.raises(SystemExit):
+            orchestrator.main(["--window", "P3D"])
+
+    def test_the_modes_are_exclusive(self, tmp_path):
+        with pytest.raises(SystemExit):
+            orchestrator.main(["--no-commit", "--apply-from", str(tmp_path)])
+
+
+class TestJobSplit:
+    """The point of the split is where the App token lives, so assert it
+    structurally rather than trust the comments."""
+
+    @property
+    def jobs(self) -> dict:
+        return yaml.safe_load(WORKFLOW.read_text())["jobs"]
+
+    def _step(self, job: str, uses: str) -> dict:
+        return next(s for s in self.jobs[job]["steps"] if uses in s.get("uses", ""))
+
+    def test_the_bound_job_never_sees_a_secret_or_a_write_permission(self):
+        bound = self.jobs["bound"]
+        assert bound["permissions"] == {"contents": "read"}
+        assert "secrets." not in yaml.safe_dump(bound)
+        checkout = self._step("bound", "actions/checkout@")
+        assert checkout["with"]["persist-credentials"] is False
+
+    def test_the_bound_job_does_not_commit(self):
+        bound_step = next(
+            s
+            for s in self.jobs["bound"]["steps"]
+            if s.get("name") == "Bound the refreshed locks"
+        )
+        assert "--no-commit" in bound_step["run"]
+
+    def test_the_artifact_carries_exactly_the_drivers_outputs(self):
+        upload = self._step("bound", "actions/upload-artifact@")
+        assert upload["with"]["path"].split() == list(orchestrator.OUTPUT_PATHS)
+
+    def test_the_token_job_installs_and_resolves_nothing(self):
+        publish = self.jobs["publish"]
+        assert publish["needs"] == "bound"
+        dumped = yaml.safe_dump(publish)
+        for forbidden in ("setup-uv", "setup-node", "uv run", "npm "):
+            assert forbidden not in dumped, forbidden
+        apply_step = next(
+            s for s in publish["steps"] if "bound_lock_branch.py" in s.get("run", "")
+        )
+        assert "--apply-from" in apply_step["run"]
+
+    def test_both_jobs_work_on_the_pushed_sha(self):
+        # `publish` commits onto what `bound` resolved; a moved branch must make
+        # the push non-fast-forward, not absorb stale outputs.
+        for job in ("bound", "publish"):
+            checkout = self._step(job, "actions/checkout@")
+            assert checkout["with"]["ref"] == "${{ github.sha }}", job
+
+    def test_the_declared_paths_exist_in_this_repo(self):
+        root = Path(__file__).parent.parent.parent.parent
+        for path in (*orchestrator.OUTPUT_PATHS, orchestrator.PYATLAN_LOCK):
+            assert (root / path).is_file(), path

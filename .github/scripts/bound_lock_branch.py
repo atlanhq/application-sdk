@@ -48,6 +48,23 @@ shape:
    bounded resolve, or restore the base branch's lock verbatim. FND-380. It rides
    in the same commit for the same reason the two uv locks do.
 
+5. **A pyatlan move regenerates the table derived from it.** The conformance
+   package commits ``relationship_directions.json``, built from the installed
+   pyatlan's models and pinned to it by a drift test. A refresh that moves
+   pyatlan without regenerating it is a red PR nobody on the lane can fix, so
+   when the BOUNDED lock's pyatlan differs from the baseline's, the table is
+   regenerated and rides in the same commit. After the bound, not before: the
+   bound can roll pyatlan back, and a table built for a version that never
+   merges is as stale as one never rebuilt.
+
+Two halves, two jobs
+--------------------
+Regenerating the table installs and imports the freshly-resolved pyatlan. That
+must not happen in a job holding the push-capable App token, so the workflow
+splits: ``--no-commit`` bounds and regenerates in a job with a read-only token
+and hands the files over as an artifact, and ``--apply-from`` copies exactly
+``OUTPUT_PATHS`` out of that artifact and commits them in the job that pushes.
+The second half runs no resolver and installs nothing.
 
 Fail-closed, like the driver it wraps. If any project's bound cannot be applied,
 this exits non-zero having committed nothing — a red check on the PR, which the
@@ -58,8 +75,10 @@ line is not a control (FND-367).
 from __future__ import annotations
 
 import argparse
+import shutil
 import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -109,6 +128,22 @@ PROJECTS: tuple[Project, ...] = (
 # is declared separately rather than squeezed into Project.
 NPM_PROJECT = "packages/conformance/conformance"
 
+# The lock the relationship table is generated from. packages/conformance is the
+# project whose environment `gen-relationship-directions` runs in, so its lock —
+# not the root's — decides which pyatlan the table describes.
+PYATLAN_LOCK = "packages/conformance/uv.lock"
+RELATIONSHIP_DIRECTIONS = (
+    "packages/conformance/conformance/data/relationship_directions.json"
+)
+
+# Every file this script may write, and so every file the publishing job may
+# commit. The workflow's artifact upload is pinned to this list by a drift test.
+OUTPUT_PATHS: tuple[str, ...] = (
+    *(f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS),
+    f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}",
+    RELATIONSHIP_DIRECTIONS,
+)
+
 
 def bound_project(project: Project, window: str, baseline_ref: str, root: Path) -> int:
     """Run the shipped driver over one project. Returns its exit code."""
@@ -153,6 +188,77 @@ def bound_npm(window: str, baseline_ref: str, root: Path) -> int:
     )
 
 
+def pyatlan_version(lock_text: str) -> str | None:
+    """The locked pyatlan version, or None when the lock does not carry it."""
+    for package in tomllib.loads(lock_text).get("package", []):
+        if package.get("name") == "pyatlan":
+            return package.get("version")
+    return None
+
+
+def pyatlan_moved(baseline_ref: str, root: Path) -> bool:
+    """Whether the bounded lock's pyatlan differs from the baseline's.
+
+    An unreadable lock raises rather than answering False: a parse failure read
+    as "unchanged" would skip the regeneration silently.
+    """
+    baseline = subprocess.run(
+        ["git", "show", f"{baseline_ref}:{PYATLAN_LOCK}"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    current = (root / PYATLAN_LOCK).read_text(encoding="utf-8")
+    return pyatlan_version(baseline) != pyatlan_version(current)
+
+
+def regenerate_relationship_directions(root: Path) -> int:
+    """Rebuild the relationship table from the bounded lock's pyatlan.
+
+    `--frozen` installs exactly what the bound left behind and never re-locks:
+    without it uv is free to rewrite the lock this script has just bounded.
+    """
+    return subprocess.run(
+        [
+            "uv",
+            "run",
+            "--frozen",
+            "--directory",
+            "packages/conformance",
+            "--extra",
+            "test",
+            "atlan-application-sdk-conformance",
+            "gen-relationship-directions",
+        ],
+        cwd=root,
+    ).returncode
+
+
+def apply_outputs(source: Path, root: Path) -> None:
+    """Copy OUTPUT_PATHS from an artifact directory into the checkout.
+
+    Only the declared paths are read, so nothing else in the artifact can reach
+    a branch that auto-merges. Every one must be present: `bound` uploads all of
+    them on every run, so a missing one means a broken handoff, and skipping it
+    would leave Renovate's unbounded lock on the branch behind a green publish.
+    A symlink anywhere along the path is refused rather than followed — a
+    symlinked parent such as `packages/` would otherwise smuggle in files from
+    outside the artifact under allowlisted names. Everything is checked before
+    anything is copied.
+    """
+    for path in OUTPUT_PATHS:
+        src = source
+        for part in Path(path).parts:
+            src = src / part
+            if src.is_symlink():
+                raise ValueError(f"refusing symlinked artifact entry: {path}")
+        if not src.is_file():
+            raise FileNotFoundError(f"missing artifact output: {path}")
+    for path in OUTPUT_PATHS:
+        shutil.copyfile(source / path, root / path)
+
+
 def stage_and_commit(root: Path, paths: list[str]) -> bool:
     """Stage the bound outputs and commit iff something changed.
 
@@ -192,22 +298,43 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--window",
-        required=True,
         help="Release-age bound as an ISO 8601 duration, e.g. P7D. Match the "
         "fleet's: a repo-specific window reintroduces the SDK/connector "
         "dependency-set divergence this exists to remove.",
     )
     parser.add_argument(
         "--baseline-ref",
-        required=True,
         help="Git ref whose locks are the pre-refresh baseline — the PR's base "
         "branch, e.g. origin/main. Required rather than defaulted: this runs "
         "after Renovate has committed the refresh, so the driver's HEAD default "
         "would silently make the bound a no-op.",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--no-commit",
+        action="store_true",
+        help="Bound and regenerate, leaving the outputs in the working tree for "
+        "another job to commit.",
+    )
+    mode.add_argument(
+        "--apply-from",
+        type=Path,
+        metavar="DIR",
+        help="Skip the bound: copy OUTPUT_PATHS from DIR (a --no-commit run's "
+        "artifact) and commit them.",
+    )
     args = parser.parse_args(argv)
 
     root = Path.cwd()
+    if args.apply_from is not None:
+        apply_outputs(args.apply_from, root)
+        stage_and_commit(root, list(OUTPUT_PATHS))
+        return 0
+
+    # Required for the bound only, so enforced here rather than by argparse.
+    if not args.window or not args.baseline_ref:
+        parser.error("--window and --baseline-ref are required to bound")
+
     for project in PROJECTS:
         code = bound_project(project, args.window, args.baseline_ref, root)
         if code != 0:
@@ -227,9 +354,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         return code
 
-    paths = [f"{p.directory}/uv.lock".removeprefix("./") for p in PROJECTS]
-    paths.append(f"{NPM_PROJECT}/{npm_bounded.LOCKFILE}")
-    stage_and_commit(root, paths)
+    if pyatlan_moved(args.baseline_ref, root):
+        code = regenerate_relationship_directions(root)
+        if code != 0:
+            print(
+                "Regenerating relationship_directions.json failed; committing "
+                "nothing so the locks cannot merge without it.",
+                file=sys.stderr,
+            )
+            return code
+
+    if not args.no_commit:
+        stage_and_commit(root, list(OUTPUT_PATHS))
     return 0
 
 
