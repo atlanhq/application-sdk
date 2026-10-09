@@ -876,7 +876,10 @@ the blind gate cannot tell a correct hop from a plausible one.
   break when `execute` and `fetchmany` run on different threads).  Draft
   `await run_in_thread(fn, arg)` instead (the SDK seam, and it does not join on
   cancel) only when the block makes a single offload call with no thread
-  affinity; keep the callable **passed, not called**, as for P031.  Route to
+  affinity; pick `self.run_in_thread` or the module-level
+  `application_sdk.execution.heartbeat.run_in_thread` exactly as P031 does
+  (module-level on a preflight path), and keep the callable **passed, not
+  called**.  Route to
   residue, with the proposed shape, when the `with` block also calls
   `pool.submit(...)` or `pool.map(...)` whose result it does not await (the
   `with` exit waits for that work today), when the pool object is used, stored

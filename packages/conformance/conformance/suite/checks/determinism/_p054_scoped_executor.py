@@ -8,10 +8,10 @@ on the event loop thread.  If the awaiting task is cancelled while the executor 
 running a blocking driver call, that ``wait=True`` blocks the loop until the call
 returns and freezes the entire worker.  A dedicated executor created without
 ``with`` and shut down with ``executor.shutdown(wait=False)`` in ``finally`` lets
-the cancel return immediately while the call finishes unjoined.  When the calls
-carry no thread affinity, ``run_in_thread(fn, ...)`` is the SDK seam and the
-simpler fix; a ``with``-scoped pool is needed at all only for thread-affine DB-API
-cursors, and is still wrong there (FND-2873).
+the cancel return immediately while the call finishes unjoined; that shape is
+correct with or without thread affinity (FND-2873).  For a single offload call
+with no thread affinity, ``run_in_thread(fn, ...)`` is the SDK seam and the
+simpler fix.
 
 Matching is construction-anchored and import-resolved, so an aliased
 ``from concurrent.futures import ThreadPoolExecutor as TPE`` is caught.
@@ -60,10 +60,10 @@ _NESTED_DEFS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
 _HINT = (
     "A `with ThreadPoolExecutor() as pool:` block exits through "
     "pool.shutdown(wait=True) on the event loop thread, so cancelling the awaiting "
-    "task blocks the whole worker until the blocking call returns. Use "
-    "run_in_thread(fn, ...) when the call has no thread affinity, or — for "
-    "thread-affine DB-API cursors — keep a dedicated executor created without "
-    "`with` and call executor.shutdown(wait=False) in `finally`."
+    "task blocks the whole worker until the blocking call returns. Keep a "
+    "dedicated executor created without `with` and call "
+    "executor.shutdown(wait=False) in `finally`, or, for a single call with no "
+    "thread affinity, use run_in_thread(fn, ...)."
 )
 
 
