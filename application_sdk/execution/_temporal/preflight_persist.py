@@ -243,21 +243,25 @@ def extraction_method(input: PreflightGateInput) -> ExtractionMethod:
     return ExtractionMethod.DIRECT
 
 
-def connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
-    """The checked workflow's connection, from either shape AE sends.
+def raw_connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
+    """The checked workflow's connection as sent, from either shape AE sends.
 
     The connection asset is read through :class:`ConnectionRef`, which models
     that wire shape and resolves the camelCase/snake_case duality itself. A
     shape it rejects falls through to the bare qualified name — itself either a
     string or a single-element list, which has no typed model.
 
-    A workflow naming no connection is legal, not an error.
+    The value is returned untrimmed so a well-formedness check sees the padding
+    the run would carry (``" default/x/1"`` has a padded first segment); a
+    blank candidate counts as absent. A workflow naming no connection is legal,
+    not an error.
 
     Args:
         snapshot: The raw extraction-input dump the gate carries.
 
     Returns:
-        The qualified name, or ``None`` when the workflow names no connection.
+        The qualified name as sent, or ``None`` when the workflow names no
+        connection.
     """
     if connection := snapshot.get("connection"):
         try:
@@ -266,18 +270,29 @@ def connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
             # Not the asset shape; the bare-name fallback below still applies.
             logger.debug("connection did not fit ConnectionRef; trying the bare name")
         else:
-            if name := _or_none(ref.attributes.qualified_name):
-                return name
+            if _or_none(ref.attributes.qualified_name):
+                return ref.attributes.qualified_name
 
     for key in ("connection_qualified_name", "connection-qualified-name"):
         raw = snapshot.get(key)
-        if isinstance(raw, str):
-            if name := _or_none(raw):
-                return name
-        elif isinstance(raw, list) and raw and isinstance(raw[0], str):
-            if name := _or_none(raw[0]):
-                return name
+        if isinstance(raw, list) and raw:
+            raw = raw[0]
+        if isinstance(raw, str) and _or_none(raw):
+            return raw
     return None
+
+
+def connection_qualified_name(snapshot: dict[str, Any]) -> str | None:
+    """:func:`raw_connection_qualified_name`, trimmed — the name a row stores.
+
+    Args:
+        snapshot: The raw extraction-input dump the gate carries.
+
+    Returns:
+        The trimmed qualified name, or ``None`` when the workflow names no
+        connection.
+    """
+    return _or_none(raw_connection_qualified_name(snapshot))
 
 
 def build_check_result(

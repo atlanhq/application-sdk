@@ -57,6 +57,10 @@ with workflow.unsafe.imports_passed_through():
         PREFLIGHT_RESULTS_TIMEOUT_SECONDS,
     )
     from application_sdk.contracts.base import SerializableEnum
+    from application_sdk.contracts.types import (
+        ConnectionRef,
+        connection_qualified_name_defect,
+    )
     from application_sdk.credentials.errors import (
         CredentialNotFoundError,
         CredentialRoutingError,
@@ -74,6 +78,7 @@ with workflow.unsafe.imports_passed_through():
         AppTimeoutError,
         DependencyUnavailableError,
         InternalError,
+        InvalidInputError,
     )
     from application_sdk.errors.leaves import PreconditionError as PreconditionError
     from application_sdk.errors.leaves import (
@@ -83,6 +88,7 @@ with workflow.unsafe.imports_passed_through():
     from application_sdk.errors.wire import FailureDetails
     from application_sdk.execution._temporal.preflight_persist import (
         persist_check_result,
+        raw_connection_qualified_name,
     )
 
     # Handler-side since FND-3280 so ``/check`` can emit its row without
@@ -1359,6 +1365,55 @@ def _gate_error(
     )
 
 
+def _unidentifiable_connection(snapshot: dict[str, Any]) -> PreflightOutput | None:
+    """The block verdict for a workflow whose Connection cannot be addressed.
+
+    ``None`` when the snapshot names its connection by a well-formed qualified
+    name in any shape :func:`raw_connection_qualified_name` reads, or names no
+    connection at all. A name that is present but fails
+    :func:`connection_qualified_name_defect` blocks like a missing one: pyatlan
+    and atlan-publish-app both refuse it, only after every extraction activity.
+    This is input validation, not a readiness opinion on the source, so the gate
+    blocks on it in every mode (CONNECT-1738).
+    """
+    # Untrimmed: the stored row trims, but a padded first or last segment is
+    # exactly what the run would carry into pyatlan, so it must reach the rule.
+    qualified_name = raw_connection_qualified_name(snapshot)
+    if qualified_name is not None:
+        defect = connection_qualified_name_defect(qualified_name)
+        if defect is None:
+            return None
+        message = (
+            f"The workflow's Connection qualifiedName {qualified_name!r} is not "
+            f"well-formed: {defect}. Re-create the workflow from the setup wizard."
+        )
+    else:
+        try:
+            ref = ConnectionRef.model_validate(snapshot.get("connection") or {})
+        except ValidationError:
+            return None
+        if not ref.is_unidentifiable:
+            return None
+        message = (
+            "The workflow's Connection has no qualifiedName, so nothing can be "
+            "crawled into it. Re-create the workflow from the setup wizard."
+        )
+    error = InvalidInputError(message=message, field="connection").to_failure_details()
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[
+            PreflightCheck(
+                name="connection_qualified_name",
+                passed=False,
+                message=error.message,
+                error=error,
+            )
+        ],
+        message=error.message,
+        error=error,
+    )
+
+
 def _build_block_error(
     result: PreflightOutput, app_name: str, attempt: int
 ) -> ApplicationError:
@@ -2295,6 +2350,21 @@ def build_preflight_gate_activity(
             )
         )
         try:
+            unidentifiable = _unidentifiable_connection(input.extraction_snapshot)
+            if unidentifiable is not None:
+                block_error = _build_block_error(
+                    unidentifiable, app_name, _current_attempt()
+                )
+                _emit_outcome(
+                    PreflightRowOutcome.BLOCKED,
+                    block_error.details[0].code,
+                    unidentifiable,
+                    PreflightClassification.VERDICT,
+                    primary=block_error.details[0],
+                    audience=block_error.details[0].audience.value,
+                )
+                raise block_error
+
             # Resolve inside the activity (the workflow forwarded only references),
             # under the same deadline the handler gets: a hung vault must end at
             # the budget as the gate's own fault, not at Temporal's kill with no

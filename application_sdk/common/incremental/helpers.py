@@ -32,6 +32,7 @@ from application_sdk.constants import (
     PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE,
     TEMPORARY_PATH,
 )
+from application_sdk.contracts.types import connection_qualified_name_defect
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.integrity import (
@@ -131,10 +132,10 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
     gain, which is how CONNECT-1136 broke a tenant's miner while its crawler
     ran fine. Route through this function rather than re-deriving the segment.
 
-    An *empty* last segment is the one case that is rejected, because it is not
-    a name at all: it collapses every such connection onto one directory, so
-    they would share a marker and silently overwrite each other's watermark.
-    Failing is strictly better than that.
+    The shape itself is :func:`~application_sdk.contracts.types.connection_qualified_name_defect`,
+    the rule the preflight gate also applies. An *empty* last segment matters
+    most here: it collapses every such connection onto one directory, so they
+    would share a marker and silently overwrite each other's watermark.
 
     Args:
         connection_qualified_name: The full qualified name (e.g., "default/oracle/1764230875")
@@ -144,45 +145,27 @@ def extract_epoch_id_from_qualified_name(connection_qualified_name: str) -> str:
 
     Raises:
         ConnectionQualifiedNameEmptyError: If the qualified name is empty.
-        ConnectionQualifiedNameFormatError: If the qualified name has fewer than
-            three segments, or its last segment is empty.
+        ConnectionQualifiedNameFormatError: If the qualified name is not
+            well-formed (fewer than three segments, or an empty or padded one).
     """
-    if not connection_qualified_name:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            ConnectionQualifiedNameEmptyError,
-        )
+    from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
+        ConnectionQualifiedNameEmptyError,
+        ConnectionQualifiedNameFormatError,
+    )
 
+    if not connection_qualified_name:
         raise ConnectionQualifiedNameEmptyError()
 
-    parts = connection_qualified_name.split("/")
-
-    if len(parts) < 3:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            ConnectionQualifiedNameFormatError,
-        )
-
-        raise ConnectionQualifiedNameFormatError()
-
-    connection_id = parts[-1]
-
-    # A trailing slash ("default/oracle/") passes the segment-count check above
-    # but yields an empty connection directory — ".../connection/" — which every
-    # connection ending that way would share. Two connections writing one marker
-    # move each other's watermark, so each re-extracts from the other's window or
-    # skips its own: silent, and only visible as missing data much later. Reject
-    # it here, at the one place every caller derives the segment.
-    if not connection_id:
-        from application_sdk.common.incremental.incremental_errors import (  # noqa: PLC0415
-            ConnectionQualifiedNameFormatError,
-        )
-
+    defect = connection_qualified_name_defect(connection_qualified_name)
+    if defect is not None:
         raise ConnectionQualifiedNameFormatError(
             message=(
-                "connection_qualified_name has an empty last segment "
-                f"(qn={connection_qualified_name!r}); it would share a persistent "
-                "artifacts directory with every other such connection"
+                f"connection_qualified_name is not well-formed: {defect} "
+                f"(qn={connection_qualified_name!r})"
             ),
         )
+
+    connection_id = connection_qualified_name.split("/")[-1]
 
     if not connection_id.isdigit():
         logger.warning(

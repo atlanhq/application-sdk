@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import Literal
 
+from application_sdk.contracts.types import connection_qualified_name_defect
 from application_sdk.testing.harness.atlas._errors import UnknownConnectorTypeError
 from application_sdk.testing.harness.seed._errors import SeedSegmentInvalidError
 
@@ -24,13 +25,6 @@ __all__ = [
     "SeededConnection",
     "TableSpec",
 ]
-
-#: Minimum slash-separated segments in a Connection qualified name
-#: (``default/<connector>/<suffix>``). ``atlan-publish-app``'s own config
-#: validation refuses ``connection_creation_enabled`` on anything that is not a
-#: slash-delimited path, so a malformed QN here fails the seed's publish run
-#: minutes later rather than at declaration.
-_CONNECTION_QN_SEGMENTS = 3
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -213,8 +207,9 @@ def validate_resolved_spec(spec: ResolvedSeedSpec) -> None:
         UnknownConnectorTypeError: ``connector_type`` is not a pyatlan_v9
             ``AtlanConnectorType`` — publish would create a Connection with a
             ``connectorName`` no consumer recognises.
-        SeedSegmentInvalidError: The connection QN is not a slash-delimited path
-            of at least three composable segments, any tree segment is empty,
+        SeedSegmentInvalidError: The connection QN fails
+            :func:`~application_sdk.contracts.types.connection_qualified_name_defect`,
+            any tree segment is empty,
             padded with whitespace, or carries a ``/``, or the tree is empty.
     """
     from pyatlan_v9.model.enums import AtlanConnectorType  # noqa: PLC0415
@@ -232,25 +227,22 @@ def validate_resolved_spec(spec: ResolvedSeedSpec) -> None:
             value_summary=spec.connector_type,
         ) from error
 
-    segments = spec.qualified_name.split("/")
-    if len(segments) < _CONNECTION_QN_SEGMENTS:
+    # The connection QN takes the contract's rule, the one the preflight gate
+    # and the incremental marker path apply, so a QN the seed accepts is one a
+    # run accepts. It already rejects a padded segment: 'default/snowflake/ x'
+    # is a three-segment path that composes a prefix no ref will ever match,
+    # and it is the harder failure to spot because the QN prints almost right.
+    defect = connection_qualified_name_defect(spec.qualified_name)
+    if defect is not None:
         raise SeedSegmentInvalidError(
             message=(
                 f"the seeded connection qualified name {spec.qualified_name!r} is "
-                f"not a slash-delimited path of at least {_CONNECTION_QN_SEGMENTS} "
-                "segments (shape: 'default/<connector>/<suffix>'). "
-                "atlan-publish-app refuses connection creation on anything else"
+                f"not well-formed: {defect}. atlan-publish-app refuses connection "
+                "creation on anything but 'default/<connector>/<suffix>'"
             ),
             field="qualified_name",
             value_summary=spec.qualified_name,
         )
-    # Every segment of the connection QN gets the same treatment as a tree
-    # segment. Checking only that none is *empty* let a padded one through —
-    # 'default/snowflake/ x' is a well-formed three-segment path that composes a
-    # prefix no ref will ever match, and it is the harder failure to spot
-    # because the QN prints almost right.
-    for segment in segments:
-        _check_segment(segment, field="qualified_name")
 
     # An empty tree is legal to *declare* and impossible to *verify*: it
     # serialises zero records, so the seed's read-back count is zero — the exact

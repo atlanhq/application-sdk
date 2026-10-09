@@ -38,6 +38,7 @@ from application_sdk.contracts.storage import (
     VerifyRefsOutput,
 )
 from application_sdk.contracts.types import (
+    CONNECTION_QN_MIN_SEGMENTS,
     AssetArtifact,
     BoundedDict,
     BoundedList,
@@ -51,9 +52,11 @@ from application_sdk.contracts.types import (
     TreeSelection,
     asset_artifact_fields,
     asset_artifact_marker,
+    connection_qualified_name_defect,
 )
 
 __all__ = [
+    "CONNECTION_QN_MIN_SEGMENTS",
     "AssetArtifact",
     "BoundedDict",
     "BoundedList",
@@ -87,6 +90,7 @@ __all__ = [
     "VerifyRefsOutput",
     "asset_artifact_fields",
     "asset_artifact_marker",
+    "connection_qualified_name_defect",
     "get_contract_fields",
     "has_default",
     "is_backwards_compatible",
