@@ -780,7 +780,11 @@ def scan_contract_compat(
                         )
                     )
 
-            # B006: every live field must be recorded in the ledger
+            # B006: every live field must be recorded in the ledger.
+            # A contract the ledger records always has rows, even with no
+            # fields of its own: the SDK refuses an entrypoint input or output
+            # that does not subclass `Input`/`Output`, and regeneration records the inherited
+            # `Input`/`Output` fields under the subclass's name.
             contract_recorded = class_node.name in ledger_by_contract
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:

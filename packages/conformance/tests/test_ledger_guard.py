@@ -46,6 +46,22 @@ def test_no_base_passes() -> None:
     assert errors == []
 
 
+@pytest.mark.parametrize(
+    ("value", "prefix"),
+    [
+        ({"required": "yes"}, "INVALID REQUIRED"),
+        ({"status": "retired"}, "INVALID STATUS"),
+    ],
+    ids=["required", "status"],
+)
+def test_no_base_still_rejects_hand_edited_values(value: dict, prefix: str) -> None:
+    """A first ledger has nothing to compare against, but its values are checked."""
+    head = {"fields": [{"contract": "X", "field": "f", "type": "str"} | value]}
+    passed, errors = check(None, head)
+    assert not passed
+    assert [e.split(":")[0] for e in errors] == [prefix]
+
+
 def test_no_base_no_head_passes() -> None:
     passed, errors = check(None, None)
     assert passed

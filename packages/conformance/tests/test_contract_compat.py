@@ -2411,3 +2411,95 @@ def test_b005_new_required_field_suppressible(tmp_path: Path) -> None:
         tmp_path, "str  # conformance: ignore[B005] no deployed callers yet", None
     )
     assert [f.suppressed for f in _required_findings(findings)] == [True]
+
+
+_EP_REQUIRED_ALIASED = _EP_REQUIRED.replace(
+    "from pydantic import BaseModel, Field",
+    "from pydantic import BaseModel, Field as F",
+)
+
+
+@pytest.mark.parametrize(
+    ("decl", "required"),
+    [
+        ("str = F()", True),
+        ("str = F(...)", True),
+        ('Annotated[str, F(description="d")]', True),
+        ('str = F(default="")', False),
+        ('Annotated[str, F(default="")]', False),
+    ],
+)
+def test_b005_reads_field_imported_under_an_alias(
+    tmp_path: Path, decl: str, required: bool
+) -> None:
+    """``from pydantic import Field as F`` makes ``F(...)`` a ``Field`` call."""
+    findings = _scan(
+        tmp_path,
+        {"app.py": _EP_REQUIRED_ALIASED.format(decl=decl)},
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    assert len(_required_findings(findings)) == int(required)
+
+
+def test_b005_reads_field_alias_of_a_base_in_another_file(tmp_path: Path) -> None:
+    """An inherited field reads ``Field`` through its own file's alias."""
+    findings = _scan(
+        tmp_path,
+        {
+            "base.py": (
+                "from pydantic import BaseModel, Field as F\n\n"
+                "class Base(BaseModel):\n"
+                "    extra: str = F(...)\n"
+            ),
+            "app.py": (
+                "from base import Base\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Base):\n"
+                '    name: str = ""\n\n'
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            ),
+        },
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message
+
+
+def test_b005_first_own_field_on_a_fieldless_input_contract_fires(
+    tmp_path: Path,
+) -> None:
+    """A contract with no fields of its own is still recorded, via ``Input``'s.
+
+    The SDK refuses an entrypoint input that does not subclass ``Input``, so a
+    recorded contract always has the inherited rows a regeneration wrote; its
+    first own field is a new field on an existing contract.
+    """
+    findings = _scan(
+        tmp_path,
+        {
+            "app.py": (
+                "from application_sdk.contracts import Input\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Input):\n"
+                "    extra: str\n\n"
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            )
+        },
+        _make_ledger(
+            *(
+                ContractField("MyInput", name, "str", "active", None)
+                for name in (
+                    "workflow_id",
+                    "correlation_id",
+                    "app_name",
+                    "workflow_slug",
+                )
+            )
+        ),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message

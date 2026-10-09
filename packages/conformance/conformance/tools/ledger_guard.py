@@ -106,13 +106,15 @@ def check(
 
     Returns (passed, error_messages).  ``passed`` is True when no deletions,
     type changes, ``active`` → ``sunset`` moves, newly required fields or
-    unknown HEAD statuses or requiredness are detected.  An absent *base_payload* (no prior ledger) means there is
-    nothing to guard against — passes with no errors.
+    unknown HEAD statuses or requiredness are detected.  An absent
+    *base_payload* (no prior ledger) has no entries to compare against, so
+    only HEAD's own values are checked.
     """
-    errors: list[str] = []
-
     if base_payload is None:
-        return True, errors
+        errors = _invalid_values(head_payload) if head_payload is not None else []
+        return len(errors) == 0, errors
+
+    errors: list[str] = []
 
     if head_payload is None:
         errors.append(
@@ -174,22 +176,29 @@ def check(
                 "existing contract must have a default; callers that predate it "
                 "do not send it. Give it a default and regenerate."
             )
+
+    errors.extend(_invalid_values(head_payload))
+    return len(errors) == 0, errors
+
+
+def _invalid_values(payload: dict) -> list[str]:
+    """Report statuses and requiredness no regeneration writes."""
+    errors: list[str] = []
+    for (contract, field), required in _index_required(payload).items():
         if required is not None and not isinstance(required, bool):
             errors.append(
                 f"INVALID REQUIRED: {contract}.{field} {required!r} — a ledger "
                 "'required' is true, false or absent; regenerate instead of "
                 "editing it by hand."
             )
-
-    for (contract, field), status in head_status.items():
+    for (contract, field), status in _index_statuses(payload).items():
         if status not in _STATUSES:
             errors.append(
                 f"INVALID STATUS: {contract}.{field} {status!r} — a ledger "
                 "status is one of 'active', 'deprecated' or 'sunset'; "
                 "regenerate instead of editing it by hand."
             )
-
-    return len(errors) == 0, errors
+    return errors
 
 
 def main(argv: list[str] | None = None) -> int:

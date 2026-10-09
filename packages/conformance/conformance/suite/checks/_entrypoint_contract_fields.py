@@ -56,6 +56,7 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
     collect_import_aliases,
+    field_call_names,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -239,8 +240,20 @@ class _FieldInfo(NamedTuple):
     required: bool | None = None
 
 
-def _is_field_call(node: ast.expr | None) -> TypeGuard[ast.Call]:
-    return isinstance(node, ast.Call) and _is_named(node.func, "Field")
+#: The names that call ``Field`` when a file imports it under no alias.
+_FIELD_CALL_NAMES = frozenset({"Field"})
+
+
+def _is_field_call(
+    node: ast.expr | None, field_names: frozenset[str]
+) -> TypeGuard[ast.Call]:
+    """Whether *node* calls ``Field`` — by any of *field_names*, or ``x.Field``."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id in field_names) or (
+        isinstance(func, ast.Attribute) and func.attr == "Field"
+    )
 
 
 def _field_call_has_default(call: ast.Call) -> bool:
@@ -263,13 +276,15 @@ def _field_call_has_default(call: ast.Call) -> bool:
     return False
 
 
-def _field_required(ann_node: ast.AnnAssign) -> bool:
+def _field_required(ann_node: ast.AnnAssign, field_names: frozenset[str]) -> bool:
     """Whether Pydantic v2 requires this field in every payload.
 
     A field is required when nothing supplies a default: no value, a
     ``Field(...)`` value without one, or no value with an ``Annotated``
     ``Field(...)`` that supplies none. ``Optional[X]`` does not make a field
-    optional in Pydantic v2 — only a default does.
+    optional in Pydantic v2 — only a default does. *field_names* are the local
+    names the defining file binds to ``Field``, so ``F(...)`` after
+    ``from pydantic import Field as F`` reads as the call it is.
     """
     value = ann_node.value
     if value is None:
@@ -280,10 +295,11 @@ def _field_required(ann_node: ast.AnnAssign) -> bool:
             sl = annotation.slice
             metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
             return not any(
-                _is_field_call(m) and _field_call_has_default(m) for m in metadata
+                _is_field_call(m, field_names) and _field_call_has_default(m)
+                for m in metadata
             )
         return True
-    if _is_field_call(value):
+    if _is_field_call(value, field_names):
         return not _field_call_has_default(value)
     return False
 
@@ -335,11 +351,14 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
     return "active"
 
 
-def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
+def _iter_fields(
+    classdef: ast.ClassDef, field_names: frozenset[str] = _FIELD_CALL_NAMES
+) -> list[_FieldInfo]:
     """Return annotated field info declared directly on *classdef*'s own body.
 
     Does not resolve fields inherited from a base class or mixin — use
-    :func:`resolve_contract_fields` for that.
+    :func:`resolve_contract_fields` for that. *field_names* are the local names
+    *classdef*'s file binds to ``Field``.
     """
     result = []
     for stmt in classdef.body:
@@ -359,7 +378,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
-                required=_field_required(stmt),
+                required=_field_required(stmt, field_names),
             )
         )
     return result
@@ -463,7 +482,7 @@ def resolve_contract_fields(
                 # overwrite below.
                 for base_name in reversed(rec.bases):
                     merge_ancestor(base_name, visiting)
-                for fi in _iter_fields(rec.node):
+                for fi in _iter_fields(rec.node, rec.field_call_names):
                     fields_by_name[fi.name] = _keep_model_declared(
                         fi._replace(node=None), fields_by_name.get(fi.name)
                     )
@@ -500,7 +519,7 @@ def resolve_contract_fields(
 
     # Fields declared directly on classdef always win over inherited ones —
     # except for the marker, which is sticky (see `_keep_model_declared`).
-    for fi in _iter_fields(classdef):
+    for fi in _iter_fields(classdef, field_call_names(aliases)):
         fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())
