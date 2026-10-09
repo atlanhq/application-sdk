@@ -107,10 +107,10 @@ human audit):
 
 - **B005 NonAdditiveContractChange** (app source, the contract class) — a field
   the ledger records is absent from the live contract, its type changed, or
-  source marks it `sunset` while the ledger still records `active`.
+  source marks it `sunset` while the ledger records something else.
   A skipped deprecation (`sunset` over `active`) has one fix: change the
   source marker from `sunset` to `deprecated`, regenerate, and leave `sunset`
-  to a later PR.  Report `classification = "mechanical"`; never hand-edit the
+  to a later PR.  Over a ledger `deprecated`, regenerate.  Report `classification = "mechanical"`; never hand-edit the
   ledger to `sunset` — `ledger-guard` refuses `active` → `sunset` too.
   For a removal or retype, work in this order and stop at the first step that
   applies:

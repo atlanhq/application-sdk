@@ -104,7 +104,9 @@ def _parse(payload: dict) -> ContractLedger:
             contract=r["contract"],
             field=r["field"],
             type=r["type"],
-            status=r.get("status", "active"),
+            # An explicit null reads as active, like an absent key: left as
+            # None it would match neither 'active' nor 'sunset' in B005.
+            status=r.get("status") or "active",
         )
         for r in payload.get("fields", [])
     ]

@@ -246,6 +246,16 @@ def test_load_ledger_repo_root_picks_up_committed_file(tmp_path: Path) -> None:
     assert [f.contract for f in ledger.fields] == ["R"]
 
 
+def test_load_ledger_reads_a_null_status_as_active(tmp_path: Path) -> None:
+    """Left as None, a null status matched neither 'active' nor 'sunset' in B005."""
+    ledger_data = {
+        "version": LEDGER_VERSION,
+        "fields": [{"contract": "R", "field": "r", "type": "str", "status": None}],
+    }
+    (tmp_path / _LEDGER_NAME).write_text(json.dumps(ledger_data), encoding="utf-8")
+    assert [f.status for f in load_ledger(repo_root=tmp_path).fields] == ["active"]
+
+
 def test_load_ledger_is_empty_when_the_repo_has_no_ledger(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -67,12 +67,17 @@ def _index_fields(payload: dict) -> dict[tuple[str, str], str]:
     return result
 
 
+_STATUSES = frozenset({"active", "deprecated", "sunset"})
+
+
 def _index_statuses(payload: dict) -> dict[tuple[str, str], str]:
-    """Index ledger statuses as {(contract, field): status}; absent means active."""
+    """Index ledger statuses as {(contract, field): status}.
+
+    An absent or null status means active, as the ledger loader reads it.
+    """
     return {
-        (entry.get("contract", ""), entry.get("field", "")): entry.get(
-            "status", "active"
-        )
+        (entry.get("contract", ""), entry.get("field", "")): entry.get("status")
+        or "active"
         for entry in payload.get("fields", [])
     }
 
@@ -84,8 +89,9 @@ def check(
     """Compare base and head ledger payloads.
 
     Returns (passed, error_messages).  ``passed`` is True when no deletions,
-    type changes or ``active`` → ``sunset`` moves are detected.  An absent *base_payload* (no prior ledger) means
-    there is nothing to guard against — passes with no errors.
+    type changes, ``active`` → ``sunset`` moves or unknown HEAD statuses are
+    detected.  An absent *base_payload* (no prior ledger) means there is
+    nothing to guard against — passes with no errors.
     """
     errors: list[str] = []
 
@@ -129,6 +135,14 @@ def check(
                     "'active' → 'sunset' — mark it 'deprecated' first and merge "
                     "that, then move it to 'sunset' in a later PR."
                 )
+
+    for (contract, field), status in head_status.items():
+        if status not in _STATUSES:
+            errors.append(
+                f"INVALID STATUS: {contract}.{field} {status!r} — a ledger "
+                "status is one of 'active', 'deprecated' or 'sunset'; "
+                "regenerate instead of editing it by hand."
+            )
 
     return len(errors) == 0, errors
 

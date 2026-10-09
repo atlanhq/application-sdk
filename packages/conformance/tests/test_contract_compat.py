@@ -947,6 +947,38 @@ def test_b005_reads_rows_recorded_under_the_pre_rename_bundle_name(
     assert len(legacy) == (1 if fires else 0)
 
 
+@pytest.mark.parametrize(
+    ("status", "fires"),
+    [("active", True), ("deprecated", True), ("sunset", False)],
+)
+def test_b005_pre_rename_rows_check_the_source_lifecycle(
+    tmp_path: Path, status: str, fires: bool
+) -> None:
+    """A legacy row has no row under the renamed class for the main pass to read.
+
+    So a direct sunset on a renamed bundle class must be caught here, or it
+    passes B005 for this one bundle shape.
+    """
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "miner_only", "str", status),
+    )
+    files = _renamed_bundle("crawler_only", "miner_only")
+    files["miner/_input.py"] = files["miner/_input.py"].replace(
+        'miner_only: str = ""',
+        "miner_only: str = Field(default='', deprecated=True, "
+        'json_schema_extra={"x-lifecycle": "sunset"})',
+    )
+    findings = _scan(tmp_path, files, ledger)
+    legacy = [
+        f
+        for f in findings
+        if f.rule_id == "B005"
+        and "'AppInputContract.miner_only'" in f.message
+        and "is marked 'sunset'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
 def test_b005_pre_rename_rows_left_to_the_main_pass_when_the_class_exists(
     tmp_path: Path,
 ) -> None:
@@ -1099,32 +1131,38 @@ _SUNSET_KWARGS = 'deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}'
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "ledger_status", "fires"),
+    ("kwargs", "ledger_status", "remedy"),
     [
-        (_SUNSET_KWARGS, "active", True),
-        (_SUNSET_KWARGS, "deprecated", False),
-        (_SUNSET_KWARGS, "sunset", False),
-        ("deprecated=True", "active", False),
+        (_SUNSET_KWARGS, "active", "Mark it 'deprecated'"),
+        (_SUNSET_KWARGS, "retired", "Mark it 'deprecated'"),
+        (_SUNSET_KWARGS, "deprecated", "Regenerate"),
+        (_SUNSET_KWARGS, "sunset", None),
+        ("deprecated=True", "active", None),
     ],
-    ids=["active-to-sunset", "deprecated-to-sunset", "sunset-noop", "deprecate"],
+    ids=["active", "unknown-status", "deprecated-unregenerated", "sunset", "deprecate"],
 )
 def test_b005_sunset_requires_a_recorded_deprecation(
-    tmp_path: Path, kwargs: str, ledger_status: str, fires: bool
+    tmp_path: Path, kwargs: str, ledger_status: str, remedy: str | None
 ) -> None:
-    """Source 'sunset' over a ledger 'active' skipped the deprecation window.
+    """Source 'sunset' must sit over a ledger 'sunset'.
 
-    The generator refuses to record that move, so this is the state a direct
-    sunset leaves behind — and B005, unlike ledger-guard, blocks the merge.
+    The generator records 'sunset' only over 'deprecated', so any other ledger
+    status under it is a skipped deprecation or a stale (or hand-edited)
+    ledger. A hand-edited 'deprecated' is reported too: it would otherwise
+    excuse a direct sunset without the generator or ledger-guard seeing it.
     """
     ledger = _make_ledger(ContractField("MyInput", "name", "str", ledger_status))
     src = _EP_LIFECYCLE.format(kwargs=kwargs)
     findings = [
         f for f in _scan(tmp_path, {"app.py": src}, ledger) if f.rule_id == "B005"
     ]
-    assert bool(findings) is fires
-    if fires:
-        assert "MyInput.name" in findings[0].message
-        assert "'deprecated'" in findings[0].message
+    if remedy is None:
+        assert findings == []
+        return
+    assert len(findings) == 1
+    assert "MyInput.name" in findings[0].message
+    assert f"records it '{ledger_status}'" in findings[0].message
+    assert remedy in findings[0].message
 
 
 def test_b005_widening_is_not_a_break(tmp_path: Path) -> None:
