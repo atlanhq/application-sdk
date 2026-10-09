@@ -149,6 +149,7 @@ jobs:
         # own environment — the bound must not depend on a full dev sync.
         # `--no-commit`: committing is `publish`'s job, below.
         run: |
+          set -euo pipefail
           uv run --no-project --with 'packaging==26.3' \
             python .github/scripts/bound_lock_branch.py \
             --window P3D \
@@ -287,5 +288,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           python3 .github/scripts/carry_artifact_status.py \
             --target-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

@@ -469,10 +469,19 @@ class TestTwoJobHandoff:
         assert head_files(in_repo) == set(orchestrator.OUTPUT_PATHS)
         assert head_subject(in_repo) == orchestrator.COMMIT_MESSAGE
 
+    @staticmethod
+    def _unchanged_artifact(in_repo: Path, tmp_path_factory) -> Path:
+        """Every output present, byte-identical to the checkout."""
+        artifact = tmp_path_factory.mktemp("artifact")
+        for path in orchestrator.OUTPUT_PATHS:
+            (artifact / path).parent.mkdir(parents=True, exist_ok=True)
+            (artifact / path).write_bytes((in_repo / path).read_bytes())
+        return artifact
+
     def test_apply_from_copies_only_the_declared_paths(self, in_repo, tmp_path_factory):
         # The publishing job holds the push token; the artifact must not be able
         # to widen what it commits.
-        artifact = tmp_path_factory.mktemp("artifact")
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
         (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
         (artifact / ".github" / "workflows").mkdir(parents=True)
         (artifact / ".github" / "workflows" / "evil.yaml").write_text("x\n")
@@ -481,10 +490,31 @@ class TestTwoJobHandoff:
         assert head_files(in_repo) == {"uv.lock"}
         assert not (in_repo / ".github" / "workflows" / "evil.yaml").exists()
 
+    @pytest.mark.parametrize("missing", orchestrator.OUTPUT_PATHS)
+    def test_apply_from_rejects_an_incomplete_artifact(
+        self, in_repo, tmp_path_factory, missing
+    ):
+        """A missing output is a broken handoff, not "unchanged".
+
+        Skipping it would leave Renovate's unbounded lock on the branch behind a
+        green publish. Nothing is copied either: the check runs before any copy.
+        """
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
+        (artifact / "uv.lock").write_text(uv_lock(marker="bounded"))
+        if missing == "uv.lock":
+            (artifact / orchestrator.PYATLAN_LOCK).write_text(uv_lock(marker="x"))
+        (artifact / missing).unlink()
+
+        with pytest.raises(FileNotFoundError, match=missing):
+            orchestrator.main(["--apply-from", str(artifact)])
+        assert head_subject(in_repo) == "base"
+        assert git(in_repo, "status", "--porcelain").stdout == ""
+
     def test_apply_from_refuses_a_symlink(self, in_repo, tmp_path_factory):
-        artifact = tmp_path_factory.mktemp("artifact")
+        artifact = self._unchanged_artifact(in_repo, tmp_path_factory)
         outside = tmp_path_factory.mktemp("elsewhere") / "runner-file"
         outside.write_text("not ours\n")
+        (artifact / "uv.lock").unlink()
         (artifact / "uv.lock").symlink_to(outside)
 
         with pytest.raises(ValueError, match="symlink"):

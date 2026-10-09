@@ -239,15 +239,20 @@ def apply_outputs(source: Path, root: Path) -> None:
     """Copy OUTPUT_PATHS from an artifact directory into the checkout.
 
     Only the declared paths are read, so nothing else in the artifact can reach
-    a branch that auto-merges. A symlink is refused rather than followed: it
-    would commit whatever file on the runner it points at.
+    a branch that auto-merges. Every one must be present: `bound` uploads all of
+    them on every run, so a missing one means a broken handoff, and skipping it
+    would leave Renovate's unbounded lock on the branch behind a green publish.
+    A symlink is refused rather than followed: it would commit whatever file on
+    the runner it points at. Everything is checked before anything is copied.
     """
     for path in OUTPUT_PATHS:
         src = source / path
         if src.is_symlink():
             raise ValueError(f"refusing symlinked artifact entry: {path}")
-        if src.is_file():
-            shutil.copyfile(src, root / path)
+        if not src.is_file():
+            raise FileNotFoundError(f"missing artifact output: {path}")
+    for path in OUTPUT_PATHS:
+        shutil.copyfile(source / path, root / path)
 
 
 def stage_and_commit(root: Path, paths: list[str]) -> bool:
