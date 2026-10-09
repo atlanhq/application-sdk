@@ -1,5 +1,21 @@
 # Changelog
 
+## v3.45.0 (October 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.44.0...v3.45.0
+
+### Features
+
+- flag qualifiedNames missing their connection prefix and same-connection orphans [FND-3523] (#4277) (by @cmgrote in [0015cbd](https://github.com/atlanhq/application-sdk/commit/0015cbd))
+- integration kit runs on_complete() cleanup by default (#4281) (by @cmgrote in [836fbd3](https://github.com/atlanhq/application-sdk/commit/836fbd3))
+- in-tenant object-store assertions for system-app suites (FND-3571) (#4271) (by @cmgrote in [9efcc92](https://github.com/atlanhq/application-sdk/commit/9efcc92))
+
+### Bug Fixes
+
+- reject empty or malformed connection_qualified_name before extraction [CONNECT-1738] (#3869) (by @SwarnadeepChatterjee in [8cd86d4](https://github.com/atlanhq/application-sdk/commit/8cd86d4))
+- cleanup_storage never deletes a key a durable ref points at (#4280) (by @cmgrote in [ce779dc](https://github.com/atlanhq/application-sdk/commit/ce779dc))
+
+
 ## v3.44.0 (October 08, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.43.0...v3.44.0
