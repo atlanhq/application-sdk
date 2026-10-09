@@ -196,6 +196,12 @@ halves; ``atlan-mysql-app`` is the reference for each:
   ``mode``, inheriting ``BaseE2ETest``'s ``RunMode.DIRECT`` default.  The reusable
   e2e job always starts a CI-side worker on a per-leg queue that only
   ``RunMode.AGENT`` routes to, so the container under test never runs.
+* ``T025`` — EntrypointWithoutE2ECoverage: a bundle entrypoint has no e2e suite.
+* ``T026`` — E2EHarnessTenantPoolMismatch: an e2e test class's harness base
+  disagrees with the app's declared marketplace ``type`` in ``atlan.yaml`` — a
+  ``system`` app whose suite does not inherit ``SystemAppE2ETest`` (so it runs on
+  the connector tenants), or a ``connector`` whose suite does (claiming the
+  system-app pool).
 """
 
 from __future__ import annotations
@@ -2228,6 +2234,106 @@ RULES: tuple[RuleDefinition, ...] = (
         help_uri=(
             "https://github.com/atlanhq/application-sdk/blob/main/"
             "packages/conformance/conformance/docs/rules/tests.md#t025"
+        ),
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/tests.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="T026",
+        canonical_reference=(
+            "application_sdk/testing/e2e/system_app.py — `SystemAppE2ETest` sets "
+            "`_tenant_pool = TenantPool.SYSTEM`, which is what binds a suite to the "
+            "system-app tenant pool; the toolkit's "
+            "contract-toolkit/examples/system-app/app/generated/_e2e_base.py shows "
+            'the generated base a `type = "system"` contract emits, already '
+            "parented to it. None of the reference apps is a system app."
+        ),
+        fix_locus=FixLocus.TESTS,
+        scope=RuleScope.APP,
+        name="E2EHarnessTenantPoolMismatch",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="e2e-tenant-pool",
+        autofixable=False,
+        since="0.46.0",
+        rationale=(
+            "The e2e tenants are split into a connector pool and a system-app pool "
+            "(FND-3542). The harness enforces the split at runtime, but only once a "
+            "suite has picked its base: a SystemAppE2ETest suite refuses to run "
+            "unless E2E_TENANT_POOL=system, and every other suite refuses the "
+            "system pool. Two regressions slip past that gate. A system app that "
+            "adopts the harness on plain BaseE2ETest (or a generated base built "
+            "before its contract was typed 'system') never opts into the system "
+            "pool, so it runs on the connector tenants and turns a connector's test "
+            "bed into a system app's (FND-438). A connector that adopts "
+            "SystemAppE2ETest claims a pool reserved for system apps. The app's "
+            "declared marketplace type in atlan.yaml is the one signal the app "
+            "itself owns, so the rule compares the two instead of keeping a list of "
+            "app names. "
+            "Customer impact: a system app tested against connector tenants can "
+            "ship a regression its own tenants would have caught, and a connector "
+            "on the system pool can break the system apps' test beds."
+        ),
+        short_description=(
+            "An e2e test class's harness base does not match the app's declared "
+            "marketplace type"
+        ),
+        full_description=(
+            "A person has to close a ``system`` finding, not the remediation lane:\n"
+            "switching the base is only half of it, and the suite will not run\n"
+            "until the repo is also added to the system-app tenant secret.\n"
+            "\n"
+            "The top-level ``type`` in ``atlan.yaml`` (generated from\n"
+            "``contract/app.pkl``) is compared case-insensitively against the base\n"
+            "of every SDK-harness e2e test class — a collectable ``Test*`` class\n"
+            "under ``tests/e2e/`` that reaches ``BaseE2ETest``, ``SQLAppE2ETest`` or\n"
+            "``SystemAppE2ETest``, directly, through a repo-local base, or through a\n"
+            "generated ``*GeneratedE2EBase``:\n"
+            "\n"
+            "* ``system`` — the class **must** inherit ``SystemAppE2ETest``.\n"
+            "* ``utility`` — either base is allowed. Some system apps keep\n"
+            "  ``utility`` because they have a marketplace tile and can be run\n"
+            "  directly, but only ever inside a tenant; for them inheriting\n"
+            "  ``SystemAppE2ETest`` *is* the declaration, and the runtime pool gate\n"
+            "  holds the suite there. A utility that never adopts it cannot be told\n"
+            "  apart from any other utility, so it is not flagged.\n"
+            "* ``connector`` — the class **must not** inherit ``SystemAppE2ETest``.\n"
+            "* any other type, or no ``atlan.yaml`` — not graded.\n"
+            "\n"
+            "A base counts as the SDK class only when it is imported from\n"
+            "``application_sdk.testing.e2e``; a same-named class from anywhere else\n"
+            "is resolved against the repo's own classes.\n"
+            "\n"
+            "**Remediation (system):** in this order —\n"
+            "\n"
+            "1. Make ``SystemAppE2ETest`` the first base. For a toolkit-generated\n"
+            "   base, regenerating (``pkl eval -m . contract/app.pkl``) from a\n"
+            "   contract typed ``system`` emits it already::\n"
+            "\n"
+            "       from application_sdk.testing.e2e import SystemAppE2ETest\n"
+            "\n"
+            "       class MyAppGeneratedE2EBase(SystemAppE2ETest):\n"
+            "           ...\n"
+            "\n"
+            "2. Get the repo added to the selected repositories of the\n"
+            "   ``E2E_SYSTEM_TENANT_MATRIX_JSON`` secret, so CI places its legs on\n"
+            "   the system-app pool.\n"
+            "\n"
+            "**Remediation (connector):** base the suite on the generated\n"
+            "``<Name>GeneratedE2EBase`` (or ``BaseE2ETest`` / ``SQLAppE2ETest``).\n"
+            "If the app really is a system app, fix ``type`` in ``contract/app.pkl``\n"
+            "and regenerate instead.\n"
+            "\n"
+            "See ``docs/standards/connector-ci-e2e.md`` → *System apps*.\n"
+            "\n"
+            "Suppress with ``# conformance: ignore[T026] <reason>`` on the ``class``\n"
+            "line.\n"
+        ),
+        help_uri=(
+            "https://github.com/atlanhq/application-sdk/blob/main/"
+            "packages/conformance/conformance/docs/rules/tests.md#t026"
         ),
         remediation_reference=RemediationReference(
             kind=RemediationKind.GUIDE,

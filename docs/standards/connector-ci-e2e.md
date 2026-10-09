@@ -56,6 +56,31 @@ routing, polling, grading and teardown are unchanged.
   the variable when it places a leg; for a local run against a system-app
   tenant, export it yourself.
 
+Which base an app's suites use follows from the top-level `type` it declares in
+`atlan.yaml` (generated from `contract/app.pkl`). Conformance rule
+[T026](../../packages/conformance/conformance/docs/rules/tests.md#t026) checks
+every e2e test class against it, case-insensitively:
+
+| Declared `type` | e2e test classes | Why |
+|---|---|---|
+| `system` | must inherit `SystemAppE2ETest` | A system app runs only in a tenant. On any other base the suite never opts into the system pool and runs on the connector tenants instead. |
+| `utility` | either base | Some system apps (connection-delete, model-caster) keep `utility` because they have a marketplace tile and can be run directly, but only ever in a tenant. For them, inheriting `SystemAppE2ETest` *is* the declaration, and the runtime pool gate keeps the suite on the system pool from then on. |
+| `connector` | must not inherit `SystemAppE2ETest` | The system pool is for system apps only. |
+| anything else | not checked | |
+
+To move a system app onto the system pool, do these in order:
+
+1. Make `SystemAppE2ETest` the first base. For a contract typed `system`, the
+   generated `_e2e_base.py` already extends it, so regenerating the contract is
+   usually all this takes.
+2. Get the repo added to the selected repositories of the
+   `E2E_SYSTEM_TENANT_MATRIX_JSON` secret. Until that happens, CI can't place the
+   suite on the system pool, and the harness refuses to run it anywhere else.
+
+A `utility` app that ought to be on the system pool but has never adopted
+`SystemAppE2ETest` looks the same as every other utility, so T026 can't flag it.
+Onboarding one is a human decision.
+
 ### The SDR base class
 
 `BaseSDRIntegrationTest` is deprecated on the same v4.0 clock. Removing it needs **no new SDK surface**, because there is no SDR-shaped hole to fill.
