@@ -46,10 +46,14 @@ from application_sdk.testing.e2e.payload import RunMode
 from application_sdk.testing.e2e.portforward import kube_http_call
 from application_sdk.testing.e2e.sql_app import SQLAppE2ETest
 from application_sdk.testing.e2e.system_app import (
+    FieldCondition,
+    FieldOp,
+    RecordFormat,
     StoreAbsent,
     StoreCount,
     StoreExpectation,
     StorePresent,
+    StoreRecords,
     SystemAppE2ETest,
 )
 from application_sdk.testing.e2e.tenant_pool import TenantPool
@@ -71,10 +75,14 @@ __all__ = [
     "ResolvedDAG",
     "RunMode",
     "SQLAppE2ETest",
+    "FieldCondition",
+    "FieldOp",
+    "RecordFormat",
     "StoreAbsent",
     "StoreCount",
     "StoreExpectation",
     "StorePresent",
+    "StoreRecords",
     "SystemAppE2ETest",
     "TenantPool",
 ]

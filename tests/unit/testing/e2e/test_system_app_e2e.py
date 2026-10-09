@@ -481,6 +481,30 @@ async def test_an_unreadable_verdict_is_never_a_pass(
         await _read_then_grade(tmp_path, _OutputsAE(outputs))
 
 
+async def test_a_failing_records_verdict_names_the_counts(tmp_path: Path) -> None:
+    verdict = {
+        "enabled": True,
+        "passed": False,
+        "observations": [
+            {
+                "prefix": _PURGED,
+                "kind": "records",
+                "expected_count": 2,
+                "passed": False,
+                "files_scanned": 1,
+                "records_scanned": 3,
+                "records_matched": 1,
+            }
+        ],
+    }
+    with pytest.raises(AssertionError) as exc:
+        await _read_then_grade(tmp_path, _OutputsAE(verdict))
+    assert (
+        f"[FAIL] {_PURGED}: expected RECORDS == 2; "
+        "saw records matched=1 of 3 in 1 file(s)"
+    ) in str(exc.value)
+
+
 @pytest.mark.parametrize(
     "outputs",
     [
