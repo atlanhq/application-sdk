@@ -327,6 +327,11 @@ a call named `assert_*` (`self.assertEqual`, `mock.assert_called_once`,
 `pytest.fail(...)` / `self.fail(...)`
 an SDK integration-test scenario-helper call: `.equals` / `.contains` /
     `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`
+a direct, same-name `super().test_full_dag_runs_end_to_end()` delegation
+    from a class whose base is imported from `application_sdk.testing.e2e`
+    or the contract-generated `app/generated/_e2e_base.py` (the SDK full-DAG
+    scenario grades outcomes through its assertion ladder; an app-local
+    intermediate base is not trusted)
 a `# should not raise` / `# must not raise` comment anywhere in the body
     (case-insensitive): the call completing *is* the assertion
 ```

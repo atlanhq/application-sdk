@@ -41,8 +41,9 @@ project-local ``_assert_*`` helper) or is exactly ``fail``
 (``pytest.fail``/``self.fail``); one of the SDK integration-test scenario
 helpers (``.equals``/``.contains``/``.exists``/``.is_dict``/``.is_string``/
 ``.is_true``/``.is_list``); a direct, same-name
-  ``super().test_full_dag_runs_end_to_end()`` delegation (the SDK's assertion-bearing
-  full-DAG scenario); or an explicit ``# should not raise`` /
+``super().test_full_dag_runs_end_to_end()`` delegation from a class whose base
+is imported from the SDK e2e harness or the contract-generated ``_e2e_base``
+(the SDK's assertion-bearing full-DAG scenario); or an explicit ``# should not raise`` /
 ``# must not raise`` comment anywhere in the test body (case-insensitive).
 
 The last form covers "the call completing without raising *is* the
@@ -261,12 +262,58 @@ def _has_no_raise_marker(
 
 _FULL_DAG_ASSERTION_SCENARIO = "test_full_dag_runs_end_to_end"
 
+# Modules whose classes inherit the SDK's assertion-bearing
+# ``test_full_dag_runs_end_to_end`` unchanged: the SDK harness itself, and the
+# contract-emitted ``generated/[<entrypoint>/]_e2e_base`` module that subclasses
+# it. An app-local intermediate base is not trusted — it may override the
+# scenario with a body that asserts nothing.
+_SDK_E2E_MODULE_PREFIXES: tuple[str, ...] = (
+    "application_sdk.testing.e2e",
+    "application_sdk.testing.full_dag",
+)
+_GENERATED_E2E_BASE_RE = re.compile(r"(?:^|\.)generated(?:\.\w+)?\._e2e_base$")
+
+
+def _is_sdk_e2e_module(module: str) -> bool:
+    return (
+        any(
+            module == prefix or module.startswith(prefix + ".")
+            for prefix in _SDK_E2E_MODULE_PREFIXES
+        )
+        or _GENERATED_E2E_BASE_RE.search(module) is not None
+    )
+
+
+def _sdk_e2e_base_names(tree: ast.Module) -> frozenset[str]:
+    """Local names bound by ``from <sdk e2e module> import X [as Y]``."""
+    names: set[str] = set()
+    for stmt in tree.body:
+        if (
+            isinstance(stmt, ast.ImportFrom)
+            and stmt.level == 0
+            and stmt.module is not None
+            and _is_sdk_e2e_module(stmt.module)
+        ):
+            names.update(alias.asname or alias.name for alias in stmt.names)
+    return frozenset(names)
+
+
+def _inherits_sdk_full_dag_scenario(
+    cls: ast.ClassDef | None, sdk_base_names: frozenset[str]
+) -> bool:
+    """True when a direct base of *cls* is imported from an SDK e2e module."""
+    if cls is None:
+        return False
+    return any(
+        isinstance(base, ast.Name) and base.id in sdk_base_names for base in cls.bases
+    )
+
 
 def _has_direct_full_dag_scenario_delegation(
-    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    node: ast.FunctionDef | ast.AsyncFunctionDef, inherits_sdk_scenario: bool
 ) -> bool:
     """True for a direct same-name delegation to the SDK full-DAG test."""
-    if node.name != _FULL_DAG_ASSERTION_SCENARIO:
+    if not inherits_sdk_scenario or node.name != _FULL_DAG_ASSERTION_SCENARIO:
         return False
     for stmt in node.body:
         if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
@@ -288,7 +335,9 @@ def _has_direct_full_dag_scenario_delegation(
 
 
 def _assertion_signals(
-    node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list[str]
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    lines: list[str],
+    inherits_sdk_scenario: bool = False,
 ) -> tuple[bool, bool]:
     """Return ``(has_any_assertion, only_vacuous_plain_asserts)`` for *node*.
 
@@ -301,7 +350,7 @@ def _assertion_signals(
     has_assert_stmt = False
     has_nonvacuous_assert_stmt = False
     has_other_assertion = _has_no_raise_marker(lines, node) or (
-        _has_direct_full_dag_scenario_delegation(node)
+        _has_direct_full_dag_scenario_delegation(node, inherits_sdk_scenario)
     )
     for sub in ast.walk(node):
         if isinstance(sub, ast.Assert):
@@ -414,6 +463,13 @@ def scan_text(text: str, file: str) -> list[Finding]:
     directives = _parse_directives(text)
     lines = text.splitlines()
     collected = _collect_tests(tree)
+    sdk_base_names = _sdk_e2e_base_names(tree)
+    enclosing_class = {
+        id(sub): cls
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef)
+        for sub in cls.body
+    }
 
     if not is_collectable_test_file(Path(file).name):
         if not collected:
@@ -441,7 +497,13 @@ def scan_text(text: str, file: str) -> list[Finding]:
                 )
             )
             continue
-        has_any, only_vacuous = _assertion_signals(node, lines)
+        has_any, only_vacuous = _assertion_signals(
+            node,
+            lines,
+            _inherits_sdk_full_dag_scenario(
+                enclosing_class.get(id(node)), sdk_base_names
+            ),
+        )
         if not has_any:
             findings.append(
                 make_finding(
