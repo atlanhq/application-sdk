@@ -522,7 +522,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="typed-contract-boundary",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.9.0",
         rationale=(
@@ -547,13 +547,16 @@ RULES: tuple[RuleDefinition, ...] = (
             "the change from the contract ledger (B005/B006), which only sees schema\n"
             "edits, not reads.\n"
             "\n"
-            "Fix: use attribute access (``param.field``).  Suppress with\n"
+            "Fix: use attribute access (``param.field``) when the field is declared on\n"
+            "the contract (or a base) and the parameter is not ``Optional``; otherwise\n"
+            "``param.field`` can raise where ``getattr`` returned the default, so each\n"
+            "site gets a drafted fix that a human reviews.  Suppress with\n"
             "``# conformance: ignore[P026] <reason>`` only when a value genuinely may\n"
             "be absent and the contract models it as ``Optional`` with a real default.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p026",
         remediation_reference=RemediationReference(
-            kind=RemediationKind.GUIDE,
+            kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/prescriptions.prose.md",
         ),
     ),

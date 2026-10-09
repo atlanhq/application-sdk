@@ -48,7 +48,7 @@ reassigned.
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
-| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | — | 0.9.0 |
+| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | yes | 0.9.0 |
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | yes | 0.9.0 |
@@ -1331,7 +1331,7 @@ Suppress with `# conformance: ignore[P025] <reason>` on the App class definition
 
 ## P026 — `GetattrOnTypedContractField` {#p026}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** yes · **Since:** 0.9.0
 
 > getattr() with a default on a typed entrypoint/task contract param — defeats the typed boundary
 
@@ -1346,7 +1346,7 @@ site and the type annotation stops being load-bearing.
   attribute and raises SpecUrlRequiredError when it is empty. The field is typed, so the
   right move is to read it and assert it is present, not to getattr past the type with a
   default that silently changes behaviour when the field is renamed.
-- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
@@ -1356,9 +1356,11 @@ raise `AttributeError` and surface the drift.  This defeats the typed boundary P
 establish and hides the change from the contract ledger (B005/B006), which only sees
 schema edits, not reads.
 
-Fix: use attribute access (`param.field`).  Suppress with `# conformance: ignore[P026]
-<reason>` only when a value genuinely may be absent and the contract models it as
-`Optional` with a real default.
+Fix: use attribute access (`param.field`) when the field is declared on the contract (or
+a base) and the parameter is not `Optional`; otherwise `param.field` can raise where
+`getattr` returned the default, so each site gets a drafted fix that a human reviews.
+Suppress with `# conformance: ignore[P026] <reason>` only when a value genuinely may be
+absent and the contract models it as `Optional` with a real default.
 
 ---
 
