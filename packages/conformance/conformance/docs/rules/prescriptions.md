@@ -1815,7 +1815,13 @@ direct-GUID route. * `CredentialRef.from_workflow_args(workflow_args)` — the s
 reading `agent_json` off the args payload. * `route_credentials(input)`
 (`application_sdk.credentials`,   SDK >= 3.40.0) — routes through
 `CredentialRef.resolve` and also   owns the pre-built-ref and inline channels; on an SDK
-that has it,   P053 prescribes it over a hand-rolled `CredentialRef.resolve`.
+that has it,   P053 prescribes it over a hand-rolled `CredentialRef.resolve`. *
+`self.resolve_credential_ref(input)` in a class deriving from the   SDK `SqlApp`
+template — the template's routing seam, shared with   the injected preflight gate.
+
+Only this standard seam is accepted.  Other SDK resolvers
+(`CredentialRef.resolve_or_none` and the like) are not: P053 moves those apps onto
+`route_credentials`, which clears this rule too.
 
 An app that resolves strictly by `credential_guid` (a custom local vault read that only
 ever builds `CredentialRef(name=guid, credential_guid=guid)`) ignores `agent_json`, so
@@ -1825,15 +1831,15 @@ failure invisible to status-only pipelines.
 Apps that lean on the SDK's transparent resolution (they build no `CredentialRef` and
 call no `resolve_credential_raw`) are not gated in and never flagged.
 
-This is a WARN (not BLOCK): the static heuristic recognises the two sanctioned resolver
+This is a WARN (not BLOCK): the static heuristic recognises the sanctioned resolver
 entry points and a direct `agent_spec`-carrying ref, but an app could resolve
 `agent_json` through a bespoke helper the heuristic does not know about.  Review before
 suppressing.
 
-**Remediation:** route credential resolution through `CredentialRef.resolve(input)` or
-`CredentialRef.from_workflow_args(workflow_args)` (both consume `agent_json` and pick
-the correct route), keeping the direct `credential_guid` path only as a fallback after
-the agent-aware call.
+**Remediation:** route credential resolution through the SDK seam,
+`route_credentials(input)` from `application_sdk.credentials` (SDK >= 3.40.0), or
+`self.resolve_credential_ref(input)` in a `SqlApp` subclass.  Both consume `agent_json`
+and pick the correct route; it is the same end state P053 prescribes.
 
 ---
 

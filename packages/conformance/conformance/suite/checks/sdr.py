@@ -39,7 +39,8 @@ Cross-artifact checks that gate on ``self_deployed_runtime: true`` in
 * ``P037`` — an SDR app that resolves source credentials with a *custom*,
   GUID-only path (a hand-rolled vault read + ``resolve_credential_raw`` or a
   bare ``CredentialRef(credential_guid=...)`` construction) but NEVER routes
-  through an agent-aware resolver entry point (``CredentialRef.resolve`` /
+  through an agent-aware resolver entry point (``route_credentials`` / the
+  ``SqlApp.resolve_credential_ref`` seam / ``CredentialRef.resolve`` /
   ``CredentialRef.from_workflow_args`` / an ``agent_spec``-carrying ref).  Its
   manifest can be P029-clean and ``agent_json`` forwarded, yet the connector
   code ignores it and resolves strictly by ``credential_guid`` — so in agent
@@ -831,6 +832,10 @@ _AGENT_AWARE_RESOLVER_ATTRS = frozenset(
 #: an app that has migrated onto it must not read to P037 as GUID-only.
 _ROUTE_CREDENTIALS = "route_credentials"
 
+#: The SDK ``SqlApp`` template's credential seam; matched only as that SDK method.
+_SQLAPP_SEAM = "resolve_credential_ref"
+_SQLAPP_CLASS = "SqlApp"
+
 
 _SDK_CALLABLE = "sdk-callable"
 _SDK_MODULE = "sdk-module"
@@ -989,6 +994,92 @@ def _attribute_root(node: ast.expr) -> str | None:
     return node.id if isinstance(node, ast.Name) else None
 
 
+def _sdk_sqlapp_names(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """Local names bound to the SDK ``SqlApp`` class, and to SDK modules."""
+    classes: set[str] = set()
+    modules: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            if node.level != 0 or not node.module:
+                continue
+            if node.module.split(".")[0] != "application_sdk":
+                continue
+            for alias in node.names:
+                local = alias.asname or alias.name
+                if alias.name == _SQLAPP_CLASS:
+                    classes.add(local)
+                else:
+                    modules.add(local)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] == "application_sdk":
+                    modules.add(alias.asname or alias.name.split(".")[0])
+    return classes, modules
+
+
+def _is_sdk_sqlapp(node: ast.expr, classes: set[str], modules: set[str]) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in classes
+    return (
+        isinstance(node, ast.Attribute)
+        and node.attr == _SQLAPP_CLASS
+        and _attribute_root(node.value) in modules
+    )
+
+
+def _is_self_receiver(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id in ("self", "cls")
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "super"
+    )
+
+
+def _sqlapp_seam_calls(tree: ast.AST) -> set[int]:
+    """``id()`` of every call in *tree* that is the SDK ``SqlApp`` seam."""
+    classes, modules = _sdk_sqlapp_names(tree)
+    if not classes and not modules:
+        return set()
+    class_defs = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+    derived: set[str] = set()
+    changed = True
+    while changed:
+        changed = False
+        for cls in class_defs:
+            if cls.name in derived:
+                continue
+            if any(
+                _is_sdk_sqlapp(base, classes, modules)
+                or (isinstance(base, ast.Name) and base.id in derived)
+                for base in cls.bases
+            ):
+                derived.add(cls.name)
+                changed = True
+    calls: set[int] = set()
+    for cls in class_defs:
+        if cls.name not in derived:
+            continue
+        for node in ast.walk(cls):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == _SQLAPP_SEAM
+                and _is_self_receiver(node.func.value)
+            ):
+                calls.add(id(node))
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == _SQLAPP_SEAM
+            and _is_sdk_sqlapp(node.func.value, classes, modules)
+        ):
+            calls.add(id(node))
+    return calls
+
+
 def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, bool]:
     """Scan one module AST for the two P037 signals.
 
@@ -1000,7 +1091,7 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
     * ``agent_aware`` is True if any *agent-aware* resolver entry point is called
       (``CredentialRef.resolve`` / ``CredentialRef.from_workflow_args`` /
       ``resolve_agent_credential`` / ``resolve_agent_json`` /
-      ``route_credentials``) or a
+      ``route_credentials`` / the ``SqlApp.resolve_credential_ref`` seam) or a
       ``CredentialRef(...)`` is built with an ``agent_spec``/``agent_json`` kwarg.
 
     Using the AST (not text) keeps docstring/comment mentions of
@@ -1008,7 +1099,7 @@ def _classify_credential_calls(tree: ast.AST) -> tuple[tuple[int, str] | None, b
     """
     custom_site: tuple[int, str] | None = None
     agent_aware = False
-    router_calls = _sdk_router_calls(tree)
+    router_calls = _sdk_router_calls(tree) | _sqlapp_seam_calls(tree)
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -1052,9 +1143,11 @@ def _check_p037(paths: list[Path], root: Path) -> list[Finding]:
 
     Apps that rely on the SDK's transparent resolution (they build no
     ``CredentialRef`` and call no ``resolve_credential_raw``) are not gated in.
-    Apps that DO call an agent-aware resolver (via ``CredentialRef.resolve`` or
+    Apps that DO call an agent-aware resolver (``route_credentials``, the
+    ``SqlApp.resolve_credential_ref`` seam, ``CredentialRef.resolve`` or
     ``CredentialRef.from_workflow_args``) are exempt even when they also keep a
-    GUID fallback.
+    GUID fallback.  Other SDK resolvers (``resolve_or_none`` and the like) are
+    deliberately not accepted: P053 moves those apps onto ``route_credentials``.
     """
     first_custom: tuple[str, int, str] | None = None
     agent_aware_anywhere = False
@@ -1086,15 +1179,17 @@ def _check_p037(paths: list[Path], root: Path) -> list[Finding]:
             message=(
                 f"{rel}:{line}: credentials are resolved via a custom GUID-only path "
                 f"({callee}) and no agent-aware resolver "
-                "(CredentialRef.resolve / CredentialRef.from_workflow_args) is called "
+                "(route_credentials / SqlApp.resolve_credential_ref / "
+                "CredentialRef.resolve / CredentialRef.from_workflow_args) is called "
                 "anywhere in the app. The manifest may forward agent_json, but code "
                 "that resolves strictly by credential_guid ignores it, so in SDR "
                 "(agent) mode credentials never resolve and the workflow writes zero "
-                "assets while reporting 'success'. Route "
-                "credential resolution through CredentialRef.resolve(input) or "
-                "CredentialRef.from_workflow_args(workflow_args) — which consume "
-                "agent_json and pick the agent vs. GUID route — keeping the direct "
-                "credential_guid path only as a fallback."
+                "assets while reporting 'success'. Route credential resolution "
+                "through the SDK seam: route_credentials(input) from "
+                "application_sdk.credentials (SDK >= 3.40.0), or "
+                "self.resolve_credential_ref(input) in a SqlApp subclass — both "
+                "consume agent_json and pick the agent vs. GUID route. This is the "
+                "end state P053 prescribes."
             ),
         )
     ]

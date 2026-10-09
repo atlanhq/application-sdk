@@ -1041,18 +1041,21 @@ say so.
 - **P037 SdrAgentJsonNotConsumed** (WARN) — the app performs custom credential
   resolution (a bare `CredentialRef(credential_guid=...)` construction or a
   `resolve_credential_raw(...)` call) but never routes through an agent-aware
-  resolver entry point (`CredentialRef.resolve(input)` /
+  resolver entry point (`route_credentials(input)`, the `SqlApp` seam
+  `self.resolve_credential_ref(input)`, `CredentialRef.resolve(input)` /
   `CredentialRef.from_workflow_args(workflow_args)`, or a `CredentialRef` built
-  with an `agent_spec`/`agent_json` kwarg).  Resolving strictly by
+  with an `agent_spec`/`agent_json` kwarg).  Other SDK resolvers
+  (`resolve_or_none` and the like) are not accepted.  Resolving strictly by
   `credential_guid` ignores the forwarded `agent_json`, so in agent (SDR) mode
   the credential never resolves and the workflow writes zero assets while
   reporting "success".  The finding is app-level, anchored at
   the first custom-resolution call site.  Apps that lean on the SDK's transparent
   resolution (no `CredentialRef` / `resolve_credential_raw`) are not gated in.
   Draft a proposal that
-  routes resolution through `CredentialRef.resolve(input)` /
-  `CredentialRef.from_workflow_args(workflow_args)`, keeping the direct
-  `credential_guid` path only as a fallback; route to residue for confirmation.
+  routes resolution through the SDK seam: `route_credentials(input)` from
+  `application_sdk.credentials` (SDK >= 3.40.0), or
+  `self.resolve_credential_ref(input)` in a `SqlApp` subclass — the same end
+  state P053 prescribes; route to residue for confirmation.
 
 - **P038 SdrArtifactMisrooted** (BLOCK) — the object-store output path/prefix
   (`artifacts/apps/<identity>/...`) is rooted from the *workflow-input*
