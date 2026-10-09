@@ -26,6 +26,7 @@ Contracts generate — from one `pkl eval -m . contract/app.pkl` at repo root:
 - `src/App.pkl`: **canonical template** for all new native app contracts.
 - `src/Widgets.pkl`: widget catalog re-exported from `App.pkl`.
 - `src/Inputs.pkl`: typed input field classes for `App.inputs` (system apps), re-exported from `App.pkl`.
+- `src/InputContract.pkl`: renders a system app's caller node (`contract/generated/input.pkl`) from its `inputs`.
 - `src/Deployment.pkl`: deployment classes (`DeployConfig`, `Pool`, `KedaConfig`, `DaprComponents`, `ResourceConfig`, `VpaConfig`) re-exported from `App.pkl`.
 - `src/Connectors.pkl`: connector type registry (still imported explicitly by consumers).
 - Legacy modules (reference only, not for new apps):
@@ -61,7 +62,7 @@ demonstrates distinct feature surface, verified by `tests/*.pkl`.
   per-entrypoint artifact subfolders.
 - `deploy`: single-pool migration example — KEDA, resources, env, pool-level `overrides`; shows v0.16.x → v0.17.0 migration path.
 - `pools`: `pools` map (preferred) — named hot/cold worker pools with per-pool `cooldownPeriod` and resources.
-- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest.
+- `system-app`: `type = "system"` — no `entrypoints` block or card, no credential config, no `uiConfig`; typed `inputs` render `_input.py` with no manifest, and `contract/generated/input.pkl` for callers.
 - `connection-ref`: `ConnectionRefInput` widget, `pipeline.publish = null`.
 - `publish-controls`: publish toggles, `includeInputFields`, `errorHandling`, `zeroOutConfig`.
 - `fanin`: multi-parent fan-in via `dependsOn`, explicit `DependencyCondition`.

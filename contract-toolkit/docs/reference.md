@@ -1086,6 +1086,63 @@ A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value,
 - Two different `ObjectField`s with the same `className`.
 - A `JsonObjectField`, at any depth. Declare the shape with an `ObjectField`, or a `MapField` of a known value type.
 
+### System App Input Contract
+
+A system app has no manifest of its own: each caller declares the app's DAG node. Hand-written node classes such as `PopularityNode` restate the app's args and drift from them. A system app with `inputs` therefore also renders `contract/generated/input.pkl`: the node class callers add to their `extraNodes`, with one typed property per input.
+
+The file sits in the app's `contract/` Pkl project, so it ships in the app's published Pkl package, and each caller pins the version it imports:
+
+```pkl
+// caller's contract/PklProject
+dependencies {
+  ["app-contract-toolkit"] { uri = "package://atlanhq.github.io/application-sdk/contracts/app-contract-toolkit@<VERSION>" }
+  ["popularity"] { uri = "package://<popularity package base URI>@<VERSION>" }
+}
+
+// caller's contract/app.pkl
+import "@popularity/generated/input.pkl" as Popularity
+
+extraNodes {
+  ["popularity"] = new Popularity.PopularityNode {
+    connectionQualifiedName = "$.extract.outputs.connection_qualified_name"
+    windowDays = "{{popularity-window-days}}"
+    includeFilter = "{{include-filter}}"
+    dependsOn { "qi" }
+  }
+}
+```
+
+How each input becomes a property:
+
+| Input | Property |
+|---|---|
+| Name | camelCase of the arg name (`window_days` → `windowDays`), rendered under the arg name. A Pkl keyword is quoted with backticks. |
+| `required = true` | No default: a caller that does not set it fails to render. Adding a required input to the app fails every caller's render until the caller sets it. |
+| Otherwise | Nullable, default `null`, and rendered only when set; the app applies its own default. |
+| `StringField` | `String` |
+| `IntField` / `FloatField` | `Int` / `Number`, with `min` / `max` as a constraint |
+| `BoolField` | `Boolean` |
+| `EnumField` | A union of its string values |
+| `ListField` / `MapField` | `Listing<T>` / `Mapping<String, V>`, length-bounded by `maxItems` |
+| `ObjectField` | A generated class of the same `className`, rendered to its wire mapping |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | `DagRef` only: these values come from upstream nodes at run time |
+| `lifecycle` not `active` | `@Deprecated`, with `lifecycleMessage` |
+
+Every non-string property also accepts a `DagRef`: an upstream node's output (`$.extract.outputs.x`) or an exact workflow parameter placeholder (`{{window-days}}`). Because the property type is a union, a literal collection or object is written with `new` (`typesToIgnore = new Listing { "SHOW" }`), not amended in place.
+
+The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<taskQueuePrefix>-{deployment_name}"` and `displayName` from the app's contract. A caller may override any of them, and sets `dependsOn` / `dependsOnCondition` itself.
+
+**Refused:**
+
+- At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, and a value outside its input's type or bounds.
+- At the system app's render: an input whose property name would override a `DAGNode` property (`depends_on` → `dependsOn`), and two inputs mapping to the same property.
+
+**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `@app-contract-toolkit/App.pkl`; only a contract that imports the toolkit by relative path changes it).
+
+The generated module imports `@app-contract-toolkit/App.pkl` through the app's own package dependency. Pkl resolves one version of a package per major version across the caller's dependency graph (toolkit versions are all `0.x`), so the node is a `DAGNode` of the caller's own toolkit.
+
+**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app publishes its contract package.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.

@@ -1,0 +1,134 @@
+// FND-3570: a system app with `inputs` generates the DAG node its callers
+// add to `extraNodes`. These facts render a caller contract with the
+// example's committed `contract/generated/input.pkl`, so they test the file
+// callers actually import.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/minimal/app.pkl" as minimalApp
+import "../examples/system-app/app.pkl" as systemApp
+import "../examples/system-app/contract/generated/input.pkl" as Caller
+import "../src/App.pkl" as App
+import "../src/InputContract.pkl"
+
+local function callerWith(node: App.DAGNode) = (minimalApp) {
+  extraNodes { ["system-app"] = node }
+}
+
+local function manifestOf(app: App) = app.output.files["app/generated/manifest.json"].text
+
+local function systemNodeArgs(app: App): Map<String, Any> =
+  let (manifest = new json.Parser { useMapping = true }.parse(manifestOf(app)) as Mapping)
+  manifest["dag"]["system-app"]["inputs"]["args"].toMap()
+
+local minimalNode = new Caller.SystemAppNode {
+  connectionQualifiedName = "$.extract.outputs.connection_qualified_name"
+  inputPrefix = "$.extract.outputs.input_prefix"
+  dependsOn { "extract" }
+}
+
+local fullNode = (minimalNode) {
+  windowDays = 7
+  sampleRatio = 0.5
+  lakeProvider = "aws"
+  columnMapping = new Caller.ColumnMapping { queryId = "QID"; caseInsensitiveMatch = false }
+  // A union-typed property has no default to amend, so literal collections
+  // are written with `new`.
+  includeFilter = new Mapping { ["DB"] = new Listing { "SCHEMA_A"; "SCHEMA_B" } }
+  typesToIgnore = new Listing { "SHOW" }
+  dryRun = "{{dry-run}}"
+}
+
+local generatedText: String = systemApp.output.files["contract/generated/input.pkl"].text
+
+facts {
+  ["The committed example caller node is current"] {
+    generatedText == read("../examples/system-app/contract/generated/input.pkl").text
+  }
+
+  ["The caller node renders required args and stamps the app's identity"] {
+    let (args = systemNodeArgs(callerWith(minimalNode)))
+    args.keys == Set("connection_qualified_name", "input_prefix", "app_name")
+      && args["app_name"] == "system-app"
+  }
+
+  ["The node's workflow type and task queue come from the system app's contract"] {
+    manifestOf(callerWith(minimalNode)).contains("\"workflow_type\": \"system-app\"")
+    manifestOf(callerWith(minimalNode)).contains("\"task_queue\": \"atlan-system-app-{deployment_name}\"")
+  }
+
+  ["Optional args render under their snake_case names, objects as mappings"] {
+    let (args = systemNodeArgs(callerWith(fullNode)))
+    args["window_days"] == 7
+      && args["sample_ratio"] == 0.5
+      && args["lake_provider"] == "aws"
+      && args["column_mapping"].toMap() == Map("query_id", "QID", "case_insensitive_match", false)
+      && args["include_filter"].keys == Set("DB")
+      && args["include_filter"]["DB"].toList() == List("SCHEMA_A", "SCHEMA_B")
+      && args["types_to_ignore"].toList() == List("SHOW")
+      && args["dry_run"] == "{{dry-run}}"
+  }
+
+  ["A caller that omits a required input fails to render"] {
+    module.catch(() -> manifestOf(callerWith(new Caller.SystemAppNode {
+      connectionQualifiedName = "$.extract.outputs.connection_qualified_name"
+    }))).contains("inputPrefix")
+  }
+
+  ["A caller cannot set an undeclared property or arg"] {
+    module.catch(() -> manifestOf(callerWith((minimalNode) { args { ["calculate_popularity"] = true } })))
+      .contains("SystemAppNode.args sets List(\"calculate_popularity\"), which `system-app` does not declare.")
+  }
+
+  ["Values are checked against each input's type and bounds"] {
+    module.catch(() -> manifestOf(callerWith((minimalNode) { windowDays = 0 }))).contains("Expected value of type `Int(this >= 1)|App.DagRef`")
+    module.catch(() -> manifestOf(callerWith((minimalNode) { windowDays = "seven" }))).contains("Expected value of type `Int(this >= 1)|App.DagRef`")
+    module.catch(() -> manifestOf(callerWith((minimalNode) { lakeProvider = "s3" }))).contains("Expected value of type")
+  }
+
+  ["Non-string inputs accept a DAG output or an exact placeholder"] {
+    systemNodeArgs(callerWith((minimalNode) { windowDays = "$.extract.outputs.window_days" }))["window_days"]
+      == "$.extract.outputs.window_days"
+    systemNodeArgs(callerWith((minimalNode) { windowDays = "{{window-days}}" }))["window_days"] == "{{window-days}}"
+  }
+
+  ["Only a system app with inputs generates a caller node"] {
+    !(systemApp) { inputs = new Mapping {} }.output.files.containsKey("contract/generated/input.pkl")
+    !minimalApp.output.files.containsKey("contract/generated/input.pkl")
+  }
+
+  ["Class name defaults to name in PascalCase plus Node; the path can be moved"] {
+    (systemApp) { name = "connection-delete" }.output.files["contract/generated/input.pkl"].text
+      .contains("open class ConnectionDeleteNode extends App.DAGNode {")
+    (systemApp) { inputContractPath = "pkl/input.pkl" }.output.files.containsKey("pkl/input.pkl")
+  }
+
+  ["Input names map to camelCase properties, quoting Pkl keywords"] {
+    InputContract.propertyName("connection_qualified_name") == "connectionQualifiedName"
+    (systemApp) { inputs { ["import"] = new App.StringField { default = "x" } } }
+      .output.files["contract/generated/input.pkl"].text.contains("  `import`: String?\n")
+  }
+
+  ["An input that would override a DAGNode property is refused"] {
+    module.catch(() -> (systemApp) { inputs { ["depends_on"] = new App.StringField { default = "" } } }
+      .output.files["contract/generated/input.pkl"].text)
+      .contains("would become input-contract properties List(\"dependsOn\")")
+  }
+
+  ["Inputs mapping to one camelCase property are refused"] {
+    module.catch(() -> (systemApp) { inputs { ["dry__run"] = new App.BoolField { default = false } } }
+      .output.files["contract/generated/input.pkl"].text)
+      .contains("map to the same camelCase input-contract property")
+  }
+
+  ["Strings in docs and values are escaped"] {
+    let (text = (systemApp) {
+      displayName = "Say \"hi\" \\ now"
+      inputs { ["mode"] = new App.EnumField { values { "a\"b" }; default = "a\"b"; doc = "line one\nline two" } }
+    }.output.files["contract/generated/input.pkl"].text)
+    text.contains("  displayName = \"Say \\\"hi\\\" \\\\ now\"\n")
+      && text.contains("  /// line one\n  /// line two\n")
+      && text.contains("(\"a\\\"b\"|App.DagRef)?")
+  }
+}

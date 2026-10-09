@@ -75,3 +75,8 @@ inputs {
     lifecycleMessage = "Ignored; will be removed."
   }
 }
+
+// The generated caller node (`contract/generated/input.pkl`) imports the
+// toolkit the way this example does: by relative path. A real app leaves
+// `inputContractToolkitImport` at its `@app-contract-toolkit/App.pkl` default.
+inputContractToolkitImport = "../../../../src/App.pkl"
