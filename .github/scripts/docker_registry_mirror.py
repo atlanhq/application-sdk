@@ -38,22 +38,41 @@ DEFAULT_DAEMON_JSON = Path("/etc/docker/daemon.json")
 MIRRORS_KEY = "registry-mirrors"
 # `docker info` exits non-zero until the restarted daemon answers on its socket.
 _MIRRORS_FORMAT = "{{json .RegistryConfig.Mirrors}}"
+# Cap on one `docker info` probe, so a hung client can't eat the whole budget.
+_INFO_PROBE_TIMEOUT_S = 10.0
+# Return code reported for a command killed at its timeout (as coreutils' timeout).
+TIMED_OUT = 124
 
 
 class DaemonConfigError(Exception):
     """The existing daemon.json can't be safely merged into."""
 
 
-def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
-    """Single seam for every external command, so tests can stub it."""
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+def run(cmd: list[str], timeout_s: float) -> subprocess.CompletedProcess[str]:
+    """Single seam for every external command, so tests can stub it.
+
+    A command still running at ``timeout_s`` is killed and reported as
+    ``TIMED_OUT`` rather than raised, so a hung ``systemctl``/``docker`` can't
+    keep the caller from reaching its rollback.
+    """
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=timeout_s
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, TIMED_OUT, "", f"timed out after {timeout_s:g}s"
+        )
 
 
 def load_config(path: Path) -> dict[str, Any] | None:
     """Return the parsed daemon.json, or None when there is none to merge into."""
     if not path.exists():
         return None
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as exc:
+        raise DaemonConfigError(f"{path} is not valid UTF-8 ({exc})") from exc
     if not text.strip():
         return None
     try:
@@ -90,13 +109,20 @@ def write_config(path: Path, config: dict[str, Any]) -> None:
 
 
 def restart_and_wait(timeout_s: float) -> list[str] | None:
-    """Restart Docker; return its mirrors once it answers, or None on timeout."""
-    restart = run(["systemctl", "restart", "docker"])
+    """Restart Docker; return its mirrors once it answers, or None on timeout.
+
+    ``timeout_s`` bounds the restart and every probe together.
+    """
+    deadline = time.monotonic() + timeout_s
+    restart = run(["systemctl", "restart", "docker"], timeout_s)
     if restart.returncode != 0:
         print(f"systemctl restart docker failed: {restart.stderr.strip()}")
-    deadline = time.monotonic() + timeout_s
     while True:
-        info = run(["docker", "info", "--format", _MIRRORS_FORMAT])
+        remaining = max(deadline - time.monotonic(), 1.0)
+        info = run(
+            ["docker", "info", "--format", _MIRRORS_FORMAT],
+            min(remaining, _INFO_PROBE_TIMEOUT_S),
+        )
         if info.returncode == 0:
             try:
                 mirrors = json.loads(info.stdout.strip() or "null")
@@ -120,9 +146,8 @@ def configure(daemon_json: Path, mirror: str, timeout_s: float) -> int:
         print(f"{daemon_json} already lists {mirror}; not restarting Docker.")
         return 0
 
-    original_text = (
-        daemon_json.read_text(encoding="utf-8") if daemon_json.exists() else None
-    )
+    # Bytes, not text: the rollback restores the file exactly as it was.
+    original_bytes = daemon_json.read_bytes() if daemon_json.exists() else None
     write_config(daemon_json, merged)
     mirrors = restart_and_wait(timeout_s)
     if mirrors is not None:
@@ -138,10 +163,10 @@ def configure(daemon_json: Path, mirror: str, timeout_s: float) -> int:
         return 0
 
     # Docker didn't come back on the new config: put the old one back.
-    if original_text is None:
+    if original_bytes is None:
         daemon_json.unlink(missing_ok=True)
     else:
-        daemon_json.write_text(original_text, encoding="utf-8")
+        daemon_json.write_bytes(original_bytes)
     if restart_and_wait(timeout_s) is not None:
         print(
             f"::warning::Docker did not restart with registry mirror {mirror}; "

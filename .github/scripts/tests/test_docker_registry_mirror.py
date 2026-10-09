@@ -36,13 +36,22 @@ class FakeDocker:
         self.up = True
         self.restarts = 0
         self.mirrors: list[str] = []
+        self.timeouts: list[float] = []
+        # Simulates `systemctl restart` hanging until killed at its timeout.
+        self.restart_hangs = False
         # Called with the config the daemon is restarting on; return False to
         # simulate a daemon that refuses to start.
         self.accepts = lambda config: True
 
-    def __call__(self, cmd: list[str]) -> subprocess.CompletedProcess[str]:
+    def __call__(
+        self, cmd: list[str], timeout_s: float
+    ) -> subprocess.CompletedProcess[str]:
+        self.timeouts.append(timeout_s)
         if cmd[:2] == ["systemctl", "restart"]:
             self.restarts += 1
+            if self.restart_hangs:
+                self.up = False
+                return subprocess.CompletedProcess(cmd, mod.TIMED_OUT, "", "timed out")
             config = (
                 json.loads(self.daemon_json.read_text())
                 if self.daemon_json.exists()
@@ -72,8 +81,20 @@ def docker(daemon_json: Path, monkeypatch: pytest.MonkeyPatch) -> FakeDocker:
     return fake
 
 
+TIMEOUT_S = 5.0
+
+
 def _configure(daemon_json: Path) -> int:
-    return mod.main(["--mirror", MIRROR, "--daemon-json", str(daemon_json)])
+    return mod.main(
+        [
+            "--mirror",
+            MIRROR,
+            "--daemon-json",
+            str(daemon_json),
+            "--timeout-seconds",
+            str(TIMEOUT_S),
+        ]
+    )
 
 
 def test_creates_daemon_json_when_absent(
@@ -175,6 +196,46 @@ def daemon_json_docker_without_mirror(
     fake = FakeDocker(daemon_json, starts_with_mirror=False)
     monkeypatch.setattr(mod, "run", fake)
     return fake
+
+
+def test_invalid_utf8_config_is_left_alone(
+    daemon_json: Path, docker: FakeDocker, capsys
+) -> None:
+    content = b'{"bip": "\xff"}'
+    daemon_json.parent.mkdir(parents=True)
+    daemon_json.write_bytes(content)
+    assert _configure(daemon_json) == 0
+    assert daemon_json.read_bytes() == content
+    assert docker.restarts == 0
+    assert "not valid UTF-8" in capsys.readouterr().out
+
+
+def test_hung_restart_still_reaches_rollback(
+    daemon_json: Path, docker: FakeDocker, capsys
+) -> None:
+    original = b'{"bip": "192.168.49.1/24"}'
+    daemon_json.parent.mkdir(parents=True)
+    daemon_json.write_bytes(original)
+    docker.restart_hangs = True
+    assert _configure(daemon_json) == 1
+    assert daemon_json.read_bytes() == original
+    assert docker.restarts == 2
+    assert "::error::Docker is not running" in capsys.readouterr().out
+
+
+def test_every_command_is_bounded_by_the_budget(
+    daemon_json: Path, docker: FakeDocker
+) -> None:
+    docker.accepts = lambda config: False
+    _configure(daemon_json)
+    assert docker.timeouts
+    assert all(0 < t <= TIMEOUT_S for t in docker.timeouts)
+
+
+def test_run_kills_a_command_at_its_timeout() -> None:
+    result = mod.run(["sleep", "30"], 0.2)
+    assert result.returncode == mod.TIMED_OUT
+    assert "timed out" in result.stderr
 
 
 def test_rejects_non_https_mirror(daemon_json: Path) -> None:
