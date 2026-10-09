@@ -72,12 +72,12 @@ from __future__ import annotations
 import ast
 import re
 import sys
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
     _parse_directives,
-    collect_import_origins,
     is_collectable_test_file,
     is_test_class,
     make_cli_main,
@@ -162,8 +162,52 @@ class _Index:
     classes: dict[tuple[str, str], _ClassInfo]
     #: bare class name -> every repo definition, for cross-file resolution.
     by_name: dict[str, list[_ClassInfo]]
-    #: per-file ``{bound name: fully-qualified import origin}``.
+    #: per-file module-scope ``{bound name: fully-qualified import origin}``.
     origins: dict[str, dict[str, str]]
+    #: per-file modules star-imported at module scope (absolute imports only).
+    star_modules: dict[str, list[str]]
+
+
+def _module_scope_statements(body: list[ast.stmt]) -> Iterator[ast.stmt]:
+    """Statements that run at module scope, including inside ``if`` / ``try`` /
+    ``with`` blocks, but never inside a function or class body.
+
+    A module-level class's bases are evaluated in module scope, so only these
+    bindings can name them. A nested import of a different same-named class
+    must not overwrite the module-level binding.
+    """
+    for stmt in body:
+        yield stmt
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for field in ("body", "orelse", "finalbody"):
+            children = getattr(stmt, field, None)
+            if isinstance(children, list):
+                yield from _module_scope_statements(children)
+        for handler in getattr(stmt, "handlers", None) or []:
+            yield from _module_scope_statements(handler.body)
+
+
+def _module_imports(tree: ast.Module) -> tuple[dict[str, str], list[str]]:
+    """Module-scope import bindings ``{bound: origin}`` and star-imported modules.
+
+    Later bindings win, as they do at runtime. Relative imports are skipped:
+    their names resolve against the repo's own classes.
+    """
+    origins: dict[str, str] = {}
+    stars: list[str] = []
+    for stmt in _module_scope_statements(tree.body):
+        if isinstance(stmt, ast.Import):
+            for alias in stmt.names:
+                bound = alias.asname or alias.name.split(".")[0]
+                origins[bound] = alias.name
+        elif isinstance(stmt, ast.ImportFrom) and stmt.level == 0 and stmt.module:
+            for alias in stmt.names:
+                if alias.name == "*":
+                    stars.append(stmt.module)
+                else:
+                    origins[alias.asname or alias.name] = f"{stmt.module}.{alias.name}"
+    return origins, stars
 
 
 def _index_file(path: Path, rel: str, index: _Index) -> tuple[ast.Module, str] | None:
@@ -173,7 +217,7 @@ def _index_file(path: Path, rel: str, index: _Index) -> tuple[ast.Module, str] |
         tree = ast.parse(text, filename=str(path))
     except (OSError, SyntaxError, UnicodeDecodeError):
         return None
-    index.origins[rel] = collect_import_origins(tree)
+    index.origins[rel], index.star_modules[rel] = _module_imports(tree)
     for node in ast.walk(tree):
         if isinstance(node, ast.ClassDef):
             info = _ClassInfo(rel, node)
@@ -233,6 +277,15 @@ def _resolve_base(
         # rule can grade — a same-named class from another package is not the
         # SDK's.
         return set(), list(index.by_name.get(qualified.rpartition(".")[2], []))
+
+    if not rest:
+        # ``from application_sdk.testing.e2e import *`` exports every harness
+        # base, so a bare harness-base name with no explicit binding is the
+        # SDK's.
+        for module in index.star_modules.get(from_file, []):
+            sdk = _sdk_name(f"{module}.{head}")
+            if sdk is not None:
+                return {sdk}, []
 
     # No import binding: a relative or star import, or a dotted chain off an
     # unbound name. Resolve the tail against the repo's own classes.
@@ -314,7 +367,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         # utility (either base is allowed) and every other type: not graded.
         return []
 
-    index = _Index(classes={}, by_name={}, origins={})
+    index = _Index(classes={}, by_name={}, origins={}, star_modules={})
     for gen in _generated_base_files(root):
         _index_file(gen, gen.relative_to(root).as_posix(), index)
 
@@ -370,7 +423,8 @@ main = make_cli_main(
         "T026: e2e harness base class must match the app's declared marketplace "
         "type (system -> SystemAppE2ETest; connector -> not SystemAppE2ETest)."
     ),
-    default_scan_paths=("tests",),
+    # discover() takes the repo root and walks its tests/ itself.
+    default_scan_paths=(".",),
 )
 
 if __name__ == "__main__":

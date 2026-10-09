@@ -7,10 +7,16 @@ grade, and every class that is not an SDK-harness class.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
-from conformance.suite.checks.e2e_system_app_base import RULE_T026, discover, scan_all
+from conformance.suite.checks.e2e_system_app_base import (
+    RULE_T026,
+    discover,
+    main,
+    scan_all,
+)
 
 _SYSTEM_SUITE = """\
 from application_sdk.testing.e2e import SystemAppE2ETest
@@ -189,6 +195,62 @@ def test_non_sdk_system_base_does_not_count(tmp_path: Path) -> None:
     assert "resolves to BaseE2ETest" in message
 
 
+def test_nested_import_does_not_mask_module_level_sdk_base(tmp_path: Path) -> None:
+    """Only module-scope bindings name a module-level class's bases."""
+    _atlan_yaml(tmp_path, "system")
+    _suite(
+        tmp_path,
+        "from application_sdk.testing.e2e import BaseE2ETest\n"
+        "def _helper():\n"
+        "    from somewhere_else import BaseE2ETest\n"
+        "    return BaseE2ETest\n"
+        "class TestMyAppE2E(BaseE2ETest):\n    pass\n",
+    )
+    assert len(_run(tmp_path)) == 1
+
+
+def test_module_level_conditional_import_counts(tmp_path: Path) -> None:
+    _atlan_yaml(tmp_path, "connector")
+    _suite(
+        tmp_path,
+        "try:\n"
+        "    from application_sdk.testing.e2e import SystemAppE2ETest\n"
+        "except ImportError:\n"
+        "    raise\n"
+        "class TestMyAppE2E(SystemAppE2ETest):\n    pass\n",
+    )
+    assert len(_run(tmp_path)) == 1
+
+
+@pytest.mark.parametrize(
+    ("app_type", "base", "expected"),
+    [
+        ("connector", "SystemAppE2ETest", 1),
+        ("system", "SystemAppE2ETest", 0),
+        ("system", "BaseE2ETest", 1),
+    ],
+)
+def test_sdk_star_import_is_recognised(
+    tmp_path: Path, app_type: str, base: str, expected: int
+) -> None:
+    _atlan_yaml(tmp_path, app_type)
+    _suite(
+        tmp_path,
+        "from application_sdk.testing.e2e import *\n"
+        f"class TestMyAppE2E({base}):\n    pass\n",
+    )
+    assert len(_run(tmp_path)) == expected
+
+
+def test_non_sdk_star_import_is_not_the_sdk(tmp_path: Path) -> None:
+    _atlan_yaml(tmp_path, "connector")
+    _suite(
+        tmp_path,
+        "from somewhere_else import *\nclass TestMyAppE2E(SystemAppE2ETest):\n    pass\n",
+    )
+    assert _run(tmp_path) == []
+
+
 # ---------------------------------------------------------------------------
 # utility
 # ---------------------------------------------------------------------------
@@ -316,3 +378,18 @@ def test_finding_is_anchored_to_the_class_line(tmp_path: Path) -> None:
     [finding] = scan_all(discover(tmp_path), tmp_path)
     assert finding.file == "tests/e2e/test_myapp_e2e.py"
     assert finding.line == 3
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+
+def test_cli_default_scan_finds_e2e_suites(tmp_path: Path) -> None:
+    """With no path argument the CLI scans the repo root's tests/ tree."""
+    _atlan_yaml(tmp_path, "system")
+    _suite(tmp_path, _PLAIN_SUITE)
+    sarif_file = tmp_path / "out.sarif"
+    main(["--root", str(tmp_path), "--sarif-output", str(sarif_file)])
+    results = json.loads(sarif_file.read_text())["runs"][0]["results"]
+    assert [r["ruleId"] for r in results] == [RULE_T026]
