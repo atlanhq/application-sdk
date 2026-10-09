@@ -905,9 +905,9 @@ jobs:
       # because every action this workflow calls is pinned @main: an input added
       # on a feature branch is silently ignored until it lands. Sparse-checks-out
       # .github/scripts and globalprotect-connect (the latter needed only on the
-      # dataforge path — a couple of extra files otherwise).
-      - name: Fetch SDK CI scripts (source-credential export + dataforge fetch)
-        if: env.E2E_SOURCE_ENV_JSON != '' || inputs.dataforge-datasource != ''
+      # dataforge path — a couple of extra files otherwise). Unconditional: the
+      # Docker Hub mirror step below runs a script from it on every connector.
+      - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -1054,6 +1054,20 @@ jobs:
       # A services-script has no token of its own, so log in here for it. It
       # is non-fatal: only a pull of a private image needs it, and that pull
       # then fails loudly (`denied`/`unauthorized`) on its own.
+      # Docker Hub images (mysql, testcontainers' ryuk, ...) are pulled
+      # anonymously from a shared runner IP, so they hit Docker Hub's rate limit
+      # and its 5xx, fail test setup, and eject the PR from the merge queue.
+      # `registry-mirrors` makes the daemon try mirror.gcr.io (Google's public
+      # Docker Hub cache) first and fall back to Docker Hub on a miss; image
+      # names and testcontainers are unchanged, and only docker.io pulls are
+      # affected. Must run AFTER the GlobalProtect step: its `resubnet-docker`
+      # overwrites daemon.json, which would drop the mirror. Best-effort: fails
+      # only if Docker is down even after restoring the old daemon.json.
+      - name: Use mirror.gcr.io as a Docker Hub mirror
+        run: >-
+          sudo python3 application-sdk-scripts/.github/scripts/docker_registry_mirror.py
+          --mirror https://mirror.gcr.io
+
       - name: Log in to GHCR (private CI images for services-script)
         continue-on-error: true
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
