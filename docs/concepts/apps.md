@@ -410,16 +410,18 @@ emits ``endpoint_configured=<bool>`` rather than the resolved endpoint.
 
 ### SDK built-in workflow: `sdk:store-assert`
 
-Every worker built by `create_worker` also registers `sdk:store-assert`. There is
-no flag and no handler is needed. It exists for system-app e2e (see
+Every worker built by `create_worker` also registers `sdk:store-assert`; no
+handler is needed. It exists for system-app e2e (see
 `docs/standards/connector-ci-e2e.md`): the harness appends it as a DAG node on the
 app's own task queue. There it checks claims of the form `prefix → ABSENT | PRESENT
 | COUNT == n` against the worker's deployment object store, and returns a verdict
 made of counts and booleans.
 
-It is ungated on purpose. An e2e-only switch would have to be injected through the
-install path, and e2e exists to prove that path matches production. What keeps it
-safe in production instead:
+It is registered everywhere, so worker start-up is the same on every tenant, but
+it is gated at run time. Unless the pod has `ATLAN_STORE_ASSERT_ENABLED=true`, the
+node touches nothing and returns `enabled=False`. The SDK's e2e install sets that
+variable for the one tenant it installs to, through `deploy.env_overrides`; a
+customer tenant never has it. When enabled:
 
 - It only LISTs, plus one HEAD for `ABSENT`. It never reads contents, writes or
   deletes.

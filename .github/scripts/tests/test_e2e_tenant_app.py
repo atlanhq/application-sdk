@@ -281,6 +281,103 @@ def test_install_scopes_the_registration_to_the_one_tenant(
     assert "commit_sha" not in body
 
 
+def test_install_opts_only_its_own_tenant_in_to_store_assertions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FND-3571: the registration carries env_overrides.<tenant> setting
+    ATLAN_STORE_ASSERT_ENABLED, keyed by the same tenant it is scoped to."""
+    yaml = pytest.importorskip("yaml")
+    transport = _wire(
+        monkeypatch,
+        StubTransport(
+            routes=[
+                StubRoute("GET", "/info", _ok({"version": "older"})),
+                StubRoute("POST", "/marketplace/publish", _ok({"version_id": "v1"})),
+                StubRoute("POST", "/install", _ok({"deployment_id": "d1"})),
+                StubRoute(
+                    "GET", "/deployments/", _ok({"deployment_status": "SUCCEEDED"})
+                ),
+                StubRoute("GET", "/info", _ok({"version": _VERSION})),
+            ],
+            sticky=[StubRoute("GET", "/releases/", Response(status=404, body={}))],
+        ),
+    )
+    app.install(_install_args(deploy_config="replicas: 2\n"))
+
+    config = yaml.safe_load(transport.body_for("/marketplace/publish")["config"])
+    assert config == {
+        "replicas": 2,
+        "env_overrides": {"example-tenant": {"ATLAN_STORE_ASSERT_ENABLED": "true"}},
+    }
+
+
+@pytest.mark.parametrize(
+    ("deploy_config", "expected"),
+    [
+        pytest.param(
+            "",
+            {"env_overrides": {"t1": {"ATLAN_STORE_ASSERT_ENABLED": "true"}}},
+            id="empty",
+        ),
+        pytest.param(
+            "env_overrides:\n  t1: {A: '1'}\n  t2: {B: '2'}\nreplicas: 1\n",
+            {
+                "env_overrides": {
+                    "t1": {"A": "1", "ATLAN_STORE_ASSERT_ENABLED": "true"},
+                    "t2": {"B": "2"},
+                },
+                "replicas": 1,
+            },
+            id="merges-existing-overrides",
+        ),
+        pytest.param(
+            "env_overrides:\n  t1: {ATLAN_STORE_ASSERT_ENABLED: 'false'}\n",
+            {"env_overrides": {"t1": {"ATLAN_STORE_ASSERT_ENABLED": "true"}}},
+            id="wins-over-an-app-opt-out",
+        ),
+    ],
+)
+def test_store_assert_override_merges_into_the_deploy_config(
+    deploy_config: str, expected: dict[str, object]
+) -> None:
+    yaml = pytest.importorskip("yaml")
+    merged = app.with_store_assert_override(deploy_config, "t1")
+    assert yaml.safe_load(merged) == expected
+
+
+def test_store_assert_override_on_an_empty_config_needs_no_yaml(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The per-leg venv may lack PyYAML; the common empty case must not need it."""
+    real_import = builtins.__import__
+
+    def _no_yaml(name: str, *args: object, **kwargs: object) -> object:
+        if name == "yaml":
+            raise ModuleNotFoundError(name)
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _no_yaml)
+    assert app.with_store_assert_override("", "t1") == (
+        'env_overrides:\n  "t1":\n    ATLAN_STORE_ASSERT_ENABLED: "true"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "deploy_config",
+    [
+        pytest.param("- a\n- b\n", id="not-a-mapping"),
+        pytest.param("env_overrides: [t1]\n", id="overrides-not-a-mapping"),
+        pytest.param("env_overrides:\n  t1: on\n", id="tenant-entry-not-a-mapping"),
+    ],
+)
+def test_store_assert_override_refuses_a_malformed_deploy_config(
+    deploy_config: str,
+) -> None:
+    pytest.importorskip("yaml")
+    with pytest.raises(app.TenantAppError):
+        app.with_store_assert_override(deploy_config, "t1")
+
+
 def test_install_forwards_commit_sha_when_present(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -828,10 +828,10 @@ def create_worker(
             resolved_app_name,
         )
 
-    # The e2e object-store assertion node (FND-3571). Ungated on purpose: an
-    # e2e-only flag would have to be injected through the install path e2e
-    # exists to prove matches production. It is LIST-only, allowlisted and
-    # bounded — see store_assert's module docstring.
+    # The e2e object-store assertion node (FND-3571). Registered on every
+    # worker so start-up is identical on every tenant; the activity itself
+    # refuses to read anything unless ATLAN_STORE_ASSERT_ENABLED is set — see
+    # store_assert's module docstring.
     from application_sdk.execution._temporal.store_assert import (  # noqa: PLC0415 — lazy: loaded with the other SDK-owned workflows
         STORE_ASSERT_ACTIVITY_NAME,
         StoreAssertWorkflow,

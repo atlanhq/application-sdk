@@ -44,17 +44,18 @@ store, so a suite that needs to prove what the app left there returns its claims
 from :meth:`SystemAppE2ETest.store_expectations`. The harness then appends one
 ``sdk:store-assert`` node after every other node, on the app's own task queue —
 the same pod and store binding the app used — and grades the verdict that node
-returns. Every SDK worker serves that workflow; it only LISTs, only under
-``artifacts/apps/``, ``persistent-artifacts/`` and ``connection-cache/``, and
-returns counts::
+returns. Every SDK worker serves that workflow, but it reads nothing unless the
+app's pod has ``ATLAN_STORE_ASSERT_ENABLED=true``, which the SDK's e2e install
+sets for the leased tenant. It only LISTs, only under ``artifacts/apps/``,
+``persistent-artifacts/`` and ``connection-cache/``, and returns counts::
 
     class TestPurge(SystemAppE2ETest):
         def store_expectations(self):
             return [
-                StoreExpectation(
-                    prefix=f"persistent-artifacts/{self.connection_qualified_name}",
-                    kind=StoreExpectationKind.ABSENT,
+                StoreAbsent(
+                    prefix=f"persistent-artifacts/{self.connection_qualified_name}"
                 ),
+                StoreCount(prefix="connection-cache/kept", count=3),
             ]
 """
 
@@ -67,14 +68,18 @@ from typing import Any, ClassVar
 from application_sdk.errors.base import AppError
 from application_sdk.execution._temporal.store_assert import (
     STORE_ASSERT_WORKFLOW_TYPE,
+    StoreAbsent,
     StoreAssertInput,
     StoreAssertOutput,
+    StoreCount,
     StoreExpectation,
     StoreExpectationKind,
     StoreObservation,
+    StorePresent,
 )
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.testing.e2e._errors import (
+    StoreAssertDisabledError,
     StoreAssertQueueAmbiguousError,
     StoreAssertUnreadableError,
 )
@@ -87,8 +92,10 @@ logger = get_logger(__name__)
 
 __all__ = [
     "STORE_ASSERT_NODE_ID",
+    "StoreAbsent",
+    "StoreCount",
     "StoreExpectation",
-    "StoreExpectationKind",
+    "StorePresent",
     "SystemAppE2ETest",
 ]
 
@@ -283,6 +290,19 @@ class SystemAppE2ETest(BaseE2ETest):
                     "store expectations went ungraded. Not a verdict on the app: "
                     f"{type(read.cause).__name__}: {read.cause}"
                 ),
+            )
+        if not read.enabled:
+            raise StoreAssertDisabledError(
+                message=(
+                    f"The {STORE_ASSERT_NODE_ID} node in AE run "
+                    f"{outcome.ae_result.run_id} read nothing: the app's pod does "
+                    "not have ATLAN_STORE_ASSERT_ENABLED=true. The SDK's e2e "
+                    "install sets it for the leased tenant through "
+                    "deploy.env_overrides; check that this run installed the app "
+                    "itself (install-app-to-tenant) and that the install applied "
+                    "the override. Not a verdict on the app."
+                ),
+                resource=STORE_ASSERT_NODE_ID,
             )
         if not read.passed:
             raise AssertionError(

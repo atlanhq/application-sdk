@@ -15,14 +15,15 @@ from application_sdk.execution._temporal.store_assert import MAX_STORE_EXPECTATI
 from application_sdk.testing.e2e import (
     BaseE2ETest,
     RunMode,
+    StoreAbsent,
     StoreExpectation,
-    StoreExpectationKind,
     SystemAppE2ETest,
     TenantPool,
 )
 from application_sdk.testing.e2e._errors import (
     AtlanApiHttpError,
     MissingHarnessClassAttrError,
+    StoreAssertDisabledError,
     StoreAssertQueueAmbiguousError,
     StoreAssertUnreadableError,
     TenantPoolMismatchError,
@@ -328,7 +329,7 @@ def _manifest(tmp_path: Path, dag: dict[str, Any] | None = None) -> str:
 
 
 def _absent() -> StoreExpectation:
-    return StoreExpectation(prefix=_PURGED, kind=StoreExpectationKind.ABSENT)
+    return StoreAbsent(prefix=_PURGED)
 
 
 def _suite(manifest: str, *expectations: StoreExpectation) -> _SystemSuite:
@@ -383,7 +384,7 @@ def test_expectations_append_a_node_on_the_apps_queue(tmp_path: Path) -> None:
     assert node["app_name"] == "connection-delete"
     assert node["depends_on"] == {"node_id": "delete", "tag": "success"}
     assert node["inputs"]["args"] == {
-        "expectations": [{"prefix": _PURGED, "kind": "absent", "count": None}]
+        "expectations": [{"prefix": _PURGED, "kind": "absent"}]
     }
     assert harness._node_dispatch[STORE_ASSERT_NODE_ID].task_queue == (
         "atlan-connection-delete-production"
@@ -424,6 +425,7 @@ def test_too_many_expectations_fail_before_submit(tmp_path: Path) -> None:
 
 def _verdict(passed: bool) -> dict[str, Any]:
     return {
+        "enabled": True,
         "passed": passed,
         "observations": [
             {
@@ -476,6 +478,23 @@ async def test_an_unreadable_verdict_is_never_a_pass(
     tmp_path: Path, outputs: dict[str, Any] | Exception
 ) -> None:
     with pytest.raises(StoreAssertUnreadableError):
+        await _read_then_grade(tmp_path, _OutputsAE(outputs))
+
+
+@pytest.mark.parametrize(
+    "outputs",
+    [
+        pytest.param(
+            {"enabled": False, "passed": False, "observations": []}, id="disabled"
+        ),
+        # A verdict that predates the gate has no `enabled`; it must not pass.
+        pytest.param({"passed": True, "observations": []}, id="no-enabled-field"),
+    ],
+)
+async def test_a_disabled_tenant_is_a_precondition_error_not_a_pass(
+    tmp_path: Path, outputs: dict[str, Any]
+) -> None:
+    with pytest.raises(StoreAssertDisabledError, match="ATLAN_STORE_ASSERT_ENABLED"):
         await _read_then_grade(tmp_path, _OutputsAE(outputs))
 
 

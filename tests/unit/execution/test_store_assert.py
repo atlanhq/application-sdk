@@ -10,18 +10,27 @@ import pydantic
 import pytest
 from obstore.store import MemoryStore
 
+from application_sdk import constants
 from application_sdk.execution._temporal import store_assert
 from application_sdk.execution._temporal.store_assert import (
     MAX_STORE_EXPECTATIONS,
+    StoreAbsent,
     StoreAssertInput,
-    StoreExpectation,
+    StoreCount,
     StoreExpectationKind,
+    StorePresent,
     evaluate_expectation,
     resolve_assert_prefix,
     store_assert_activity,
 )
 
 ROOT = "persistent-artifacts/default/postgres/run-1"
+
+
+@pytest.fixture
+def enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The tenant opted in (``ATLAN_STORE_ASSERT_ENABLED=true``)."""
+    monkeypatch.setattr(constants, "STORE_ASSERT_ENABLED", True)
 
 
 def _store(**objects: bytes) -> MemoryStore:
@@ -35,12 +44,12 @@ def _put(store: MemoryStore, key: str, data: bytes = b"x") -> None:
     obstore.put(store, key, data)
 
 
-def _absent(prefix: str = ROOT) -> StoreExpectation:
-    return StoreExpectation(prefix=prefix, kind=StoreExpectationKind.ABSENT)
+def _absent(prefix: str = ROOT) -> StoreAbsent:
+    return StoreAbsent(prefix=prefix)
 
 
-def _count(n: int, prefix: str = ROOT) -> StoreExpectation:
-    return StoreExpectation(prefix=prefix, kind=StoreExpectationKind.COUNT, count=n)
+def _count(n: int, prefix: str = ROOT) -> StoreCount:
+    return StoreCount(prefix=prefix, count=n)
 
 
 # ---------------------------------------------------------------------------
@@ -157,9 +166,7 @@ async def test_present_and_count_use_the_data_view() -> None:
             f"{ROOT}/b.json": b"x",
         }
     )
-    present = await evaluate_expectation(
-        StoreExpectation(prefix=ROOT, kind=StoreExpectationKind.PRESENT), store
-    )
+    present = await evaluate_expectation(StorePresent(prefix=ROOT), store)
     assert present.passed
     assert (present.objects_all, present.objects_data) == (3, 2)
 
@@ -170,9 +177,7 @@ async def test_present_and_count_use_the_data_view() -> None:
 
 
 async def test_present_fails_on_an_empty_prefix() -> None:
-    observation = await evaluate_expectation(
-        StoreExpectation(prefix=ROOT, kind=StoreExpectationKind.PRESENT), MemoryStore()
-    )
+    observation = await evaluate_expectation(StorePresent(prefix=ROOT), MemoryStore())
     assert not observation.passed
 
 
@@ -188,22 +193,30 @@ async def test_count_over_the_scan_cap_is_truncated_and_fails(monkeypatch) -> No
 
 
 @pytest.mark.parametrize(
-    "expectation",
+    "raw",
     [
-        pytest.param(
-            StoreExpectation(prefix=ROOT, kind=StoreExpectationKind.COUNT),
-            id="count-without-n",
-        ),
-        pytest.param(
-            StoreExpectation(prefix=ROOT, kind=StoreExpectationKind.ABSENT, count=0),
-            id="n-on-absent",
-        ),
+        pytest.param({"prefix": ROOT, "kind": "count"}, id="count-without-n"),
+        pytest.param({"prefix": ROOT, "kind": "absent", "count": 0}, id="n-on-absent"),
+        pytest.param({"prefix": ROOT, "kind": "bogus"}, id="unknown-kind"),
+        pytest.param({"prefix": ROOT}, id="no-kind"),
     ],
 )
-async def test_malformed_expectations_fail(expectation: StoreExpectation) -> None:
-    observation = await evaluate_expectation(expectation, MemoryStore())
-    assert not observation.passed
-    assert observation.problem
+def test_malformed_expectations_are_rejected_at_the_boundary(
+    raw: dict[str, Any],
+) -> None:
+    with pytest.raises(pydantic.ValidationError):
+        StoreAssertInput.model_validate({"expectations": [raw]})
+
+
+def test_each_kind_round_trips_through_json_as_its_own_model() -> None:
+    """AE carries the input as JSON; the ``kind`` tag must pick the model back."""
+    sent = StoreAssertInput(
+        expectations=[_absent(), StorePresent(prefix=ROOT), _count(2)]
+    )
+    wire = sent.model_dump(mode="json", include={"expectations"})
+    assert [e["kind"] for e in wire["expectations"]] == ["absent", "present", "count"]
+    received = StoreAssertInput.model_validate(wire)
+    assert received.expectations == sent.expectations
 
 
 def test_negative_count_is_rejected_at_construction() -> None:
@@ -234,7 +247,7 @@ async def test_only_list_and_head_are_ever_called(monkeypatch) -> None:
     for expectation in (
         _absent(),
         _count(1),
-        StoreExpectation(prefix=ROOT, kind=StoreExpectationKind.PRESENT),
+        StorePresent(prefix=ROOT),
     ):
         await evaluate_expectation(expectation, store)
 
@@ -250,6 +263,32 @@ async def test_listing_failure_is_reported_not_raised(monkeypatch) -> None:
     assert observation.problem == "listing failed: RuntimeError"
 
 
+async def test_disabled_tenant_reads_nothing(monkeypatch) -> None:
+    """Without ATLAN_STORE_ASSERT_ENABLED the store is never even resolved."""
+    monkeypatch.setattr(constants, "STORE_ASSERT_ENABLED", False)
+
+    def _must_not_resolve(_: Any) -> Any:
+        raise AssertionError("resolved the store on a disabled tenant")
+
+    monkeypatch.setattr(store_assert, "_resolve_store", _must_not_resolve)
+    output = await store_assert_activity(StoreAssertInput(expectations=[_absent()]))
+    assert (output.enabled, output.passed, output.observations) == (False, False, [])
+
+
+def test_gate_defaults_off(monkeypatch) -> None:
+    import importlib
+
+    monkeypatch.delenv("ATLAN_STORE_ASSERT_ENABLED", raising=False)
+    try:
+        assert importlib.reload(constants).STORE_ASSERT_ENABLED is False
+        monkeypatch.setenv("ATLAN_STORE_ASSERT_ENABLED", "TRUE ")
+        assert importlib.reload(constants).STORE_ASSERT_ENABLED is True
+    finally:
+        monkeypatch.undo()
+        importlib.reload(constants)
+
+
+@pytest.mark.usefixtures("enabled")
 async def test_activity_aggregates_in_input_order(monkeypatch) -> None:
     store = _store(**{f"{ROOT}/a": b"x"})
     monkeypatch.setattr(store_assert, "_resolve_store", lambda _: store)
@@ -257,6 +296,7 @@ async def test_activity_aggregates_in_input_order(monkeypatch) -> None:
     passing = await store_assert_activity(
         StoreAssertInput(expectations=[_count(1), _absent(f"{ROOT}-other")])
     )
+    assert passing.enabled
     assert passing.passed
     assert [o.prefix for o in passing.observations] == [ROOT, f"{ROOT}-other"]
 
@@ -267,6 +307,7 @@ async def test_activity_aggregates_in_input_order(monkeypatch) -> None:
     assert [o.passed for o in failing.observations] == [True, False]
 
 
+@pytest.mark.usefixtures("enabled")
 async def test_no_expectations_is_not_a_pass(monkeypatch) -> None:
     monkeypatch.setattr(store_assert, "_resolve_store", lambda _: MemoryStore())
     assert not (await store_assert_activity(StoreAssertInput())).passed

@@ -62,6 +62,7 @@ __all__ = [
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
     "SeededConnectionNotSearchableError",
+    "StoreAssertDisabledError",
     "StoreAssertQueueAmbiguousError",
     "StoreAssertUnreadableError",
     "TenantPoolMismatchError",
@@ -318,3 +319,18 @@ class StoreAssertUnreadableError(DependencyUnavailableError):
 
     code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORE_ASSERT_UNREADABLE"
     component: str | None = "e2e_harness_store_assert"
+
+
+@dataclass(kw_only=True)
+class StoreAssertDisabledError(PreconditionError):
+    """The app's deployment on this tenant has store assertions turned off.
+
+    The node ran and read nothing, because ``ATLAN_STORE_ASSERT_ENABLED`` was
+    not set on the app's pod. The SDK's e2e install sets it, per tenant,
+    through ``deploy.env_overrides``; an app installed any other way does not
+    get it. Like :class:`StoreAssertUnreadableError`, this says nothing about
+    the app, and it is not a pass.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_STORE_ASSERT_DISABLED"
+    expected_state: str | None = "ATLAN_STORE_ASSERT_ENABLED=true on the app's pod"

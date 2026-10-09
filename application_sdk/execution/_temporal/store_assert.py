@@ -8,10 +8,11 @@ binding the app used. The node evaluates each expectation and returns a
 structured verdict as its output; the harness reads that output back from AE
 and grades it.
 
-Registered on every app worker, ungated. An env flag that only e2e tenants set
-would have to be injected through the e2e install path, and that path exists
-to prove it behaves exactly like production. What keeps this safe in
-production instead:
+Registered on every app worker, so worker start-up is identical on every
+tenant, but gated at run time: unless ``ATLAN_STORE_ASSERT_ENABLED`` is set
+(:data:`~application_sdk.constants.STORE_ASSERT_ENABLED`) the activity touches
+nothing and returns ``enabled=False``. Only the e2e install sets it, per
+tenant, through ``deploy.env_overrides``. Within an enabled run:
 
 * LIST, plus one HEAD for ``ABSENT`` — no GET, PUT or DELETE, and never
   object contents.
@@ -33,7 +34,7 @@ included, plus a HEAD on the bare prefix key, which is exactly what
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from temporalio import activity, workflow
@@ -42,6 +43,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     import obstore
 
+    from application_sdk import constants
     from application_sdk._runtime.offload import run_in_thread
     from application_sdk.contracts.base import Input, Output, SerializableEnum
     from application_sdk.contracts.types import MaxItems
@@ -92,17 +94,40 @@ class StoreExpectationKind(SerializableEnum):
     """Exactly ``count`` objects in the default listing view."""
 
 
-class StoreExpectation(BaseModel):
-    """One claim about one prefix."""
+class _PrefixCheck(BaseModel):
+    """Fields every check shares."""
 
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     prefix: str = Field(max_length=1024)
     """Object-store key prefix, or a ``./local/tmp/...`` workflow path; both are
     normalised the same way every SDK storage call normalises them."""
-    kind: StoreExpectationKind
-    count: int | None = Field(default=None, ge=0)
-    """Required for ``COUNT`` and rejected otherwise."""
+
+
+class StoreAbsent(_PrefixCheck):
+    """No object of any kind under the prefix, directory markers included."""
+
+    kind: Literal[StoreExpectationKind.ABSENT] = StoreExpectationKind.ABSENT
+
+
+class StorePresent(_PrefixCheck):
+    """At least one object under the prefix, in the default listing view."""
+
+    kind: Literal[StoreExpectationKind.PRESENT] = StoreExpectationKind.PRESENT
+
+
+class StoreCount(_PrefixCheck):
+    """Exactly ``count`` objects under the prefix, in the default listing view."""
+
+    kind: Literal[StoreExpectationKind.COUNT] = StoreExpectationKind.COUNT
+    count: int = Field(ge=0)
+
+
+StoreExpectation = Annotated[
+    StoreAbsent | StorePresent | StoreCount, Field(discriminator="kind")
+]
+"""One claim about one prefix: a model per kind, tagged by ``kind``, so a kind
+added later never changes the shape of an existing one."""
 
 
 class StoreObservation(BaseModel):
@@ -137,6 +162,9 @@ class StoreAssertInput(Input):
 class StoreAssertOutput(Output):
     """The verdict: one observation per expectation, in input order."""
 
+    enabled: bool = False
+    """Whether this deployment allows store assertions. When False nothing was
+    read, ``observations`` is empty and ``passed`` is False."""
     passed: bool = False
     observations: Annotated[
         list[StoreObservation], MaxItems(MAX_STORE_EXPECTATIONS)
@@ -173,18 +201,6 @@ def resolve_assert_prefix(prefix: str) -> str:
         "prefix must sit strictly below one of: "
         + ", ".join(f"{r}/" for r in STORE_ASSERT_ROOTS)
     )
-
-
-def _check_shape(expectation: StoreExpectation) -> str:
-    """Return why *expectation* is malformed, or ``""`` when it is not."""
-    if expectation.kind is StoreExpectationKind.COUNT and expectation.count is None:
-        return "a COUNT expectation needs count"
-    if (
-        expectation.kind is not StoreExpectationKind.COUNT
-        and expectation.count is not None
-    ):
-        return f"count is only valid on COUNT, not {expectation.kind.value.upper()}"
-    return ""
 
 
 async def _scan(
@@ -240,18 +256,17 @@ async def evaluate_expectation(
     observation = StoreObservation(
         prefix=expectation.prefix,
         kind=expectation.kind,
-        expected_count=expectation.count,
+        expected_count=(
+            expectation.count if isinstance(expectation, StoreCount) else None
+        ),
     )
-    shape_problem = _check_shape(expectation)
-    if shape_problem:
-        return observation.model_copy(update={"problem": shape_problem})
     try:
         listing_prefix = resolve_assert_prefix(expectation.prefix)
     except ValueError as exc:
         return observation.model_copy(update={"problem": str(exc)})
 
     # ABSENT needs only to know whether anything at all is there.
-    limit = 1 if expectation.kind is StoreExpectationKind.ABSENT else MAX_KEYS_SCANNED
+    limit = 1 if isinstance(expectation, StoreAbsent) else MAX_KEYS_SCANNED
     try:
         items, truncated = await _scan(store, listing_prefix, limit=limit)
     # conformance: ignore[E004] the failure is the observation: reported in the verdict, which the harness grades as not passed
@@ -265,7 +280,7 @@ async def evaluate_expectation(
             update={"problem": f"listing failed: {type(exc).__name__}"}
         )
 
-    if expectation.kind is StoreExpectationKind.ABSENT:
+    if isinstance(expectation, StoreAbsent):
         found = len(items)
         if not found:
             try:
@@ -292,7 +307,7 @@ async def evaluate_expectation(
         "objects_data": len(data),
         "truncated": truncated,
     }
-    if expectation.kind is StoreExpectationKind.PRESENT:
+    if isinstance(expectation, StorePresent):
         update["passed"] = bool(data)
     else:
         update["passed"] = not truncated and len(data) == expectation.count
@@ -306,7 +321,18 @@ async def evaluate_expectation(
 
 @activity.defn(name=STORE_ASSERT_ACTIVITY_NAME)
 async def store_assert_activity(input: StoreAssertInput) -> StoreAssertOutput:
-    """Evaluate every expectation against the worker's deployment store."""
+    """Evaluate every expectation against the worker's deployment store.
+
+    Reads nothing unless this tenant opted in: the gate is checked before the
+    store is even resolved.
+    """
+    if not constants.STORE_ASSERT_ENABLED:
+        logger.warning(
+            "store-assert refused %d expectation(s): ATLAN_STORE_ASSERT_ENABLED "
+            "is not set on this deployment",
+            len(input.expectations),
+        )
+        return StoreAssertOutput(enabled=False)
     store = _resolve_store(None)
     observations = [
         await evaluate_expectation(expectation, store)
@@ -318,7 +344,7 @@ async def store_assert_activity(input: StoreAssertInput) -> StoreAssertOutput:
         len(observations),
         sum(o.passed for o in observations),
     )
-    return StoreAssertOutput(passed=passed, observations=observations)
+    return StoreAssertOutput(enabled=True, passed=passed, observations=observations)
 
 
 @workflow.defn(name=STORE_ASSERT_WORKFLOW_TYPE)

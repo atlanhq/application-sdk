@@ -56,8 +56,9 @@ routing, polling, grading and teardown are unchanged.
   the variable when it places a leg; for a local run against a system-app
   tenant, export it yourself.
 - To prove what the app left in the tenant's object store, override
-  `store_expectations()` to return `StoreExpectation(prefix, kind, count)`
-  claims: `ABSENT`, `PRESENT` or `COUNT == n`. The runner can't see the store,
+  `store_expectations()` to return `StoreAbsent(prefix)`,
+  `StorePresent(prefix)` or `StoreCount(prefix, count)` claims, all from
+  `application_sdk.testing.e2e`. The runner can't see the store,
   so the harness appends an `sdk-store-assert` node after every other node. It
   runs on the app's own task queue, which means the same pod and store binding
   the app used. The harness then reads that node's verdict back from AE and
@@ -72,6 +73,12 @@ routing, polling, grading and teardown are unchanged.
   - Every SDK worker serves the `sdk:store-assert` workflow behind the node. It
     only LISTs, plus one HEAD for `ABSENT`, and returns counts, never keys or
     contents.
+  - The node reads nothing unless the app's pod has
+    `ATLAN_STORE_ASSERT_ENABLED=true`. `e2e_tenant_app.py install` sets it for
+    the leased tenant through `deploy.env_overrides`, so it applies only when
+    the run installs the app itself (`install-app-to-tenant`, the default) or
+    you use the E2E Tenant Install workflow. Otherwise the test fails with
+    `StoreAssertDisabledError`, never as a pass.
   - If the DAG spans several task queues, override `store_assert_task_queue()`.
 
 ### The SDR base class

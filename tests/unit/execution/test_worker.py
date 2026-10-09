@@ -361,7 +361,8 @@ class TestCreateWorker:
         assert "preflight" in str(excinfo.value)
 
     def test_store_assert_workflow_registered_on_every_worker(self) -> None:
-        """FND-3571: ungated — no env flag, no handler needed."""
+        """FND-3571: registered whatever ATLAN_STORE_ASSERT_ENABLED says — the
+        gate is checked at run time, so start-up is identical everywhere."""
         from application_sdk.execution._temporal.store_assert import (
             STORE_ASSERT_ACTIVITY_NAME,
             StoreAssertWorkflow,

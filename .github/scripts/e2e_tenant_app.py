@@ -2503,6 +2503,57 @@ def _converged_outcome(
     )
 
 
+#: Env var that opts an app's pod in to the SDK's ``sdk:store-assert`` e2e node
+#: (FND-3571). Every e2e install sets it for the one tenant it targets; a
+#: customer tenant never gets it, so the node there reads nothing.
+STORE_ASSERT_ENV = "ATLAN_STORE_ASSERT_ENABLED"
+
+
+def with_store_assert_override(deploy_config: str, tenant: str) -> str:
+    """Return *deploy_config* with ``env_overrides.<tenant>`` opting in to store
+    assertions.
+
+    ``env_overrides`` is GM's per-tenant env mechanism, the same one a
+    production ``atlan.yaml`` uses, so the install path itself is unchanged:
+    only the deploy config this registration carries gains one entry. Existing
+    overrides, for this tenant or any other, are kept.
+
+    Args:
+        deploy_config: The ``deploy:`` block from ``atlan.yaml`` as YAML text,
+            or empty.
+        tenant: The validated tenant ID the release is scoped to.
+
+    Raises:
+        TenantAppError: *deploy_config* is not a YAML mapping, or its
+            ``env_overrides`` (or this tenant's entry) is not a mapping.
+    """
+    if not deploy_config.strip():
+        # JSON scalars are valid YAML, so no YAML library is needed here.
+        return (
+            f"env_overrides:\n  {json.dumps(tenant)}:\n"
+            f"    {STORE_ASSERT_ENV}: {json.dumps('true')}\n"
+        )
+    try:
+        import yaml  # noqa: PLC0415 — lazy: see resolve_app_id
+    except ModuleNotFoundError as exc:
+        raise TenantAppError(
+            "PyYAML is needed to add the store-assert env override to a "
+            "non-empty deploy config; run the install on the runner's system "
+            "Python, which has it."
+        ) from exc
+    parsed = yaml.safe_load(deploy_config)
+    if not isinstance(parsed, dict):
+        raise TenantAppError("deploy config is not a YAML mapping")
+    overrides = parsed.setdefault("env_overrides", {})
+    if not isinstance(overrides, dict):
+        raise TenantAppError("deploy.env_overrides is not a mapping")
+    tenant_env = overrides.setdefault(tenant, {})
+    if not isinstance(tenant_env, dict):
+        raise TenantAppError(f"deploy.env_overrides.{tenant} is not a mapping")
+    tenant_env[STORE_ASSERT_ENV] = "true"
+    return yaml.safe_dump(parsed, default_flow_style=False, sort_keys=False)
+
+
 def install(args: argparse.Namespace) -> InstallOutcome:
     """Register + install + wait, converging by version."""
     # app_id is a free-text workflow input that lands in request paths; the
@@ -2563,6 +2614,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             )
         print(f"::warning::{explanation} Double-check before relying on this run.")
 
+    tenant = validate_tenant_id(args.tenant)
     request = PublishRequest(
         app_id=app_id,
         image=args.image,
@@ -2571,8 +2623,8 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         repo_url=repo_url,
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
-        allowed_tenants=(validate_tenant_id(args.tenant),),
-        deploy_config=args.deploy_config,
+        allowed_tenants=(tenant,),
+        deploy_config=with_store_assert_override(args.deploy_config, tenant),
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
         entrypoints=args.entrypoints,
