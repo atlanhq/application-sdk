@@ -93,7 +93,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `docsUrl` | String | `""` | Documentation link. Emitted as top-level `docs_url` in `atlan.yaml` (omitted when empty). |
 | `logo` | String | `icon` | Logo URL. |
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
-| `type` | String | `"connector"` | Marketplace type. |
+| `type` | String | `"connector"` | Marketplace type, emitted as top-level `type`. `"system"` switches on system-app mode; see [System Apps](#system-apps). |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
@@ -709,6 +709,8 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
 
+A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 
 Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
@@ -834,7 +836,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `hasCredentialConfig` | Boolean | `true` | Whether to generate credential JSON. |
+| `hasCredentialConfig` | Boolean | `true` (`false` when `type = "system"`) | Whether to generate credential JSON. |
 | `connectorConfigName` | String | `"atlan-connectors-{name}"` | Credential configmap name. Override to share credentials across entrypoints. |
 | `credentialConnectorType` | String | `"rest"` | Default connector type (`"jdbc"`, `"rest"`). |
 | `credentialCommonFields` | Listing<CredentialFieldEntry> | `[]` | Fields shared across all auth types. |
@@ -857,6 +859,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
+| `inputs` | Mapping<FieldName, InputField> | Typed inputs with no setup-form widget. System apps only; see [System App Inputs](#system-app-inputs). |
 
 ### Deploy Configuration
 
@@ -1015,6 +1018,130 @@ Use the typed `vpa` field rather than `overrides`: the chart key is `vpa`, and a
 
 For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
 
+### System Apps
+
+A system app runs only inside a tenant and is started by other apps' DAG nodes (popularity, publish, query intelligence, ...). It has no marketplace card. Set `type = "system"`:
+
+- `marketplaceCard` and `hasCredentialConfig` default to `false`.
+- `atlan.yaml` keeps `type: system` but carries **no `entrypoints` block**. Downstream reads an entrypoint with no `marketplace_card` key as a card, so no block is the only shape that cannot surface one. This matches the hand-written `atlan.yaml` of existing system apps.
+- `marketplaceCard = true`, or `packageId` on any `Entrypoint`, fails at `pkl eval`: with no `entrypoints` block they would be dropped silently.
+
+What does **not** change:
+
+- `manifest.json` and the workflow configmap still follow `uiConfig`. A system app with a setup form keeps it; one without renders no manifest.
+- `_input.py` is rendered from `uiConfig`, from `inputs` (below), or both. A system app's input class extends the SDK's `Input` rather than `ExtractionInput`.
+- `_e2e_base.py` extends `SystemAppE2ETest` and omits the `argo_*` names and `app_service_url`; see [E2E Test Harness](#e2e-test-harness).
+- Hiding the app's own listing is the Global Marketplace App row's `is_system_app` flag. Only a GM admin sets it, so the toolkit does not emit it.
+
+See `examples/system-app/`.
+
+### System App Inputs
+
+Every `_input.py` field is an `InputField` from `src/Inputs.pkl`, rendered by one renderer. A `uiConfig` widget derives its field: `TagsInput` becomes `ListField { items = new StringField {} }`, `NumericInput` becomes `IntField { default = 0 }`, and so on, so a type renders the same way wherever it was declared.
+
+A system app's inputs are the args its callers' DAG nodes pass, so there is no `uiConfig` to derive them from. Declare them in `inputs`, keyed by the arg name callers send (snake_case, used as-is). The toolkit renders them into `app/generated/_input.py` as `AppInputContract(Input)`. The app imports that class, subclassing it to add validators or properties, instead of hand-maintaining its own model.
+
+```pkl
+inputs {
+  ["connection_qualified_name"] = new StringField { required = true }
+  ["window_days"] = new IntField { default = 30; min = 1 }
+  ["lake_provider"] = new EnumField { values { "local"; "aws"; "gcp"; "azure" }; default = "local" }
+  ["include_filter"] = new MapField { values = new ListField { items = new StringField {} } }
+  ["column_mapping"] = new ObjectField {
+    className = "ColumnMapping"
+    fields { ["query_id"] = new StringField { default = "QUERY_ID" } }
+  }
+}
+```
+
+| Field class | Renders | Notes |
+|---|---|---|
+| `StringField` | `str` | |
+| `IntField` / `FloatField` | `int` / `float` | `min` / `max` render `ge=` / `le=`. A `default` outside them fails at `pkl eval`: the generated model does not validate defaults, so it would reach the app unchecked. |
+| `BoolField` | `bool` | |
+| `EnumField` | `Literal[...]` | `default` must be one of `values`. |
+| `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are checked against `items`, bounds included. |
+| `MapField` | `Annotated[dict[str, V], MaxItems(n)]` | `values` is a scalar field or a `ListField`. Its only default is `{}`. |
+| `ObjectField` | its own model class | `className` must be unique. `extra="forbid"` by default; `allowExtra = true` renders `extra="ignore"`. |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | the SDK types of the same name | `FileReferenceField` is the way to hand over large or binary payloads. |
+| `JsonObjectField` | `Annotated[dict[str, Any], MaxItems(n)]` | Opaque. Exists for widgets that post free-form JSON; `inputs` refuses it. |
+
+Every field also takes `doc` (rendered as a docstring), `required`, `nullable` (renders `T | None`), `lifecycle` / `lifecycleMessage` (as on widgets) and `coerceJsonString` (also accept the value as a JSON-encoded string, via one generated `field_validator`).
+
+**Defaults** resolve in one order for every field:
+
+1. `required = true`: no default.
+2. An explicit `default`.
+3. `nullable = true`: `None`.
+4. The type's natural empty value: `[]`, `{}`, or an object with every field at its default.
+
+A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value, and inventing one (`""`, `0`) would hide a missing argument.
+
+**What changes:** `_input.py` and `app/generated/__init__.py` are emitted when `inputs` is non-empty, even with no `uiConfig`.
+
+**What does not:** `manifest.json` and the workflow configmap follow `uiConfig` only, so declaring inputs never creates a manifest. The publish-step scaffold fields (`output_dir`, ...) are added only for an app that renders a manifest.
+
+**Refused at `pkl eval`:**
+
+- `inputs` on a non-system app. No manifest arg would pass them, so every run would see only their defaults.
+- `inputs` on a multi-entrypoint bundle root, which renders no `_input.py`.
+- A key that is also a `uiConfig` field, or that the generated class already declares (base, credential, publish or streaming fields).
+- Two different `ObjectField`s with the same `className`, or a `className` that would shadow a name `_input.py` declares or imports (`Input`, `AppInputContract`, `Field`, `ConnectionRef`, ...).
+- A field name or `className` that is a Python keyword (`class`, `lambda`, `None`, ...).
+- A `JsonObjectField`, at any depth. Declare the shape with an `ObjectField`, or a `MapField` of a known value type.
+
+### System App Input Contract
+
+A system app has no manifest of its own: each caller declares the app's DAG node. Hand-written node classes such as `PopularityNode` restate the app's args and drift from them. A system app with `inputs` therefore also renders `contract/generated/input.pkl`: the node class callers add to their `extraNodes`, with one typed property per input.
+
+The file is synced into the toolkit as `src/system/<name>.pkl`. Any connector, whether internal, public or partner-built, then imports it through the toolkit dependency it already has, and the toolkit version it pins fixes the contract version:
+
+```pkl
+// caller's contract/app.pkl
+import "@app-contract-toolkit/system/popularity.pkl" as Popularity
+
+extraNodes {
+  ["popularity"] = new Popularity.PopularityNode {
+    connectionQualifiedName = "$.extract.outputs.connection_qualified_name"
+    windowDays = "{{popularity-window-days}}"
+    includeFilter = "{{include-filter}}"
+    dependsOn { "qi" }
+  }
+}
+```
+
+How each input becomes a property:
+
+| Input | Property |
+|---|---|
+| Name | camelCase of the arg name (`window_days` → `windowDays`), rendered under the arg name. A Pkl keyword is quoted with backticks. |
+| `required = true` | No default: a caller that does not set it fails to render. Adding a required input to the app fails every caller's render until the caller sets it. |
+| Otherwise | Nullable, default `null`, and rendered only when set; the app applies its own default. |
+| `nullable = true` | Also accepts `new App.ExplicitNull {}`, which sends the arg as `None`. An unset property cannot: it omits the arg. A required nullable input stays required. |
+| `StringField` | `String` |
+| `IntField` / `FloatField` | `Int` / `Number`, with `min` / `max` as a constraint |
+| `BoolField` | `Boolean` |
+| `EnumField` | A union of its string values |
+| `ListField` / `MapField` | `Listing<T>` / `Mapping<String, V>`, length-bounded by `maxItems` |
+| `ObjectField` | A generated class of the same `className`, rendered to its wire mapping |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | `DagRef` only: these values come from upstream nodes at run time |
+| `lifecycle` not `active` | `@Deprecated`, with `lifecycleMessage` |
+
+Every non-string property also accepts a `DagRef`: an upstream node's output (`$.extract.outputs.x`) or an exact workflow parameter placeholder (`{{window-days}}`). Because the property type is a union, a literal collection or object is written with `new` (`typesToIgnore = new Listing { "SHOW" }`), not amended in place.
+
+The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<taskQueuePrefix>-{deployment_name}"` and `displayName` from the app's contract. A caller may override any of them, and sets `dependsOn` / `dependsOnCondition` itself.
+
+**Refused:**
+
+- At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, a raw `args` entry for one it does (set the property instead), and a value outside its input's type or bounds.
+- At the system app's render: an input whose property name would override a node property (`depends_on` → `dependsOn`, or `inputArgs`), two inputs mapping to the same property, and an `ObjectField` whose `className` is the node class or a Pkl type the module uses (`String`, `Listing`, `App`, ...).
+
+**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, which resolves from the synced home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it).
+
+**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input and no new required input. The toolkit does not compare one release's inputs with the last. The app repo's `B005` conformance rule does, checking the generated `AppInputContract` against its `contract_schema.lock.json`, and it blocks only where that repo's conformance is enforced.
+
+**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app's contract is synced into `src/system/`.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
@@ -1022,7 +1149,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
-| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
+| `marketplaceCard` | Boolean | `true` (`false` when `type = "system"`) | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
 | `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |

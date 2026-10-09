@@ -1,0 +1,10 @@
+# AUTO-GENERATED from contract/app.pkl — DO NOT EDIT MANUALLY.
+# To regenerate: pkl eval -m . contract/app.pkl
+name: system-app
+display_name: System App Example
+type: system
+execution_mode: native
+icon_url: https://assets.atlan.com/assets/ph-gear-light.svg
+visibility: public
+build_tag: v1
+self_deployed_runtime: true
