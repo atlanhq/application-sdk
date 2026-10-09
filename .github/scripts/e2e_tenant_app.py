@@ -2587,6 +2587,13 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # instead of taking the no-op path.
     current = _extract_version(info) or resolve_version_via_catalog(info)
     if current and current == args.version:
+        # Skips the store-assert override below, by design. The version is the
+        # per-commit image tag, and every consumer runs this script from main,
+        # so once the override shipped every install of a new version carries
+        # it. A version can only converge here without it if it was installed
+        # before then, and that commit's pinned SDK predates store expectations,
+        # so its suite cannot declare any. Should it happen anyway, the suite
+        # fails closed with StoreAssertDisabledError, never a pass.
         return _converged_outcome(read_client, app_id, args.version, info, current)
     if current:
         print(f"tenant runs {current}; installing {args.version}")
@@ -2635,6 +2642,9 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
         allowed_tenants=(tenant,),
+        # Every publish carries the override. The converged early return above
+        # skips it; see the comment there for why that cannot reach a suite
+        # with store expectations, and why it fails closed if it does.
         deploy_config=with_store_assert_override(args.deploy_config, tenant),
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
