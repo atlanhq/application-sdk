@@ -279,7 +279,13 @@ def _post_graphql_once(token: str, payload: dict) -> dict:
         with urllib.request.urlopen(req, timeout=30) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        body = exc.read().decode(errors="replace")
+        # The error body can be cut short just like a success body. Keep the
+        # status rather than the read failure: it is what decides whether to
+        # retry (a 502 should, a 401 should not).
+        try:
+            body = exc.read().decode(errors="replace")
+        except (http.client.HTTPException, ConnectionError) as read_exc:
+            body = f"<error body cut short: {type(read_exc).__name__}>"
         message = f"GraphQL request failed: {exc.code} {exc.reason}: {body}"
         if _is_rate_limited(exc.code, exc.headers, body):
             raise RateLimitedError(

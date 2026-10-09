@@ -891,6 +891,49 @@ def _http_error(status: int, body: bytes, headers: dict | None = None):
     )
 
 
+class _TruncatedBody(io.RawIOBase):
+    """An HTTPError body whose connection closes before it is fully read."""
+
+    def read(self, *args):
+        raise rfs.http.client.IncompleteRead(b"{", 40)
+
+
+def _truncated_http_error(status: int):
+    return rfs.urllib.error.HTTPError(
+        rfs.GRAPHQL_URL, status, "Error", email.message.Message(), _TruncatedBody()
+    )
+
+
+def test_a_truncated_error_body_keeps_its_status_and_retries(monkeypatch):
+    # A 502 whose body is cut short must still classify as a 502. Before, the
+    # IncompleteRead escaped the HTTPError handler and bypassed retry entirely.
+    def boom(req, timeout=None):
+        raise _truncated_http_error(502)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "failed: 502 " in str(exc)
+        assert rfs._is_retryable(exc)
+
+
+def test_a_truncated_error_body_does_not_make_an_auth_failure_retryable(
+    monkeypatch,
+):
+    def boom(req, timeout=None):
+        raise _truncated_http_error(401)
+
+    monkeypatch.setattr(rfs.urllib.request, "urlopen", boom)
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "failed: 401 " in str(exc)
+        assert not rfs._is_retryable(exc)
+
+
 class _ScriptedUrlopen:
     """Stands in for urlopen: raises each scripted HTTPError, then succeeds."""
 
