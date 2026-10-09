@@ -30,6 +30,7 @@ open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
 import "Deployment.pkl" as DeploymentPkg
+import "InputContract.pkl" as InputContractPkg
 import "Inputs.pkl" as InputsPkg
 import "Widgets.pkl"
 
@@ -489,6 +490,36 @@ local inputAllObjects: List<InputsPkg.ObjectField> =
 local inputNestedClasses: List<InputsPkg.ObjectField> =
   inputAllObjects.fold(List(), (acc: List<InputsPkg.ObjectField>, o: InputsPkg.ObjectField) ->
     if (acc.any((a) -> a.className == o.className)) acc else acc.add(o))
+
+/// Name of the generated caller node class (`contract/generated/input.pkl`).
+/// Defaults to `name` in PascalCase plus `Node`: `popularity` →
+/// `PopularityNode`, `connection-delete` → `ConnectionDeleteNode`.
+///
+/// Only a system app with `inputs` generates a caller node. See
+/// `inputContractPath`.
+inputContractClassName: InputsPkg.ClassName =
+  name.split("-").map((p) -> p.capitalize()).join("") + "Node"
+
+/// Where the generated caller node is written, relative to the repo root.
+///
+/// A system app with `inputs` renders the Pkl class its callers add to their
+/// `extraNodes`, with one typed property per input. The file is synced into
+/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
+/// public or partner-built) imports it through the toolkit dependency it
+/// already has:
+///
+/// ```pkl
+/// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
+/// extraNodes { ["popularity"] = new Popularity.PopularityNode { ... } }
+/// ```
+inputContractPath: String = "contract/generated/input.pkl"
+
+/// How the generated caller node imports the toolkit. The default,
+/// `../App.pkl`, resolves from the file's synced home in the toolkit,
+/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
+/// sync source and is not evaluated there. Only a contract that evaluates the
+/// file in place (as the toolkit's own example does) sets this.
+inputContractToolkitImport: String = "../App.pkl"
 
 /// Refuses `inputs` declarations that would be dropped or would clash.
 local _inputsCheck: Any =
@@ -1003,7 +1034,18 @@ open class DAGNode {
     if (dependsOn != null && dependsOnCondition != null)
       throw("DAGNode cannot set both dependsOn and dependsOnCondition. Use dependsOn for shorthand or dependsOnCondition for explicit AE conditions.")
     else null
+
+  /// Checks this node's `args`, forced when the node renders. A system app's
+  /// generated caller node overrides it to refuse args the app does not
+  /// declare.
+  hidden _nodeArgsCheck: Any = null
 }
+
+/// A value an AE DAG resolves at run time: an upstream node's output
+/// (`$.extract.outputs.connection_qualified_name`) or an exact workflow
+/// parameter placeholder (`{{window-days}}`). Generated caller nodes accept one
+/// wherever an input's own type is not already a string.
+typealias DagRef = String(matches(Regex(#"\$\..+|\{\{[A-Za-z0-9][A-Za-z0-9_-]*\}\}"#)))
 
 /// Error handling / retry / timeout configuration for a DAG node.
 class ErrorHandlingConfig {
@@ -3129,6 +3171,7 @@ local function renderDependencyCondition(condition: DependencyCondition): Mappin
 local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_nodeCheck = node._errorHandlingCheck)
   let (_depCheck = node._dependencyConfigCheck)
+  let (_argsCheck = node._nodeArgsCheck)
   let (_qiCheck = if (node is QueryIntelligenceNode) (node as QueryIntelligenceNode)._qiArgsCheck else null)
   let (_popularityCheck = if (node is PopularityNode) (node as PopularityNode)._popularityDependencyCheck else null)
   let (_popularityFormRefCheck = if (node is PopularityNode) validatePopularityFormRefs(node as PopularityNode) else null)
@@ -5068,6 +5111,22 @@ output =
         when (uiConfig != null || !inputs.isEmpty) {
           ["app/generated/_input.py"] = generateInputClassPy()
           ["app/generated/__init__.py"] = new FileOutput { text = "" }
+        }
+        // The DAG node a system app's callers add to start it, derived from
+        // `inputs` so no caller restates the app's args by hand.
+        when (isSystemApp && !inputs.isEmpty) {
+          [inputContractPath] = new FileOutput {
+            text = InputContractPkg.render(
+              inputContractClassName,
+              name,
+              displayName,
+              workflowTypeResolved,
+              "\(taskQueuePrefix)-{deployment_name}",
+              inputs.toMap(),
+              inputNestedClasses,
+              inputContractToolkitImport
+            )
+          }
         }
         // e2e test-harness artifacts (independent of uiConfig)
         ["app/generated/_e2e_base.py"] = generateE2EBasePy()

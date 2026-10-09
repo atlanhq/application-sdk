@@ -75,3 +75,10 @@ inputs {
     lifecycleMessage = "Ignored; will be removed."
   }
 }
+
+// The toolkit's tests evaluate the generated caller node
+// (`contract/generated/input.pkl`) in place, so it imports the toolkit by
+// this example's own relative path. A real app leaves
+// `inputContractToolkitImport` at its `../App.pkl` default, which resolves
+// once the file is synced into the toolkit as `src/system/<name>.pkl`.
+inputContractToolkitImport = "../../../../src/App.pkl"

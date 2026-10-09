@@ -42,7 +42,8 @@ facts {
   ["Inputs render _input.py and __init__.py without a manifest or configmap"] {
     files.keys == Set(
       "atlan.yaml", "app.yaml", "app/generated/_e2e_base.py",
-      "app/generated/_input.py", "app/generated/__init__.py")
+      "app/generated/_input.py", "app/generated/__init__.py",
+      "contract/generated/input.pkl")
   }
 
   ["System app input model extends Input, not ExtractionInput"] {
