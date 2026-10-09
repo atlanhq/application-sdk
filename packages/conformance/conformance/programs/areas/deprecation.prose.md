@@ -269,8 +269,10 @@ human audit):
   mocked tests stay green (latent-on-main breakage found in the fleet SDR
   sweep).  Apply the pandas migration named in the finding message:
   - `frame.count_rows()` → `len(frame)`;
-  - `frame.to_pylist()` → `frame.to_dict("records")` (pyarrow-Table receivers
-    are already exempted by the checker — `pa.Table.to_pylist()` is real);
+  - `frame.to_pylist()` → `frame.to_dict("records")`.  The checker flags
+    this call only when the receiver has pandas evidence (an SDK reader or
+    SQL-client frame, a function annotated `-> pd.DataFrame`, a `pd.DataFrame`
+    annotation, or a pandas-created frame); `pa.Table.to_pylist()` is real;
   - `frame.names` → `frame.columns`.
 
   `DataframeType.daft` is **not** a B007 finding — it is an SDK symbol and

@@ -48,7 +48,7 @@ from conformance.suite.schema.findings import Finding
 from ._authoring import scan_authoring
 from ._consumer import scan_consumer
 from ._contract_compat import scan_contract_compat
-from ._daft_runtime import scan_daft_runtime
+from ._daft_runtime import scan_daft_runtime, summarize_frame_functions
 from ._ledger_schema import load_ledger
 from ._manifest import load_manifest
 from ._private_imports import own_import_roots, scan_private_imports
@@ -99,7 +99,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
     # of any one file.
     own_roots = own_import_roots(root) if run_consumer else frozenset()
 
-    findings: list[Finding] = []
+    parsed: list[tuple[Path, str, ast.Module]] = []
     for path in paths:
         try:
             text = path.read_text(encoding="utf-8")
@@ -109,6 +109,15 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
             tree = ast.parse(text, filename=str(path))
         except SyntaxError:
             continue
+        parsed.append((path, text, tree))
+    frame_summary = (
+        summarize_frame_functions(tree for _, _, tree in parsed)
+        if run_consumer
+        else None
+    )
+
+    findings: list[Finding] = []
+    for path, text, tree in parsed:
         try:
             rel = str(path.relative_to(root))
         except ValueError:
@@ -117,7 +126,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
         if run_consumer and manifest is not None:
             findings.extend(scan_consumer(tree, rel, manifest, directives))
         if run_consumer:
-            findings.extend(scan_daft_runtime(tree, rel, directives))
+            findings.extend(scan_daft_runtime(tree, rel, directives, frame_summary))
             findings.extend(scan_private_imports(tree, rel, directives, own_roots))
         if run_authoring:
             findings.extend(scan_authoring(tree, rel, version, directives))
