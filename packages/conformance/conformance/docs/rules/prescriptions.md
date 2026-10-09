@@ -843,18 +843,23 @@ The alias covers Temporal workflow-type dispatch only, not the `/start` selector
 `?entrypoint=` resolves entry-point names, so a caller selecting
 `?entrypoint=<old-name>` must switch to the tile name.
 
-2. For each contract name not matched in code, add an
+2. For each `@entrypoint` name in *code* that is an internal DAG step or a background
+job rather than a tile, declare it as an `Entrypoint` in `contract/app.pkl` without a
+`packageId` and re-run `pkl eval`: it gets its own `app/generated/<name>/` dir, stays
+routable and gets no marketplace card.
+
+3. For each contract name not matched in code, add an
 `@entrypoint(name="<missing-name>")` on the corresponding App method, or rename the
 entry point that already backs that tile as in step 1.
 
-3. If the *code* name is the intended one and the contract is wrong, update the
+4. If the *code* name is the intended one and the contract is wrong, update the
 `entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and re-run
 `pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow — never
 hand-edit `app/generated/` (C002 catches stale generated artifacts). On a released app,
 prefer step 1: a tile's name is its Marketplace card and configmap identity, and no
 alias covers renaming it.
 
-4. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
+5. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
 `Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
 
 Land as `BLOCK`: a justified inline `# conformance: ignore[P016] <reason>` on the
@@ -1272,7 +1277,8 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
   are derived from that name, so any disagreement routes work to a queue no worker is
   listening on.
 - **Decision:** app owner decides — align the contract and .env.example to the code name, or rename
-  App.name with a legacy_workflow_types alias
+  App.name; a rename changes the Temporal workflow type, so the old type must stay
+  dispatchable through a legacy_workflow_types alias, else live DAGs are stranded
 
 Three independent sources declare an app's name:
 
@@ -1317,7 +1323,14 @@ The code-derived name is the source of truth (mirrors
 `AppRegistry.resolve_running_app_name` from PR #2380).  To fix drift:
 
 1. Add an explicit `name = \"<intended-name>\"` class variable to the App subclass so
-the code name is unambiguous.
+the code name is unambiguous.  If `<intended-name>` differs from the name the class
+resolves to today, this renames `App.name`, and `App.name` is also the Temporal workflow
+type the worker registers (`<app>` for the implicit `run()`, `<app>:<entry-point>` for
+each `@entrypoint`).  Live DAGs still dispatch the old type, so the rename requires an
+alias that keeps it dispatchable: `legacy_workflow_types = {"<old-type>":
+"<entry-point>"}` on the App subclass (`run` for the implicit entry point), and the same
+pair in `legacyWorkflowTypes` in `contract/app.pkl` (K015 holds the two in agreement).
+Without the alias, no worker claims the old type and live DAGs are stranded.
 
 2. Update `contract/app.pkl` `name` to match and re-run `pkl eval` (never hand-edit
 `atlan.yaml` — C002 catches stale generated artifacts).
@@ -2656,7 +2669,9 @@ copied, the bypass spreads.
 - **Compliant example:** atlan-openapi-app app/connector.py — `_transform_blocking` writes every connection,
   APISpec and APIPath line as `entity_bytes(asset, entity_type=...,
   envelope=ENTITY_ENVELOPE)`; no mapper result is serialized any other way.
-- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`) — needs an envelope choice: PYATLAN
+  keeps today's output but is a temporary lever removed in v4.0; FLATTENED is the target
+  but changes the wire shape (owner decision); the skill runs it with a parity check
 - **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
   where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
   from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.
@@ -2692,6 +2707,12 @@ pass `connection_name` / `last_sync` unless the mapper already stamps them.  Whe
 line needs a key the model cannot hold, decode what `entity_bytes` produced and decorate
 it.  WARN tier — suppress with `# conformance: ignore[P052] <reason>` only for a genuine
 non-entity use, such as a `ConnectionRef` built from `to_atlas_format`.
+
+The fix needs an envelope choice.  `PYATLAN` keeps today's output but is a temporary
+lever, deprecated in 3.36.0 and removed in v4.0
+(`application_sdk/common/entity_envelope.py`).  `FLATTENED` is the target but changes
+the wire shape, which is an owner decision; the `migrate-asset-modeling` skill runs it
+with a parity check.
 
 ---
 

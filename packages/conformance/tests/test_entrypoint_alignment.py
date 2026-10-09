@@ -254,6 +254,9 @@ def test_p016_multi_ep_drift_advises_rename_with_alias(tmp_path: Path) -> None:
     # The alias does not keep the old /start selector working — say so.
     assert "?entrypoint=extract" in code_only
     assert "?entrypoint=" in contract_only
+    assert "internal DAG step or a background job" in code_only
+    assert "without a packageId" in code_only
+    assert "packageId" not in contract_only
 
 
 def test_p016_multi_ep_renamed_behind_alias_is_aligned(tmp_path: Path) -> None:

@@ -747,11 +747,23 @@ RULES: tuple[RuleDefinition, ...] = (
             "``entity_bytes`` produced and decorate it.  WARN tier — suppress with\n"
             "``# conformance: ignore[P052] <reason>`` only for a genuine non-entity\n"
             "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
+            "\n"
+            "The fix needs an envelope choice.  ``PYATLAN`` keeps today's output but\n"
+            "is a temporary lever, deprecated in 3.36.0 and removed in v4.0\n"
+            "(``application_sdk/common/entity_envelope.py``).  ``FLATTENED`` is the\n"
+            "target but changes the wire shape, which is an owner decision; the\n"
+            "``migrate-asset-modeling`` skill runs it with a parity check.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,
             target="migrate-asset-modeling",
+            note=(
+                "needs an envelope choice: PYATLAN keeps today's output but is a "
+                "temporary lever removed in v4.0; FLATTENED is the target but "
+                "changes the wire shape (owner decision); the skill runs it with "
+                "a parity check"
+            ),
         ),
     ),
     RuleDefinition(

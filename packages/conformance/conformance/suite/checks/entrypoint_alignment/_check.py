@@ -255,6 +255,9 @@ def check_p016(
                     "contract/app.pkl (K015 checks they agree). The alias covers "
                     "Temporal workflow-type dispatch only: callers selecting "
                     f"?entrypoint={ep.name} on /start must switch to the tile name. "
+                    "If it is an internal DAG step or a background job, declare it "
+                    "as an Entrypoint in contract/app.pkl without a packageId: it "
+                    "stays routable and gets no marketplace card. "
                     "Otherwise add a tile "
                     "for it in contract/app.pkl and re-run pkl eval, or remove it."
                 ),
