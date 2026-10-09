@@ -1421,13 +1421,16 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   per-function ignore[P028] naming the creator whose grammar it mirrors.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
-  end state in two cases, and the reason must say which. Either the caller needs the
+  end state in three cases, and the reason must say which. Either the caller needs the
   qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
   grammar — the reason then names that creator and the module it lives in, so a drift in
   pyatlan can be traced here. Or no pyatlan creator owns the grammar at all (a Process /
   ColumnProcess identity, a content-hashed ARS key), in which case the reason says so
-  and the site is centralised as the single source of truth rather than repeated. A
-  directive on a site that could simply call the creator is unremediated.
+  and the site is centralised as the single source of truth rather than repeated. Or the
+  f-string is not an identity at all (an object-store key or prefix starting with the
+  qn, a trailing-`/` match prefix, a log/exception message or display text), and the
+  reason names what the string is. A directive on a site that could simply call the
+  creator is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1444,6 +1447,15 @@ so it is not flagged.
 Fix: construct assets through the pyatlan asset `.creator()` factories, which compute
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
+
+Not an identity — suppress with a reason: an f-string that embeds a qualifiedName but
+does not build an asset identity is a false positive of this name-and-`/` heuristic.
+This covers an object-store key or prefix that *starts* with the qn (e.g.
+`f"{connection_qn}/lineage_current_state"`), a trailing-`/` match `prefix` (`f"{qn}/"`
+used with `startswith`), and a log or exception message or display text.  Suppress it
+with `# conformance: ignore[P028] <reason>`, where the reason names what the string is
+(for example `object-store key, not a qualifiedName`). Do not rewrite it through a
+creator.
 
 ---
 

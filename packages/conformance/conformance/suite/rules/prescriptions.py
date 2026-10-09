@@ -625,14 +625,17 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         terminal_state=(
             "A justified per-function inline `# conformance: ignore[P028] <reason>` IS "
-            "the correct end state in two cases, and the reason must say which. "
+            "the correct end state in three cases, and the reason must say which. "
             "Either the caller needs the qualifiedName STRING and not the asset, and "
             "the f-string mirrors a pyatlan creator's grammar — the reason then names "
             "that creator and the module it lives in, so a drift in pyatlan can be "
             "traced here. Or no pyatlan creator owns the grammar at all (a Process / "
             "ColumnProcess identity, a content-hashed ARS key), in which case the "
             "reason says so and the site is centralised as the single source of truth "
-            "rather than repeated. A directive on a site that could simply call the "
+            "rather than repeated. Or the f-string is not an identity at all (an "
+            "object-store key or prefix starting with the qn, a trailing-`/` match "
+            "prefix, a log/exception message or display text), and the reason names "
+            "what the string is. A directive on a site that could simply call the "
             "creator is unremediated."
         ),
         scope=RuleScope.APP,
@@ -672,6 +675,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "which compute qualifiedName from typed parent references.  WARN tier —\n"
             "suppress with ``# conformance: ignore[P028] <reason>`` where a raw\n"
             "qualifiedName string is genuinely required.\n"
+            "\n"
+            "Not an identity — suppress with a reason: an f-string that embeds a\n"
+            "qualifiedName but does not build an asset identity is a false\n"
+            "positive of this name-and-``/`` heuristic.  This covers an\n"
+            "object-store key or prefix that *starts* with the qn (e.g.\n"
+            '``f"{connection_qn}/lineage_current_state"``), a trailing-``/`` match\n'
+            '``prefix`` (``f"{qn}/"`` used with ``startswith``), and a log or\n'
+            "exception message or display text.  Suppress it with\n"
+            "``# conformance: ignore[P028] <reason>``, where the reason names what\n"
+            "the string is (for example ``object-store key, not a qualifiedName``).\n"
+            "Do not rewrite it through a creator.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
         remediation_reference=RemediationReference(

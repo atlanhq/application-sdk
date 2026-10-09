@@ -126,7 +126,12 @@ entrypoint/task contract — that no local edit can perform, and the writer may 
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
 constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
 performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
-the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
+the SDK has no qualifiedName seam, the creators own the grammar.  An f-string
+that embeds a qualifiedName but is not an identity — an object-store key or
+prefix starting with the qn, a trailing-`/` match prefix, a log/exception
+message or display text — is suppressed with
+`# conformance: ignore[P028] <reason>` naming what the string is, not
+rewritten.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
