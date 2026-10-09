@@ -491,6 +491,28 @@ class TestTrackFileRefs:
 
         assert ref in _app_state["wf-test-track"][TRACKED_FILE_REFS_KEY]
 
+    def test_upload_refs_output_retained_refs_are_tracked_beside_transient_twin(
+        self,
+    ) -> None:
+        # cleanup_storage's durable-alias guard relies on the RETAINED copies
+        # ``upload_refs`` returns reaching the tracked set — and on a TRANSIENT
+        # ref with the same key not collapsing into them.
+        from application_sdk.app.base import _app_state
+        from application_sdk.constants import TRACKED_FILE_REFS_KEY
+        from application_sdk.contracts.storage import UploadRefsOutput
+        from application_sdk.contracts.types import StorageTier
+        from application_sdk.storage.file_ref_sync import _find_file_refs
+
+        key = "artifacts/apps/a/workflows/w/r/transformed/table/entities.json"
+        retained = FileReference(storage_path=key, tier=StorageTier.RETAINED)
+        transient = FileReference(storage_path=key, tier=StorageTier.TRANSIENT)
+        found = _find_file_refs(UploadRefsOutput(prefix="p", refs=[retained]))
+        assert found == [retained]
+
+        _track_file_refs("wf-test-upload-refs", *found, transient)
+        tracked = _app_state["wf-test-upload-refs"][TRACKED_FILE_REFS_KEY]
+        assert {retained, transient} <= tracked
+
 
 class TestActivityFnExecution:
     """Tests for the activity_fn returned by create_activity_from_task.

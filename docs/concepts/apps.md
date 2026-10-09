@@ -303,7 +303,7 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
 
 - `cleanup_files()` — removes tracked `FileReference` local paths from task outputs, **then** convention-based temp directories (using `input.extra_paths` if provided, otherwise `ATLAN_CLEANUP_BASE_PATHS`, otherwise the default temp path).
 - `cleanup_storage()` — removes object store artifacts by tier:
-  - `StorageTier.TRANSIENT` refs are always removed.
+  - `StorageTier.TRANSIENT` refs are always removed, except a key that a `RETAINED` or `PERSISTENT` ref in the same run also points at (the same file key, its `.sha256` sidecar, or a key under a durable directory ref). The durable tier wins: that key is counted in `skipped_count` and a WARNING names the clash.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
 
