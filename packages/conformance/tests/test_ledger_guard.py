@@ -369,6 +369,17 @@ def test_requiredness_moves_that_break_no_caller_allowed(
     assert check(base, head) == (True, [])
 
 
+@pytest.mark.parametrize("base_required", [False, True], ids=["false", "true"])
+def test_erasing_a_known_required_blocked(base_required: bool) -> None:
+    """A known baseline cannot become unknown: unknown is never checked."""
+    base = {"fields": [_row("extra", base_required)]}
+    head = {"fields": [_row("extra", None)]}
+    passed, errors = check(base, head)
+    assert not passed
+    assert len(errors) == 1
+    assert errors[0].startswith("REQUIRED ERASED: MyInput.extra")
+
+
 def test_invalid_head_required_blocked() -> None:
     base = {"fields": [_row("extra")]}
     head = {"fields": [_row("extra", "yes")]}

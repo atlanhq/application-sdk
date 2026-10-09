@@ -8,7 +8,8 @@ and HEAD.  Additions and every other status change are allowed.  Retirement
 runs ``active`` → ``deprecated`` → ``sunset`` across separate merges, so callers
 always see a deprecation before a field is withdrawn; and a caller that predates
 a field never has to send it.  An unknown ``required`` in the base (a ledger
-written before the key existed) may be backfilled with either value.
+written before the key existed) may be backfilled with either value; a known
+one may never become unknown, since unknown is not checked.
 
 Exit codes
 ----------
@@ -156,13 +157,22 @@ def check(
                     "'active' → 'sunset' — mark it 'deprecated' first and merge "
                     "that, then move it to 'sunset' in a later PR."
                 )
-            if (
-                base_required[(contract, field)] is False
-                and head_required[(contract, field)] is True
-            ):
+            base_req = base_required[(contract, field)]
+            head_req = head_required[(contract, field)]
+            if base_req is False and head_req is True:
                 errors.append(
                     f"NEWLY REQUIRED: {contract}.{field} not required → required "
                     "— callers that omit it fail validation. Keep a default."
+                )
+            elif isinstance(base_req, bool) and head_req is None:
+                # Unknown is never checked, so erasing a known value would
+                # let the source drop its default with neither B005 nor this
+                # guard noticing.
+                errors.append(
+                    f"REQUIRED ERASED: {contract}.{field} 'required' was "
+                    f"{str(base_req).lower()} and is now absent — a recorded "
+                    "requiredness is permanent; regenerate instead of editing "
+                    "it by hand."
                 )
 
     for (contract, field), required in head_required.items():
