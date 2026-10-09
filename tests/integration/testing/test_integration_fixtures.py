@@ -32,9 +32,13 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _APP_MODULE = '''
 """A minimal registered App, at module level so Temporal's sandbox can import it."""
 
+import tempfile
+from pathlib import Path
+
 from application_sdk.app.base import App
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference, StorageTier
 
 
 class EchoInput(Input):
@@ -54,6 +58,34 @@ class EchoApp(App):
 
     async def run(self, input: EchoInput) -> EchoOutput:
         return await self.add_one(input)
+
+
+class PublishOutput(Output):
+    intermediate: FileReference = FileReference()
+    published: FileReference = FileReference()
+
+
+class PublishApp(App):
+    """Hands one TRANSIENT and one RETAINED ref to the auto-persist interceptor."""
+
+    name = "kitpublish"
+
+    @task
+    async def write(self, input: EchoInput) -> PublishOutput:
+        # Under the child suite's cwd — the outer test's tmp_path — so pytest
+        # prunes it; tempfile.mkdtemp() would leave a tree on the host per run.
+        root = Path(tempfile.mkdtemp(dir=Path.cwd()))
+        (root / "intermediate.json").write_text("{}")
+        (root / "published.json").write_text("{}")
+        return PublishOutput(
+            intermediate=FileReference.from_local(root / "intermediate.json"),
+            published=FileReference.from_local(
+                root / "published.json", tier=StorageTier.RETAINED
+            ),
+        )
+
+    async def run(self, input: EchoInput) -> PublishOutput:
+        return await self.write(input)
 '''
 
 # Verbatim the shape documented in docs/guides/integration-fixtures.md.
@@ -81,7 +113,7 @@ import os
 import pytest
 
 from application_sdk.common.task_queue import task_queue_from_env
-from kit_smoke_app import EchoApp, EchoInput
+from kit_smoke_app import EchoApp, EchoInput, PublishApp
 
 
 @pytest.mark.asyncio(loop_scope="session")
@@ -89,10 +121,11 @@ async def test_the_app_runs_through_the_kit(executor):
     output = await executor.execute_app(EchoApp, EchoInput(value=41))
     assert output.result == 42
     # KitOptions.preserve_artifacts, observed from inside the worker fixture's
-    # lifetime — the only place the default exists, since the prior value is
-    # restored on teardown. _clean_env() strips APPLICATION_SDK_ENABLE_* from
-    # the child environment (pinned by its own test), so a pass here can only
-    # come from the kit's own default.
+    # lifetime — the only place the kit could set it, since the prior value is
+    # restored on teardown. The default runs cleanup, so the kit must leave the
+    # variable unset and the SDK's own default (on) apply. _clean_env() strips
+    # APPLICATION_SDK_ENABLE_* from the child environment (pinned by its own
+    # test), so a pass here can only come from the kit's own default.
     # It has to ride this async test: a sync one cannot request `worker`.
     #
     # os.getenv, not os.environ[...]: a subscript makes the mapping the subject
@@ -100,9 +133,19 @@ async def test_the_app_runs_through_the_kit(executor):
     # this child inherits the developer's - into the report, which the outer
     # test then re-emits via its own assertion message.
     cleanup_interceptor = os.getenv("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR")
-    assert cleanup_interceptor == "false", (
+    assert cleanup_interceptor is None, (
         f"kit default not applied: {cleanup_interceptor!r}"
     )
+
+
+async def test_artifact_assertions_see_post_cleanup_storage(executor, store_root):
+    # on_complete() runs inside the workflow, so by the time the result is
+    # back its cleanup has run: the store holds what production leaves.
+    output = await executor.execute_app(PublishApp, EchoInput())
+    intermediate = store_root / output.intermediate.storage_path
+    published = store_root / output.published.storage_path
+    assert published.is_file(), "RETAINED ref missing after cleanup"
+    assert not intermediate.exists(), "TRANSIENT ref survived: cleanup did not run"
 
 
 def test_the_queue_is_the_deployment_queue(integration_task_queue):
@@ -235,10 +278,8 @@ def test_clean_env_drops_the_vars_the_conftest_must_own(
     is only meaningful because the child cannot inherit that variable — and the
     parent really does set it: ``tests/integration/conftest.py`` sets it autouse
     for every integration test, this one included. Without the strip the child
-    inherits ``"false"``, ``_artifact_preservation`` takes its "explicit value
-    wins" branch, and the assertion passes on the inherited value instead of the
-    kit's default — so the guard it exists to pin could then be deleted with
-    this whole suite green.
+    inherits ``"false"``, cleanup never runs, and the post-cleanup storage
+    assertion fails on the parent's value rather than on anything the kit did.
 
     Asserts on the leaked *key names* only. ``assert "X" not in _clean_env()``
     would render the whole mapping into the failure output, and this dict is the
@@ -259,7 +300,44 @@ def test_clean_env_drops_the_vars_the_conftest_must_own(
 def test_star_import_suite_passes_end_to_end(adopting_suite: Path) -> None:
     result = _run_pytest(adopting_suite, "-q")
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "3 passed" in result.stdout
+    assert "4 passed" in result.stdout
+
+
+_PRESERVE_CONFTEST_TAIL = """
+
+from application_sdk.testing.integration.fixtures import KitOptions  # noqa: E402
+
+
+@pytest.fixture(scope="session")
+def integration_options():
+    return KitOptions(preserve_artifacts=True)
+"""
+
+_PRESERVE_TEST = """
+from kit_smoke_app import EchoInput, PublishApp
+
+
+async def test_the_opt_in_keeps_intermediates(executor, store_root):
+    output = await executor.execute_app(PublishApp, EchoInput())
+    assert (store_root / output.intermediate.storage_path).is_file()
+    assert (store_root / output.published.storage_path).is_file()
+"""
+
+
+def test_preserve_artifacts_opt_in_keeps_intermediates(adopting_suite: Path) -> None:
+    """The debugging opt-in, and the red half of the post-cleanup assertion.
+
+    The same PublishApp run that loses its TRANSIENT ref under the default keeps
+    it here, so ``test_artifact_assertions_see_post_cleanup_storage`` is
+    measuring cleanup rather than a ref that was never written.
+    """
+    suite = adopting_suite / "tests" / "integration"
+    conftest = suite / "conftest.py"
+    conftest.write_text(conftest.read_text() + _PRESERVE_CONFTEST_TAIL)
+    (suite / "test_kit.py").write_text(_PRESERVE_TEST)
+    result = _run_pytest(adopting_suite, "-q")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout
 
 
 def test_missing_app_cls_override_is_reported(adopting_suite: Path) -> None:
