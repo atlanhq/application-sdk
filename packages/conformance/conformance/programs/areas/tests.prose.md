@@ -244,6 +244,12 @@ residue for a human to apply, not an applied edit:
   other constant-true placeholder to make the finding go away — that
   converts a T005 into a T007 (`VacuousAssertion`), which is not a fix.
 
+  A direct same-name override of the SDK's `BaseE2ETest.test_full_dag_runs_end_to_end`
+  is already assertion-bearing: the inherited full-DAG scenario grades the run's
+  outcome. Keep that delegation rather than deleting it or adding a redundant
+  assertion. This exception is deliberately limited to that SDK scenario; an
+  arbitrary call to a superclass test/helper still needs an outcome assertion.
+
   If the test's only real purpose is confirming a call doesn't raise (rare —
   most such tests are better expressed by also asserting on the return
   value), leave it flagged and route to residue with that assessment rather

@@ -40,7 +40,9 @@ whose attribute name starts with ``assert`` (``self.assertEqual``,
 project-local ``_assert_*`` helper) or is exactly ``fail``
 (``pytest.fail``/``self.fail``); one of the SDK integration-test scenario
 helpers (``.equals``/``.contains``/``.exists``/``.is_dict``/``.is_string``/
-``.is_true``/``.is_list``); or an explicit ``# should not raise`` /
+``.is_true``/``.is_list``); a direct, same-name
+  ``super().test_full_dag_runs_end_to_end()`` delegation (the SDK's assertion-bearing
+  full-DAG scenario); or an explicit ``# should not raise`` /
 ``# must not raise`` comment anywhere in the test body (case-insensitive).
 
 The last form covers "the call completing without raising *is* the
@@ -257,6 +259,34 @@ def _has_no_raise_marker(
     )
 
 
+_FULL_DAG_ASSERTION_SCENARIO = "test_full_dag_runs_end_to_end"
+
+
+def _has_direct_full_dag_scenario_delegation(
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """True for a direct same-name delegation to the SDK full-DAG test."""
+    if node.name != _FULL_DAG_ASSERTION_SCENARIO:
+        return False
+    for stmt in node.body:
+        if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+            continue
+        call = stmt.value
+        if (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == _FULL_DAG_ASSERTION_SCENARIO
+            and isinstance(call.func.value, ast.Call)
+            and isinstance(call.func.value.func, ast.Name)
+            and call.func.value.func.id == "super"
+            and not call.func.value.args
+            and not call.func.value.keywords
+            and not call.args
+            and not call.keywords
+        ):
+            return True
+    return False
+
+
 def _assertion_signals(
     node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list[str]
 ) -> tuple[bool, bool]:
@@ -265,11 +295,14 @@ def _assertion_signals(
     ``only_vacuous_plain_asserts`` is meaningful only when ``has_any_assertion``
     is ``True``: it is set when every ``assert`` statement found is a constant-
     true literal and no other assertion form (context-manager, ``assert_*``
-    call, scenario helper, no-raise marker) is present.
+    call, scenario helper, inherited full-DAG scenario, or no-raise marker) is
+    present.
     """
     has_assert_stmt = False
     has_nonvacuous_assert_stmt = False
-    has_other_assertion = _has_no_raise_marker(lines, node)
+    has_other_assertion = _has_no_raise_marker(lines, node) or (
+        _has_direct_full_dag_scenario_delegation(node)
+    )
     for sub in ast.walk(node):
         if isinstance(sub, ast.Assert):
             has_assert_stmt = True

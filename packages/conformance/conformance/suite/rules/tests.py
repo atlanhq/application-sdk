@@ -590,6 +590,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "    `pytest.fail(...)` / `self.fail(...)`\n"
             "    an SDK integration-test scenario-helper call: `.equals` / `.contains` /\n"
             "        `.exists` / `.is_dict` / `.is_string` / `.is_true` / `.is_list`\n"
+            "    a direct, same-name `super().test_full_dag_runs_end_to_end()` delegation\n"
+            "        (the SDK full-DAG scenario grades outcomes through its assertion ladder)\n"
             "    a `# should not raise` / `# must not raise` comment anywhere in the body\n"
             "        (case-insensitive): the call completing *is* the assertion\n"
             "\n"
