@@ -106,12 +106,26 @@ with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
 
 - **B005 NonAdditiveContractChange** (app source, the contract class) — a field
-  the ledger records is absent from the live contract, its type changed, or
-  source marks it `sunset` while the ledger records something else.
+  the ledger records is absent from the live contract, its type changed,
+  source marks it `sunset` while the ledger records something else, or it is
+  required in source where the ledger records it not required (or it is new
+  and required on a contract the ledger records).
   A skipped deprecation (`sunset` over `active`) has one fix: change the
   source marker from `sunset` to `deprecated`, regenerate, and leave `sunset`
   to a later PR.  Over a ledger `deprecated`, regenerate.  Report `classification = "mechanical"`; never hand-edit the
   ledger to `sunset` — `ledger-guard` refuses `active` → `sunset` too.
+  A field the finding calls **required** (no default) on an existing contract
+  — new, or with its default removed — is fixed by giving it a default in the
+  contract source (in a generated contract, in its Pkl definition), never by
+  hand-editing `required` in the ledger, which `ledger-guard` refuses.  Pick
+  the default that keeps today's behaviour for a caller that omits the field:
+  for a removed default, restore the one the base ref had; for a new field,
+  the value that makes it a no-op (`None`, `""`, an empty collection, `False`).
+  Report `classification = "mechanical"` only when such a no-op exists and the
+  app's code handles it; otherwise route to residue — the owner decides the
+  default, and migrates callers to send the field.  The way to add a
+  mandatory input is to add it optional with a default, then migrate callers;
+  a new entrypoint contract may declare required fields freely.
   For a removal or retype, work in this order and stop at the first step that
   applies:
   1. **Suspect a false positive before proposing anything.**  The ledger keys

@@ -43,6 +43,15 @@ deletes an entry, changes a recorded ``type``, or moves an entry straight from
 ``active`` to ``sunset`` (it keeps ``active`` and B005 reports the skip).  This means regenerating after
 a removal does NOT launder the removal — B005 will still fire against the
 persisted ledger entry.
+
+**Requiredness** (``required``: callers must send the field) is recorded the
+same way.  It may relax from ``true`` to ``false`` but is never recorded moving
+back, and a field added to a contract the ledger already records is recorded
+``false`` whatever the source says.  A source that requires either field then
+disagrees with the ledger, and B005 reports it: a caller that predates the field
+does not send it.  A contract new to the ledger records its fields as declared.
+An entry written before ``required`` existed has it unknown, and the first
+regeneration records the source's current requiredness as its baseline.
 """
 
 from __future__ import annotations
@@ -50,6 +59,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -64,6 +74,7 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     sdk_base_contract_names,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
+    LEDGER_VERSION,
     ContractField,
     ContractLedger,
     load_ledger_baseline,
@@ -84,7 +95,8 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     """Scan *repo_root* and build an updated ledger.
 
     Append-only: new fields are added; ``status`` is refreshed from source;
-    ``type`` is NEVER changed; entries are NEVER deleted.
+    ``type`` is NEVER changed; entries are NEVER deleted; ``required`` never
+    moves from ``False`` to ``True``.
     """
     # Collect all Python files under the repo root
     paths = list(discover(repo_root))
@@ -149,6 +161,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                     field=fi.name,
                     type=fi.canonical_type,
                     status=fi.status,
+                    required=fi.required,
                 )
 
     # Merge: append-only with status refresh
@@ -170,18 +183,37 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                 field=existing_field.field,
                 type=existing_field.type,  # NEVER change the recorded type
                 status=status,
+                required=_merged_required(existing_field.required, live.required),
             )
         else:
             # Field removed from source — keep in ledger (B005 will flag it)
             merged[key] = existing_field
 
-    # Add new live fields not yet in the ledger
+    # Add new live fields not yet in the ledger. On a contract the ledger
+    # already records, a new field is recorded not-required whatever the
+    # source says: callers that predate it cannot send it, so B005 reports a
+    # source that requires it instead of the regeneration recording it.
+    recorded_contracts = {contract for contract, _ in existing_by_key}
     for key, live_field in live_entries.items():
         if key not in merged:
+            if live_field.required and live_field.contract in recorded_contracts:
+                live_field = replace(live_field, required=False)
             merged[key] = live_field
 
     fields = sorted(merged.values(), key=lambda f: (f.contract, f.field))
-    return ContractLedger(version=existing.version, fields=fields)
+    return ContractLedger(version=max(existing.version, LEDGER_VERSION), fields=fields)
+
+
+def _merged_required(recorded: bool | None, live: bool | None) -> bool | None:
+    """The ``required`` to record over *recorded*, given the source's *live*.
+
+    Unknown takes the source's value (the backfill); ``True`` follows the
+    source, so a field may relax; ``False`` stays ``False``, so B005 reports a
+    source that now requires it.  An unknown source keeps what is recorded.
+    """
+    if recorded is False or live is None:
+        return recorded
+    return live
 
 
 def _find_repo_root() -> Path | None:

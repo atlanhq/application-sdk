@@ -724,6 +724,21 @@ def scan_contract_compat(
                             directives=directives,
                         )
                     )
+                if lf.required is False and live.required:
+                    # The generator never records False → True, and records a
+                    # field new to a recorded contract as False — so this is
+                    # a default removed, or a field added without one.
+                    findings.append(
+                        make_finding(
+                            filename=rel,
+                            rule_id="B005",
+                            node=live.node or class_node,
+                            message=_newly_required_message(
+                                f"{class_node.name}.{lf.field}", recorded=True
+                            ),
+                            directives=directives,
+                        )
+                    )
                 if live.canonical_type != lf.type:
                     if _retype_is_compatible(
                         lf.type, live.canonical_type, inherited=live.node is None
@@ -766,8 +781,23 @@ def scan_contract_compat(
                     )
 
             # B006: every live field must be recorded in the ledger
+            contract_recorded = class_node.name in ledger_by_contract
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:
+                    if contract_recorded and fi.required:
+                        # B005 too: regenerating records it not-required, so
+                        # the finding survives the B006 fix — report it now.
+                        findings.append(
+                            make_finding(
+                                filename=rel,
+                                rule_id="B005",
+                                node=fi.node or class_node,
+                                message=_newly_required_message(
+                                    f"{class_node.name}.{fi.name}", recorded=False
+                                ),
+                                directives=directives,
+                            )
+                        )
                     # An inherited field is a *new* commitment for THIS contract
                     # even when its declaring base is ledgered under its own
                     # name: the ledger records each entrypoint contract's own
@@ -847,6 +877,30 @@ def _unrecorded_sunset_message(qualified: str, ledger_status: str, regen: str) -
         f"it '{ledger_status}'. A field retires through 'active' → 'deprecated' → "
         "'sunset' in separate PRs, so callers see a deprecation before it is "
         f"withdrawn. {remedy}"
+        "Suppress with '# conformance: ignore[B005] <reason>' "
+        "only if this contract has no deployed consumers."
+    )
+
+
+def _newly_required_message(qualified: str, *, recorded: bool) -> str:
+    """B005 text for a field callers must send that the ledger does not require."""
+    if recorded:
+        what = (
+            f"Contract field '{qualified}' is required (it has no default) but "
+            "the ledger records it as not required: it was added to an existing "
+            "contract without a default, or its default was removed. "
+        )
+    else:
+        what = (
+            f"Contract field '{qualified}' is new and required (it has no "
+            "default) on a contract the ledger already records. "
+        )
+    return (
+        f"{what}Callers that predate it — a saved workflow config, another "
+        "app's DAG node — do not send it, so their next run on this version "
+        "fails validation though they changed nothing. Give it a default, then "
+        "migrate callers to send it; a new entrypoint contract may declare "
+        "required fields freely. "
         "Suppress with '# conformance: ignore[B005] <reason>' "
         "only if this contract has no deployed consumers."
     )

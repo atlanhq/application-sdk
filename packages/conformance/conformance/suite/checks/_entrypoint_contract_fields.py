@@ -36,7 +36,7 @@ import ast
 import re
 from collections.abc import Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
@@ -233,6 +233,59 @@ class _FieldInfo(NamedTuple):
     #: Trailing with a default so every existing positional construction of this
     #: tuple keeps working.
     model_declared: bool = False
+    #: Whether a payload must carry this field: Pydantic v2 requires a field
+    #: with no default, ``Optional`` or not. ``None`` means unknown — a field
+    #: mirrored from an SDK registry, whose defaults are not recorded there.
+    required: bool | None = None
+
+
+def _is_field_call(node: ast.expr | None) -> TypeGuard[ast.Call]:
+    return isinstance(node, ast.Call) and _is_named(node.func, "Field")
+
+
+def _field_call_has_default(call: ast.Call) -> bool:
+    """Whether a ``Field(...)`` call supplies a default.
+
+    ``Field()`` and ``Field(...)`` (an Ellipsis default) leave the field
+    required; any other positional default, ``default=`` (other than
+    Ellipsis) or ``default_factory=`` supplies one.
+    """
+    if call.args:
+        first = call.args[0]
+        return not (isinstance(first, ast.Constant) and first.value is Ellipsis)
+    for kw in call.keywords:
+        if kw.arg == "default_factory":
+            return True
+        if kw.arg == "default":
+            return not (
+                isinstance(kw.value, ast.Constant) and kw.value.value is Ellipsis
+            )
+    return False
+
+
+def _field_required(ann_node: ast.AnnAssign) -> bool:
+    """Whether Pydantic v2 requires this field in every payload.
+
+    A field is required when nothing supplies a default: no value, a
+    ``Field(...)`` value without one, or no value with an ``Annotated``
+    ``Field(...)`` that supplies none. ``Optional[X]`` does not make a field
+    optional in Pydantic v2 — only a default does.
+    """
+    value = ann_node.value
+    if value is None:
+        annotation = ann_node.annotation
+        if isinstance(annotation, ast.Subscript) and _is_named(
+            annotation.value, "Annotated"
+        ):
+            sl = annotation.slice
+            metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
+            return not any(
+                _is_field_call(m) and _field_call_has_default(m) for m in metadata
+            )
+        return True
+    if _is_field_call(value):
+        return not _field_call_has_default(value)
+    return False
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -306,6 +359,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
+                required=_field_required(stmt),
             )
         )
     return result

@@ -3,747 +3,871 @@
     {
       "contract": "ExtractionInput",
       "field": "agent_json",
+      "required": false,
       "status": "active",
       "type": "AgentCredentialSpec | None"
     },
     {
       "contract": "ExtractionInput",
       "field": "app_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "connection",
+      "required": false,
       "status": "active",
       "type": "ConnectionRef"
     },
     {
       "contract": "ExtractionInput",
       "field": "correlation_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "credential_guid",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "credential_ref",
+      "required": false,
       "status": "active",
       "type": "CredentialRef | None"
     },
     {
       "contract": "ExtractionInput",
       "field": "exclude_filter",
+      "required": false,
       "status": "active",
       "type": "FilterMap | str"
     },
     {
       "contract": "ExtractionInput",
       "field": "exclude_table_regex",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "extraction_method",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "include_filter",
+      "required": false,
       "status": "active",
       "type": "FilterMap | str"
     },
     {
       "contract": "ExtractionInput",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "source_tag_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "temp_table_regex",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionInput",
       "field": "workflow_slug",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "artifacts",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "ExtractionOutput",
       "field": "columns_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "connection_qualified_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "current_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "databases_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "error",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "metrics",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "ExtractionOutput",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "procedures_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "processes_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "publish_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "records_uploaded",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "schemas_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "staging_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "status",
+      "required": false,
       "status": "active",
       "type": "OutputStatus"
     },
     {
       "contract": "ExtractionOutput",
       "field": "success",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "ExtractionOutput",
       "field": "tables_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "transformed_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "ExtractionOutput",
       "field": "transformed_files",
+      "required": false,
       "status": "active",
       "type": "list[FileReference]"
     },
     {
       "contract": "ExtractionOutput",
       "field": "views_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "ExtractionOutput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "agent_json",
+      "required": false,
       "status": "active",
       "type": "AgentCredentialSpec | None"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "app_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "column_batch_size",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "column_chunk_size",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "connection",
+      "required": false,
       "status": "active",
       "type": "ConnectionRef"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "copy_workers",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "correlation_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "credential_guid",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "credential_ref",
+      "required": false,
       "status": "active",
       "type": "CredentialRef | None"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "exclude_filter",
+      "required": false,
       "status": "active",
       "type": "FilterMap | str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "exclude_table_regex",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "extraction_method",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "include_filter",
+      "required": false,
       "status": "active",
       "type": "FilterMap | str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "incremental_extraction",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "prepone_marker_hours",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "prepone_marker_timestamp",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "source_tag_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "temp_table_regex",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "upload_concurrency",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionInput",
       "field": "workflow_slug",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "artifacts",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "backfill_tables",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "changed_tables",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "column_batches_executed",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "columns_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "connection_qualified_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "current_state_files",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "current_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "databases_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "error",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "incremental_diff_files",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "marker_updated",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "metrics",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "procedures_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "processes_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "publish_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "records_uploaded",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "schemas_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "staging_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "status",
+      "required": false,
       "status": "active",
       "type": "OutputStatus"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "success",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "tables_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "transformed_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "transformed_files",
+      "required": false,
       "status": "active",
       "type": "list[FileReference]"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "views_extracted",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "IncrementalExtractionOutput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "Input",
       "field": "app_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "Input",
       "field": "correlation_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "Input",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "Input",
       "field": "workflow_slug",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "Output",
       "field": "artifacts",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "Output",
       "field": "metrics",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "Output",
       "field": "status",
+      "required": false,
       "status": "active",
       "type": "OutputStatus"
     },
     {
       "contract": "PublishInputMixin",
       "field": "connection_qualified_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "current_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "publish_state_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "staging_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "PublishInputMixin",
       "field": "transformed_data_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "app_name",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "batch_size",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "connection",
+      "required": false,
       "status": "active",
       "type": "ConnectionRef"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "correlation_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "credential_guid",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "credential_ref",
+      "required": false,
       "status": "active",
       "type": "CredentialRef | None"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "exclude_users",
+      "required": false,
       "status": "active",
       "type": "list[str]"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "lookback_days",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "output_path",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "output_prefix",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionInput",
       "field": "workflow_slug",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "artifacts",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "error",
+      "required": false,
       "status": "active",
       "type": "str"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "metrics",
+      "required": false,
       "status": "active",
       "type": "dict[str, Any] | None"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "records_uploaded",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "status",
+      "required": false,
       "status": "active",
       "type": "OutputStatus"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "success",
+      "required": false,
       "status": "active",
       "type": "bool"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "total_batches",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "total_queries",
+      "required": false,
       "status": "active",
       "type": "int"
     },
     {
       "contract": "QueryExtractionOutput",
       "field": "workflow_id",
+      "required": false,
       "status": "active",
       "type": "str"
     }
   ],
-  "version": 1
+  "version": 2
 }

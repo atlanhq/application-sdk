@@ -296,3 +296,69 @@ def test_reactivation_allowed() -> None:
     passed, errors = check(base, head)
     assert passed
     assert errors == []
+
+
+# ── check: requiredness ───────────────────────────────────────────────────────
+
+
+def _row(field: str, required: object = False, contract: str = "MyInput") -> dict:
+    row: dict = {"contract": contract, "field": field, "type": "str"}
+    if required is not None:
+        row["required"] = required
+    return row
+
+
+def test_new_required_field_on_existing_contract_blocked() -> None:
+    """A required entry added to a contract the base records fails, naming it."""
+    base = {"fields": [_row("name")]}
+    head = {"fields": [_row("name"), _row("extra", True)]}
+    passed, errors = check(base, head)
+    assert not passed
+    assert len(errors) == 1
+    assert errors[0].startswith("NEW REQUIRED FIELD: MyInput.extra")
+
+
+def test_new_field_with_default_on_existing_contract_allowed() -> None:
+    base = {"fields": [_row("name")]}
+    head = {"fields": [_row("name"), _row("extra", False)]}
+    assert check(base, head) == (True, [])
+
+
+def test_new_contract_may_add_required_fields() -> None:
+    base = {"fields": [_row("name")]}
+    head = {"fields": [_row("name"), _row("x", True, contract="NewInput")]}
+    assert check(base, head) == (True, [])
+
+
+def test_optional_to_required_blocked() -> None:
+    base = {"fields": [_row("extra", False)]}
+    head = {"fields": [_row("extra", True)]}
+    passed, errors = check(base, head)
+    assert not passed
+    assert len(errors) == 1
+    assert errors[0].startswith("NEWLY REQUIRED: MyInput.extra")
+
+
+@pytest.mark.parametrize(
+    ("base_required", "head_required"),
+    [(None, True), (None, False), (True, False), (True, True), (False, False)],
+    ids=["backfill-required", "backfill-optional", "relax", "keep", "keep-optional"],
+)
+def test_requiredness_moves_that_break_no_caller_allowed(
+    base_required: bool | None, head_required: bool
+) -> None:
+    """An unknown base (a version-1 ledger) may backfill to either value."""
+    base = {"fields": [_row("extra", base_required)]}
+    head = {"fields": [_row("extra", head_required)]}
+    assert check(base, head) == (True, [])
+
+
+def test_invalid_head_required_blocked() -> None:
+    base = {"fields": [_row("extra")]}
+    head = {"fields": [_row("extra", "yes")]}
+    passed, errors = check(base, head)
+    assert not passed
+    assert errors == [
+        "INVALID REQUIRED: MyInput.extra 'yes' — a ledger 'required' is true, "
+        "false or absent; regenerate instead of editing it by hand."
+    ]
