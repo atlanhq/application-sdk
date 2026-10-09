@@ -320,9 +320,13 @@ class SystemAppE2ETest(BaseE2ETest):
                     f"{outcome.ae_result.run_id} read nothing: the app's pod does "
                     "not have ATLAN_STORE_ASSERT_ENABLED=true. The SDK's e2e "
                     "install sets it for the leased tenant through "
-                    "deploy.env_overrides; check that this run installed the app "
-                    "itself (install-app-to-tenant) and that the install applied "
-                    "the override. Not a verdict on the app."
+                    "deploy.env_overrides, but only on an install that publishes: "
+                    "when the tenant already runs this version, the install is "
+                    "skipped and the pod keeps the env it was installed with. "
+                    "Check that this run installed the app itself "
+                    "(install-app-to-tenant); if it reported the version as "
+                    "already installed, install a new version. Not a verdict on "
+                    "the app."
                 ),
                 resource=STORE_ASSERT_NODE_ID,
             )

@@ -2448,6 +2448,13 @@ def _converged_outcome(
     now **corroborated where it can be**, and the outcome says which layer did
     it, so a skip resting on the record alone is reported as exactly that rather
     than as a verification.
+
+    The skip also means the deploy config, and with it the
+    ``ATLAN_STORE_ASSERT_ENABLED`` override, is not re-applied: the pod keeps
+    the env its version was installed with. Re-publishing could not change
+    that either, for the reason above. A version installed without the
+    override fails store-asserting suites closed, as
+    ``StoreAssertDisabledError``, whose message names this path.
     """
     pod = read_pod_build_identity(read_client)
     if pod.reachable and pod.build_id and pod.build_id != version:
@@ -2491,6 +2498,10 @@ def _converged_outcome(
             "established that the tenant serves the version under test. "
             f"{_unreadable_pod_hint(pod)}{deployment_note}"
         )
+    print(
+        f"::notice::install skipped, so {STORE_ASSERT_ENV} is whatever {version} "
+        "was first installed with; store-asserting suites fail closed if it is unset."
+    )
 
     return InstallOutcome(
         version=version,

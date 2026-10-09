@@ -413,10 +413,20 @@ async def _count_records(
         if expectation.format is RecordFormat.PARQUET
         else _store_records.count_jsonl
     )
-    scanned = matched = 0
+    scanned = matched = fetched = 0
     for key, _ in files:
         try:
             result = await obstore.get_async(store, key)  # type: ignore[arg-type]
+            # The caps above used the listed sizes; an object replaced since
+            # can be larger. The GET's own metadata arrives before the body,
+            # so re-check against it before reading.
+            size = int(result.meta["size"])
+            fetched += size
+            if size > MAX_RECORD_FILE_BYTES or fetched > MAX_RECORD_BYTES:
+                return {
+                    "problem": "a file grew past the byte caps after it was "
+                    "listed; RECORDS cannot be graded"
+                }
             payload = bytes(await result.bytes_async())
         # conformance: ignore[E004] the failure is the observation: reported in the verdict, which the harness grades as not passed
         except Exception as exc:

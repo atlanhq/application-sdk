@@ -236,7 +236,8 @@ def test_expectation_count_is_capped() -> None:
 
 async def test_only_list_and_head_are_ever_called(monkeypatch) -> None:
     """The module's whole view of obstore is ``list`` + ``head_async``: no get,
-    put or delete exists on it, so any such call would raise."""
+    put or delete exists on it, so any such call would raise. A raise the
+    evaluator catches becomes a ``problem``, so the observations are checked."""
     store = _store(**{f"{ROOT}/a": b"x"})
     monkeypatch.setattr(
         store_assert,
@@ -249,7 +250,8 @@ async def test_only_list_and_head_are_ever_called(monkeypatch) -> None:
         _count(1),
         StorePresent(prefix=ROOT),
     ):
-        await evaluate_expectation(expectation, store)
+        observation = await evaluate_expectation(expectation, store)
+        assert observation.problem == ""
 
 
 async def test_listing_failure_is_reported_not_raised(monkeypatch) -> None:

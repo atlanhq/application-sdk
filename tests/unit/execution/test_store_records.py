@@ -252,6 +252,79 @@ async def test_unreadable_content_is_a_problem(
     assert problem in observation.problem
 
 
+def _parquet_with_corrupt_pages() -> bytes:
+    """Footer intact, every data page overwritten: opens, then fails to decode."""
+    data = bytearray(_parquet([{"type_name": f"T{i % 7}" * 20} for i in range(5000)]))
+    footer_len = int.from_bytes(data[-8:-4], "little")
+    body_end = len(data) - 8 - footer_len
+    data[8 : body_end - 8] = b"\xff" * (body_end - 16)
+    return bytes(data)
+
+
+async def test_a_corrupt_parquet_page_is_a_problem_not_a_raise() -> None:
+    store = MemoryStore()
+    obstore.put(store, f"{ROOT}/x.parquet", _parquet_with_corrupt_pages())
+    check = _records(
+        RecordFormat.PARQUET, _cond("type_name", FieldOp.EQ, value="T0"), count=0
+    )
+    observation = await evaluate_expectation(check, store)
+    assert not observation.passed
+    assert "a data page could not be decoded" in observation.problem
+
+
+@pytest.mark.parametrize(
+    ("content", "expected"),
+    [
+        pytest.param(b'{"a": 1}\r\n{"a": 2}\r\n', 2, id="crlf"),
+        pytest.param(b'{"a": 1}\n{"a": 2}', 2, id="no-trailing-newline"),
+        pytest.param(b'\n\n{"a": 1}\n  \n', 1, id="blank-lines"),
+        pytest.param(b"", 0, id="empty"),
+    ],
+)
+async def test_jsonl_line_endings(content: bytes, expected: int) -> None:
+    store = MemoryStore()
+    obstore.put(store, f"{ROOT}/x.jsonl", content)
+    observation = await evaluate_expectation(
+        _records(RecordFormat.JSONL, count=expected), store
+    )
+    assert observation.problem == ""
+    assert observation.records_scanned == expected
+
+
+@pytest.mark.parametrize(
+    ("cap", "value"),
+    [
+        pytest.param("MAX_RECORD_FILE_BYTES", 100, id="file-bytes"),
+        pytest.param("MAX_RECORD_BYTES", 100, id="total-bytes"),
+    ],
+)
+async def test_an_object_that_grew_after_listing_is_not_read(
+    monkeypatch: pytest.MonkeyPatch, cap: str, value: int
+) -> None:
+    """The listing said small; the GET's own size is what decides the read."""
+    store = MemoryStore()
+    obstore.put(store, f"{ROOT}/a.json", b"{}\n")
+    monkeypatch.setattr(store_assert, cap, value)
+
+    class _Grown:
+        meta = {"size": value + 1}
+
+        async def bytes_async(self) -> bytes:
+            raise AssertionError("read a body past a cap")
+
+    async def _get(*a: Any, **k: Any) -> _Grown:
+        return _Grown()
+
+    monkeypatch.setattr(
+        store_assert, "obstore", SimpleNamespace(list=obstore.list, get_async=_get)
+    )
+    observation = await evaluate_expectation(
+        _records(RecordFormat.JSONL, count=1), store
+    )
+    assert not observation.passed
+    assert "grew past the byte caps" in observation.problem
+
+
 @pytest.mark.parametrize(
     ("cap", "value"),
     [

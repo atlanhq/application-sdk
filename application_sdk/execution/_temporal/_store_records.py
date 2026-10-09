@@ -10,11 +10,14 @@ extra, and importing this module (which every worker does) must not load it.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Protocol
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Protocol
 from urllib.parse import unquote
 
 import orjson
+
+if TYPE_CHECKING:
+    from pyarrow.parquet import ParquetFile
 
 #: Rows decoded per parquet batch; bounds memory to one batch of the projected
 #: columns rather than a whole file.
@@ -121,6 +124,22 @@ def record_matches(
     return all(c.holds(lookup(record, c.path, partitions)) for c in conditions)
 
 
+def _lines(data: bytes) -> Iterator[bytes]:
+    """Each ``\\n``-separated line of *data*, one at a time.
+
+    ``bytes.splitlines()`` would build every line up front: millions of short
+    records cost several times the file's size before the first is counted.
+    A trailing ``\\r`` is JSON whitespace, so CRLF files parse unchanged.
+    """
+    start = 0
+    while start < len(data):
+        end = data.find(b"\n", start)
+        if end == -1:
+            end = len(data)
+        yield data[start:end]
+        start = end + 1
+
+
 def count_jsonl(
     data: bytes, conditions: Sequence[Condition], partitions: Mapping[str, str]
 ) -> tuple[int, int]:
@@ -130,7 +149,7 @@ def count_jsonl(
         MalformedRecordsError: A non-blank line is not a JSON object.
     """
     scanned = matched = 0
-    for line in data.splitlines():
+    for line in _lines(data):
         if not line.strip():
             continue
         try:
@@ -154,7 +173,8 @@ def count_parquet(
 
     Raises:
         ParquetUnavailableError: pyarrow is not installed.
-        MalformedRecordsError: *data* is not a parquet file.
+        MalformedRecordsError: *data* is not a parquet file, or a page in it
+            cannot be decoded.
     """
     try:
         import pyarrow as pa  # noqa: PLC0415 — optional extra; see module docstring
@@ -163,9 +183,22 @@ def count_parquet(
         raise ParquetUnavailableError from exc
     try:
         parquet_file = pq.ParquetFile(pa.BufferReader(data))
-    except (pa.ArrowInvalid, OSError) as exc:
+    except (pa.ArrowException, OSError) as exc:
         raise MalformedRecordsError("not a parquet file") from exc
+    # A readable footer says nothing about the pages: a corrupt or truncated
+    # one only fails when its batch is decoded.
+    try:
+        return _count_parquet_rows(parquet_file, conditions, partitions)
+    except (pa.ArrowException, OSError) as exc:
+        raise MalformedRecordsError("a data page could not be decoded") from exc
 
+
+def _count_parquet_rows(
+    parquet_file: ParquetFile,
+    conditions: Sequence[Condition],
+    partitions: Mapping[str, str],
+) -> tuple[int, int]:
+    """:func:`count_parquet` past the footer; pyarrow errors propagate."""
     rows = parquet_file.metadata.num_rows
     if not conditions:
         return rows, rows

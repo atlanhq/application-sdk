@@ -417,6 +417,18 @@ def test_several_queues_need_an_override(tmp_path: Path) -> None:
         _suite(manifest, _absent())._build_seed_dag()
 
 
+def test_a_manifest_node_with_the_reserved_id_is_not_replaced(tmp_path: Path) -> None:
+    manifest = _manifest(
+        tmp_path,
+        {
+            "delete": {"inputs": {"task_queue": _QUEUE}},
+            STORE_ASSERT_NODE_ID: {"inputs": {"task_queue": _QUEUE}},
+        },
+    )
+    with pytest.raises(StoreAssertQueueAmbiguousError, match="already has a node"):
+        _suite(manifest, _absent())._build_seed_dag()
+
+
 def test_too_many_expectations_fail_before_submit(tmp_path: Path) -> None:
     too_many = [_absent()] * (MAX_STORE_EXPECTATIONS + 1)
     with pytest.raises(pydantic.ValidationError):
