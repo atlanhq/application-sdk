@@ -712,6 +712,54 @@ def test_post_graphql_wraps_timeouts_as_runtime_error(monkeypatch):
         assert "timed out" in str(exc)
 
 
+def test_post_graphql_wraps_a_truncated_body_as_runtime_error(monkeypatch):
+    # GitHub closing the connection mid-body raises IncompleteRead from
+    # resp.read(). It is not a URLError, so before this was wrapped it escaped
+    # every handler and failed the whole dashboard run.
+    class _Truncated:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            raise rfs.http.client.IncompleteRead(b"x" * 10, 5)
+
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Truncated()
+    )
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert "IncompleteRead" in str(exc)
+        assert rfs._is_retryable(exc)
+
+
+def test_post_graphql_wraps_a_reset_during_read_as_runtime_error(monkeypatch):
+    # A reset after the status line raises ConnectionResetError directly, unlike
+    # a reset during connect, which urlopen wraps in URLError.
+    class _Reset:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self):
+            raise ConnectionResetError(104, "Connection reset by peer")
+
+    monkeypatch.setattr(
+        rfs.urllib.request, "urlopen", lambda req, timeout=None: _Reset()
+    )
+    try:
+        rfs._post_graphql_once("tok", {"query": "{}"})
+        assert False, "expected RuntimeError"
+    except RuntimeError as exc:
+        assert rfs._is_retryable(exc)
+
+
 def test_fetch_lock_texts_survives_a_transport_failure(capsys):
     # The whole point of the wrap: an enrichment pass degrades to "no signal for
     # this PR", never to a dashboard that skipped every repo.
@@ -982,6 +1030,22 @@ def test_retries_a_read_timeout(monkeypatch):
     post = _ScriptedPost(
         [
             RuntimeError("GraphQL request failed: The read operation timed out"),
+            {"ok": 1},
+        ]
+    )
+    monkeypatch.setattr(rfs, "_post_graphql_once", post)
+
+    assert rfs._post_graphql("tok", {}, sleep=lambda _: None) == {"ok": 1}
+    assert post.calls == 2
+
+
+def test_retries_a_truncated_response(monkeypatch):
+    post = _ScriptedPost(
+        [
+            RuntimeError(
+                "GraphQL response cut short: IncompleteRead: "
+                "IncompleteRead(211544 bytes read, 135875 more expected)"
+            ),
             {"ok": 1},
         ]
     )

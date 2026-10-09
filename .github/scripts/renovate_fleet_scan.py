@@ -29,6 +29,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import sys
@@ -292,6 +293,13 @@ def _post_graphql_once(token: str, payload: dict) -> dict:
     # TimeoutError directly rather than wrapping it, hence both.
     except (urllib.error.URLError, TimeoutError) as exc:
         raise RuntimeError(f"GraphQL request failed: {exc}") from exc
+    # The status line arrived but the body did not: GitHub (or a proxy) closed
+    # the connection mid-read. That surfaces from resp.read() as IncompleteRead
+    # or a bare ConnectionResetError, neither of which urlopen wraps in URLError.
+    except (http.client.HTTPException, ConnectionError) as exc:
+        raise RuntimeError(
+            f"GraphQL response cut short: {type(exc).__name__}: {exc}"
+        ) from exc
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"GraphQL response was not JSON: {exc}") from exc
 
@@ -311,6 +319,8 @@ def _is_retryable(exc: RuntimeError) -> bool:
         return True
     # Transport-level: connection reset, DNS blip, read timeout. None of these
     # carry a status, and all are the same kind of transient as a 502.
+    if "response cut short" in text:
+        return True
     return "failed: <urlopen error" in text or "timed out" in text.lower()
 
 
