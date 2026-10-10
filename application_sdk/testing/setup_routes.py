@@ -1096,7 +1096,9 @@ class FormStep:
     a positional placeholder when the served step declares none."""
 
     properties: frozenset[str] = frozenset()
-    """The field names this panel puts on screen."""
+    """The field names this panel puts on screen: the ones the step lists, plus
+    the sub-fields a listed ``conditional`` property's widget draws
+    (:func:`_composite_fields`)."""
 
 
 @dataclass(frozen=True)
@@ -1131,6 +1133,43 @@ class ServedForm:
         """
         rendered: frozenset[str] = frozenset()
         return rendered.union(*(step.properties for step in self.steps))
+
+
+def _composite_fields(properties: dict[str, Any], name: str) -> frozenset[str]:
+    """Fields a ``conditional`` property's widget draws from its own conditions.
+
+    ``formBlock.vue`` renders a ``type: conditional`` property through the
+    condition matching the form's current values, and a composite widget such
+    as the marketplace ``AssetSelection`` lays out that condition's
+    ``properties`` itself — so those sub-fields reach the user without any step
+    naming them. A connector's contract declares them at the top level too, so
+    the values the widget writes have a schema, and reading step lists alone
+    reported every one of them as undrawn on a form that renders.
+
+    Which condition matches depends on what the user picked, so this is the
+    union over conditions, transitively: a sub-field may itself be conditional.
+    Malformed shapes contribute nothing rather than raising, like the rest of
+    the parser.
+
+    Args:
+        properties: The schema's top-level ``properties``.
+        name: A field some step lists.
+    """
+    found: set[str] = set()
+    pending: list[Any] = [properties.get(name)]
+    while pending:
+        definition = pending.pop()
+        if not isinstance(definition, dict) or definition.get("type") != "conditional":
+            continue
+        conditions = definition.get("conditions")
+        for condition in conditions if isinstance(conditions, list) else []:
+            sub = condition.get("properties") if isinstance(condition, dict) else None
+            if not isinstance(sub, dict):
+                continue
+            for key, sub_definition in sub.items():
+                found.add(str(key))
+                pending.append(sub_definition)
+    return frozenset(found)
 
 
 def served_form(body: dict[str, Any]) -> ServedForm:
@@ -1170,11 +1209,8 @@ def served_form(body: dict[str, Any]) -> ServedForm:
         return ServedForm()
 
     properties = schema.get("properties")
-    names = (
-        frozenset(str(key) for key in properties)
-        if isinstance(properties, dict)
-        else frozenset()
-    )
+    defined: dict[str, Any] = properties if isinstance(properties, dict) else {}
+    names = frozenset(str(key) for key in defined)
 
     raw_steps = schema.get("steps")
     steps: list[FormStep] = []
@@ -1182,12 +1218,13 @@ def served_form(body: dict[str, Any]) -> ServedForm:
         if not isinstance(step, dict):
             continue
         declared = step.get("properties")
+        listed = [str(name) for name in declared] if isinstance(declared, list) else []
         steps.append(
             FormStep(
                 id=str(step.get("id") or f"<step {index}>"),
-                properties=frozenset(str(name) for name in declared)
-                if isinstance(declared, list)
-                else frozenset(),
+                properties=frozenset(listed).union(
+                    *(_composite_fields(defined, name) for name in listed)
+                ),
             )
         )
     return ServedForm(properties=names, steps=tuple(steps))
