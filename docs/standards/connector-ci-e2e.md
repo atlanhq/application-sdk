@@ -171,7 +171,9 @@ Two details of the removal matter:
 - It uses the run's own `github.token`, so the `unlabeled` event starts no
   workflow run — nothing re-fires on it.
 - Before removing the label, the gate records the verdict as an `e2e` commit
-  status on the PR head (`success` or `failure` only). The consumer's
+  status on the PR head: `success` or `failure`, or `error` when the run acted
+  on the label but produced no verdict (cancelled, tenant busy, install
+  failed). The consumer's
   [Release Gate](release-flow.md) reads that status once the label is gone. The
   status is bound to the commit, so a push re-blocks a release PR until the
   label is re-added.
@@ -203,6 +205,38 @@ Note that a genuine re-trigger still **queues** behind an in-flight run rather
 than cancelling it (`cancel-in-progress: false`). That is deliberate —
 cancelling mid-run abandons a live Automation Engine run and leaves tenant state
 behind — and it is a separate decision from the gating above.
+
+### Every run on a commit honours its e2e verdict
+
+A run started by an unrelated label skips e2e, but it is still a `Tests` run on
+the same commit. GitHub reads the required `tests / Tests Gate` from the newest
+check suite on the commit, so before FND-3650 that run's green gate overrode the
+run that was actually running e2e. A PR could merge mid-suite, or over a failed
+suite.
+
+The `e2e` commit status now carries the verdict across runs:
+
+1. The run that acts on the label posts `e2e = pending` from `Discover e2e
+   suites`, and its gate always replaces it with `success`, `failure` or `error`.
+2. Any other PR run whose own gate passed holds it on that status
+   (`e2e_commit_verdict.py`). `success` passes. `failure` and `error` fail, even
+   after the label is consumed. `pending` is waited on for up to 10 minutes.
+   No status passes, because e2e is not required on a normal PR, unless the PR
+   carries `e2e` and the run skipped only because of the unrelated-label
+   filter. Then a missing status fails after a short wait.
+3. If the wait runs out, that gate fails. When the acting run records its
+   verdict, it re-runs that gate (`rerun_deferred_gate.py`, needs
+   `ORG_PAT_GITHUB`), which then reads the final status. Without the PAT,
+   re-run the failed job by hand.
+
+If the label starts two attempts on one commit, the newest attempt decides
+(each status links the run that posted it), and an older attempt that finishes
+later does not write its verdict. Each recorder re-checks after writing: if an
+older attempt's row has become the newest `e2e` status, it re-posts the newest
+attempt's latest row, so the combined status the Release Gate reads matches.
+
+A failed e2e is cleared by pushing a fix or by adding the label again. Removing
+the label does not clear it, because the verdict belongs to the commit.
 
 ### One dispatch per commit, however many events GitHub sends
 
