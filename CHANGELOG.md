@@ -1,5 +1,14 @@
 # Changelog
 
+## v3.45.1 (October 10, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.45.0...v3.45.1
+
+### Bug Fixes
+
+- confirm connection-delete purged the seed root instead of deleting it from the runner [FND-3572] (#4300) (by @cmgrote in [90ab880](https://github.com/atlanhq/application-sdk/commit/90ab880))
+
+
 ## v3.45.0 (October 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.44.0...v3.45.0
