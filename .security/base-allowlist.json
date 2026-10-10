@@ -1,11 +1,29 @@
 {
   "_comment": "Central allowlist for SDK base image vulnerabilities. Shared across all connector repos. Auto-maintained by the vuln-triage rover; CODEOWNERS: SDK/security team + @atlan-ci (auto-merge of allowlist-only PRs).",
   "_base_image": "app-runtime-base:3",
-  "_updated": "2026-10-02",
+  "_updated": "2026-10-10",
   "_renewal_note": "Expiry dates are the remediation SLA per severity, measured from first detection. CRITICAL: 7 days. HIGH: 30 days. MEDIUM/LOW are NOT allowlisted (tracked on Linear tickets only). The gate (check_allowlist.py) passes while an entry is unexpired and fails once it expires. Enforced by .github/scripts/validate_allowlist.py via _expiry_policy below.",
   "_expiry_policy": {
     "CRITICAL": 7,
     "HIGH": 30
   },
-  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive."
+  "_entry_schema": "Each non-underscore key is a CVE/advisory ID. Required: package, severity (CRITICAL|HIGH only), reason, expires, added_by, case (1-4), ticket. Optional: fix_pr. Keep entries minimal but descriptive.",
+  "CVE-2026-78669": {
+    "package": "dapr-daprd-1.18",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
+    "expires": "2026-11-09",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 4,
+    "ticket": "BLDX-1663"
+  },
+  "CVE-2026-97031": {
+    "package": "dapr-daprd-1.18",
+    "severity": "HIGH",
+    "reason": "Case 4: base-image CVE; awaiting an app-runtime-base:3 rebuild.",
+    "expires": "2026-11-09",
+    "added_by": "@atlan-app-fleet (vuln-triage)",
+    "case": 4,
+    "ticket": "BLDX-1663"
+  }
 }
