@@ -17,9 +17,12 @@ Since FND-1724 the registry is drained through the ``connection-delete`` app
 rather than through ``pyatlan``, so what the wiring has to show has one more
 step in it: every registered connection reaches
 :func:`~application_sdk.testing.harness.teardown.delete_connection`, a delete
-that does not complete falls back to the runner-side purge (and only then), and
-the seed NDJSON is deleted **by key** — the bulk-prefix delete it replaced is
-what the tenant's s3proxy answers with a 403.
+that does not complete falls back to the runner-side purge (and only then).
+The seed root is not deleted from the runner at all: the tenant's s3proxy
+refuses that in every request shape, and since FND-3569 the same
+``connection-delete`` PURGE takes it. Teardown only reads that run's
+``storage_deleted_by_prefix`` back, and warns when the root is missing from it
+(FND-3572).
 """
 
 from __future__ import annotations
@@ -44,9 +47,52 @@ from application_sdk.testing.harness.teardown import (
 _RUN_QN = "default/openapi/1787587123106596"
 _SEED_QN = "default/snowflake/1787587123106596"
 _SEED_PREFIX = "artifacts/apps/openapi/e2e-seed/default%2Fsnowflake%2F1787587123106596"
-#: The one key the harness itself writes under that root. Teardown deletes this,
-#: not the root: see :func:`~application_sdk.testing.harness.seed.seed_object_keys`.
-_SEED_KEY = f"{_SEED_PREFIX}/transformed/assets.json"
+#: The ``connection-delete`` node teardown reads the storage report from.
+_DELETE_NODE = "delete"
+
+
+def _run_id(qualified_name: str) -> str:
+    """The AE run id the default (successful) delete report carries."""
+    return f"run-{qualified_name}"
+
+
+class _RecordingAE:
+    """Stand-in AE client that serves scripted ``delete`` node outputs.
+
+    Only :meth:`get_node_outputs` is reached: ``delete_connection`` itself is
+    patched out, so this is what teardown's storage read-back talks to.
+    """
+
+    def __init__(
+        self,
+        harness: BaseE2ETest,
+        scripted: dict[str, dict[str, Any] | BaseException],
+    ) -> None:
+        self._harness = harness
+        self._scripted = scripted
+        self.reads: list[tuple[str, str]] = []
+
+    async def get_node_outputs(self, run_id: str, node_id: str) -> dict[str, Any]:
+        self.reads.append((run_id, node_id))
+        scripted = self._scripted.get(run_id)
+        if isinstance(scripted, BaseException):
+            raise scripted
+        if scripted is not None:
+            return scripted
+        # An FND-3569+ connection-delete that purged the seed roots of the one
+        # connection it was pointed at — and only those, so a root checked
+        # against another connection's run reads as missing.
+        return {
+            "storage_objects_deleted": 3,
+            "storage_deleted_by_prefix": {
+                f"{root}/": 3
+                for root, seeded_qn in self._harness._seeded_prefixes.items()
+                if run_id == _run_id(seeded_qn)
+            },
+        }
+
+    async def aclose(self) -> None:
+        """Teardown closes the pool last; nothing to release here."""
 
 
 @asynccontextmanager
@@ -84,8 +130,13 @@ def _harness(
     *,
     seed_error: BaseException | None = None,
     delete_reports: dict[str, ConnectionDeleteReport] | None = None,
+    node_outputs: dict[str, dict[str, Any] | BaseException] | None = None,
 ) -> tuple[_SeedingE2ETest, list[str], list[str], list[str]]:
-    """A harness whose seed, delete, purge and object delete are recorded.
+    """A harness whose seed, delete and purge are recorded, and its warnings.
+
+    The fourth element is every WARNING teardown logged, rendered. The module's
+    logger is substituted rather than captured with ``caplog``: the SDK's
+    adaptor is loguru-backed and does not propagate to stdlib ``logging``.
 
     ``plans``, ``specs`` and ``deleted_connections`` are exposed on the harness
     rather than returned: only a few tests read them, and widening the tuple
@@ -98,10 +149,13 @@ def _harness(
             A QN with no entry succeeds, which is the shape every test that is
             not about the fallback wants — the fallback purge then runs for
             exactly the connections named here, and for no others.
+        node_outputs: Per-run-id ``delete`` node outputs, or an exception to
+            raise reading them. A run with no entry reports every registered
+            seed root purged.
     """
     seeded: list[str] = []
     purged: list[str] = []
-    deleted: list[str] = []
+    warnings: list[str] = []
     deleted_connections: list[str] = []
     plans: list[harness_seed.SeedPublishPlan] = []
     delete_plans: list[ConnectionDeletePlan] = []
@@ -124,20 +178,24 @@ def _harness(
         delete_plans.append(wiring["plan"])
         scripted = (delete_reports or {}).get(qualified_name)
         return scripted or ConnectionDeleteReport(
-            qualified_name=qualified_name, succeeded=True
+            qualified_name=qualified_name,
+            succeeded=True,
+            ae_run_id=_run_id(qualified_name),
         )
 
     async def _record_purge(client: object, connection_qualified_name: str) -> object:
         purged.append(connection_qualified_name)
         return SimpleNamespace(purged=1, orphaned=(), errors=())
 
-    async def _record_delete(key: str, _store: object) -> bool:
-        deleted.append(key)
-        return True
+    def _record_warning(message: str, *args: object, **_kwargs: object) -> None:
+        warnings.append(message % args if args else message)
+
+    def _ignore(*_args: object, **_kwargs: object) -> None:
+        return None
 
     harness = _SeedingE2ETest()
     harness.run_id = 1787587123
-    harness._ae = object()
+    harness._ae = _RecordingAE(harness, node_outputs or {})
     harness.connection_qualified_name = _RUN_QN
     # A run that submitted its DAG against its own connection, which is what
     # every test here but ``TestTeardownSkipsAConnectionThatWasNeverCreated`` is
@@ -145,7 +203,7 @@ def _harness(
     # therefore what teardown keys its delete off (FND-1873).
     harness._submitted_connection_qns = [_RUN_QN]
     harness._seeded_connection_qns = []
-    harness._seeded_prefixes = []
+    harness._seeded_prefixes = {}
     harness._minter = SimpleNamespace(
         connection_identity=lambda connector_type: SimpleNamespace(
             qualified_name=f"default/{connector_type}/minted",
@@ -162,7 +220,8 @@ def _harness(
         "application_sdk.testing.e2e.base.purge_connection", _record_purge
     )
     monkeypatch.setattr(
-        "application_sdk.testing.e2e.base.delete_object", _record_delete
+        "application_sdk.testing.e2e.base.logger",
+        SimpleNamespace(info=_ignore, warning=_record_warning, error=_record_warning),
     )
     monkeypatch.setattr(
         _SeedingE2ETest, "_atlas_client", lambda self: _null_atlas_client()
@@ -172,7 +231,7 @@ def _harness(
     harness.recorded_specs = specs
     harness.recorded_delete_plans = delete_plans
     harness.deleted_connections = deleted_connections
-    return harness, seeded, purged, deleted
+    return harness, seeded, purged, warnings
 
 
 class TestSeedAssetsRegistry:
@@ -181,7 +240,7 @@ class TestSeedAssetsRegistry:
     def test_the_seeded_qn_is_recorded_and_returned(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, seeded, _purged, _warnings = _harness(monkeypatch)
         report = harness.seed_assets(_spec())
         assert report.qualified_name == _SEED_QN
         assert seeded == [_SEED_QN]
@@ -191,14 +250,14 @@ class TestSeedAssetsRegistry:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """The NDJSON is the other thing a seed leaves on a shared tenant."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec())
-        assert harness._seeded_prefixes == [_SEED_PREFIX]
+        assert harness._seeded_prefixes == {_SEED_PREFIX: _SEED_QN}
 
     def test_a_none_qn_is_minted_from_the_specs_connector_type(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, seeded, _purged, _warnings = _harness(monkeypatch)
         report = harness.seed_assets(_spec(qualified_name=None))
         assert report.qualified_name == "default/snowflake/minted"
         assert seeded == ["default/snowflake/minted"]
@@ -209,20 +268,20 @@ class TestSeedAssetsRegistry:
         """The NDJSON may already be uploaded — and the connection created by
         publish — by the time the run fails; registering on success would leave
         exactly those half-set-up artifacts behind."""
-        harness, _seeded, _purged, _deleted = _harness(
+        harness, _seeded, _purged, _warnings = _harness(
             monkeypatch, seed_error=RuntimeError("publish rejected the batch")
         )
         with pytest.raises(RuntimeError):
             harness.seed_assets(_spec())
         assert harness._seeded_connection_qns == [_SEED_QN]
-        assert harness._seeded_prefixes == [_SEED_PREFIX]
+        assert harness._seeded_prefixes == {_SEED_PREFIX: _SEED_QN}
 
     def test_a_bad_segment_is_rejected_before_anything_is_registered(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Validation is the whole point of the spec; a segment that cannot
         compose must not reach the tenant, or the registry."""
-        harness, seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, seeded, _purged, _warnings = _harness(monkeypatch)
         spec = harness_seed.SeedSpec(
             connector_type="snowflake",
             qualified_name=_SEED_QN,
@@ -233,7 +292,7 @@ class TestSeedAssetsRegistry:
             harness.seed_assets(spec)
         assert seeded == []
         assert harness._seeded_connection_qns == []
-        assert harness._seeded_prefixes == []
+        assert harness._seeded_prefixes == {}
 
     @pytest.mark.parametrize("blank", ["", "   "])
     def test_an_empty_qn_is_rejected_rather_than_minted(
@@ -244,7 +303,7 @@ class TestSeedAssetsRegistry:
         on it would paper over the caller's mistake with a valid QN, and the
         seed would publish under a connection nobody asked for while the
         connector's refs still named the empty one."""
-        harness, seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, seeded, _purged, _warnings = _harness(monkeypatch)
         with pytest.raises(harness_seed.SeedSegmentInvalidError):
             harness.seed_assets(_spec(qualified_name=blank))
         assert seeded == []
@@ -258,7 +317,7 @@ class TestSeedAssetsRegistry:
         the resolved spec back — asserting on anything derived from
         ``connector_type`` (the workflow name, say) would stay green through a
         regression that minted over it."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         spec = harness_seed.SeedSpec(
             connector_type="snowflake",
             qualified_name=_SEED_QN,
@@ -274,7 +333,7 @@ class TestSeedAssetsRegistry:
     ) -> None:
         """The other side of the same assertion — without it, "not replaced"
         could pass on a resolver that never mints at all."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         spec = harness_seed.SeedSpec(
             connector_type="snowflake",
             qualified_name=_SEED_QN,
@@ -296,7 +355,7 @@ class TestSeedWorkflowNames:
         two accounts — would otherwise reuse one slug, publish each graph over
         the other, and leave an AE run list that cannot tell them apart. Same
         collision ``_ae_workflow_name_suffix`` solves for multi-DAGSpec runs."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec(qualified_name="default/snowflake/111"))
         harness.seed_assets(_spec(qualified_name="default/snowflake/222"))
         first, second = (plan.ae_workflow_name for plan in harness.recorded_plans)
@@ -307,7 +366,7 @@ class TestSeedWorkflowNames:
     ) -> None:
         """The other half of the same rule: sharing the suite's own workflow
         name would publish the seed's one-node graph over the connector's DAG."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec())
         name = harness.recorded_plans[0].ae_workflow_name
         assert "-seed-" in name
@@ -322,7 +381,7 @@ class TestSeedWorkflowNames:
         That is fine and is what this pins: the registry only ever grows within
         a run, so the ordinals cannot repeat whatever else lands in it. Reading
         the count off a shared structure is only safe while that holds."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec(qualified_name="default/snowflake/111"))
         with harness._dag_run(
             DAGSpec(connection_qualified_name="default/snowflake/999")
@@ -350,7 +409,7 @@ class TestTeardownIncludesSeededConnections:
     ) -> None:
         """The run's assets hold lineage refs *into* the seeded skeletons, so
         the referrer goes first — the direction that cannot strand an edge."""
-        harness, _seeded, purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN, _SEED_QN]
@@ -362,7 +421,7 @@ class TestTeardownIncludesSeededConnections:
         """One single-node run per connection, each named apart from the other:
         ``create_workflow`` is idempotent on the name, so two teardowns sharing
         one would publish each graph over the other."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
         names = [plan.ae_workflow_name for plan in harness.recorded_delete_plans]
@@ -375,24 +434,16 @@ class TestTeardownIncludesSeededConnections:
             DeleteType.PURGE
         }
 
-    def test_the_seed_object_is_deleted_by_key_after_the_connections(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        """By key, not by prefix. A bulk-prefix delete is a bucket-level URL the
-        tenant's s3proxy answers with ``403 code 1009`` however allowlisted the
-        prefix is — which is why the old teardown never deleted this at all."""
-        harness, _seeded, _purged, deleted = _harness(monkeypatch)
-        harness.seed_assets(_spec())
-        harness.teardown_method(method=None)
-        assert deleted == [_SEED_KEY]
-
     def test_a_run_that_seeded_nothing_deletes_only_its_own(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, _purged, deleted = _harness(monkeypatch)
+        """No seed root, so nothing to read back from the delete either."""
+        harness, _seeded, _purged, warnings = _harness(monkeypatch)
+        ae = harness._ae
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
-        assert deleted == []
+        assert ae.reads == []
+        assert warnings == []
 
     def test_an_absent_app_falls_back_to_the_runner_purge(
         self, monkeypatch: pytest.MonkeyPatch
@@ -400,7 +451,7 @@ class TestTeardownIncludesSeededConnections:
         """``connection-delete`` is a marketplace utility, so a tenant may
         simply not have it. Leaking a whole connection is worse than leaking
         bytes, so the Atlas half is still reclaimed — and never by raising."""
-        harness, _seeded, purged, _deleted = _harness(
+        harness, _seeded, purged, _warnings = _harness(
             monkeypatch,
             delete_reports={
                 _RUN_QN: ConnectionDeleteReport(
@@ -421,7 +472,7 @@ class TestTeardownIncludesSeededConnections:
         not skip the seeded ones, and none of it may replace the verdict. Only
         the connection that failed is purged from the runner — a fallback that
         ran for the others too would re-walk what the app had already taken."""
-        harness, _seeded, purged, _deleted = _harness(
+        harness, _seeded, purged, _warnings = _harness(
             monkeypatch,
             delete_reports={
                 _RUN_QN: ConnectionDeleteReport(
@@ -439,26 +490,172 @@ class TestTeardownIncludesSeededConnections:
     ) -> None:
         """The worker-up-only tier wires no AE client, so there is nothing to
         submit a delete through — and a connection it minted still has to go."""
-        harness, _seeded, purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, purged, _warnings = _harness(monkeypatch)
         del harness._ae
         harness.teardown_method(method=None)
         assert harness.deleted_connections == []
         assert purged == [_RUN_QN]
 
-    def test_an_unreachable_store_still_leaves_the_connections_deleted(
+
+class TestTeardownConfirmsTheSeedRootPurge:
+    """The seed root is the connection-delete PURGE's to take, not the runner's.
+
+    FND-3572: the runner-side per-key delete could never succeed (the tenant's
+    s3proxy refuses DELETE under ``/artifacts/apps/`` from a runner), so it
+    warned on every green leg. It is gone; what is left is reading the delete
+    run's own ``storage_deleted_by_prefix`` and warning only when the seed root
+    is not in it — naming the root and the run, so the warning is actionable.
+    """
+
+    def test_a_purge_that_reports_the_root_is_silent(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """Bytes left behind are strictly less harmful than a replaced verdict,
-        and the entities are what a later run trips over."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        """The green-leg acceptance: an FND-3569+ delete, no warning at all."""
+        harness, _seeded, _purged, warnings = _harness(monkeypatch)
+        ae = harness._ae
         harness.seed_assets(_spec())
-        monkeypatch.setattr(
-            _SeedingE2ETest,
-            "seed_object_store",
-            lambda self: (_ for _ in ()).throw(RuntimeError("no binding")),
+        harness.teardown_method(method=None)
+        assert ae.reads == [(_run_id(_SEED_QN), _DELETE_NODE)]
+        assert warnings == []
+
+    def test_each_root_is_checked_against_its_own_connections_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two seeds, two runs: each root is read back from the delete of the
+        connection it was seeded under, so one run's report cannot vouch for
+        another connection's root."""
+        other_qn = "default/postgres/1787587123106596"
+        other_root = (
+            "artifacts/apps/openapi/e2e-seed/default%2Fpostgres%2F1787587123106596"
         )
+        harness, _seeded, _purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={
+                _run_id(other_qn): {
+                    "storage_deleted_by_prefix": {f"{_SEED_PREFIX}/": 1},
+                }
+            },
+        )
+        ae = harness._ae
+        harness.seed_assets(_spec())
+        harness.seed_assets(_spec(other_qn))
+        harness.teardown_method(method=None)
+        assert ae.reads == [
+            (_run_id(_SEED_QN), _DELETE_NODE),
+            (_run_id(other_qn), _DELETE_NODE),
+        ]
+        assert len(warnings) == 1
+        assert f"{other_root}/" in warnings[0]
+        assert _run_id(other_qn) in warnings[0]
+
+    def test_only_the_seeded_connections_run_is_read(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The run's own connection has no seed root, so its run is not read —
+        a read per connection would be an AE call for nothing."""
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
+        ae = harness._ae
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert [run_id for run_id, _node in ae.reads] == [_run_id(_SEED_QN)]
+
+    def test_a_pre_fnd3569_delete_warns_with_the_root_and_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An older connection-delete reports no per-prefix storage at all."""
+        harness, _seeded, purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={
+                _run_id(_SEED_QN): {"message": "Deleted 4 assets (0 failed)"}
+            },
+        )
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert len(warnings) == 1
+        assert f"{_SEED_PREFIX}/" in warnings[0]
+        assert _run_id(_SEED_QN) in warnings[0]
+        assert "FND-3569" in warnings[0]
+        # The delete itself completed, so no runner-side fallback.
+        assert purged == []
+
+    def test_a_purge_that_missed_the_root_warns_with_the_root_and_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A report that lists other prefixes but not this seed's root."""
+        harness, _seeded, _purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={
+                _run_id(_SEED_QN): {
+                    "storage_objects_deleted": 2,
+                    "storage_deleted_by_prefix": {
+                        f"persistent-artifacts/{_SEED_QN}/": 2,
+                    },
+                }
+            },
+        )
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert len(warnings) == 1
+        assert f"{_SEED_PREFIX}/" in warnings[0]
+        assert _run_id(_SEED_QN) in warnings[0]
+        assert f"persistent-artifacts/{_SEED_QN}/" in warnings[0]
+
+    def test_the_root_key_carries_the_trailing_slash(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """connection-delete keys a purged root as ``<root>/``. The bare root is
+        not that key — and matching it loosely would let a sibling seed whose
+        encoded QN extends this one's stand in for it."""
+        harness, _seeded, _purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={
+                _run_id(_SEED_QN): {
+                    "storage_deleted_by_prefix": {_SEED_PREFIX: 1},
+                }
+            },
+        )
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert len(warnings) == 1
+        assert f"{_SEED_PREFIX}/" in warnings[0]
+
+    def test_an_unreadable_report_warns_and_never_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness, _seeded, _purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={_run_id(_SEED_QN): RuntimeError("AE run read failed")},
+        )
+        harness.seed_assets(_spec())
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN, _SEED_QN]
+        assert len(warnings) == 1
+        assert f"{_SEED_PREFIX}/" in warnings[0]
+        assert _run_id(_SEED_QN) in warnings[0]
+
+    def test_an_incomplete_delete_names_the_root_it_left(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The runner fallback reclaims Atlas only, so the root is still there —
+        and there is no completed run to read a report from."""
+        harness, _seeded, purged, warnings = _harness(
+            monkeypatch,
+            delete_reports={
+                _SEED_QN: ConnectionDeleteReport(
+                    qualified_name=_SEED_QN,
+                    ae_run_id="run-stalled",
+                    errors=("the connection-delete run did not succeed",),
+                )
+            },
+        )
+        ae = harness._ae
+        harness.seed_assets(_spec())
+        harness.teardown_method(method=None)
+        assert purged == [_SEED_QN]
+        assert ae.reads == []
+        left = [w for w in warnings if f"{_SEED_PREFIX}/" in w]
+        assert len(left) == 1
+        assert "run-stalled" in left[0]
 
 
 class TestTeardownDeletesEachConnectionOnce:
@@ -473,7 +670,7 @@ class TestTeardownDeletesEachConnectionOnce:
     def test_seeding_under_the_runs_own_qn_deletes_it_once(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec(qualified_name=_RUN_QN))
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
@@ -484,7 +681,7 @@ class TestTeardownDeletesEachConnectionOnce:
     ) -> None:
         """Ordinals stay positional, so a later connection's teardown workflow
         name does not depend on whether an earlier one was a duplicate."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.seed_assets(_spec(qualified_name=_RUN_QN))
         harness.seed_assets(_spec())
         harness.teardown_method(method=None)
@@ -498,7 +695,7 @@ class TestTeardownDeletesEachConnectionOnce:
     ) -> None:
         """The skip of the run's own slot must not take the seeded copy of the
         same name with it: the seed published a real connection there."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness._submitted_connection_qns = []
         harness.seed_assets(_spec(qualified_name=_RUN_QN))
         harness.teardown_method(method=None)
@@ -529,7 +726,8 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
     def test_a_run_that_neither_seeded_nor_submitted_deletes_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, purged, deleted = _harness(monkeypatch)
+        harness, _seeded, purged, _warnings = _harness(monkeypatch)
+        ae = harness._ae
         harness._submitted_connection_qns = []
         harness.teardown_method(method=None)
         assert harness.deleted_connections == []
@@ -537,7 +735,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         # And no runner-side purge either: the fallback exists for a delete that
         # did not complete, not for one that was never needed.
         assert purged == []
-        assert deleted == []
+        assert ae.reads == []
 
     def test_a_submitted_run_still_deletes_its_own_connection(
         self, monkeypatch: pytest.MonkeyPatch
@@ -550,7 +748,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         ``_run_full_dag_async``. It is pinned through the real submit path in
         ``test_multi_dag_runs.py``.
         """
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_RUN_QN]
 
@@ -566,7 +764,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         half-set-up seed that most needs reclaiming. Driven through the real
         seed path in ``test_non_publishing_entrypoint.py``.
         """
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness._submitted_connection_qns = []
         harness._connection_create_attempted = True
         harness.teardown_method(method=None)
@@ -579,13 +777,16 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         it exists whether or not the suite's own DAG was ever submitted — and
         the ordinal its teardown workflow is named from does not shift when the
         run's own connection is skipped."""
-        harness, _seeded, _purged, deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, warnings = _harness(monkeypatch)
+        ae = harness._ae
         harness.seed_assets(_spec())
         harness._submitted_connection_qns = []
         harness.teardown_method(method=None)
         assert harness.deleted_connections == [_SEED_QN]
         assert harness.recorded_delete_plans[0].ae_workflow_name.endswith("-teardown-2")
-        assert deleted == [_SEED_KEY]
+        # Its seed root is still confirmed against its own delete run.
+        assert ae.reads == [(_run_id(_SEED_QN), _DELETE_NODE)]
+        assert warnings == []
 
     def test_the_skipped_delete_is_logged_rather_than_silent(
         self, monkeypatch: pytest.MonkeyPatch
@@ -598,7 +799,7 @@ class TestTeardownSkipsAConnectionThatWasNeverCreated:
         ``logging``, so ``caplog`` would assert against an empty record list and
         read as "the code failed to log".
         """
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         harness._submitted_connection_qns = []
         messages: list[str] = []
 
@@ -622,7 +823,7 @@ class TestPerRunConnection:
     def test_the_active_run_rebinds_the_connection_and_restores_it(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         with harness._dag_run(DAGSpec(connection_qualified_name=self._OTHER_QN)) as dag:
             assert dag.connection_qualified_name == self._OTHER_QN
             assert harness.connection_qualified_name == self._OTHER_QN
@@ -631,7 +832,7 @@ class TestPerRunConnection:
     def test_a_run_that_names_no_connection_keeps_the_suites_own(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         with harness._dag_run(DAGSpec()) as dag:
             assert dag.connection_qualified_name == _RUN_QN
             assert harness.connection_qualified_name == _RUN_QN
@@ -640,7 +841,7 @@ class TestPerRunConnection:
     def test_a_named_connection_joins_the_teardown_registry(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         with harness._dag_run(DAGSpec(connection_qualified_name=self._OTHER_QN)):
             pass
         harness.teardown_method(method=None)
@@ -650,8 +851,26 @@ class TestPerRunConnection:
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Two runs against one prepared connection delete it once, not twice."""
-        harness, _seeded, _purged, _deleted = _harness(monkeypatch)
+        harness, _seeded, _purged, _warnings = _harness(monkeypatch)
         for _ in range(2):
             with harness._dag_run(DAGSpec(connection_qualified_name=self._OTHER_QN)):
                 pass
         assert harness._seeded_connection_qns == [self._OTHER_QN]
+
+
+class TestDeleteObjectIsADeprecatedNoOp:
+    """``base.delete_object`` was importable before FND-3572 retired its only
+    use. It stays importable until v4.0, warns, and deletes nothing — so no new
+    code can come to depend on it."""
+
+    async def test_it_warns_and_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.testing.e2e import base
+
+        async def _must_not_run(*_args: object, **_kwargs: object) -> bool:
+            raise AssertionError("the deprecated no-op reached storage")
+
+        monkeypatch.setattr("application_sdk.storage.ops.delete", _must_not_run)
+        with pytest.warns(DeprecationWarning, match="does nothing.*v4.0"):
+            assert await base.delete_object("artifacts/k", None) is False
