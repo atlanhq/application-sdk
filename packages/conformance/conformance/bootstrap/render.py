@@ -241,6 +241,7 @@ def render(
     dataforge_output_prefix: str = "",
     dataforge_hermetic_fallback: str = "",
     dataforge_lifecycle: str = "",
+    two_store: str = "true",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -328,6 +329,11 @@ def render(
       new param is a single value, quoted or bare in the spelling the fleet
       hand-wrote it (bare for the numeric and boolean inputs, quoted for the
       strings).
+
+      ``two_store`` (FND-3656) is the one slot outside that chain: the line is
+      rendered on every file, so its default is ``"true"`` — ADR-0014's SDR
+      posture — and a repo's own ``false`` (an app with no SDR boundary for
+      the check to observe) is read back and re-emitted rather than reset.
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -381,4 +387,5 @@ def render(
         dataforge_output_prefix=dataforge_output_prefix,
         dataforge_hermetic_fallback=dataforge_hermetic_fallback,
         dataforge_lifecycle=dataforge_lifecycle,
+        two_store=two_store,
     )

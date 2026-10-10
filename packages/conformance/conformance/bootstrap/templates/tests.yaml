@@ -201,6 +201,8 @@ jobs:
       # from `objectstore` to `atlan-objectstore` shows up as zero
       # downstream assets/lineage in Atlas. See atlan-mysql-app#381 for
       # the first adopter + confirmed end-to-end proof of the boundary
-      # crossing.
-      two-store: true
+      # crossing. Per-repo (FND-3656): an app with nothing to observe at
+      # that boundary — no SDR, no SDK objectstore bindings — may set false,
+      # and --resync keeps it. T022 decides whether false is allowed.
+      two-store: << two_store >>
 <% if secrets_block %><< secrets_block >><% else %>    secrets: inherit<% endif %>

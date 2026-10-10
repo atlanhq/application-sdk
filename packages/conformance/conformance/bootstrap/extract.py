@@ -240,6 +240,11 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("dataforge_output_prefix", "dataforge-output-prefix", "plain"),
     ("dataforge_hermetic_fallback", "dataforge-hermetic-fallback", "bool"),
     ("dataforge_lifecycle", "dataforge-lifecycle", "bool"),
+    # FND-3656: rendered on every file, unlike the rest, so the render default
+    # is "true" (ADR-0014's SDR posture) rather than "" — but a repo's own
+    # `false` must survive the resync, or an app with no SDR boundary to
+    # observe (a system app) is either flipped or held by the resync lane.
+    ("two_store", "two-store", "bool"),
 )
 
 # The two inputs whose real-world spelling is a ``>-`` folded scalar — a list of

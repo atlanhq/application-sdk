@@ -1263,6 +1263,8 @@ _FND1143_VALUES: dict[str, tuple[str, str]] = {
         "false",
     ),
     "dataforge_lifecycle": ("      dataforge-lifecycle: true", "true"),
+    # FND-3656: the opt-out is the value worth pinning — `true` is the default.
+    "two_store": ("      two-store: false", "false"),
 }
 
 
