@@ -79,12 +79,15 @@ class _RecordingAE:
             raise scripted
         if scripted is not None:
             return scripted
-        # An FND-3569+ connection-delete that purged every seed root it was
-        # pointed at — the shape every test not about the warning wants.
+        # An FND-3569+ connection-delete that purged the seed roots of the one
+        # connection it was pointed at — and only those, so a root checked
+        # against another connection's run reads as missing.
         return {
             "storage_objects_deleted": 3,
             "storage_deleted_by_prefix": {
-                f"{root}/": 3 for root in self._harness._seeded_prefixes
+                f"{root}/": 3
+                for root, seeded_qn in self._harness._seeded_prefixes.items()
+                if run_id == _run_id(seeded_qn)
             },
         }
 
@@ -514,6 +517,36 @@ class TestTeardownConfirmsTheSeedRootPurge:
         harness.teardown_method(method=None)
         assert ae.reads == [(_run_id(_SEED_QN), _DELETE_NODE)]
         assert warnings == []
+
+    def test_each_root_is_checked_against_its_own_connections_run(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Two seeds, two runs: each root is read back from the delete of the
+        connection it was seeded under, so one run's report cannot vouch for
+        another connection's root."""
+        other_qn = "default/postgres/1787587123106596"
+        other_root = (
+            "artifacts/apps/openapi/e2e-seed/default%2Fpostgres%2F1787587123106596"
+        )
+        harness, _seeded, _purged, warnings = _harness(
+            monkeypatch,
+            node_outputs={
+                _run_id(other_qn): {
+                    "storage_deleted_by_prefix": {f"{_SEED_PREFIX}/": 1},
+                }
+            },
+        )
+        ae = harness._ae
+        harness.seed_assets(_spec())
+        harness.seed_assets(_spec(other_qn))
+        harness.teardown_method(method=None)
+        assert ae.reads == [
+            (_run_id(_SEED_QN), _DELETE_NODE),
+            (_run_id(other_qn), _DELETE_NODE),
+        ]
+        assert len(warnings) == 1
+        assert f"{other_root}/" in warnings[0]
+        assert _run_id(other_qn) in warnings[0]
 
     def test_only_the_seeded_connections_run_is_read(
         self, monkeypatch: pytest.MonkeyPatch
