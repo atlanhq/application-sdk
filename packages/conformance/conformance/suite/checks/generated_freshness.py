@@ -15,7 +15,9 @@ What each rule catches — all **deterministic, no pkl toolchain required**:
   output (``atlan.yaml``, ``manifest.json``, ``_input.py``) is absent — the
   contract was never generated.  The two ``app/generated/`` artifacts are resolved
   against the layout the contract declares: top-level for a single-entrypoint app,
-  and under every declared entrypoint for a bundle.
+  and under every declared entrypoint for a bundle.  A system app
+  (``type = "system"``) with no ``uiConfig`` emits no ``manifest.json``, so only
+  ``atlan.yaml`` and ``_input.py`` are required of it.
 * **K005 GeneratedArtifactBannerStripped** — a generated text artifact is missing
   its ``… DO NOT EDIT …`` provenance banner — a heuristic hand-edit signal.
 * **K007 ToolkitVersionOutdated** — the app's ``app-contract-toolkit`` dependency
@@ -171,6 +173,66 @@ def _yaml_comment_start(line: str) -> int:
 # predicate, then reads each listing element's ``name`` (or mapping key) so it
 # can require a copy per declared entrypoint instead of accepting any subdirectory.
 _ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
+
+# K004 — a top-level ``type = "system"`` puts the contract into system-app mode.
+# Matched against ``_top_level_skeleton`` output, so a nested ``type = …`` inside
+# an object body does not count however it is indented.
+_SYSTEM_TYPE_RE = re.compile(r'(?m)^\s*type\s*=\s*"system"')
+
+# K004 — a top-level ``uiConfig`` declaration other than ``= null``.  App.pkl
+# emits a single-entrypoint ``manifest.json`` only ``when (uiConfig != null)``.
+# Also matched against the skeleton.
+_UI_CONFIG_RE = re.compile(r"(?m)^\s*uiConfig\b(?!\s*=\s*null\b)")
+
+
+def _top_level_skeleton(text: str) -> str:
+    """*text* with comments and every ``{ … }`` body blanked out.
+
+    Pkl allows a top-level property at any indentation, so column position
+    cannot tell ``type = "system"`` at module level from one nested in an
+    object.  Brace depth can.  Blanked characters become spaces (newlines are
+    kept), so ``(?m)^\s*`` patterns run against the result only see module-level
+    declarations.  String literals at depth 0 are kept verbatim (their value
+    matters); braces inside any string or comment are ignored.
+    """
+    out: list[str] = []
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            out.append("".join(c if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        if ch == '"':
+            delim = '"""' if text.startswith('"""', i) else '"'
+            j = i + len(delim)
+            while j < n and not text.startswith(delim, j):
+                j += 2 if text[j] == "\\" else 1
+            end = min(n, j + len(delim))
+            chunk = text[i:end]
+            out.append(
+                chunk if depth == 0 else "".join(c if c == "\n" else " " for c in chunk)
+            )
+            i = end
+            continue
+        if ch == "{":
+            depth += 1
+        keep = ch == "\n" or (depth == 0 and ch != "}")
+        out.append(ch if keep else " ")
+        if ch == "}":
+            depth = max(0, depth - 1)
+        i += 1
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +700,24 @@ def _missing_generated_outputs(
     ]
 
 
+def _emits_no_manifest(text: str, entrypoints: tuple[str, ...] | None) -> bool:
+    """True for a single-entrypoint system app that declares no ``uiConfig``.
+
+    App.pkl emits ``app/generated/manifest.json`` only ``when (uiConfig !=
+    null)``; a system app with no setup form has none — its callers' DAGs start
+    it.  Keyed on both conditions, not on ``type = "system"`` alone: a system
+    app *with* a ``uiConfig`` still emits a manifest, so a missing one there is
+    still a real finding.
+    """
+    if entrypoints:
+        return False
+    skeleton = _top_level_skeleton(text)
+    return (
+        _SYSTEM_TYPE_RE.search(skeleton) is not None
+        and _UI_CONFIG_RE.search(skeleton) is None
+    )
+
+
 def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     """K004 — flag expected generated outputs that are absent while the contract
     exists."""
@@ -681,7 +761,10 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
         if not (root / expected).is_file():
             _missing(expected)
 
+    no_manifest = _emits_no_manifest(text, entrypoints)
     for filename in _EXPECTED_GENERATED_OUTPUTS:
+        if filename == "manifest.json" and no_manifest:
+            continue
         # Name the path the app is actually expected to carry, so the remedy is
         # actionable for whichever layout the contract declares — and, for a
         # bundle, names the entrypoint that is actually missing.
