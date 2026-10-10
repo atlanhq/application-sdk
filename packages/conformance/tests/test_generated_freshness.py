@@ -483,6 +483,39 @@ def test_k004_nested_system_type_is_not_a_system_app(tmp_path: Path) -> None:
     assert "app/generated/manifest.json" in findings[0].message
 
 
+def test_k004_indented_top_level_ui_config_still_requires_manifest(
+    tmp_path: Path,
+) -> None:
+    """Pkl allows an indented top-level property; it still emits a manifest."""
+    files = _system_app_files()
+    files["contract/app.pkl"] = (
+        _SYSTEM_APP_PKL + "\n  uiConfig = new UIConfig {\n    properties {}\n  }\n"
+    )
+    assert "\n  uiConfig = new UIConfig" in files["contract/app.pkl"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "app/generated/manifest.json" in findings[0].message
+
+
+def test_k004_indented_top_level_system_type_is_a_system_app(tmp_path: Path) -> None:
+    files = _system_app_files()
+    files["contract/app.pkl"] = _SYSTEM_APP_PKL.replace(
+        '\ntype = "system"', '\n    type = "system"'
+    )
+    assert '\n    type = "system"' in files["contract/app.pkl"]
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K004"] == []
+
+
+def test_k004_commented_out_system_type_is_not_a_system_app(tmp_path: Path) -> None:
+    files = _system_app_files()
+    files["contract/app.pkl"] = _SYSTEM_APP_PKL.replace(
+        '\ntype = "system"', '\n// type = "system"'
+    )
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "app/generated/manifest.json" in findings[0].message
+
+
 def test_k004_toolkit_system_app_example_no_finding(tmp_path: Path) -> None:
     """The toolkit's own generated system-app example satisfies K004."""
     example = (

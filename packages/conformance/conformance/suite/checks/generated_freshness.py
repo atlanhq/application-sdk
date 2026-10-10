@@ -175,13 +175,64 @@ def _yaml_comment_start(line: str) -> int:
 _ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
 
 # K004 — a top-level ``type = "system"`` puts the contract into system-app mode.
-# Anchored at column 0 so a nested ``type = …`` inside an object body (indented)
-# does not count.
-_SYSTEM_TYPE_RE = re.compile(r'(?m)^type\s*=\s*"system"')
+# Matched against ``_top_level_skeleton`` output, so a nested ``type = …`` inside
+# an object body does not count however it is indented.
+_SYSTEM_TYPE_RE = re.compile(r'(?m)^\s*type\s*=\s*"system"')
 
 # K004 — a top-level ``uiConfig`` declaration other than ``= null``.  App.pkl
 # emits a single-entrypoint ``manifest.json`` only ``when (uiConfig != null)``.
-_UI_CONFIG_RE = re.compile(r"(?m)^uiConfig\b(?!\s*=\s*null\b)")
+# Also matched against the skeleton.
+_UI_CONFIG_RE = re.compile(r"(?m)^\s*uiConfig\b(?!\s*=\s*null\b)")
+
+
+def _top_level_skeleton(text: str) -> str:
+    """*text* with comments and every ``{ … }`` body blanked out.
+
+    Pkl allows a top-level property at any indentation, so column position
+    cannot tell ``type = "system"`` at module level from one nested in an
+    object.  Brace depth can.  Blanked characters become spaces (newlines are
+    kept), so ``(?m)^\s*`` patterns run against the result only see module-level
+    declarations.  String literals at depth 0 are kept verbatim (their value
+    matters); braces inside any string or comment are ignored.
+    """
+    out: list[str] = []
+    depth = 0
+    i = 0
+    n = len(text)
+    while i < n:
+        ch = text[i]
+        if text.startswith("//", i):
+            end = text.find("\n", i)
+            end = n if end < 0 else end
+            out.append(" " * (end - i))
+            i = end
+            continue
+        if text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            end = n if end < 0 else end + 2
+            out.append("".join(c if c == "\n" else " " for c in text[i:end]))
+            i = end
+            continue
+        if ch == '"':
+            delim = '"""' if text.startswith('"""', i) else '"'
+            j = i + len(delim)
+            while j < n and not text.startswith(delim, j):
+                j += 2 if text[j] == "\\" else 1
+            end = min(n, j + len(delim))
+            chunk = text[i:end]
+            out.append(
+                chunk if depth == 0 else "".join(c if c == "\n" else " " for c in chunk)
+            )
+            i = end
+            continue
+        if ch == "{":
+            depth += 1
+        keep = ch == "\n" or (depth == 0 and ch != "}")
+        out.append(ch if keep else " ")
+        if ch == "}":
+            depth = max(0, depth - 1)
+        i += 1
+    return "".join(out)
 
 
 # ---------------------------------------------------------------------------
@@ -658,10 +709,12 @@ def _emits_no_manifest(text: str, entrypoints: tuple[str, ...] | None) -> bool:
     app *with* a ``uiConfig`` still emits a manifest, so a missing one there is
     still a real finding.
     """
+    if entrypoints:
+        return False
+    skeleton = _top_level_skeleton(text)
     return (
-        not entrypoints
-        and _SYSTEM_TYPE_RE.search(text) is not None
-        and _UI_CONFIG_RE.search(text) is None
+        _SYSTEM_TYPE_RE.search(skeleton) is not None
+        and _UI_CONFIG_RE.search(skeleton) is None
     )
 
 
