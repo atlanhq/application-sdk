@@ -3535,14 +3535,13 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         "unit-coverage-fail-under",
         "force-external-runtime",
         # Hardcoded by the template: forwarded from this workflow's own
-        # workflow_dispatch inputs, or pinned to the SDK posture (two-store).
+        # workflow_dispatch inputs.
         "application-sdk-ref",
         "distinct-id",
         "run-e2e",
         "base-image-ref",
         "agent-name-override",
         "e2e-clouds",
-        "two-store",
         # Policy drop, not a slot — see redundant_install_app_to_tenant.
         "install-app-to-tenant",
     }
@@ -3552,3 +3551,82 @@ def test_every_reusable_input_has_a_slot_or_a_documented_reason() -> None:
         "extract_tests_yaml_params + template line), or any repo that passes "
         "one is frozen out of every structural CI update."
     )
+
+
+# ---------------------------------------------------------------------------
+# FND-3656: two-store is a per-repo value, not a pinned posture
+# ---------------------------------------------------------------------------
+
+
+def _two_store_false_tests_yaml() -> str:
+    """A tests.yaml opting out of the two-store posture the way a system app
+    does: hand-edited in place, under its own explanatory comment.
+
+    A system app never runs SDR and never touches the SDK's objectstore
+    bindings, so the boundary check has nothing to observe; T022 only demands
+    ``true`` of SDR apps that ship e2e suites.
+    """
+    canonical = render("tests.yaml", app_name="app")
+    assert canonical.count("      two-store: true\n") == 1
+    return canonical.replace(
+        "      two-store: true\n",
+        "      # System app: no SDR, no objectstore bindings to observe.\n"
+        "      two-store: false\n",
+    )
+
+
+def test_resync_keeps_a_two_store_opt_out(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Until FND-3656 the template hardcoded ``two-store: true``, so every
+    resync flipped a system app's ``false`` — which the resync lane reads as a
+    lost setting and holds the whole repo over."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(_two_store_false_tests_yaml())
+    _cmd_bootstrap(["--resync"])
+    after = wf.read_text()
+    assert "      two-store: false\n" in after
+    assert "two-store: true" not in after
+    assert after == render("tests.yaml", app_name="app", two_store="false")
+
+
+def test_resync_keeps_two_store_true(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    before = wf.read_text()
+    _cmd_bootstrap(["--resync"])
+    assert wf.read_text() == before
+    assert "      two-store: true\n" in before
+
+
+def test_fresh_bootstrap_renders_two_store_true(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fresh-scaffold default stays ADR-0014's SDR posture."""
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    text = (tmp_path / ".github" / "workflows" / "tests.yaml").read_text()
+    assert "      two-store: true\n" in text
+
+
+def test_c002_accepts_a_two_store_opt_out(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``two-store: false`` in the canonical position is a per-repo value, not
+    drift. (A hand-written comment beside it still is, as for every slot.)"""
+    from conformance.suite.checks.bootstrap_drift import scan_path
+
+    monkeypatch.chdir(tmp_path)
+    _cmd_bootstrap([])
+    wf = tmp_path / ".github" / "workflows" / "tests.yaml"
+    wf.write_text(
+        render("tests.yaml", app_name="app").replace(
+            "      two-store: true\n", "      two-store: false\n"
+        )
+    )
+    assert scan_path(wf, tmp_path) == []
