@@ -45,14 +45,32 @@ _REUSABLE = (
 )
 
 
-def _status_payload(*states: tuple[str, str]) -> str:
-    return json.dumps(
-        {
-            "statuses": [
-                {"context": context, "state": state} for context, state in states
-            ]
-        }
+_RUN = 38060382427
+
+
+def _row(
+    context: str, state: str, run_id: int | None = _RUN, status_id: int = 0
+) -> dict:
+    url = (
+        f"https://github.com/{REPO}/actions/runs/{run_id}"
+        if run_id is not None
+        else "https://example.invalid/elsewhere"
     )
+    return {"id": status_id, "context": context, "state": state, "target_url": url}
+
+
+def _status_payload(*rows: tuple, page_size: int = 100) -> str:
+    """The `--paginate --slurp` listing: a list of pages, newest status first.
+
+    Each row is ``(context, state)`` or ``(context, state, run_id)``, given
+    newest first; status ids are assigned in that order.
+    """
+    built = [
+        _row(row[0], row[1], row[2] if len(row) > 2 else _RUN, len(rows) - index)
+        for index, row in enumerate(rows)
+    ]
+    pages = [built[i : i + page_size] for i in range(0, len(built), page_size)] or [[]]
+    return json.dumps(pages)
 
 
 class _Clock:
@@ -75,7 +93,8 @@ def _sequence(*responses: str):
     remaining = list(responses)
 
     def run(args: list) -> str:
-        assert args[1] == f"repos/{REPO}/commits/{SHA}/status?per_page=100"
+        assert args[1] == f"repos/{REPO}/commits/{SHA}/statuses?per_page=100"
+        assert "--paginate" in args and "--slurp" in args
         return remaining.pop(0) if len(remaining) > 1 else remaining[0]
 
     return run
@@ -109,11 +128,61 @@ def test_no_e2e_context_is_an_empty_state() -> None:
     assert read_e2e_state(REPO, SHA, run) == ""
 
 
-@pytest.mark.parametrize("raw", ["", "not json", "[]", '{"statuses": null}'])
+@pytest.mark.parametrize("raw", ["", "not json", "{}", '[{"statuses": []}]'])
 def test_an_unreadable_payload_raises_rather_than_reading_as_absent(raw: str) -> None:
     """Absent passes the gate, so an API failure must never be spelled that way."""
     with pytest.raises(StatusUnreadable):
         read_e2e_state(REPO, SHA, _sequence(raw))
+
+
+@pytest.mark.parametrize("state", [None, 7, "", "neutral"])
+def test_an_unrecognised_e2e_state_raises_rather_than_reading_as_absent(
+    state: object,
+) -> None:
+    raw = json.dumps([[{**_row("e2e", "success"), "state": state, "id": 1}]])
+    with pytest.raises(StatusUnreadable):
+        read_e2e_state(REPO, SHA, _sequence(raw))
+
+
+def test_an_e2e_status_past_the_first_page_is_found() -> None:
+    rows = [("ci/other", "success")] * 150 + [("e2e", "failure")]
+    run = _sequence(_status_payload(*rows))
+    assert read_e2e_state(REPO, SHA, run) == "failure"
+
+
+def test_an_attempts_latest_state_wins() -> None:
+    run = _sequence(_status_payload(("e2e", "failure"), ("e2e", "pending")))
+    assert read_e2e_state(REPO, SHA, run) == "failure"
+
+
+def test_a_late_older_success_cannot_mask_a_newer_pending_attempt() -> None:
+    """The label re-added mid-run: the older attempt finishes after the newer
+    one has posted `pending`. Its success is the newest row, but not the verdict."""
+    run = _sequence(
+        _status_payload(
+            ("e2e", "success", _RUN),
+            ("e2e", "pending", _RUN + 5),
+            ("e2e", "pending", _RUN),
+        )
+    )
+    assert read_e2e_state(REPO, SHA, run) == "pending"
+
+
+def test_a_newer_attempts_verdict_replaces_an_older_failure() -> None:
+    """Re-adding the label is how a failure is retried."""
+    run = _sequence(
+        _status_payload(
+            ("e2e", "success", _RUN + 5),
+            ("e2e", "pending", _RUN + 5),
+            ("e2e", "failure", _RUN),
+        )
+    )
+    assert read_e2e_state(REPO, SHA, run) == "success"
+
+
+def test_a_status_naming_no_run_never_outranks_a_real_attempt() -> None:
+    run = _sequence(_status_payload(("e2e", "success", None), ("e2e", "failure", _RUN)))
+    assert read_e2e_state(REPO, SHA, run) == "failure"
 
 
 # --- the decision table ------------------------------------------------------

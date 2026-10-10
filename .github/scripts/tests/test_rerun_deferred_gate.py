@@ -77,7 +77,11 @@ def _stub(
             calls.append(path)
             return "{}" if rerun_ok else ""
         if path.endswith("/jobs?per_page=100"):
-            return "" if jobs is None else json.dumps({"jobs": jobs})
+            if jobs is None:
+                return ""
+            assert "--paginate" in args and "--slurp" in args
+            pages = [{"jobs": jobs[i : i + 100]} for i in range(0, len(jobs), 100)]
+            return json.dumps(pages or [{"jobs": []}])
         if path.endswith(f"/actions/runs/{SELF}"):
             return json.dumps({"workflow_id": WORKFLOW_ID})
         return json.dumps([{"workflow_runs": listing}])
@@ -146,6 +150,27 @@ def test_a_rejected_rerun_fails_open(capsys: pytest.CaptureFixture[str]) -> None
     run = _stub(listing=[_run(NEWER)], jobs=[_gate_job()], rerun_ok=False)
     assert not repair(REPO, SHA, SELF, run=run)
     assert "actions: write" in capsys.readouterr().err
+
+
+def test_finds_a_gate_job_past_the_first_page() -> None:
+    """A large e2e matrix can push the gate job onto a later page."""
+    reruns: list = []
+    legs = [{"name": f"tests / End-to-end ({i})", "steps": []} for i in range(150)]
+    run = _stub(listing=[_run(NEWER)], jobs=[*legs, _gate_job()], reruns=reruns)
+    assert repair(REPO, SHA, SELF, run=run)
+    assert reruns == [f"repos/{REPO}/actions/runs/{NEWER}/rerun-failed-jobs"]
+
+
+def test_dry_run_reports_the_candidate_and_posts_nothing(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    reruns: list = []
+    run = _stub(listing=[_run(NEWER)], jobs=[_gate_job()], reruns=reruns)
+    assert repair(REPO, SHA, SELF, run=run, dry_run=True)
+    assert reruns == []
+    assert (
+        f"would re-run the failed jobs of {REPO} run {NEWER}" in capsys.readouterr().err
+    )
 
 
 def test_main_always_exits_zero(monkeypatch: pytest.MonkeyPatch) -> None:

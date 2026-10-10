@@ -3479,13 +3479,21 @@ jobs:
             ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
             && format('End-to-end suite {0} on this commit', needs.e2e.result)
             || 'No e2e verdict on this commit (cancelled, tenant busy, or setup failed); add the e2e label again' }}
+          RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The driver skips the write when a newer e2e attempt has already
+        # posted on this commit: the Release Gate reads the combined status,
+        # where an older attempt's late row would mask the newer one. If the
+        # driver checkout failed, this step fails and `pending` stays, which
+        # holds sibling gates closed rather than open.
         run: |
-          gh api -X POST "repos/${REPO}/statuses/${HEAD_SHA}" \
-            -f state="$STATE" \
-            -f context=e2e \
-            -f description="$DESCRIPTION" \
-            -f target_url="$RUN_URL"
+          python3 .github/scripts/record_e2e_verdict.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --run-id "$RUN_ID" \
+            --state "$STATE" \
+            --description "$DESCRIPTION" \
+            --target-url "$RUN_URL"
 
       # A newer run on this commit may have given up waiting for the verdict
       # just recorded, and as the newest suite its red gate owns the required

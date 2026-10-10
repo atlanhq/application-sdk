@@ -62,12 +62,25 @@ def gate_deferral_failed(repo: str, run_id: int, run: RunFn) -> bool | None:
 
     None means the jobs could not be read, which the caller treats as "leave it".
     """
+    # Every page: a large e2e matrix can push the gate job past the first 100.
     payload = _load(
-        run(["api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"])
+        run(
+            [
+                "api",
+                f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100",
+                "--paginate",
+                "--slurp",
+            ]
+        )
     )
-    jobs = payload.get("jobs") if isinstance(payload, dict) else None
-    if not isinstance(jobs, list):
+    if not isinstance(payload, list):
         return None
+    jobs: list = []
+    for page in payload:
+        page_jobs = page.get("jobs") if isinstance(page, dict) else None
+        if not isinstance(page_jobs, list):
+            return None
+        jobs.extend(page_jobs)
     for job in jobs:
         if not isinstance(job, dict):
             continue

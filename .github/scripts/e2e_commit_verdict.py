@@ -35,6 +35,9 @@ reading its own skipped e2e as a pass:
   for the FND-48 filter. Its acting sibling may not have posted ``pending`` yet,
   so it waits a short settle window for the status to appear, then fails.
 
+The newest e2e attempt on the commit decides (by the run id each status links),
+so an older attempt finishing late cannot override a newer one.
+
 A status that cannot be read is retried until the budget runs out, then fails.
 This driver decides a required check, so unlike the repair scripts it fails
 closed.
@@ -50,6 +53,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import subprocess
 import sys
 import time
@@ -98,32 +102,85 @@ class StatusUnreadable(Exception):
     """The commit's statuses could not be read or parsed."""
 
 
-def read_e2e_state(repo: str, sha: str, run: RunFn) -> str:
-    """The newest ``e2e`` status state on ``sha``, or "" when there is none.
+_KNOWN_STATES = frozenset((_SUCCESS, _PENDING, *_FAILED))
 
-    The combined-status endpoint already reduces each context to its newest
-    status, which is the same read the Release Gate makes.
+_RUN_ID_RE = re.compile(r"/actions/runs/(\d+)")
+
+#: The attempt key for an ``e2e`` status whose ``target_url`` names no run. It
+#: sorts below every real run, so it never outranks an attempt this workflow
+#: made, but it still counts when it is the only one.
+_UNKNOWN_ATTEMPT = -1
+
+
+def attempt_id(status: dict) -> int:
+    """The workflow run that posted ``status``, read from its ``target_url``.
+
+    Every ``e2e`` status the reusable posts links the run that posted it, and run
+    ids grow with creation time, so the id orders e2e attempts on the commit.
+    """
+    url = status.get("target_url")
+    match = _RUN_ID_RE.search(url) if isinstance(url, str) else None
+    return int(match.group(1)) if match else _UNKNOWN_ATTEMPT
+
+
+def read_e2e_attempts(repo: str, sha: str, run: RunFn) -> dict[int, str]:
+    """Each e2e attempt on ``sha`` mapped to its latest state.
+
+    Reads the full status history (every page), not the combined status. The
+    combined status keeps only the newest ``e2e`` row, so two attempts on one
+    commit (the label added twice, or removed and re-added mid-run) let an older
+    attempt's late ``success`` mask a newer attempt that is still ``pending``.
 
     Raises:
-        StatusUnreadable: the API call failed or returned an unexpected shape.
-            Never collapsed into "", because "" means "no e2e ran here" and
-            passes the gate.
+        StatusUnreadable: the API call failed, returned an unexpected shape, or
+            an ``e2e`` row carries a state this driver does not know. Never
+            collapsed into "no attempts", because that passes the gate.
     """
-    raw = run(["api", f"repos/{repo}/commits/{sha}/status?per_page=100"])
+    raw = run(
+        [
+            "api",
+            f"repos/{repo}/commits/{sha}/statuses?per_page=100",
+            "--paginate",
+            "--slurp",
+        ]
+    )
     if not raw.strip():
         raise StatusUnreadable(f"could not read the statuses on {sha[:7]}")
     try:
-        payload = json.loads(raw)
+        pages = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise StatusUnreadable(f"the statuses on {sha[:7]} are not valid JSON") from exc
-    statuses = payload.get("statuses") if isinstance(payload, dict) else None
-    if not isinstance(statuses, list):
-        raise StatusUnreadable(f"the statuses on {sha[:7]} have no `statuses` list")
-    for status in statuses:
-        if isinstance(status, dict) and status.get("context") == E2E_CONTEXT:
-            state = status.get("state")
-            return state if isinstance(state, str) else ""
-    return ""
+    if not isinstance(pages, list) or not all(isinstance(page, list) for page in pages):
+        raise StatusUnreadable(f"the statuses on {sha[:7]} are not a list of pages")
+
+    rows = [
+        row
+        for page in pages
+        for row in page
+        if isinstance(row, dict) and row.get("context") == E2E_CONTEXT
+    ]
+    for row in rows:
+        if row.get("state") not in _KNOWN_STATES or not isinstance(row.get("id"), int):
+            raise StatusUnreadable(
+                f"an `e2e` status on {sha[:7]} has an unrecognised shape "
+                f"(state={row.get('state')!r})"
+            )
+    attempts: dict[int, str] = {}
+    # Status ids grow with creation, so the highest id is each attempt's latest.
+    for row in sorted(rows, key=lambda r: r["id"], reverse=True):
+        attempts.setdefault(attempt_id(row), row["state"])
+    return attempts
+
+
+def read_e2e_state(repo: str, sha: str, run: RunFn) -> str:
+    """The e2e verdict on ``sha``: the newest attempt's latest state, or "".
+
+    The newest attempt decides, the same way re-adding the label retries a
+    failure: an older attempt can neither pass nor fail the commit once a newer
+    one has started, and a newer one still running keeps the verdict pending.
+    """
+    attempts = read_e2e_attempts(repo, sha, run)
+    return attempts[max(attempts)] if attempts else ""
 
 
 def decide(

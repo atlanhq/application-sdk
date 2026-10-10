@@ -163,7 +163,7 @@ def test_verdict_targets_the_pr_head(gate_job: dict[str, Any]) -> None:
     """`github.sha` is the merge ref; the Release Gate reads the head."""
     step = _step(gate_job, "Record the e2e verdict on the head commit")
     assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
-    assert "context=e2e" in step["run"]
+    assert "record_e2e_verdict.py" in step["run"]
 
 
 def test_gate_job_can_write_the_status(gate_job: dict[str, Any]) -> None:
