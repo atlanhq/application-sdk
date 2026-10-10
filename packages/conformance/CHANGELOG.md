@@ -2,6 +2,14 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.46.1] - 2026-10-10
+
+### Bug fixes
+
+- confirm connection-delete purged the seed root instead of deleting it from the runner [FND-3572] (#4300) ([90ab880](https://github.com/atlanhq/application-sdk/commit/90ab880))
+- keep a repo's two-store value across bootstrap --resync [FND-3656] (#4298) ([f6738e3](https://github.com/atlanhq/application-sdk/commit/f6738e3))
+- K004 no longer requires manifest.json of system apps (#4292) ([42c47a3](https://github.com/atlanhq/application-sdk/commit/42c47a3))
+
 ## [0.46.0] - 2026-10-09
 
 ### Features
