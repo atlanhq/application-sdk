@@ -6,6 +6,16 @@ Release notes are generated from [conventional commit](https://www.conventionalc
 messages. Every merge to `main` that touches `contract-toolkit/` files auto-creates or
 updates a release PR — see `.github/workflows/contract-toolkit-release.yml`.
 
+## [0.33.0] - 2026-10-09
+
+### Features
+
+- first-class system apps: no card, typed inputs, SystemAppE2ETest base, generated caller contract (#4262) ([cc86087](https://github.com/atlanhq/application-sdk/commit/cc86087))
+
+### Other changes
+
+- ci(contract-toolkit): format generated Python identically in every regeneration path (#4260) ([63c50db](https://github.com/atlanhq/application-sdk/commit/63c50db))
+
 ## [0.32.0] - 2026-10-08
 
 ### Features
