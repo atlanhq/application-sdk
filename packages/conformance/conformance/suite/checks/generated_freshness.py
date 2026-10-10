@@ -15,7 +15,9 @@ What each rule catches — all **deterministic, no pkl toolchain required**:
   output (``atlan.yaml``, ``manifest.json``, ``_input.py``) is absent — the
   contract was never generated.  The two ``app/generated/`` artifacts are resolved
   against the layout the contract declares: top-level for a single-entrypoint app,
-  and under every declared entrypoint for a bundle.
+  and under every declared entrypoint for a bundle.  A system app
+  (``type = "system"``) with no ``uiConfig`` emits no ``manifest.json``, so only
+  ``atlan.yaml`` and ``_input.py`` are required of it.
 * **K005 GeneratedArtifactBannerStripped** — a generated text artifact is missing
   its ``… DO NOT EDIT …`` provenance banner — a heuristic hand-edit signal.
 * **K007 ToolkitVersionOutdated** — the app's ``app-contract-toolkit`` dependency
@@ -171,6 +173,15 @@ def _yaml_comment_start(line: str) -> int:
 # predicate, then reads each listing element's ``name`` (or mapping key) so it
 # can require a copy per declared entrypoint instead of accepting any subdirectory.
 _ENTRYPOINTS_RE = re.compile(r"(?m)^\s*entrypoints\b")
+
+# K004 — a top-level ``type = "system"`` puts the contract into system-app mode.
+# Anchored at column 0 so a nested ``type = …`` inside an object body (indented)
+# does not count.
+_SYSTEM_TYPE_RE = re.compile(r'(?m)^type\s*=\s*"system"')
+
+# K004 — a top-level ``uiConfig`` declaration other than ``= null``.  App.pkl
+# emits a single-entrypoint ``manifest.json`` only ``when (uiConfig != null)``.
+_UI_CONFIG_RE = re.compile(r"(?m)^uiConfig\b(?!\s*=\s*null\b)")
 
 
 # ---------------------------------------------------------------------------
@@ -638,6 +649,22 @@ def _missing_generated_outputs(
     ]
 
 
+def _emits_no_manifest(text: str, entrypoints: tuple[str, ...] | None) -> bool:
+    """True for a single-entrypoint system app that declares no ``uiConfig``.
+
+    App.pkl emits ``app/generated/manifest.json`` only ``when (uiConfig !=
+    null)``; a system app with no setup form has none — its callers' DAGs start
+    it.  Keyed on both conditions, not on ``type = "system"`` alone: a system
+    app *with* a ``uiConfig`` still emits a manifest, so a missing one there is
+    still a real finding.
+    """
+    return (
+        not entrypoints
+        and _SYSTEM_TYPE_RE.search(text) is not None
+        and _UI_CONFIG_RE.search(text) is None
+    )
+
+
 def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
     """K004 — flag expected generated outputs that are absent while the contract
     exists."""
@@ -681,7 +708,10 @@ def _scan_missing_outputs(root: Path, present: set[str]) -> list[Finding]:
         if not (root / expected).is_file():
             _missing(expected)
 
+    no_manifest = _emits_no_manifest(text, entrypoints)
     for filename in _EXPECTED_GENERATED_OUTPUTS:
+        if filename == "manifest.json" and no_manifest:
+            continue
         # Name the path the app is actually expected to carry, so the remedy is
         # actionable for whichever layout the contract declares — and, for a
         # bundle, names the entrypoint that is actually missing.

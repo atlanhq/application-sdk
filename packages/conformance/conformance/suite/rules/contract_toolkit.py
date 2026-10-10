@@ -437,7 +437,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "app/generated/<entrypoint>/ path — because hard-coding the "
             "single-entrypoint prefix made the rule unsatisfiable on every bundle: "
             "the finding named a path the contract never emits, and its remedy "
-            "(regenerate and commit) could not clear it."
+            "(regenerate and commit) could not clear it.  For the same reason a "
+            'single-entrypoint system app (type = "system") with no uiConfig is '
+            "not required to carry manifest.json: App.pkl emits it only when "
+            "uiConfig is set, so the remedy could never produce one."
         ),
         short_description=(
             "contract/app.pkl exists but an expected generated artifact "
@@ -466,6 +469,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "declared entrypoint (one generated copy does not cover the rest).  "
             "``atlan.yaml`` stays in scope for both — a bundle root emits it "
             "too.\n"
+            "\n"
+            "**System apps.**  A single-entrypoint contract with "
+            '``type = "system"`` and no ``uiConfig`` emits no '
+            "``manifest.json`` — App.pkl writes it only when ``uiConfig`` is set, "
+            "and a system app's callers declare its DAG node instead.  The rule "
+            "does not require one there.  ``atlan.yaml`` and ``_input.py`` stay "
+            "required, so a system app that was never generated still fires.  A "
+            "system app that *does* declare a ``uiConfig`` emits a manifest and is "
+            "checked like any other single-entrypoint app.\n"
             "\n"
             "Unlike K010, which exempts bundles outright, this rule checks the "
             "declared layout so its coverage is preserved: a bundle that was never "

@@ -393,6 +393,115 @@ def test_k004_single_entrypoint_message_keeps_top_level_path(tmp_path: Path) -> 
     assert "'app/generated/manifest.json'" in findings[0].message
 
 
+_SYSTEM_APP_PKL = dedent("""\
+    amends "@app-contract-toolkit/App.pkl"
+
+    name = "demo"
+    type = "system"
+
+    inputs {
+      ["connection_qualified_name"] = new StringField { required = true }
+    }
+""")
+
+
+def _system_app_files() -> dict[str, str]:
+    """What ``pkl eval`` emits for a system app with no uiConfig — no manifest."""
+    files = _clean_files()
+    files["contract/app.pkl"] = _SYSTEM_APP_PKL
+    del files["app/generated/manifest.json"]
+    return files
+
+
+def test_k004_system_app_without_manifest_no_finding(tmp_path: Path) -> None:
+    """A system app with no uiConfig emits no manifest.json — not a K004 gap.
+
+    Regression: K004 required manifest.json of every single-entrypoint contract,
+    so every generated system app carried a finding its remedy could not clear.
+    """
+    assert [
+        f for f in _scan(tmp_path, _system_app_files()) if f.rule_id == "K004"
+    ] == []
+
+
+def test_k004_system_app_missing_input_py_fires(tmp_path: Path) -> None:
+    files = _system_app_files()
+    del files["app/generated/_input.py"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "app/generated/_input.py" in findings[0].message
+
+
+def test_k004_ungenerated_system_app_fires(tmp_path: Path) -> None:
+    """The exemption is manifest-only: a never-generated system app still fires."""
+    files = {
+        "contract/PklProject": _PKL_PROJECT,
+        "contract/PklProject.deps.json": _DEPS_JSON,
+        "contract/app.pkl": _SYSTEM_APP_PKL,
+    }
+    messages = [f.message for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(messages) == 2
+    assert any("'atlan.yaml'" in m for m in messages)
+    assert any("app/generated/_input.py" in m for m in messages)
+    assert not any("manifest.json" in m for m in messages)
+
+
+def test_k004_system_app_with_ui_config_still_requires_manifest(
+    tmp_path: Path,
+) -> None:
+    """App.pkl emits manifest.json whenever uiConfig is set, system app or not."""
+    files = _system_app_files()
+    files["contract/app.pkl"] = _SYSTEM_APP_PKL + dedent("""\
+
+        uiConfig = new UIConfig {
+          properties {}
+        }
+    """)
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "app/generated/manifest.json" in findings[0].message
+
+
+def test_k004_system_app_explicit_null_ui_config_no_finding(tmp_path: Path) -> None:
+    files = _system_app_files()
+    files["contract/app.pkl"] = _SYSTEM_APP_PKL + "\nuiConfig = null\n"
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K004"] == []
+
+
+def test_k004_nested_system_type_is_not_a_system_app(tmp_path: Path) -> None:
+    """Only a top-level ``type = "system"`` switches modes, not a nested field."""
+    files = _clean_files()
+    files["contract/app.pkl"] = _APP_PKL + dedent("""\
+
+        metadata {
+          type = "system"
+        }
+    """)
+    del files["app/generated/manifest.json"]
+    findings = [f for f in _scan(tmp_path, files) if f.rule_id == "K004"]
+    assert len(findings) == 1
+    assert "app/generated/manifest.json" in findings[0].message
+
+
+def test_k004_toolkit_system_app_example_no_finding(tmp_path: Path) -> None:
+    """The toolkit's own generated system-app example satisfies K004."""
+    example = (
+        Path(__file__).resolve().parents[3]
+        / "contract-toolkit"
+        / "examples"
+        / "system-app"
+    )
+    files = {
+        str(p.relative_to(example)): p.read_text(encoding="utf-8")
+        for p in example.rglob("*")
+        if p.is_file()
+    }
+    assert "app/generated/manifest.json" not in files
+    # The example keeps app.pkl at its root; a consuming app keeps it in contract/.
+    files["contract/app.pkl"] = files.pop("app.pkl")
+    assert [f for f in _scan(tmp_path, files) if f.rule_id == "K004"] == []
+
+
 # ---------------------------------------------------------------------------
 # K005 — stripped provenance banner
 # ---------------------------------------------------------------------------

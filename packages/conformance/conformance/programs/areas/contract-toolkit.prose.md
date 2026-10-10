@@ -259,6 +259,9 @@ automatically on renovate bumps, via `postUpgradeTasks`).
 **K004 MissingGeneratedArtifact** — `contract/app.pkl` exists but an expected
 output (`atlan.yaml`, `app/generated/manifest.json`, `app/generated/_input.py`)
 is absent.  `classification = "mechanical"`; **requires `pkl`**.
+A single-entrypoint system app (`type = "system"`) with no `uiConfig` is not
+expected to carry `manifest.json` — the toolkit never emits one for it, so the
+rule does not ask for it.  Never hand-write a `manifest.json` to clear K004.
 
 *Procedure:*
 
