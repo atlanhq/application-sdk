@@ -2,6 +2,25 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.46.0] - 2026-10-09
+
+### Features
+
+- T026 checks the e2e harness base against the app's declared type [FND-3558] (#4286) ([1da9b58](https://github.com/atlanhq/application-sdk/commit/1da9b58))
+- refuse new required fields on existing contracts [FND-3597] (#4279) ([a069892](https://github.com/atlanhq/application-sdk/commit/a069892))
+- FND-3555 P026 becomes auto-fixable as judgment (#4256) ([79cc64a](https://github.com/atlanhq/application-sdk/commit/79cc64a))
+- require deprecated before sunset on contract ledger fields [FND-3596] (#4272) ([470534c](https://github.com/atlanhq/application-sdk/commit/470534c))
+- FND-3556 P054 becomes auto-fixable as judgment (#4255) ([039ba8f](https://github.com/atlanhq/application-sdk/commit/039ba8f))
+
+### Bug fixes
+
+- T005 false positive on compliant code (1 repo) (#4270) ([b5ea451](https://github.com/atlanhq/application-sdk/commit/b5ea451))
+- correct D003's fix guidance (1 repo) (#4269) ([943d484](https://github.com/atlanhq/application-sdk/commit/943d484))
+
+### Other changes
+
+- chore(deps): lock file maintenance (#4267) ([eb84623](https://github.com/atlanhq/application-sdk/commit/eb84623))
+
 ## [0.45.0] - 2026-10-08
 
 ### Features
