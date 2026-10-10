@@ -12,7 +12,9 @@ Three properties carry the design, and each is pinned here:
   predates the status check, which would otherwise go red.
 * The consumer Tests Gate records the verdict as an `e2e` commit status
   before removing the label, because the label was the Release Gate's only
-  evidence. Only a real verdict (success / failure) is recorded.
+  evidence. A real verdict is recorded as success / failure; a run that
+  acted on the label without one records `error`, replacing the `pending`
+  its discover-e2e job posted (FND-3650).
 * Every step is fail-open. The Tests Gate job IS the required check; a 404
   (label already gone) must not redden it.
 
@@ -31,7 +33,7 @@ import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from _gha_expr import evaluate  # noqa: E402
+from _gha_expr import evaluate, evaluate_operand  # noqa: E402
 
 _WORKFLOWS = Path(__file__).resolve().parents[3] / ".github/workflows"
 
@@ -79,15 +81,18 @@ def _needs(discover: str, e2e: str) -> dict[str, Any]:
     [
         ("pull_request", "success", "success", True),
         ("pull_request", "success", "failure", True),
-        # No verdict: a skipped or cancelled matrix proves nothing either way.
-        ("pull_request", "success", "skipped", False),
-        ("pull_request", "success", "cancelled", False),
+        # Acted on the label but produced no verdict: still recorded (as
+        # `error`), so the `pending` discover-e2e posted never lingers.
+        ("pull_request", "success", "skipped", True),
+        ("pull_request", "success", "cancelled", True),
+        ("pull_request", "failure", "skipped", True),
+        # Did not act on the label: this run owns no verdict.
         ("pull_request", "skipped", "skipped", False),
         # Dispatched runs (the SDK's connector fan-out) have no PR head.
         ("workflow_dispatch", "success", "success", False),
     ],
 )
-def test_verdict_is_recorded_only_for_a_real_pr_verdict(
+def test_verdict_is_recorded_whenever_this_run_acted_on_the_label(
     gate_job: dict[str, Any],
     event_name: str,
     discover: str,
@@ -97,6 +102,26 @@ def test_verdict_is_recorded_only_for_a_real_pr_verdict(
     step = _step(gate_job, "Record the e2e verdict on the head commit")
     contexts = {"github": {"event_name": event_name}, "needs": _needs(discover, e2e)}
     assert evaluate(step["if"], contexts) is expected
+
+
+@pytest.mark.parametrize(
+    ("e2e", "state"),
+    [
+        ("success", "success"),
+        ("failure", "failure"),
+        # No verdict proves nothing; `error` blocks like a failure.
+        ("skipped", "error"),
+        ("cancelled", "error"),
+    ],
+)
+def test_only_a_real_verdict_is_recorded_as_one(
+    gate_job: dict[str, Any], e2e: str, state: str
+) -> None:
+    env = _step(gate_job, "Record the e2e verdict on the head commit")["env"]
+    contexts = {"needs": _needs("success", e2e)}
+    assert evaluate_operand(env["STATE"], contexts) == state
+    description = evaluate_operand(env["DESCRIPTION"], contexts)
+    assert len(description) <= 140  # the statuses API limit
 
 
 @pytest.mark.parametrize(
@@ -138,7 +163,6 @@ def test_verdict_targets_the_pr_head(gate_job: dict[str, Any]) -> None:
     """`github.sha` is the merge ref; the Release Gate reads the head."""
     step = _step(gate_job, "Record the e2e verdict on the head commit")
     assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
-    assert step["env"]["STATE"] == "${{ needs.e2e.result }}"
     assert "context=e2e" in step["run"]
 
 
