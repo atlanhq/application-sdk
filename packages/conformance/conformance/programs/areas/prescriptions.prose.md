@@ -1365,56 +1365,144 @@ path component, and this rule governs that package's sources too).
   (grouped per function, anchored at the first site), or a module-level
   `CredentialValue` / `CredentialMap` / `InlineCredentials` / `Bounded*Credential*`
   alias.  It only fires when the app's `uv.lock` resolves
-  `atlan-application-sdk` >= 3.40.0, so the seam is importable.
+  `atlan-application-sdk` >= 3.40.0, so the seam is importable; below that it is
+  silent.  It is a migration rule (`autofixable = false`) and `classification`
+  is always `"judgment"`: several shapes change which credential an input
+  resolves to.  The lane applies nothing: return `not_remediable = true` with a
+  `migration_brief`.  The recipe below is the migration guide a person or the
+  `/remediate` skill follows, and the app owner reviews each site's proposal.
 
-  Draft, by shape:
+  The seam, all from `application_sdk.credentials`: `route_credentials(input)`
+  returns `ResolvedCredentials(ref, inline)`.  In order: a pre-built
+  `CredentialRef` field wins (the input class's `run_credential_field`, else
+  the generic `credential_ref`, else the one other populated `CredentialRef`
+  field); then an input that names a credential (`credential_guid`,
+  `extraction_method="agent"`, or a populated `agent_json`) routes through the
+  strict `CredentialRef.resolve`; otherwise `credentials` is normalized by
+  `normalize_inline_credentials` and `ref` is `None`.  It never falls back.
 
-  1. **A local router** (`build_credential_ref(input)` and relatives) —
-     replace the body with the seam and delete the local copy::
+  Migration, by shape.  A function that has several shapes is one finding: cover
+  every shape, and if any one of them routes to residue, the whole finding
+  does, with the proposals attached.
 
-         from application_sdk.credentials import route_credentials
+  1. **`CredentialRef.resolve(input)`** — replace with
+     `route_credentials(input).ref`, or `ref, inline = route_credentials(input)`
+     when the function also handles inline credentials.  The one change: a
+     pre-built ref now wins before `credential_guid` / `agent_json`, which is
+     the SDK's intended order.  Two edges to name: an input that names no
+     credential (no GUID, no agent mode, no populated `agent_json`) raised
+     `CredentialRoutingError` before and now returns `ref = None`, so thread
+     `inline` too and read through step 7, which raises when both are empty;
+     and an input that is not `CredentialResolvable` (no
+     `agent_json` field) but has a `credential_guid` now gets a GUID ref instead
+     of `CredentialResolvableTypeError`.  Return `outcome = "fix"`.
 
-         ref, inline = route_credentials(input)
+  2. **Lenient routing** — `CredentialRef.resolve_or_none(input)`, or
+     `CredentialRef.resolve(input)` inside a `try` whose `except` handler does
+     not end in an unconditional `raise` (it logs, then falls back to a GUID
+     ref, inline credentials or `None`).  Replace with strict
+     `route_credentials(input)` and delete the handler and the fallback; apps
+     must not catch the routing error.  A misrouted input (agent mode with an
+     empty `agent_json`, an `extraction_method` that is not `direct`,
+     `query_history` or `s3`) now raises `CredentialRoutingError` naming the
+     cause instead of resolving to a fallback; `resolve_or_none` also read only
+     the generic `credential_ref`, so a toolkit-generated `<app>_credential`
+     now wins too.  The injected preflight gate still resolves leniently
+     (`CredentialRef.resolve_or_none`), so a misrouted input still passes
+     preflight and now fails in the task, mid-run, not at the gate; name that
+     too.  **Precondition:** the entry-point input class carries the
+     credential triple (`credential_guid`, `agent_json`, `extraction_method`)
+     at the top level, or the app sets `credential_guid` from
+     `connection.attributes.defaultCredentialGuid` where it constructs the
+     input.  Without either, a run whose credential sits only on the connection
+     carries no routable channel, and the fallback is what keeps it working:
+     route to residue with the note "add the lift of
+     `connection.attributes.defaultCredentialGuid` into `credential_guid` at
+     input construction first, then route strictly".  Otherwise return
+     `outcome = "fix"`.  In a `SqlApp` subclass that only needs the ref, draft
+     `self.resolve_credential_ref(input)` instead: it is the template's routing
+     seam, shared with the preflight gate, and its fallback is SDK-owned, not
+     app code.
 
-     Declare `run_credential_field: ClassVar[str] = "<app>_credential"` on the
-     input class only when it carries more than one `CredentialRef` field;
-     `route_credentials` otherwise finds the toolkit-generated one itself.  It is
-     a class declaration, not a call argument, so the preflight gate makes the
-     same choice.  On the task side, replace the
-     `resolve_credential_raw(ref)`-or-inline branch with
-     `self.context.resolve_credential_raw_or_inline(ref, inline)`.  A `SqlApp`
-     subclass that only needs the ref already has
-     `self.resolve_credential_ref(input)`.  Return `outcome = "fix"`.
+  3. **`CredentialRef(credential_guid=<x>.credential_guid)`** where `<x>` is the
+     typed entry-point input (directly, or passed unchanged into a helper) —
+     replace with `route_credentials(<x>).ref`.  Agent mode starts to work:
+     an input with `extraction_method="agent"` now resolves through
+     `agent_json` instead of the vault, and on a `CredentialResolvable` input
+     an `extraction_method` outside `direct` / `query_history` / `s3` now
+     raises.  As in shape 1, a pre-built ref on `<x>` now wins over the GUID,
+     and an empty `credential_guid` now gives `ref = None` instead of a ref
+     with an empty GUID, so thread `inline` too and read through step 7.
+     This is also the fix for a P037 finding at the same site.
+     Return `outcome = "fix"`.  The dict-access forms
+     (`<x>['credential_guid']`, `<x>.get('credential_guid')`, or a local bound
+     from one) read an untyped payload that `route_credentials` cannot route,
+     because it reads attributes, not keys; a `<x>` that is not the
+     entry-point input (a `@task` input, a sub-object) moves routing out of the
+     entry point.  Route both to residue with the note "the input must become
+     the typed entry-point object first; route there and thread `ref, inline`
+     onto the task input".
 
-  2. **Inline flattening over a dict payload** (`workflow_args.get("credentials",
-     [])` iterated into a dict) — `route_credentials` reads attributes, not
-     dict keys, so propose `normalize_inline_credentials(raw)` from
-     `application_sdk.credentials` for that half, and say in the residue that
-     the dict-shaped router should move onto the typed input so the whole
-     function can become `route_credentials(input)`.  Return
-     `outcome = "fix"`.
+  4. **Inline `[{key, value}]` flattening** — replace the loop with the
+     `inline` map `route_credentials(input)` returns.  Where the router reads a
+     dict payload (`workflow_args.get("credentials", [])`), use
+     `normalize_inline_credentials(raw)` for that half; the other channels of
+     that router are the dict-access residue of shape 3.  The map differs from
+     a local flatten: keys are flat and dotted (`{"extra.client_id": "c"}`, not
+     `{"extra": {...}}`), a JSON-string `extra` is decoded into dotted keys (one
+     that does not decode to an object raises), a pair with no string `key` is
+     skipped, a pair with no `value` takes `""`, and a repeated key or a
+     non-scalar value raises `CredentialParseError`.  Read every consumer of the
+     old dict.  One that reads `creds["extra"]` reads through step 7 (it
+     expands dotted keys back to the nested shape) or `expand_dotted_keys`, and
+     one that decoded an `extra` JSON string drops that decode, because `extra`
+     now arrives as a dict; adapt it in the same draft.  A consumer the draft cannot adapt (it passes the dict
+     on to code outside the app) routes to residue naming that consumer.
+     Otherwise return `outcome = "fix"`.
 
-  3. **A local type alias** — replace the alias with an import of
-     `CredentialValue` / `CredentialMap` / `InlineCredentials` from
-     `application_sdk.credentials`.  The SDK's `CredentialValue` also admits
-     `float`, so a field retyped onto it accepts slightly more than a local
-     `str | int | bool | None` did; name that in the proposal.  Return
-     `outcome = "fix"`.
+  5. **A local type alias** — replace it with an import of the SDK type:
+     `CredentialValue` for a scalar union, `CredentialMap` for a flat dict of
+     scalars, `InlineCredentials` for a field that takes `[{key, value}]` pairs
+     or a dict.  A `Bounded*Credential*` alias takes whichever of the three
+     its shape matches; one whose shape matches none of them (nested values,
+     a different bound the contract needs) routes to residue.  The SDK's
+     `CredentialValue` also admits `float`, so a field retyped onto it accepts
+     slightly more than a local `str | int | bool | None` did, and a field
+     retyped onto `CredentialMap` flattens a nested dict into dotted keys on
+     validation; name what applies.  Return `outcome = "fix"`.
+
+  6. **Several pre-built `CredentialRef` fields** — when the input class
+     declares more than one `CredentialRef` field and no
+     `run_credential_field`, `route_credentials` raises
+     `CredentialRoutingError` on a run where the generic `credential_ref` is
+     empty and more than one of the others is populated.  Add
+     `run_credential_field: ClassVar[str] = "<field>"` to the input class,
+     naming the field the local router reads for the run's credential.  It
+     must be a `ClassVar`, not a model field (a model field raises); the
+     preflight gate reads the same declaration.  If the code does not show
+     which field is the run's, route to residue with the note "declare
+     `run_credential_field` naming the run's credential field".
+
+  7. **The task side** — replace a `resolve_credential_raw(ref)`-or-inline
+     branch with `self.context.resolve_credential_raw_or_inline(ref, inline)`,
+     with the `@task` input carrying `ref` as `CredentialRef | None` and
+     `inline` as `CredentialMap`.  It returns the same nested shape for both
+     paths and raises `CredentialRoutingError` when both are empty.  A
+     `SqlApp` subclass that only needs the ref already has
+     `self.resolve_credential_ref(input)`.
 
   **Say what the migration changes.**  The local copies disagreed on
-  behaviour, not just shape: one that built `CredentialRef(credential_guid=...)`
-  directly never routed `agent_json`, so after the fix an agent-mode run
-  resolves through the agent for the first time; one that used
-  `resolve_or_none` swallowed a misrouted input that `route_credentials` now
-  raises on (`CredentialRoutingError`, naming the cause).  A proposal that does
-  not name which of these applies is not reviewable.  Never claim the edit is
+  behaviour, not just shape, and each shape above names its change: agent mode
+  starting to work (3), a lenient fallback becoming a raise that the preflight gate does not catch (2), a pre-built
+  ref winning first (1, 3), the inline key shape (4).  A proposal that does not
+  name which of these applies is not reviewable.  Never claim the edit is
   mechanical.
 
   **Fallback** — a second, per-source credential GUID carried in some other
   field (`CredentialRef(credential_guid=input.cloud_source)`) never fires: the
   rule only matches the input's own `credential_guid` channel.  What can still
   fire outside the seam's model is `CredentialRef.resolve` over an object that
-  is not the entry-point input; for that, propose an inline
+  models no workflow input at all; for that, propose an inline
   `# conformance: ignore[P053] <reason>` naming what is resolved, and return
   `outcome = "suppress"`.  Being in another repo is not a reason to suppress;
   the tier is already WARN for that.

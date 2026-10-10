@@ -115,7 +115,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "still the right fix and this rule is silent; from 3.40.0 this rule "
             "flags that call and P037 also accepts `route_credentials` as "
             "agent-aware, so migrating onto the seam clears both rather than trading "
-            "one finding for the other."
+            "one finding for the other. P053's guide for a "
+            "`CredentialRef(credential_guid=...)` site is that migration, so it is "
+            "also the fix for a P037 finding at the same site."
         ),
         rationale=(
             "Turning a workflow input's credential channels (a pre-built "
