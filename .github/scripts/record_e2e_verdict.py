@@ -48,6 +48,44 @@ from e2e_commit_verdict import (  # noqa: E402
     read_e2e_rows,
 )
 
+
+def record(
+    repo: str,
+    sha: str,
+    run_id: int,
+    state: str,
+    description: str,
+    target_url: str,
+    *,
+    run: RunFn | None = None,
+    sleep: SleepFn = time.sleep,
+) -> bool:
+    """Post the verdict. Returns False when skipped or rejected."""
+    run = run or _run_gh
+    try:
+        attempts = read_e2e_attempts(repo, sha, run)
+    except StatusUnreadable as exc:
+        print(f"::warning::{exc}; recording the verdict anyway", file=sys.stderr)
+        attempts = {}
+    # This check alone races: a newer attempt can post `pending` after the read
+    # above and before the write below. reconcile() after the write repairs that.
+    newer = [attempt for attempt in attempts if attempt > run_id]
+    if newer:
+        print(
+            f"::notice::run {max(newer)} started a newer e2e attempt on {sha[:7]}; "
+            f"it owns the verdict, so this run's `{state}` is not recorded",
+            file=sys.stderr,
+        )
+        return False
+    if not _post(run, repo, sha, state, description, target_url):
+        print(
+            f"::warning::could not record the e2e verdict on {sha[:7]}", file=sys.stderr
+        )
+        return False
+    reconcile(repo, sha, run, sleep=sleep)
+    return True
+
+
 #: How many times to re-check that the combined status shows the newest attempt.
 _RECONCILE_PASSES = 3
 
@@ -122,42 +160,6 @@ def reconcile(
         file=sys.stderr,
     )
     return False
-
-
-def record(
-    repo: str,
-    sha: str,
-    run_id: int,
-    state: str,
-    description: str,
-    target_url: str,
-    *,
-    run: RunFn | None = None,
-    sleep: SleepFn = time.sleep,
-) -> bool:
-    """Post the verdict. Returns False when skipped or rejected."""
-    run = run or _run_gh
-    try:
-        attempts = read_e2e_attempts(repo, sha, run)
-    except StatusUnreadable as exc:
-        print(f"::warning::{exc}; recording the verdict anyway", file=sys.stderr)
-        attempts = {}
-    newer = [attempt for attempt in attempts if attempt > run_id]
-    if newer:
-        print(
-            f"::notice::run {max(newer)} started a newer e2e attempt on {sha[:7]}; "
-            f"it owns the verdict, so this run's `{state}` is not recorded",
-            file=sys.stderr,
-        )
-        return False
-    if not _post(run, repo, sha, state, description, target_url):
-        print(
-            f"::warning::could not record the e2e verdict on {sha[:7]}", file=sys.stderr
-        )
-        return False
-    # A newer attempt may have posted between the read above and this write.
-    reconcile(repo, sha, run, sleep=sleep)
-    return True
 
 
 def main(argv: list | None = None) -> int:
