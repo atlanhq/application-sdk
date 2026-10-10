@@ -231,7 +231,9 @@ The `e2e` commit status now carries the verdict across runs:
 
 If the label starts two attempts on one commit, the newest attempt decides
 (each status links the run that posted it), and an older attempt that finishes
-later does not write its verdict.
+later does not write its verdict. Each recorder re-checks after writing: if an
+older attempt's row has become the newest `e2e` status, it re-posts the newest
+attempt's latest row, so the combined status the Release Gate reads matches.
 
 A failed e2e is cleared by pushing a fix or by adding the label again. Removing
 the label does not clear it, because the verdict belongs to the commit.

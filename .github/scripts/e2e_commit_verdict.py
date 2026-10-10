@@ -123,8 +123,8 @@ def attempt_id(status: dict) -> int:
     return int(match.group(1)) if match else _UNKNOWN_ATTEMPT
 
 
-def read_e2e_attempts(repo: str, sha: str, run: RunFn) -> dict[int, str]:
-    """Each e2e attempt on ``sha`` mapped to its latest state.
+def read_e2e_rows(repo: str, sha: str, run: RunFn) -> list[dict]:
+    """Every ``e2e`` status row on ``sha``, newest (highest id) first.
 
     Reads the full status history (every page), not the combined status. The
     combined status keeps only the newest ``e2e`` row, so two attempts on one
@@ -134,7 +134,7 @@ def read_e2e_attempts(repo: str, sha: str, run: RunFn) -> dict[int, str]:
     Raises:
         StatusUnreadable: the API call failed, returned an unexpected shape, or
             an ``e2e`` row carries a state this driver does not know. Never
-            collapsed into "no attempts", because that passes the gate.
+            collapsed into "no rows", because that passes the gate.
     """
     raw = run(
         [
@@ -165,9 +165,19 @@ def read_e2e_attempts(repo: str, sha: str, run: RunFn) -> dict[int, str]:
                 f"an `e2e` status on {sha[:7]} has an unrecognised shape "
                 f"(state={row.get('state')!r})"
             )
+    # Status ids grow with creation, so the first row is the one the combined
+    # status shows, and each attempt's first row is its latest.
+    return sorted(rows, key=lambda r: r["id"], reverse=True)
+
+
+def read_e2e_attempts(repo: str, sha: str, run: RunFn) -> dict[int, str]:
+    """Each e2e attempt on ``sha`` mapped to its latest state.
+
+    Raises:
+        StatusUnreadable: as ``read_e2e_rows``.
+    """
     attempts: dict[int, str] = {}
-    # Status ids grow with creation, so the highest id is each attempt's latest.
-    for row in sorted(rows, key=lambda r: r["id"], reverse=True):
+    for row in read_e2e_rows(repo, sha, run):
         attempts.setdefault(attempt_id(row), row["state"])
     return attempts
 
