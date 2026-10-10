@@ -10,16 +10,8 @@ which shows only the newest ``e2e`` row. So an older attempt finishing after a
 newer one started must not write: its row would mask the newer attempt's
 ``pending`` or verdict there.
 
-Checking before the write is not enough on its own. A newer attempt can post
-``pending`` between this run's read and its write, and this run's late row then
-becomes the one the combined status shows. So after writing, the recorder
-re-reads the history and, if the newest row does not belong to the newest
-attempt, re-posts that attempt's latest row (state, description, link) so the
-combined status matches what the Tests Gate reads. Every recorder does this,
-including the newer attempt's own, so the last writer always restores the
-newest attempt. A re-post that lands after the newer attempt's final verdict
-re-posts its ``pending``: that residual race blocks the commit rather than
-passing it.
+The check before the write races a newer attempt's ``pending``, so the recorder
+re-checks after writing (``reconcile``).
 
 Fail-open, always exit 0, like the step it replaces. If the attempts cannot be
 read it records anyway: a lingering ``pending`` from this run is worse than a
@@ -62,20 +54,10 @@ def record(
 ) -> bool:
     """Post the verdict. Returns False when skipped or rejected."""
     run = run or _run_gh
-    try:
-        attempts = read_e2e_attempts(repo, sha, run)
-    except StatusUnreadable as exc:
-        print(f"::warning::{exc}; recording the verdict anyway", file=sys.stderr)
-        attempts = {}
-    # This check alone races: a newer attempt can post `pending` after the read
-    # above and before the write below. reconcile() after the write repairs that.
-    newer = [attempt for attempt in attempts if attempt > run_id]
-    if newer:
-        print(
-            f"::notice::run {max(newer)} started a newer e2e attempt on {sha[:7]}; "
-            f"it owns the verdict, so this run's `{state}` is not recorded",
-            file=sys.stderr,
-        )
+    # This check alone races: a newer attempt can post `pending` after it and
+    # before the write below. reconcile() re-checks after the write and
+    # re-posts that attempt's row, so the combined status cannot show ours.
+    if _newer_attempt_owns_verdict(repo, sha, run_id, state, run):
         return False
     if not _post(run, repo, sha, state, description, target_url):
         print(
@@ -84,6 +66,24 @@ def record(
         return False
     reconcile(repo, sha, run, sleep=sleep)
     return True
+
+
+def _newer_attempt_owns_verdict(
+    repo: str, sha: str, run_id: int, state: str, run: RunFn
+) -> bool:
+    try:
+        attempts = read_e2e_attempts(repo, sha, run)
+    except StatusUnreadable as exc:
+        print(f"::warning::{exc}; recording the verdict anyway", file=sys.stderr)
+        return False
+    newer = [attempt for attempt in attempts if attempt > run_id]
+    if newer:
+        print(
+            f"::notice::run {max(newer)} started a newer e2e attempt on {sha[:7]}; "
+            f"it owns the verdict, so this run's `{state}` is not recorded",
+            file=sys.stderr,
+        )
+    return bool(newer)
 
 
 #: How many times to re-check that the combined status shows the newest attempt.
@@ -125,6 +125,17 @@ def reconcile(
     pause: float = _RECONCILE_PAUSE_SECONDS,
 ) -> bool:
     """Make the combined ``e2e`` status show the newest attempt's latest row.
+
+    The check before the write is not enough on its own. A newer attempt can
+    post ``pending`` between this run's read and its write, and this run's late
+    row then becomes the one the combined status shows. So after writing, the
+    recorder re-reads the history and, if the newest row does not belong to the
+    newest attempt, re-posts that attempt's latest row (state, description,
+    link) so the combined status matches what the Tests Gate reads. Every
+    recorder does this, including the newer attempt's own, so the last writer
+    always restores the newest attempt. A re-post that lands after the newer
+    attempt's final verdict re-posts its ``pending``: that residual race blocks
+    the commit rather than passing it.
 
     Returns True once it does, False if it could not confirm it.
     """
