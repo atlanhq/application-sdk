@@ -856,3 +856,21 @@ class TestPerRunConnection:
             with harness._dag_run(DAGSpec(connection_qualified_name=self._OTHER_QN)):
                 pass
         assert harness._seeded_connection_qns == [self._OTHER_QN]
+
+
+class TestDeleteObjectIsADeprecatedNoOp:
+    """``base.delete_object`` was importable before FND-3572 retired its only
+    use. It stays importable until v4.0, warns, and deletes nothing — so no new
+    code can come to depend on it."""
+
+    async def test_it_warns_and_deletes_nothing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.testing.e2e import base
+
+        async def _must_not_run(*_args: object, **_kwargs: object) -> bool:
+            raise AssertionError("the deprecated no-op reached storage")
+
+        monkeypatch.setattr("application_sdk.storage.ops.delete", _must_not_run)
+        with pytest.warns(DeprecationWarning, match="does nothing.*v4.0"):
+            assert await base.delete_object("artifacts/k", None) is False

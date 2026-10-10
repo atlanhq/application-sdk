@@ -211,6 +211,37 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
 logger = get_logger(__name__)
 
 
+@deprecated(
+    "application_sdk.testing.e2e.base.delete_object is deprecated, does nothing, "
+    "and will be removed in v4.0. Use application_sdk.storage.ops.delete instead."
+)
+async def delete_object(
+    key: str,
+    store: object = None,
+    *,
+    normalize: bool = True,
+) -> bool:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``base``'s import of
+        :func:`application_sdk.storage.ops.delete` for the runner-side
+        seed-object delete, which FND-3572 retired. No consumer used it, so
+        rather than keep a working alias that new code could pick up, it now
+        deletes nothing — call :func:`application_sdk.storage.ops.delete`.
+
+    Args:
+        key: Ignored.
+        store: Ignored.
+        normalize: Ignored.
+
+    Returns:
+        Always ``False``: nothing was deleted.
+    """
+    del key, store, normalize
+    return False
+
+
 # Where the sdr-e2e composite action selects the CI Dapr components, and the
 # name the atlan-configurator emits the tenant blobstorage binding under. Both
 # are the CI convention rather than a rule, which is why each has an env
