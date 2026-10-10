@@ -856,26 +856,3 @@ class TestPerRunConnection:
             with harness._dag_run(DAGSpec(connection_qualified_name=self._OTHER_QN)):
                 pass
         assert harness._seeded_connection_qns == [self._OTHER_QN]
-
-
-class TestDeleteObjectAlias:
-    """``base.delete_object`` was importable before FND-3572 dropped its only
-    use, so it stays one major as a deprecated alias of ``storage.ops.delete``."""
-
-    async def test_it_warns_and_delegates(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        from application_sdk.testing.e2e import base
-
-        calls: list[tuple[str, object, bool]] = []
-
-        async def _record(
-            key: str, store: object = None, *, normalize: bool = True
-        ) -> bool:
-            calls.append((key, store, normalize))
-            return True
-
-        monkeypatch.setattr(base, "_storage_delete", _record)
-        with pytest.warns(DeprecationWarning, match="v4.0"):
-            assert await base.delete_object("artifacts/k", None, normalize=False)
-        assert calls == [("artifacts/k", None, False)]

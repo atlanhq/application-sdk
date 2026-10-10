@@ -100,7 +100,6 @@ from application_sdk.contracts.types import ConnectionRef
 from application_sdk.errors.base import safe_traceback, sanitize_cause_repr
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage.binding import create_store_from_binding_optional
-from application_sdk.storage.ops import delete as _storage_delete
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
     AtlasReadIndeterminateError,
@@ -207,40 +206,9 @@ if TYPE_CHECKING:  # pragma: no cover - typing only; both are lazy imports
     from pyatlan.client.aio.client import AsyncAtlanClient
 
     from application_sdk.execution._temporal.store_assert import StoreAssertOutput
-    from application_sdk.storage.ops import BoundStore
     from application_sdk.testing.harness.temporal import PollerInfo
 
 logger = get_logger(__name__)
-
-
-@deprecated(
-    "application_sdk.testing.e2e.base.delete_object is deprecated and will be "
-    "removed in v4.0. Import delete from application_sdk.storage.ops instead; "
-    "this module only bound it for a teardown step FND-3572 removed."
-)
-async def delete_object(
-    key: str,
-    store: BoundStore | ObjectStore | None = None,
-    *,
-    normalize: bool = True,
-) -> bool:
-    """Deprecated alias of :func:`application_sdk.storage.ops.delete`.
-
-    .. deprecated:: 3.46
-        Removed in v4.0. ``base`` imported ``delete`` under this name for the
-        runner-side seed-object delete, which FND-3572 retired; the name stayed
-        importable, so it is kept one major as an alias.
-
-    Args:
-        key: Object-store key to delete.
-        store: Store to delete from; resolved from the current context when
-            omitted.
-        normalize: Whether to normalise *key* first.
-
-    Returns:
-        Whether an object was deleted.
-    """
-    return await _storage_delete(key, store, normalize=normalize)
 
 
 # Where the sdr-e2e composite action selects the CI Dapr components, and the
