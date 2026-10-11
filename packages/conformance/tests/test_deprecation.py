@@ -758,6 +758,7 @@ from conformance.suite.checks.deprecation._daft_runtime import (  # noqa: E402
 )
 
 _SDK_IMPORT = "from application_sdk.io import ParquetFileReader\n"
+_PD = "import pandas as pd\n"
 
 
 def _b007(src: str) -> list:
@@ -774,7 +775,12 @@ def test_b007_fires_on_count_rows() -> None:
 
 
 def test_b007_fires_on_to_pylist_on_reader_frame() -> None:
-    src = _SDK_IMPORT + "records = dataframe.to_pylist()\n"
+    src = (
+        _SDK_IMPORT
+        + "async def f(path):\n"
+        + "    dataframe = await ParquetFileReader(path).read()\n"
+        + "    return dataframe.to_pylist()\n"
+    )
     findings = _b007(src)
     assert [f.rule_id for f in findings] == ["B007"]
     assert 'to_dict("records")' in findings[0].message
@@ -861,19 +867,20 @@ def test_b007_pyarrow_exemption_is_scoped_per_function() -> None:
     """
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
         + "def unrelated():\n"
         + "    df = pa.table({})\n"
         + "    return df.to_pylist()\n"
         + "\n"
-        + "def process_reader_output(frame):\n"
+        + "def process_reader_output(frame: pd.DataFrame):\n"
         + "    df = frame\n"
         + "    return df.to_pylist()\n"
     )
     findings = _b007(src)
     assert [f.rule_id for f in findings] == ["B007"]
-    assert findings[0].line == 10
+    assert findings[0].line == 11
 
 
 def test_b007_pyarrow_exemption_still_applies_within_its_own_scope() -> None:
@@ -922,12 +929,13 @@ def test_b007_class_body_binding_does_not_leak_into_methods() -> None:
     """
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
         + "class Foo:\n"
         + "    df = pa.table({})\n"
         + "\n"
-        + "    def method(self, frame):\n"
+        + "    def method(self, frame: pd.DataFrame):\n"
         + "        df = frame\n"
         + "        return df.to_pylist()\n"
     )
@@ -938,9 +946,10 @@ def test_b007_rebinding_a_pyarrow_name_voids_the_exemption() -> None:
     """The last binding before the use decides, not "bound anywhere in scope"."""
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
-        + "def f(frame):\n"
+        + "def f(frame: pd.DataFrame):\n"
         + "    df = pa.table({})\n"
         + "    df = frame\n"
         + "    return df.to_pylist()\n"
@@ -988,7 +997,7 @@ def test_b007_tracks_every_rebinding_form() -> None:
     Tracking only `ast.Assign` reopened the round-2 false-negative class through
     walrus, loop and context-manager targets.
     """
-    prelude = _SDK_IMPORT + "import pyarrow as pa\n\n"
+    prelude = _SDK_IMPORT + _PD + "import pyarrow as pa\n\n"
     for label, body in (
         ("walrus", "    if (df := frame):\n        pass\n"),
         ("for", "    for df in pages:\n        pass\n"),
@@ -996,7 +1005,7 @@ def test_b007_tracks_every_rebinding_form() -> None:
     ):
         src = (
             prelude
-            + "def f(frame, pages):\n"
+            + "def f(frame: pd.DataFrame, pages: Iterable[pd.DataFrame]):\n"
             + "    df = pa.table({})\n"
             + body
             + "    return df.to_pylist()\n"
@@ -1025,7 +1034,8 @@ def test_b007_comprehension_over_reader_frames_still_fires() -> None:
     """The exemption must not swallow the ordinary case."""
     src = (
         _SDK_IMPORT
-        + "def f(frames):\n"
+        + _PD
+        + "def f(frames: Iterable[pd.DataFrame]):\n"
         + "    return [t.to_pylist() for t in frames]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
@@ -1043,13 +1053,14 @@ def test_b007_pyarrow_iterable_in_a_sibling_scope_does_not_exempt() -> None:
     """
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
         + "def g():\n"
         + "    tables = [pa.table({}) for _ in range(3)]\n"
         + "    return tables\n"
         + "\n"
-        + "def f(tables):\n"
+        + "def f(tables: Iterable[pd.DataFrame]):\n"
         + "    return [t.to_pylist() for t in tables]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
@@ -1069,11 +1080,12 @@ def test_b007_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> 
     """
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
         + "tables = [pa.table({}) for _ in range(3)]\n"
         + "\n"
-        + "def f(tables):\n"
+        + "def f(tables: Iterable[pd.DataFrame]):\n"
         + "    return [t.to_pylist() for t in tables]\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
@@ -1082,24 +1094,23 @@ def test_b007_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> 
 def test_b007_lambda_parameter_shadowing_a_module_pyarrow_binding_does_not_exempt() -> (
     None
 ):
-    """A same-named lambda parameter kills an enclosing pyarrow exemption.
+    """A same-named lambda parameter shadows an enclosing binding.
 
-    ``ast.Lambda`` was absent from both ``_FUNCTION_SCOPES`` and
-    ``_SCOPE_NODES``, so a lambda parameter created no binding and the outward
-    walk reached the module-level ``tables = [pa.table({}) ...]`` — clearing
-    ``[t.to_pylist() for t in tables]`` even though the lambda's ``tables``
-    shadows the global exactly as a ``def`` parameter does. Lambdas now open a
-    scope and record their parameters as unknown/non-pyarrow.
+    ``ast.Lambda`` opens a scope and records its parameters as unknown, so the
+    lambda's ``tables`` neither inherits the module-level pyarrow exemption nor
+    the module-level pandas evidence. An unannotated lambda parameter carries
+    no pandas evidence, so nothing fires.
     """
     src = (
         _SDK_IMPORT
-        + "import pyarrow as pa\n"
-        + "\n"
-        + "tables = [pa.table({}) for _ in range(3)]\n"
+        + "tables = ParquetFileReader(path).read_batches()\n"
         + "\n"
         + "f = lambda tables: [t.to_pylist() for t in tables]\n"
+        + "g = lambda: [t.to_pylist() for t in tables]\n"
     )
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    findings = _b007(src)
+    assert [f.rule_id for f in findings] == ["B007"]
+    assert findings[0].line == 5
 
 
 def test_b007_rebinding_a_parameter_to_pyarrow_restores_the_exemption() -> None:
@@ -1159,7 +1170,8 @@ def test_b007_loop_over_a_pyarrow_iterable_is_exempt() -> None:
 def test_b007_loop_over_reader_frames_still_fires() -> None:
     src = (
         _SDK_IMPORT
-        + "def f(pages):\n"
+        + _PD
+        + "def f(pages: Iterable[pd.DataFrame]):\n"
         + "    for t in pages:\n"
         + "        return t.to_pylist()\n"
     )
@@ -1170,9 +1182,10 @@ def test_b007_chained_assignment_kills_a_stale_exemption() -> None:
     """`a = df = frame` — the `len(targets) == 1` guard dropped the rebinding."""
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
-        + "def f(frame):\n"
+        + "def f(frame: pd.DataFrame):\n"
         + "    df = pa.table({})\n"
         + "    a = df = frame\n"
         + "    return df.to_pylist()\n"
@@ -1184,9 +1197,10 @@ def test_b007_tuple_unpacking_kills_a_stale_exemption() -> None:
     """`df, other = frame, 1` — `target.id` silently dropped unpacking targets."""
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
-        + "def f(frame):\n"
+        + "def f(frame: pd.DataFrame):\n"
         + "    df = pa.table({})\n"
         + "    df, other = frame, 1\n"
         + "    return df.to_pylist()\n"
@@ -1203,9 +1217,10 @@ def test_b007_augmented_assignment_kills_a_stale_exemption() -> None:
     """
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "\n"
-        + "def f(frame):\n"
+        + "def f(frame: pd.DataFrame):\n"
         + "    df = pa.table({})\n"
         + "    df += frame\n"
         + "    return df.to_pylist()\n"
@@ -1649,36 +1664,37 @@ def test_b007_still_fires_after_leaving_pyarrow_for_pandas() -> None:
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
-def test_b007_still_fires_on_an_unresolved_helper_result() -> None:
+def test_b007_silent_on_an_unresolved_helper_result() -> None:
+    """No pandas evidence: an unknown helper's result is not flagged."""
     src = _SDK_IMPORT + "rows = load_arrow_batch(path).to_pylist()\n"
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    assert _b007(src) == []
 
 
-def test_b007_still_fires_on_a_subscript_of_an_unresolved_frame() -> None:
+def test_b007_silent_on_a_subscript_of_an_unresolved_frame() -> None:
     src = _SDK_IMPORT + "values = frame['col'].to_pylist()\n"
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    assert _b007(src) == []
 
 
 def test_b007_local_binding_shadows_a_pyarrow_import_of_the_same_name() -> None:
     src = (
         _SDK_IMPORT
         + "from pyarrow import table\n"
-        + "def rows(r):\n"
+        + "def rows(r: ParquetFileReader):\n"
         + "    table = r.read()\n"
         + "    return table.to_pylist()\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
 
 
-def test_b007_fires_on_column_of_an_unresolved_receiver() -> None:
+def test_b007_silent_on_column_of_an_unresolved_receiver() -> None:
     src = _SDK_IMPORT + "values = reader.column('a').to_pylist()\n"
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    assert _b007(src) == []
 
 
 def test_b007_fires_on_batches_of_an_sdk_reader() -> None:
     src = (
         _SDK_IMPORT
-        + "for batch in ParquetFileReader(path).iter_batches():\n"
+        + "for batch in ParquetFileReader(path).read_batches():\n"
         + "    rows = batch.to_pylist()\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
@@ -1706,10 +1722,11 @@ def test_b007_exempts_an_optional_pyarrow_annotation() -> None:
 
 def test_b007_pyarrow_import_in_a_helper_does_not_exempt_a_module_name() -> None:
     # The import binds `frame` only inside `helper`; the module-level `frame`
-    # is still the fixture's reader frame.
+    # is still a pandas frame.
     src = (
         _SDK_IMPORT
-        + "from fixtures import frame\n"
+        + _PD
+        + "frame = pd.read_parquet(path)\n"
         + "def helper():\n"
         + "    import pyarrow as frame\n"
         + "    return frame\n"
@@ -1733,9 +1750,11 @@ def test_b007_pyarrow_import_in_an_enclosing_scope_still_exempts() -> None:
 def test_b007_local_import_shadows_a_module_pyarrow_import() -> None:
     src = (
         _SDK_IMPORT
+        + _PD
         + "import pyarrow as pa\n"
         + "def rows():\n"
         + "    from fixtures import pa\n"
+        + "    pa = pd.concat([pa])\n"
         + "    return pa.to_pylist()\n"
     )
     assert [f.rule_id for f in _b007(src)] == ["B007"]
@@ -1754,10 +1773,204 @@ def test_b007_comprehension_of_pyarrow_method_chains_is_exempt() -> None:
     assert _b007(src) == []
 
 
-def test_b007_comprehension_of_reader_method_chains_still_fires() -> None:
+def test_b007_comprehension_of_unknown_method_chains_is_silent() -> None:
     src = (
         _SDK_IMPORT
         + "columns = [reader.column('x') for _ in range(1)]\n"
         + "rows = [col.to_pylist() for col in columns]\n"
     )
-    assert [f.rule_id for f in _b007(src)] == ["B007"]
+    assert _b007(src) == []
+
+
+# ── B007: `.to_pylist()` flags only on pandas evidence ───────────────────────────
+
+
+def _b007_lines(src: str) -> list[int]:
+    return sorted(f.line for f in _b007(src) if f.rule_id == "B007")
+
+
+def test_b007_evidence_sdk_reader_read() -> None:
+    src = (
+        _SDK_IMPORT
+        + "from application_sdk.io import JsonFileReader\n"
+        + "async def f(path):\n"
+        + "    async with JsonFileReader(path) as reader:\n"
+        + "        df = await reader.read()\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [6]
+
+
+def test_b007_evidence_sdk_read_batches_async_for() -> None:
+    src = (
+        _SDK_IMPORT
+        + "async def f(path):\n"
+        + "    reader = ParquetFileReader(path)\n"
+        + "    async for batch in reader.read_batches():\n"
+        + "        yield batch.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [5]
+
+
+def test_b007_evidence_sql_client_get_results() -> None:
+    src = (
+        _SDK_IMPORT
+        + "class A:\n"
+        + "    async def f(self, q):\n"
+        + "        df = await self.sql_client.get_results(q)\n"
+        + "        return df.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [5]
+
+
+def test_b007_sql_client_run_query_is_not_frame_evidence() -> None:
+    """The SDK SQL clients' ``run_query`` yields ``list[dict]`` batches, not frames."""
+    src = (
+        _SDK_IMPORT
+        + "async def f(client, q):\n"
+        + "    async for batch in client.run_query(q):\n"
+        + "        yield batch.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_evidence_function_annotated_as_pandas() -> None:
+    src = (
+        _SDK_IMPORT
+        + _PD
+        + "from typing import AsyncIterator\n"
+        + "async def load(path) -> pd.DataFrame:\n"
+        + "    return await helper(path)\n"
+        + "async def pages(path) -> AsyncIterator['pd.DataFrame']:\n"
+        + "    yield await helper(path)\n"
+        + "async def f(self, path):\n"
+        + "    a = (await load(path)).to_pylist()\n"
+        + "    b = await self.load(path)\n"
+        + "    async for page in pages(path):\n"
+        + "        page.to_pylist()\n"
+        + "    return b.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [9, 12, 13]
+
+
+def test_b007_evidence_unannotated_function_returning_an_sdk_frame_call() -> None:
+    """One level only: the helper of a helper is a documented miss."""
+    src = (
+        _SDK_IMPORT
+        + "async def load(path):\n"
+        + "    return await ParquetFileReader(path).read()\n"
+        + "async def load_twice_removed(path):\n"
+        + "    return await load(path)\n"
+        + "async def f(path):\n"
+        + "    a = await load(path)\n"
+        + "    b = await load_twice_removed(path)\n"
+        + "    return a.to_pylist() + b.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [9]
+
+
+def test_b007_function_summary_needs_every_definition_to_agree() -> None:
+    src = (
+        _SDK_IMPORT
+        + _PD
+        + "import pyarrow as pa\n"
+        + "class A:\n"
+        + "    def load(self) -> pd.DataFrame: ...\n"
+        + "class B:\n"
+        + "    def load(self) -> pa.Table: ...\n"
+        + "def f(x):\n"
+        + "    return x.load().to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_evidence_reaches_across_files(tmp_path) -> None:
+    from conformance.suite.checks.deprecation import scan_all
+
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "atlan-x-app"\n')
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "helpers.py").write_text(
+        "import pandas as pd\n"
+        "import pyarrow as pa\n"
+        "def load(path) -> pd.DataFrame: ...\n"
+        "def load_arrow(path) -> pa.Table: ...\n"
+    )
+    (app / "main.py").write_text(
+        _SDK_IMPORT
+        + "from app.helpers import load, load_arrow\n"
+        + "def f(path):\n"
+        + "    a = load(path).to_pylist()\n"
+        + "    b = load_arrow(path).to_pylist()\n"
+    )
+    paths = sorted(app.glob("*.py"))
+    findings = [f for f in scan_all(paths, tmp_path) if f.rule_id == "B007"]
+    assert [(f.file, f.line) for f in findings] == [("app/main.py", 4)]
+
+
+def test_b007_evidence_parameter_and_variable_annotations() -> None:
+    src = (
+        _SDK_IMPORT
+        + _PD
+        + "import pyarrow as pa\n"
+        + "def a(df: pd.DataFrame):\n"
+        + "    return df.to_pylist()\n"
+        + "def b(df: 'pd.DataFrame | pa.Table'):\n"
+        + "    return df.to_pylist()\n"
+        + "def c(x):\n"
+        + "    df: pd.DataFrame = x\n"
+        + "    return df.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [5, 7, 10]
+
+
+def test_b007_pyarrow_isinstance_branch_is_exempt() -> None:
+    src = (
+        _SDK_IMPORT
+        + _PD
+        + "import pyarrow as pa\n"
+        + "def a(df: pd.DataFrame | pa.Table):\n"
+        + "    if isinstance(df, pa.Table):\n"
+        + "        return df.to_pylist()\n"
+        + "    elif isinstance(df, (pa.Table, pa.RecordBatch)):\n"
+        + "        return df.to_pylist()\n"
+        + "    if isinstance(df, pa.Table | pa.RecordBatch):\n"
+        + "        return df.to_pylist()\n"
+        + "    else:\n"
+        + "        return df.to_pylist()\n"
+    )
+    assert _b007_lines(src) == [12]
+
+
+def test_b007_evidence_pandas_created() -> None:
+    src = (
+        _SDK_IMPORT
+        + _PD
+        + "from pandas import concat\n"
+        + "a = pd.DataFrame(rows).to_pylist()\n"
+        + "b = pd.read_csv(path).to_pylist()\n"
+        + "c = concat([x]).to_pylist()\n"
+        + "d = something.to_pandas().to_pylist()\n"
+    )
+    assert _b007_lines(src) == [4, 5, 6, 7]
+
+
+def test_b007_silent_on_pyarrow_and_third_party_receivers() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import duckdb\n"
+        + "import pyarrow as pa\n"
+        + "def get_arrow_results(q) -> pa.Table: ...\n"
+        + "def f(con, table, q):\n"
+        + "    a = get_arrow_results(q).to_pylist()\n"
+        + "    b = con.execute(q).fetch_record_batch().to_pylist()\n"
+        + "    c = table.inspect.partitions().to_pylist()\n"
+        + "    for batch in duckdb.sql(q).fetch_record_batch():\n"
+        + "        batch.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_count_rows_and_names_still_fire_without_evidence() -> None:
+    src = _SDK_IMPORT + "n = unknown.count_rows()\ncols = unknown.names\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007", "B007"]

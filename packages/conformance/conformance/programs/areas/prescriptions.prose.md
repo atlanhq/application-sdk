@@ -126,7 +126,12 @@ entrypoint/task contract — that no local edit can perform, and the writer may 
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
 constructing assets via the pyatlan `.creator()` factories, a semantic rewrite
 performed by the `migrate-asset-modeling` skill (its `remediation_reference`);
-the SDK has no qualifiedName seam, the creators own the grammar.  All three draft a proposal for
+the SDK has no qualifiedName seam, the creators own the grammar.  An f-string
+that embeds a qualifiedName but is not an identity — an object-store key or
+prefix starting with the qn, a trailing-`/` match prefix, a log/exception
+message or display text — is suppressed with
+`# conformance: ignore[P028] <reason>` naming what the string is, not
+rewritten.  All three draft a proposal for
 human review and never auto-apply.  (These rules are backed by
 `suite.checks.prescriptions` alongside P001–P003.)
 
@@ -641,14 +646,18 @@ The lane applies nothing: return `not_remediable = true` with a
   and pointers as P013.
 
 - **P015 UnmodeledBoundedContractField** (WARN) — a field on an `Input` /
-  `Output` contract is a container of primitives or `Any`, bare or bounded
+  `Output` contract is a dict of primitives or a container of `Any` (a bare
+  `list` / `set` / `dict` counts as `Any`), bare or bounded
   (`Annotated[dict[str, str], MaxItems(N)]`).  For a container of payload-safe
   primitives, the bound satisfies payload safety without an opt-out, but the
   keys and values still have no schema.  A bound never makes `Any` safe:
   `Annotated[dict[str, Any], MaxItems(N)]` still raises `PayloadSafetyError`
   without the opt-out and is still a P001 finding — replace the `Any` first
   (see P001 above).  Containers of a typed class
-  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Target shape, from
+  (`list[FooModel]`, `dict[str, FooModel]`) are exempt.  Lists, sets and
+  tuples of a scalar primitive (`str`, `int`, `float`, `bool`, `bytes`), such
+  as `list[str]`, `Annotated[set[int], MaxItems(N)]` or `list[list[str]]`,
+  are exempt too: they have no keys to model.  Target shape, from
   `atlan-metabase-app` `app/contracts.py`:
   `CollectionFilter = Annotated[dict[str, CollectionSelection], MaxItems(1000)]`,
   where `CollectionSelection` is a `BaseModel`.  The brief proposes the nested
@@ -1092,18 +1101,21 @@ say so.
 - **P037 SdrAgentJsonNotConsumed** (WARN) — the app performs custom credential
   resolution (a bare `CredentialRef(credential_guid=...)` construction or a
   `resolve_credential_raw(...)` call) but never routes through an agent-aware
-  resolver entry point (`CredentialRef.resolve(input)` /
+  resolver entry point (`route_credentials(input)`, the `SqlApp` seam
+  `self.resolve_credential_ref(input)`, `CredentialRef.resolve(input)` /
   `CredentialRef.from_workflow_args(workflow_args)`, or a `CredentialRef` built
-  with an `agent_spec`/`agent_json` kwarg).  Resolving strictly by
+  with an `agent_spec`/`agent_json` kwarg).  Other SDK resolvers
+  (`resolve_or_none` and the like) are not accepted.  Resolving strictly by
   `credential_guid` ignores the forwarded `agent_json`, so in agent (SDR) mode
   the credential never resolves and the workflow writes zero assets while
   reporting "success".  The finding is app-level, anchored at
   the first custom-resolution call site.  Apps that lean on the SDK's transparent
   resolution (no `CredentialRef` / `resolve_credential_raw`) are not gated in.
   Draft a proposal that
-  routes resolution through `CredentialRef.resolve(input)` /
-  `CredentialRef.from_workflow_args(workflow_args)`, keeping the direct
-  `credential_guid` path only as a fallback; route to residue for confirmation.
+  routes resolution through the SDK seam: `route_credentials(input)` from
+  `application_sdk.credentials` (SDK >= 3.40.0), or
+  `self.resolve_credential_ref(input)` in a `SqlApp` subclass — the same end
+  state P053 prescribes; route to residue for confirmation.
 
 - **P038 SdrArtifactMisrooted** (BLOCK) — the object-store output path/prefix
   (`artifacts/apps/<identity>/...`) is rooted from the *workflow-input*
@@ -1156,8 +1168,9 @@ which scans template YAML, not Python.
   **The fix is the SDK bump, not the template.**  From SDK 3.28.0 the
   transformer quotes a `source_query` that resolved as a plain column
   reference, so the keyword renders as valid SQL with no template change; the
-  rule carries `superseded_by: sdk>=3.28.0` and describes only apps pinned
-  below it.  Propose raising the `atlan-application-sdk` floor to `>=3.28.0`
+  rule carries `superseded_by: sdk>=3.28.0` and fires only when the app's
+  `uv.lock` resolves `atlan-application-sdk` below it (or the version cannot be
+  resolved).  Propose raising the `atlan-application-sdk` floor to `>=3.28.0`
   and relocking.
 
   Only when the app genuinely cannot move off an older SDK, fall back to

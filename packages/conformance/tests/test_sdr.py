@@ -1013,6 +1013,97 @@ def test_p037_agent_aware_in_any_file_exempts(tmp_path: Path) -> None:
     assert not any(f.rule_id == "P037" for f in _run(tmp_path))
 
 
+#: A SqlApp subclass calling the template seam, plus a GUID-only read that P037
+#: counts as custom resolution on its own.
+_SQLAPP_SEAM_PRELUDE = (
+    "from application_sdk.credentials.ref import CredentialRef\n"
+    "{import_line}"
+    "\n"
+    "async def _named(context, guid):\n"
+    "    ref = CredentialRef(name=guid, credential_guid=guid)\n"
+    "    return await context.resolve_credential_raw(ref)\n"
+    "\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("import_line", "body"),
+    [
+        (
+            "from application_sdk.templates import SqlApp\n",
+            "class MyApp(SqlApp):\n"
+            "    async def run(self, input):\n"
+            "        return self.resolve_credential_ref(input)\n",
+        ),
+        (
+            "from application_sdk.templates.sql_app import SqlApp as Base\n",
+            "class Mid(Base):\n"
+            "    pass\n"
+            "class MyApp(Mid):\n"
+            "    async def run(self, input):\n"
+            "        return super().resolve_credential_ref(input)\n",
+        ),
+        (
+            "from application_sdk import templates\n",
+            "class MyApp(templates.SqlApp):\n"
+            "    async def run(self, input):\n"
+            "        return self.resolve_credential_ref(input)\n",
+        ),
+        (
+            "from application_sdk.templates import SqlApp\n",
+            "def resolve(app, input):\n"
+            "    return SqlApp.resolve_credential_ref(app, input)\n",
+        ),
+    ],
+    ids=["self", "aliased-indirect-super", "module-qualified-base", "on-sdk-class"],
+)
+def test_p037_silent_when_sqlapp_seam_used(
+    tmp_path: Path, import_line: str, body: str
+) -> None:
+    src = _SQLAPP_SEAM_PRELUDE.format(import_line=import_line) + body
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    assert not any(f.rule_id == "P037" for f in _run(tmp_path))
+
+
+@pytest.mark.parametrize(
+    ("import_line", "body"),
+    [
+        (
+            "from application_sdk.app import App\n",
+            "class MyApp(App):\n"
+            "    def resolve_credential_ref(self, input):\n"
+            "        return None\n"
+            "    async def run(self, input):\n"
+            "        return self.resolve_credential_ref(input)\n",
+        ),
+        (
+            "from app.base import SqlApp\n",
+            "class MyApp(SqlApp):\n"
+            "    async def run(self, input):\n"
+            "        return self.resolve_credential_ref(input)\n",
+        ),
+        (
+            "from application_sdk.templates import SqlApp\n",
+            "def resolve(helper, input):\n"
+            "    return helper.resolve_credential_ref(input)\n",
+        ),
+        (
+            "",
+            "def resolve(input):\n" "    return CredentialRef.resolve_or_none(input)\n",
+        ),
+    ],
+    ids=["non-sqlapp-class", "non-sdk-sqlapp", "other-receiver", "resolve-or-none"],
+)
+def test_p037_fires_without_the_standard_seam(
+    tmp_path: Path, import_line: str, body: str
+) -> None:
+    src = _SQLAPP_SEAM_PRELUDE.format(import_line=import_line) + body
+    _write(tmp_path, {"atlan.yaml": _SDR_ATLAN_YAML, "app/connector.py": src})
+    p037 = [f for f in _run(tmp_path) if f.rule_id == "P037"]
+    assert len(p037) == 1
+    assert "route_credentials" in p037[0].message
+
+
 def test_p037_silent_on_non_sdr_app(tmp_path: Path) -> None:
     _write(
         tmp_path,

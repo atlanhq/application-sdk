@@ -198,6 +198,12 @@ _PRIMITIVE_NAMES: frozenset[str] = frozenset(
     }
 )
 
+# Scalar element types that exempt a list/set-like container: a collection of
+# plain values has no keys to mistype, so there is no schema to model.
+_SCALAR_ELEMENT_NAMES: frozenset[str] = frozenset(
+    {"str", "int", "float", "bool", "bytes"}
+)
+
 
 def _terminal_name(node: ast.expr) -> str | None:
     """Return the terminal (rightmost) name of a (possibly subscripted) annotation.
@@ -277,6 +283,20 @@ def _container_element_type(node: ast.Subscript) -> ast.expr | None:
         return slc  # directly T
 
 
+def _is_scalar_collection_element(elem: ast.expr) -> bool:
+    """A scalar primitive, or a list/set-like container of them (any depth)."""
+    elem = _unwrap_annotated(elem)
+    if isinstance(elem, ast.Name):
+        return elem.id in _SCALAR_ELEMENT_NAMES
+    if not isinstance(elem, ast.Subscript):
+        return False
+    name = _terminal_name(elem.value)
+    if name not in _CONTAINER_NAMES or name in _DICT_LIKE_NAMES:
+        return False
+    inner = _container_element_type(elem)
+    return inner is not None and _is_scalar_collection_element(inner)
+
+
 def unmodeled_container_name(node: ast.expr) -> str | None:
     """Return the container name if *node* is an unmodeled-container annotation.
 
@@ -286,11 +306,18 @@ def unmodeled_container_name(node: ast.expr) -> str | None:
       :mod:`typing`-module equivalents, ``Mapping``, ``Sequence``, etc.);
     * **and** is bare (no type parameters) **or** is parametrised with a
       primitive / ``Any`` element/value type (``dict[str, str]``,
-      ``list[str]``, ``Annotated[dict[str, Any], MaxItems(50)]``).
+      ``list[Any]``, ``Annotated[dict[str, Any], MaxItems(50)]``).
 
     Containers of a typed class (``list[FooModel]``, ``dict[str, FooModel]``)
     are **exempt** — a collection of models is the canonical bounded pattern
     and does not need to be replaced.
+
+    List/set-like containers of a scalar primitive (``list[str]``,
+    ``set[int]``, ``Annotated[list[str], MaxItems(N)]``), or of such
+    containers (``list[list[str]]``), are **exempt**: they carry no keys, so
+    there is no schema to model.  Every dict-like container
+    of primitives, any container of ``Any``/``object``, and a bare
+    unparameterised ``list``/``set`` still match.
 
     ``Annotated[X, ...]`` wrappers (e.g. ``Annotated[dict[…], MaxItems(N)]``)
     are transparent: the check peers through them to the inner type ``X``
@@ -322,6 +349,10 @@ def unmodeled_container_name(node: ast.expr) -> str | None:
         if elem is None:
             # Unresolvable slice structure → treat as unmodeled.
             return container_name
+        if container_name not in _DICT_LIKE_NAMES and _is_scalar_collection_element(
+            elem
+        ):
+            return None
         if isinstance(elem, ast.Name):
             if elem.id in _PRIMITIVE_NAMES:
                 return container_name  # container of primitives → unmodeled

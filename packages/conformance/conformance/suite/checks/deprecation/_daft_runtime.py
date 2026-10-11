@@ -14,9 +14,23 @@ a repo that never touches the SDK is not consuming SDK reader frames):
 
 * ``frame.count_rows()`` — daft-only; pandas: ``len(frame)``.
 * ``frame.to_pylist()`` — daft-only on reader frames; pandas:
-  ``frame.to_dict("records")``.  Exempt when the receiver provably comes from
-  pyarrow — ``pyarrow.Table.to_pylist()`` is a real API the SDK itself uses.
-  A receiver comes from pyarrow when it is a call to a pyarrow import alias
+  ``frame.to_dict("records")``.  Flagged **only on pandas evidence**, because
+  ``pyarrow.Table.to_pylist()`` is a real API: the receiver is assigned from
+  an SDK frame API (``ParquetFileReader`` / ``JsonFileReader`` ``.read()``,
+  ``read_batches()``, the SQL client ``get_results()`` /
+  ``get_batched_results()``, including ``async for … in``); or it comes from
+  an app function in the same repo annotated ``-> pd.DataFrame`` (or an
+  iterator of them), or, unannotated, whose body returns an SDK frame call
+  directly (one level); or it is a parameter or variable annotated
+  ``pd.DataFrame`` or a union holding it, outside an
+  ``if isinstance(x, pa.<Type>)`` branch; or pandas created it
+  (``pd.DataFrame(...)``, ``pd.read_*``, ``pd.concat``, ``.to_pandas()``).
+  No evidence, no finding.  The pyarrow-receiver exemption below still
+  applies on top.  Known miss: a frame passed through unannotated,
+  multi-level helpers or stored on an object; it fails loudly with
+  ``AttributeError`` the first time a test runs it.
+
+  A receiver is pyarrow when it is a call to a pyarrow import alias
   (``pa.table(...)``, ``pq.ParquetFile(...)``) or to a producer method
   (``from_pandas``, ``read_table``, ``to_arrow_table``, ``to_arrow`` …); a
   method chain on such a value (``table.column("a")``,
@@ -27,8 +41,7 @@ a repo that never touches the SDK is not consuming SDK reader frames):
   where they sit: an ``import pyarrow as frame`` inside one function does not
   make a ``frame`` elsewhere pyarrow, and a local binding shadows a pyarrow
   import of the same name.  Collection elements count too: iterating
-  ``[table.column("x") for ...]`` yields pyarrow columns.  Anything unresolved
-  still fires.
+  ``[table.column("x") for ...]`` yields pyarrow columns.
 * ``frame.names`` — daft-only; pandas: ``frame.columns``.  Only
   simple-variable receivers are matched (``df.schema.names`` and
   ``df.index.names`` are legitimate attribute chains), with the same pyarrow
@@ -51,7 +64,7 @@ genuinely not an SDK reader frame.
 from __future__ import annotations
 
 import ast
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -541,16 +554,553 @@ def _is_pyarrow_bound(
     return None
 
 
+#: SDK reader classes whose ``.read()`` returns a pandas DataFrame.
+_SDK_READER_CLASSES = frozenset({"ParquetFileReader", "JsonFileReader"})
+
+#: SDK methods whose (awaited) result is a pandas DataFrame, on any receiver.
+_SDK_FRAME_ATTRS = frozenset({"get_results"})
+
+#: SDK methods that return an iterator of pandas DataFrames, on any receiver.
+#: ``run_query`` is not here: the SDK SQL clients yield ``list[dict]`` batches.
+_SDK_FRAME_ITER_ATTRS = frozenset({"read_batches", "get_batched_results"})
+
+_ITERATOR_GENERICS = frozenset(
+    {
+        "Iterator",
+        "AsyncIterator",
+        "Iterable",
+        "AsyncIterable",
+        "Generator",
+        "AsyncGenerator",
+    }
+)
+
+_PANDAS_ROOT = "pandas"
+
+_FRAME = "frame"
+_FRAME_ITER = "frame_iter"
+_READER = "reader"
+
+
+class FrameSummary:
+    """Repo-wide names of app functions that return pandas frames.
+
+    One level only: a function counts when its return annotation is a pandas
+    ``DataFrame`` (or an iterator of them), or, unannotated, when a ``return``
+    in its own body is a direct SDK frame call.  A name is kept only when every
+    definition of it in the repo agrees.
+    """
+
+    __slots__ = ("frame_fns", "frame_iter_fns")
+
+    def __init__(
+        self, frame_fns: frozenset[str], frame_iter_fns: frozenset[str]
+    ) -> None:
+        self.frame_fns = frame_fns
+        self.frame_iter_fns = frame_iter_fns
+
+
+_EMPTY_SUMMARY = FrameSummary(frozenset(), frozenset())
+
+
+class _Aliases:
+    """Module-wide local names bound to pandas, pyarrow and the SDK readers."""
+
+    __slots__ = (
+        "pandas_modules",
+        "pandas_names",
+        "pyarrow_modules",
+        "pyarrow_names",
+        "readers",
+    )
+
+    def __init__(self, tree: ast.Module) -> None:
+        self.pandas_modules: set[str] = set()
+        self.pandas_names: dict[str, str] = {}
+        self.pyarrow_modules: set[str] = set()
+        self.pyarrow_names: set[str] = set()
+        self.readers: set[str] = set(_SDK_READER_CLASSES)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    local = alias.asname or alias.name.split(".")[0]
+                    if alias.name == _PANDAS_ROOT or alias.name.startswith(
+                        _PANDAS_ROOT + "."
+                    ):
+                        self.pandas_modules.add(local)
+                    elif _is_pyarrow_module(alias.name):
+                        self.pyarrow_modules.add(local)
+            elif isinstance(node, ast.ImportFrom) and node.level == 0:
+                module = node.module or ""
+                for alias in node.names:
+                    local = alias.asname or alias.name
+                    if module == _PANDAS_ROOT or module.startswith(_PANDAS_ROOT + "."):
+                        self.pandas_names[local] = alias.name
+                    elif _is_pyarrow_module(module):
+                        self.pyarrow_names.add(local)
+                    elif alias.name in _SDK_READER_CLASSES:
+                        self.readers.add(local)
+
+    def _root(self, node: ast.expr) -> str | None:
+        while isinstance(node, ast.Attribute):
+            node = node.value
+        return node.id if isinstance(node, ast.Name) else None
+
+    def is_pandas_frame_type(self, node: ast.expr) -> bool:
+        if isinstance(node, ast.Attribute):
+            return node.attr == "DataFrame" and self._root(node) in self.pandas_modules
+        if isinstance(node, ast.Name):
+            return self.pandas_names.get(node.id) == "DataFrame"
+        return False
+
+    def is_pyarrow_type(self, node: ast.expr) -> bool:
+        if isinstance(node, ast.Attribute):
+            return self._root(node) in self.pyarrow_modules
+        return isinstance(node, ast.Name) and node.id in self.pyarrow_names
+
+    def is_pandas_factory(self, func: ast.expr) -> bool:
+        """``pd.DataFrame`` / ``pd.read_*`` / ``pd.concat`` (or their imports)."""
+        if isinstance(func, ast.Attribute):
+            name = func.attr
+            if self._root(func) not in self.pandas_modules:
+                return False
+        elif isinstance(func, ast.Name) and func.id in self.pandas_names:
+            name = self.pandas_names[func.id]
+        else:
+            return False
+        return name in ("DataFrame", "concat") or name.startswith("read_")
+
+
+def _string_annotation(node: ast.expr) -> ast.expr:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            return ast.parse(node.value, mode="eval").body
+        except SyntaxError:
+            return node
+    return node
+
+
+def _union_members(node: ast.expr) -> list[ast.expr] | None:
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return [node.left, node.right]
+    if isinstance(node, ast.Subscript) and _subscript_name(node) in (
+        "Optional",
+        "Union",
+    ):
+        inner = node.slice
+        return list(inner.elts) if isinstance(inner, ast.Tuple) else [inner]
+    return None
+
+
+def _annotation_has_frame(node: ast.expr, aliases: _Aliases) -> bool:
+    """A pandas ``DataFrame`` annotation, or a union / ``Annotated`` holding one."""
+    node = _string_annotation(node)
+    if aliases.is_pandas_frame_type(node):
+        return True
+    members = _union_members(node)
+    if members is not None:
+        return any(_annotation_has_frame(m, aliases) for m in members)
+    if isinstance(node, ast.Subscript) and _subscript_name(node) == "Annotated":
+        inner = node.slice
+        first = inner.elts[0] if isinstance(inner, ast.Tuple) and inner.elts else inner
+        return _annotation_has_frame(first, aliases)
+    return False
+
+
+def _annotation_iterates_frames(node: ast.expr, aliases: _Aliases) -> bool:
+    """``Iterator[pd.DataFrame]`` and friends, alone or in a union."""
+    node = _string_annotation(node)
+    members = _union_members(node)
+    if members is not None:
+        return any(_annotation_iterates_frames(m, aliases) for m in members)
+    if isinstance(node, ast.Subscript) and _subscript_name(node) in _ITERATOR_GENERICS:
+        inner = node.slice
+        first = inner.elts[0] if isinstance(inner, ast.Tuple) and inner.elts else inner
+        return _annotation_has_frame(first, aliases)
+    return False
+
+
+def _annotation_is_reader(node: ast.expr, aliases: _Aliases) -> bool:
+    node = _string_annotation(node)
+    members = _union_members(node)
+    if members is not None:
+        return any(_annotation_is_reader(m, aliases) for m in members)
+    if isinstance(node, ast.Name):
+        return node.id in aliases.readers
+    return isinstance(node, ast.Attribute) and node.attr in _SDK_READER_CLASSES
+
+
+def _annotation_kind(node: ast.expr, aliases: _Aliases) -> str | None:
+    if _annotation_has_frame(node, aliases):
+        return _FRAME
+    if _annotation_iterates_frames(node, aliases):
+        return _FRAME_ITER
+    if _annotation_is_reader(node, aliases):
+        return _READER
+    return None
+
+
+_Binding = tuple[float, Callable[[], "str | None"]]
+
+
+class _PandasEvidence:
+    """Whether a receiver has evidence of being a pandas frame (B007 ``to_pylist``).
+
+    Bindings are scoped like the pyarrow exemption: in the use's own scope the
+    last binding at or before the use decides; an enclosing scope's last
+    binding counts regardless of line.  A name annotated as a pandas frame in a
+    scope keeps that declared type for every use in the scope.
+    """
+
+    def __init__(
+        self,
+        tree: ast.Module,
+        scopes: _ScopeMap,
+        aliases: _Aliases,
+        summary: FrameSummary,
+    ) -> None:
+        self._scopes = scopes
+        self._aliases = aliases
+        self._summary = summary
+        self._bindings: dict[ast.AST, dict[str, list[_Binding]]] = {}
+        self._declared: dict[ast.AST, set[str]] = {}
+        self._memo: dict[int, str | None] = {}
+        self._collect(tree)
+
+    def _bind(
+        self, scope: ast.AST, name: str, pos: float, kind: Callable[[], str | None]
+    ) -> None:
+        self._bindings.setdefault(scope, {}).setdefault(name, []).append((pos, kind))
+
+    def _bind_target(
+        self, at: ast.AST, target: ast.expr, pos: float, kind: Callable[[], str | None]
+    ) -> None:
+        scope = self._scopes.scope_of(at)
+        if isinstance(target, ast.Name):
+            self._bind(scope, target.id, pos, kind)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for element in target.elts:
+                self._bind_target(at, element, pos, lambda: None)
+        elif isinstance(target, ast.Starred):
+            self._bind_target(at, target.value, pos, lambda: None)
+
+    def _bind_assignment(
+        self, at: ast.AST, target: ast.expr, value: ast.expr, pos: float
+    ) -> None:
+        if (
+            isinstance(target, (ast.Tuple, ast.List))
+            and isinstance(value, (ast.Tuple, ast.List))
+            and len(target.elts) == len(value.elts)
+        ):
+            for element, element_value in zip(target.elts, value.elts):
+                self._bind_assignment(at, element, element_value, pos)
+            return
+        self._bind_target(at, target, pos, self._value_kind(value, at))
+
+    def _collect(self, tree: ast.Module) -> None:
+        aliases = self._aliases
+        for node in ast.walk(tree):
+            if isinstance(node, _FUNCTION_SCOPES):
+                posonly = getattr(node.args, "posonlyargs", [])
+                for arg in (
+                    *posonly,
+                    *node.args.args,
+                    *node.args.kwonlyargs,
+                    *([node.args.vararg] if node.args.vararg else []),
+                    *([node.args.kwarg] if node.args.kwarg else []),
+                ):
+                    kind = (
+                        _annotation_kind(arg.annotation, aliases)
+                        if arg.annotation is not None
+                        else None
+                    )
+                    if kind == _FRAME:
+                        self._declared.setdefault(node, set()).add(arg.arg)
+                    self._bind(node, arg.arg, node.lineno - 0.5, lambda k=kind: k)
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for name, _ in _import_bindings(node):
+                    self._bind(
+                        self._scopes.scope_of(node),
+                        name,
+                        node.lineno + 0.5,
+                        lambda: None,
+                    )
+            elif isinstance(node, ast.Assign):
+                pos = (node.end_lineno or node.lineno) + 0.5
+                for target in node.targets:
+                    self._bind_assignment(node, target, node.value, pos)
+            elif isinstance(node, ast.AnnAssign):
+                pos = (node.end_lineno or node.lineno) + 0.5
+                kind = _annotation_kind(node.annotation, aliases)
+                if kind == _FRAME and isinstance(node.target, ast.Name):
+                    self._declared.setdefault(self._scopes.scope_of(node), set()).add(
+                        node.target.id
+                    )
+                if kind is not None:
+                    self._bind_target(node, node.target, pos, lambda k=kind: k)
+                elif node.value is not None:
+                    self._bind_target(
+                        node, node.target, pos, self._value_kind(node.value, node)
+                    )
+            elif isinstance(node, ast.AugAssign):
+                self._bind_target(
+                    node,
+                    node.target,
+                    (node.end_lineno or node.lineno) + 0.5,
+                    self._value_kind(node.value, node),
+                )
+            elif isinstance(node, ast.NamedExpr):
+                self._bind_target(
+                    node, node.target, node.lineno, self._value_kind(node.value, node)
+                )
+            elif isinstance(node, (ast.With, ast.AsyncWith)):
+                for item in node.items:
+                    if item.optional_vars is not None:
+                        self._bind_target(
+                            node,
+                            item.optional_vars,
+                            node.lineno + 0.5,
+                            self._value_kind(item.context_expr, node),
+                        )
+            elif isinstance(node, (ast.For, ast.AsyncFor)):
+                self._bind_target(
+                    node,
+                    node.target,
+                    node.lineno + 0.5,
+                    self._element_kind(node.iter, node),
+                )
+            elif isinstance(
+                node, (ast.ListComp, ast.SetComp, ast.DictComp, ast.GeneratorExp)
+            ):
+                for gen in node.generators:
+                    self._bind_target(
+                        node,
+                        gen.target,
+                        node.lineno - 0.5,
+                        self._element_kind(gen.iter, node),
+                    )
+
+    def _value_kind(self, value: ast.expr, at: ast.AST) -> Callable[[], str | None]:
+        def kind() -> str | None:
+            if self.is_frame(value, at):
+                return _FRAME
+            if self.is_frame_iter(value, at):
+                return _FRAME_ITER
+            if self.is_reader(value, at):
+                return _READER
+            return None
+
+        return kind
+
+    def _element_kind(
+        self, iterable: ast.expr, at: ast.AST
+    ) -> Callable[[], str | None]:
+        return lambda: _FRAME if self.is_frame_iter(iterable, at) else None
+
+    def _resolve(self, binding: _Binding) -> str | None:
+        key = id(binding)
+        if key in self._memo:
+            return self._memo[key]
+        self._memo[key] = None
+        result = binding[1]()
+        self._memo[key] = result
+        return result
+
+    def name_kind(self, name: str, at: ast.AST) -> str | None:
+        use = getattr(at, "lineno", 0)
+        own = self._scopes.scope_of(at)
+        scope: ast.AST | None = own
+        while scope is not None:
+            if name in self._declared.get(scope, ()):
+                return _FRAME
+            bindings = self._bindings.get(scope, {}).get(name)
+            if bindings:
+                if scope is own:
+                    prior = [b for b in bindings if b[0] <= use]
+                    if prior:
+                        return self._resolve(max(prior, key=lambda b: b[0]))
+                else:
+                    return self._resolve(max(bindings, key=lambda b: b[0]))
+            scope = self._scopes.parent_of(scope)
+        return None
+
+    def _called_name(self, func: ast.expr) -> str | None:
+        if isinstance(func, ast.Attribute):
+            return func.attr
+        return func.id if isinstance(func, ast.Name) else None
+
+    def is_sdk_frame_call(self, expr: ast.expr, at: ast.AST) -> bool:
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        if not isinstance(expr, ast.Call) or not isinstance(expr.func, ast.Attribute):
+            return False
+        attr = expr.func.attr
+        if attr in _SDK_FRAME_ATTRS:
+            return True
+        return attr == "read" and self.is_reader(expr.func.value, at)
+
+    def is_sdk_frame_iter_call(self, expr: ast.expr) -> bool:
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        return (
+            isinstance(expr, ast.Call)
+            and isinstance(expr.func, ast.Attribute)
+            and expr.func.attr in _SDK_FRAME_ITER_ATTRS
+        )
+
+    def is_frame(self, expr: ast.expr, at: ast.AST) -> bool:
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        if isinstance(expr, ast.Name):
+            return self.name_kind(expr.id, at) == _FRAME
+        if not isinstance(expr, ast.Call):
+            return False
+        if self.is_sdk_frame_call(expr, at):
+            return True
+        func = expr.func
+        if isinstance(func, ast.Attribute) and func.attr == "to_pandas":
+            return True
+        if self._aliases.is_pandas_factory(func):
+            return True
+        return self._called_name(func) in self._summary.frame_fns
+
+    def is_frame_iter(self, expr: ast.expr, at: ast.AST) -> bool:
+        if isinstance(expr, ast.Await):
+            expr = expr.value
+        if isinstance(expr, ast.Name):
+            return self.name_kind(expr.id, at) == _FRAME_ITER
+        if not isinstance(expr, ast.Call):
+            return False
+        if self.is_sdk_frame_iter_call(expr):
+            return True
+        return self._called_name(expr.func) in self._summary.frame_iter_fns
+
+    def is_reader(self, expr: ast.expr, at: ast.AST) -> bool:
+        if isinstance(expr, ast.Name):
+            return self.name_kind(expr.id, at) == _READER
+        if not isinstance(expr, ast.Call):
+            return False
+        func = expr.func
+        if isinstance(func, ast.Name):
+            return func.id in self._aliases.readers
+        return isinstance(func, ast.Attribute) and func.attr in _SDK_READER_CLASSES
+
+
+def _own_returns(func: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Return]:
+    found: list[ast.Return] = []
+    stack: list[ast.AST] = list(func.body)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, ast.Return):
+            found.append(node)
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)
+        ):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+    return found
+
+
+def summarize_frame_functions(trees: Iterable[ast.Module]) -> FrameSummary:
+    """Collect the repo's functions that return pandas frames (one level)."""
+    verdicts: dict[str, set[str | None]] = {}
+    for tree in trees:
+        aliases = _Aliases(tree)
+        evidence = _PandasEvidence(tree, _ScopeMap(tree), aliases, _EMPTY_SUMMARY)
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            verdict: str | None = None
+            if node.returns is not None:
+                if _annotation_has_frame(node.returns, aliases):
+                    verdict = _FRAME
+                elif _annotation_iterates_frames(node.returns, aliases):
+                    verdict = _FRAME_ITER
+            else:
+                for ret in _own_returns(node):
+                    if ret.value is None:
+                        continue
+                    if evidence.is_sdk_frame_call(ret.value, ret):
+                        verdict = _FRAME
+                    elif evidence.is_sdk_frame_iter_call(ret.value):
+                        verdict = _FRAME_ITER
+            verdicts.setdefault(node.name, set()).add(verdict)
+    return FrameSummary(
+        frozenset(n for n, v in verdicts.items() if v == {_FRAME}),
+        frozenset(n for n, v in verdicts.items() if v == {_FRAME_ITER}),
+    )
+
+
+def _flatten_types(node: ast.expr) -> list[ast.expr]:
+    if isinstance(node, ast.Tuple):
+        return [m for e in node.elts for m in _flatten_types(e)]
+    members = _union_members(node)
+    if members is not None:
+        return [m for e in members for m in _flatten_types(e)]
+    return [node]
+
+
+def _in_pyarrow_isinstance_branch(
+    call: ast.AST,
+    receiver: ast.expr,
+    parents: dict[ast.AST, ast.AST],
+    aliases: _Aliases,
+) -> bool:
+    """Whether *call* sits in the body of ``if isinstance(receiver, pa.<Type>)``."""
+    if not isinstance(receiver, ast.Name):
+        return False
+    child: ast.AST = call
+    node = parents.get(call)
+    while node is not None:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            return False
+        if isinstance(node, ast.If) and child in node.body:
+            test = node.test
+            if (
+                isinstance(test, ast.Call)
+                and isinstance(test.func, ast.Name)
+                and test.func.id == "isinstance"
+                and len(test.args) == 2
+                and isinstance(test.args[0], ast.Name)
+                and test.args[0].id == receiver.id
+            ):
+                members = _flatten_types(test.args[1])
+                if members and all(aliases.is_pyarrow_type(m) for m in members):
+                    return True
+        child = node
+        node = parents.get(node)
+    return False
+
+
 def scan_daft_runtime(
     tree: ast.Module,
     file: str,
     directives: dict[int, _IgnoreDirective],
+    frame_summary: FrameSummary | None = None,
 ) -> list[Finding]:
-    """Return B007 findings for *tree*."""
+    """Return B007 findings for *tree*.
+
+    *frame_summary* names the repo's pandas-frame-returning functions; when it
+    is ``None`` only *tree* itself is summarised.
+    """
     if not _imports_sdk(tree):
         return []
 
     scopes = _ScopeMap(tree)
+    aliases = _Aliases(tree)
+    evidence = _PandasEvidence(
+        tree,
+        scopes,
+        aliases,
+        frame_summary
+        if frame_summary is not None
+        else summarize_frame_functions([tree]),
+    )
+    parents = {
+        child: parent
+        for parent in ast.walk(tree)
+        for child in ast.iter_child_nodes(parent)
+    }
     pyarrow_by_scope = _pyarrow_bindings_by_scope(tree, scopes)
     binding_count = sum(
         len(b) for names in pyarrow_by_scope.values() for b in names.values()
@@ -590,10 +1140,11 @@ def scan_daft_runtime(
                 continue
             receiver = node.func.value
             if attr == "to_pylist":
-                # pyarrow.Table.to_pylist() is a real API: exempt receivers
-                # demonstrably bound to / produced by a pyarrow call — but only
-                # within the scope that binding was made in.
                 if _derives_from_pyarrow(receiver, node, ctx):
+                    continue
+                if not evidence.is_frame(receiver, node):
+                    continue
+                if _in_pyarrow_isinstance_branch(node, receiver, parents, aliases):
                     continue
             _flag(node, f".{attr}()", _DAFT_ONLY_METHODS[attr])
         elif isinstance(node, ast.Attribute) and node.attr == "names":

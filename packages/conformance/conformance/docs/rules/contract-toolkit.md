@@ -1014,10 +1014,17 @@ contract. The commonest case needs nothing from the app at all:
 `ExtractionOutput.transformed_files` is the SDK's own field, so every subclass of it
 inherits the exemption (FND-1863).
 
+**No consumer -- move it off the entry-point contract.** If no consumer (another app, or
+a DAG/manifest node) reads the file, it is not a public hand-off: it sits on the
+entry-point contract by accident. Move it to an internal `@task` contract (exempt from
+this rule), or stop returning it, and mark the removed field `sunset` in the contract
+ledger.
+
 **Suppress** with `# conformance: ignore[K016] <reason>` on the field declaration, or on
-the contract class definition for a field inherited from a base. Suppressing states that
-this hand-off is deliberately unchecked -- which is a defensible call for an artifact no
-other app reads, and the wrong call for one that crosses an app boundary.
+the contract class definition for a field inherited from a base, only when a consumer
+does read the file in a format `artifactSchemas` cannot describe; the reason names the
+consumer and the format. Suppressing states that this hand-off is deliberately
+unchecked, which is the wrong call for any file `artifactSchemas` can describe.
 
 ---
 

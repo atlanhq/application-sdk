@@ -707,7 +707,7 @@ conformance: ignore[P014] <reason>` at the method definition.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `contract-modeling` · **Autofixable:** — · **Since:** 0.6.0
 
-> Input/Output contract field uses a container of primitives/Any — replace with a typed nested model
+> Input/Output contract field uses a dict of primitives or a container of Any — replace with a typed nested model
 
 **Rationale:** Bounded containers (Annotated[dict[str, str], MaxItems(50)]) pass payload-safety
 validation (P001) but are still stringly-typed: keys and values carry no schema, typos
@@ -727,18 +727,23 @@ sanctioned; this is a modeling nudge toward a typed nested model.
   schema.
 - **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
-A field on an `Input`/`Output` contract whose annotation is a container of primitives or
-`Any` — `dict[str, str]`, `list[str]`, `set[int]`, or the bounded equivalents
-`Annotated[dict[str, str], MaxItems(N)]` — is considered an unmodeled boundary.  Even
-though the bounded form satisfies the payload-safety gate (P001), the container has no
-schema: keys and values are opaque strings, typos are runtime-only failures, and the
-field is invisible to contract diffing and the SDK's `is_backwards_compatible` checker.
+A field on an `Input`/`Output` contract whose annotation is a dict of primitives or a
+container of `Any` — `dict[str, str]`, `list[Any]`, a bare `list`/`set`/`dict`, or the
+bounded equivalents `Annotated[dict[str, str], MaxItems(N)]` — is considered an
+unmodeled boundary.  Even though the bounded form satisfies the payload-safety gate
+(P001), the container has no schema: keys and values are opaque strings, typos are
+runtime-only failures, and the field is invisible to contract diffing and the SDK's
+`is_backwards_compatible` checker.
 
 The SDK contract guidance (`make-contract` skill, §6) prefers typed properties / a
 nested `pydantic.BaseModel` subclass over arbitrary string keys.
 
 **Exempt:** `list[FooModel]`, `dict[str, FooModel]` — containers of a typed class are
-the canonical bounded pattern and are fine.
+the canonical bounded pattern and are fine. Lists, sets and tuples of a scalar primitive
+(`str`, `int`, `float`, `bool`, `bytes`), or of such collections — `list[str]`,
+`set[int]`, `Annotated[list[str], MaxItems(N)]`, `list[list[str]]` — are exempt too: a
+collection of plain values has no keys to mistype, and wrapping each value in a model
+changes the wire shape without adding safety.
 
 This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
@@ -1418,13 +1423,16 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   per-function ignore[P028] naming the creator whose grammar it mirrors.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
-  end state in two cases, and the reason must say which. Either the caller needs the
+  end state in three cases, and the reason must say which. Either the caller needs the
   qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
   grammar — the reason then names that creator and the module it lives in, so a drift in
   pyatlan can be traced here. Or no pyatlan creator owns the grammar at all (a Process /
   ColumnProcess identity, a content-hashed ARS key), in which case the reason says so
-  and the site is centralised as the single source of truth rather than repeated. A
-  directive on a site that could simply call the creator is unremediated.
+  and the site is centralised as the single source of truth rather than repeated. Or the
+  f-string is not an identity at all (an object-store key or prefix starting with the
+  qn, a trailing-`/` match prefix, a log/exception message or display text), and the
+  reason names what the string is. A directive on a site that could simply call the
+  creator is unremediated.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1441,6 +1449,15 @@ so it is not flagged.
 Fix: construct assets through the pyatlan asset `.creator()` factories, which compute
 qualifiedName from typed parent references.  WARN tier — suppress with `# conformance:
 ignore[P028] <reason>` where a raw qualifiedName string is genuinely required.
+
+Not an identity — suppress with a reason: an f-string that embeds a qualifiedName but
+does not build an asset identity is a false positive of this name-and-`/` heuristic.
+This covers an object-store key or prefix that *starts* with the qn (e.g.
+`f"{connection_qn}/lineage_current_state"`), a trailing-`/` match `prefix` (`f"{qn}/"`
+used with `startswith`), and a log or exception message or display text.  Suppress it
+with `# conformance: ignore[P028] <reason>`, where the reason names what the string is
+(for example `object-store key, not a qualifiedName`). Do not rewrite it through a
+creator.
 
 ---
 
@@ -1812,7 +1829,13 @@ direct-GUID route. * `CredentialRef.from_workflow_args(workflow_args)` — the s
 reading `agent_json` off the args payload. * `route_credentials(input)`
 (`application_sdk.credentials`,   SDK >= 3.40.0) — routes through
 `CredentialRef.resolve` and also   owns the pre-built-ref and inline channels; on an SDK
-that has it,   P053 prescribes it over a hand-rolled `CredentialRef.resolve`.
+that has it,   P053 prescribes it over a hand-rolled `CredentialRef.resolve`. *
+`self.resolve_credential_ref(input)` in a class deriving from the   SDK `SqlApp`
+template — the template's routing seam, shared with   the injected preflight gate.
+
+Only this standard seam is accepted.  Other SDK resolvers
+(`CredentialRef.resolve_or_none` and the like) are not: P053 moves those apps onto
+`route_credentials`, which clears this rule too.
 
 An app that resolves strictly by `credential_guid` (a custom local vault read that only
 ever builds `CredentialRef(name=guid, credential_guid=guid)`) ignores `agent_json`, so
@@ -1822,15 +1845,15 @@ failure invisible to status-only pipelines.
 Apps that lean on the SDK's transparent resolution (they build no `CredentialRef` and
 call no `resolve_credential_raw`) are not gated in and never flagged.
 
-This is a WARN (not BLOCK): the static heuristic recognises the two sanctioned resolver
+This is a WARN (not BLOCK): the static heuristic recognises the sanctioned resolver
 entry points and a direct `agent_spec`-carrying ref, but an app could resolve
 `agent_json` through a bespoke helper the heuristic does not know about.  Review before
 suppressing.
 
-**Remediation:** route credential resolution through `CredentialRef.resolve(input)` or
-`CredentialRef.from_workflow_args(workflow_args)` (both consume `agent_json` and pick
-the correct route), keeping the direct `credential_guid` path only as a fallback after
-the agent-aware call.
+**Remediation:** route credential resolution through the SDK seam,
+`route_credentials(input)` from `application_sdk.credentials` (SDK >= 3.40.0), or
+`self.resolve_credential_ref(input)` in a `SqlApp` subclass.  Both consume `agent_json`
+and pick the correct route; it is the same end state P053 prescribes.
 
 ---
 
@@ -2045,15 +2068,12 @@ fixed version the finding is a guaranteed runtime parse failure, not a style pre
 **Version scope — fixed at the root from SDK 3.28.0.**  The transformer now quotes a
 `source_query` that resolved as a plain column reference, so a reserved keyword renders
 as valid SQL with no template change at all; the `source_columns`-driven route, which
-carries arbitrary SQL, is left unquoted.  This rule therefore describes only apps pinned
-**below** that version and is marked `superseded_by: sdk>=3.28.0` rather than dropped —
-an app on an older SDK still fails at runtime, and dropping the rule would take the only
-static signal away from exactly that population.
-
-The marker names the next SDK *minor* rather than the exact patch: the patch number is
-assigned by release CI at merge time, and erring late only keeps the rule firing on some
-already-fixed apps, never the reverse.  Retire the rule (set `until`) once the fleet
-floor has crossed it.
+carries arbitrary SQL, is left unquoted.  This rule therefore fires only when the app's
+`uv.lock` resolves `atlan-application-sdk` **below** 3.28.0 — its `superseded_by:
+sdk>=3.28.0` applied per app.  An app on an older SDK still fails at runtime, and this
+is the only static signal for it.  When the locked version cannot be resolved (no
+`uv.lock`, the SDK absent from it, or an unparseable version) the rule still fires: the
+template shape is proven and nothing proves the fix.
 
 **Do not hand-remediate templates that the version bump fixes.** Embedding quotes in the
 value was the interim advice and it is worse than it looks on an unfixed SDK: below
