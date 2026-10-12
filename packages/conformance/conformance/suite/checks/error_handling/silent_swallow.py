@@ -853,6 +853,13 @@ class SilentSwallowMixin:
                     ):
                         inspected = True
                         break
+                # A comprehension checks per-item values under its bound name;
+                # connect that name back to the gather result before counting it.
+                if isinstance(
+                    node, ast.comprehension
+                ) and _is_exception_filter_comprehension(node, names):
+                    inspected = True
+                    break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -992,6 +999,65 @@ def _inspection_aliases(
                 names.add(dest)
                 changed = True
     return names
+
+
+def _is_exception_type(node: ast.AST) -> bool:
+    """Whether an isinstance type expression includes Exception or BaseException."""
+    if isinstance(node, ast.Name):
+        return node.id in {"Exception", "BaseException"}
+    if isinstance(node, ast.Attribute):
+        return (
+            isinstance(node.value, ast.Name)
+            and node.value.id == "builtins"
+            and node.attr in {"Exception", "BaseException"}
+        )
+    if isinstance(node, ast.Tuple):
+        return any(_is_exception_type(element) for element in node.elts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _is_exception_type(node.left) or _is_exception_type(node.right)
+    return False
+
+
+def _condition_checks_exception(node: ast.AST, item_name: str) -> bool:
+    """Check a comprehension filter for an exception test of its bound item."""
+    if isinstance(node, ast.Call):
+        return (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "isinstance"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == item_name
+            and _is_exception_type(node.args[1])
+        )
+    if isinstance(node, ast.BoolOp):
+        return any(
+            _condition_checks_exception(value, item_name) for value in node.values
+        )
+    if isinstance(node, ast.UnaryOp):
+        return _condition_checks_exception(node.operand, item_name)
+    if isinstance(node, ast.Compare):
+        return any(
+            _condition_checks_exception(value, item_name)
+            for value in (node.left, *node.comparators)
+        )
+    if isinstance(node, ast.IfExp):
+        return _condition_checks_exception(node.test, item_name)
+    return False
+
+
+def _is_exception_filter_comprehension(
+    node: ast.comprehension, result_names: set[str]
+) -> bool:
+    """Whether this comprehension clause checks each gather result as an exception."""
+    return (
+        isinstance(node.iter, ast.Name)
+        and node.iter.id in result_names
+        and isinstance(node.target, ast.Name)
+        and any(
+            _condition_checks_exception(condition, node.target.id)
+            for condition in node.ifs
+        )
+    )
 
 
 def _cancelled_task_names(

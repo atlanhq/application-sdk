@@ -2528,6 +2528,62 @@ async def run():
     )
 
 
+def test_p010_no_finding_base_exception_list_comprehension() -> None:
+    """Classifying every gathered value in a comprehension handles failures too."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, BaseException)]
+    if errors:
+        for error in errors:
+            logger.error("job failed: %s", error)
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_comprehension_without_exception_classification_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, int)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_unrelated_iterable_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in other_values if isinstance(item, BaseException)]
+    return gathered
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_unrelated_value_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    unrelated = None
+    errors = [item for item in gathered if isinstance(unrelated, BaseException)]
+    return errors
+""",
+        "E010",
+    )
+
+
 def test_p010_no_finding_without_return_exceptions() -> None:
     _none(
         """\
