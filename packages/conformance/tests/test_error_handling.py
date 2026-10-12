@@ -4182,6 +4182,12 @@ def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
         # The other path falls off the end and hands back None.
         "    if isinstance(exc, DeniedError):\n"
         '        return AccessDeniedError(message="denied", cause=exc)\n',
+        # The parameter itself is rebound: its name no longer holds the failure.
+        "    exc = None\n" '    return AppError(message="probe failed", cause=exc)\n',
+        # A name copied from the rebound parameter carries nothing either.
+        "    exc = None\n"
+        "    detail = exc\n"
+        '    return AppError(message="probe failed", cause=detail)\n',
     ],
     ids=[
         "discards",
@@ -4190,6 +4196,8 @@ def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
         "walks-then-discards",
         "rebound-before-return",
         "falls-through",
+        "parameter-rebound",
+        "copied-after-rebind",
     ],
 )
 def test_typed_failure_still_flags_annotated_helper_that_drops_the_failure(

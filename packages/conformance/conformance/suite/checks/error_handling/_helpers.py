@@ -788,8 +788,11 @@ def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
         *function.args.kwonlyargs,
     ]
 
+    # *live* is seeded with the parameter and loses it on rebinding, so the
+    # parameter's name alone is not evidence: ``exc = None; return E(cause=exc)``
+    # carries nothing.
     def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
-        return _references_any(value, frozenset({exc_name, *live}))
+        return _references_any(value, frozenset(live))
 
     typed: set[str] = set()
     for parameter in parameters:
@@ -906,8 +909,11 @@ def _every_return_builds_from(
     if not _body_always_exits(function.body):
         return False
 
+    # Only *live* counts, never the parameter's name on its own: the tracking is
+    # seeded with the parameter and drops it the moment the body rebinds it, so a
+    # rebound ``exc`` no longer carries the failure, and nor does a copy of it.
     def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
-        return _references_any(value, frozenset({exc_name, *live}))
+        return _references_any(value, frozenset(live))
 
     def carries_input_or_none(value: ast.expr, exc_name: str, live: set[str]) -> bool:
         return _is_none_constant(value) or carries_input(value, exc_name, live)
@@ -935,7 +941,6 @@ def _every_return_builds_from(
             return False
         carried = frozenset(
             {
-                parameter,
                 *carried_at.get(id(stmt), frozenset()),
                 *(
                     maybe_none_at.get(id(stmt), frozenset())
