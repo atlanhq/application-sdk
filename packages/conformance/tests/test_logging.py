@@ -219,6 +219,143 @@ def test_l006_silent_for_debug_in_loop() -> None:
     assert "L006" not in _ids(src)
 
 
+def test_l006_silent_for_name_bound_to_small_literal_sequence() -> None:
+    src = """
+from loguru import logger
+
+def write_assets():
+    asset_pairs = [
+        ("payload_a", "kind_a"),
+        ("payload_b", "kind_b"),
+        ("payload_c", "kind_c"),
+        ("payload_d", "kind_d"),
+        ("payload_e", "kind_e"),
+        ("payload_f", "kind_f"),
+    ]
+    for payload, kind in asset_pairs:
+        logger.info("wrote %s", kind)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_silent_for_zip_of_lists_built_in_bounded_loop() -> None:
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self):
+        pairs = [("a", 1), ("b", 2), ("c", 3)]
+        names = []
+        files = []
+        for name, file in pairs:
+            names.append(name)
+            files.append(file)
+        return Batch(names=names, files=files)
+
+    def transform(self):
+        result = self.produce()
+        logger.info("available names: %s", result.names)
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_lists_built_from_unknown_input() -> None:
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self, records):
+        names = []
+        files = []
+        for record in records:
+            names.append(record.name)
+            files.append(record.file)
+        return Batch(names=names, files=files)
+
+    def transform(self, records):
+        result = self.produce(records)
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_when_returned_list_is_mutated_before_zip() -> None:
+    src = """
+from loguru import logger
+
+class Runner:
+    def produce(self):
+        pairs = [("a", 1), ("b", 2), ("c", 3)]
+        names = []
+        files = []
+        for name, file in pairs:
+            names.append(name)
+            files.append(file)
+        return Batch(names=names, files=files)
+
+    def transform(self, extra_names):
+        result = self.produce()
+        result.names.extend(extra_names)
+        for name, file in zip(result.names, result.files, strict=True):
+            logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_two_per_item_logs_over_unknown_records() -> None:
+    src = """
+from loguru import logger
+
+def process_records(records):
+    for record in records:
+        if record.get("kind") == "statement":
+            logger.info("missing value for item %s", record)
+        else:
+            logger.info("skipping item %s", record)
+"""
+    assert _ids_unsorted(src).count("L006") == 2
+
+
+def test_l006_fires_for_zip_with_only_unknown_inputs() -> None:
+    src = """
+from loguru import logger
+
+def transform(names, files):
+    for name, file in zip(names, files, strict=True):
+        logger.info("transformed %s", name)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_name_bound_to_more_than_ten_items() -> None:
+    items = ", ".join(str(index) for index in range(11))
+    src = f"""
+from loguru import logger
+
+def process_items():
+    items = [{items}]
+    for item in items:
+        logger.info("item %s", item)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_mutated_local_literal_collection() -> None:
+    src = """
+from loguru import logger
+
+def process_items(extra_items):
+    items = ["first", "second"]
+    items.extend(extra_items)
+    for item in items:
+        logger.info("item %s", item)
+"""
+    assert "L006" in _ids(src)
+
+
 # ---------------------------------------------------------------------------
 # L007 LoggerCriticalUsage
 # ---------------------------------------------------------------------------
