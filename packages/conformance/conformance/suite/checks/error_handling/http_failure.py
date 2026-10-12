@@ -11,8 +11,9 @@ HTTP-response marker (``is_success`` / ``ok`` / ``status_code``) AND failure-sha
 (a negation or failure comparison) — so it fires on ``not resp.is_success`` and
 ``resp.status_code != 200`` but not on ordinary ``if x is None: return None``
 guards, nor on a success-shaped marker check combined with an unrelated failure
-(``resp.is_success and parsed is None`` — HTTP 200 with an empty body).  Raise a
-typed error instead of returning an empty sentinel.
+(``resp.is_success and parsed is None`` — HTTP 200 with an empty body). A bounded
+status-code range wholly within 200–299 is also a success check, not a failure
+comparison. Raise a typed error instead of returning an empty sentinel.
 
 Both polarities are covered: the failure-in-the-test → empty body
 (``if not resp.is_success: return []``) and its mirror, success-in-the-test →
@@ -33,6 +34,73 @@ def _references_http_marker(test: ast.expr) -> bool:
     return any(
         isinstance(n, ast.Attribute) and n.attr in _HTTP_MARKERS for n in ast.walk(test)
     )
+
+
+def _int_constant(node: ast.expr) -> int | None:
+    if (
+        isinstance(node, ast.Constant)
+        and isinstance(node.value, int)
+        and not isinstance(node.value, bool)
+    ):
+        return node.value
+    return None
+
+
+def _status_code_bound(
+    left: ast.expr, op: ast.cmpop, right: ast.expr
+) -> tuple[str, int, bool] | None:
+    """Normalize one comparison around ``status_code`` to a numeric bound.
+
+    The result is ``(lower/upper, value, inclusive)``. For example,
+    ``200 <= response.status_code`` becomes ``("lower", 200, True)``.
+    """
+    if isinstance(left, ast.Attribute) and left.attr == "status_code":
+        value = _int_constant(right)
+        if value is None:
+            return None
+        if isinstance(op, ast.Lt):
+            return "upper", value, False
+        if isinstance(op, ast.LtE):
+            return "upper", value, True
+        if isinstance(op, ast.Gt):
+            return "lower", value, False
+        if isinstance(op, ast.GtE):
+            return "lower", value, True
+    if isinstance(right, ast.Attribute) and right.attr == "status_code":
+        value = _int_constant(left)
+        if value is None:
+            return None
+        if isinstance(op, ast.Lt):
+            return "lower", value, False
+        if isinstance(op, ast.LtE):
+            return "lower", value, True
+        if isinstance(op, ast.Gt):
+            return "upper", value, False
+        if isinstance(op, ast.GtE):
+            return "upper", value, True
+    return None
+
+
+def _is_bounded_2xx_status_range(node: ast.expr) -> bool:
+    """Whether a chained comparison bounds ``status_code`` entirely to 2xx."""
+    if not isinstance(node, ast.Compare) or len(node.ops) != 2:
+        return False
+    operands = [node.left, *node.comparators]
+    bounds: list[tuple[str, int, bool]] = []
+    for left, op, right in zip(operands, node.ops, operands[1:]):
+        bound = _status_code_bound(left, op, right)
+        if bound is None:
+            return False
+        bounds.append(bound)
+
+    lower = [bound for bound in bounds if bound[0] == "lower"]
+    upper = [bound for bound in bounds if bound[0] == "upper"]
+    if len(lower) != 1 or len(upper) != 1:
+        return False
+
+    lower_value = lower[0][1] if lower[0][2] else lower[0][1] + 1
+    upper_value = upper[0][1] if upper[0][2] else upper[0][1] - 1
+    return lower_value >= 200 and upper_value <= 299 and lower_value <= upper_value
 
 
 def _compare_is_failure(node: ast.Compare) -> bool:
@@ -58,8 +126,11 @@ def _is_http_failure_predicate(node: ast.expr) -> bool:
     HTTP marker — so ``not resp.is_success`` and ``resp.status_code != 200``
     qualify, but a success-shaped marker check ANDed/ORed with an unrelated
     failure (``resp.is_success and parsed is None`` — HTTP 200 with an empty body)
-    does NOT.  For a BoolOp, at least one value must qualify on its own.
+    does NOT.  A bounded 2xx status-code range is a success check, not failure.
+    For a BoolOp, at least one value must qualify on its own.
     """
+    if _is_bounded_2xx_status_range(node):
+        return False
     if isinstance(node, ast.BoolOp):
         return any(_is_http_failure_predicate(v) for v in node.values)
     # ``not <expr-touching-an-http-marker>`` — negation of a truthy marker.
@@ -74,14 +145,16 @@ def _is_http_failure_predicate(node: ast.expr) -> bool:
 def _is_http_success_predicate(node: ast.expr) -> bool:
     """True if *node* is a pure HTTP *success* check (so its ``else`` is failure).
 
-    Only the unambiguous single-atom forms qualify — a bare truthy marker
-    (``if resp.is_success`` / ``if resp.ok``) or an equality/identity against a
-    non-None constant on the marker (``status_code == 200`` / ``== 204``).  A
-    BoolOp (``resp.is_success and parsed``) is deliberately excluded: its ``else``
+    Only unambiguous forms qualify — a bare truthy marker (``if resp.is_success`` /
+    ``if resp.ok``), an equality/identity against a non-None constant on the marker
+    (``status_code == 200`` / ``== 204``), or a bounded range wholly inside 2xx.
+    A BoolOp (``resp.is_success and parsed``) is deliberately excluded: its ``else``
     also fires when the unrelated condition is falsy, so the branch is not purely
     a remote-failure path.
     """
     if isinstance(node, ast.Attribute) and node.attr in _HTTP_MARKERS:
+        return True
+    if _is_bounded_2xx_status_range(node):
         return True
     if isinstance(node, ast.Compare):
         for op, comparator in zip(node.ops, node.comparators):
