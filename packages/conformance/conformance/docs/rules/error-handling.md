@@ -178,7 +178,12 @@ fire.
 
 Exempt: handlers whose warning/error/critical log call formats the exception through a
 recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
-at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify. A
+direct call to an undecorated same-module helper also counts when it receives the caught
+binding as a parameter and every control-flow path through the helper passes that
+parameter through a recognized sanitizer among the warning/error/critical call
+arguments. The helper call must be on a straight-line handler path; a prior branch that
+can bypass it does not prove the failure was logged.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
 through such a helper (directly, or via a local assigned from one), or hands it as
