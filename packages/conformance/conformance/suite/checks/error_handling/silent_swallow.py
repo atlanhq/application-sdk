@@ -1057,28 +1057,81 @@ def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
         )
     if isinstance(node, ast.BoolOp):
         return any(
-            _condition_checks_exception(value, item_names) for value in node.values
+            _condition_checks_exception(value, item_names)
+            for value in _reachable_operands(node)
         )
     if isinstance(node, ast.IfExp):
         return _condition_checks_exception(node.test, item_names)
     return False
 
 
-def _bound_names(target: ast.expr) -> set[str]:
-    """Names a comprehension target binds, including tuple unpacking."""
-    if isinstance(target, ast.Name):
-        return {target.id}
-    if isinstance(target, (ast.Tuple, ast.List)):
-        return {name for element in target.elts for name in _bound_names(element)}
-    return set()
+def _reachable_operands(node: ast.BoolOp) -> list[ast.expr]:
+    """Operands of *node* up to a literal that short-circuits the rest.
+
+    ``False and isinstance(r, Exception)`` never evaluates the test, so it must
+    not count as one. Only literal constants are folded; any other operand may
+    take either value at runtime.
+    """
+    stop_on = isinstance(node.op, ast.Or)
+    operands: list[ast.expr] = []
+    for value in node.values:
+        operands.append(value)
+        if isinstance(value, ast.Constant) and bool(value.value) is stop_on:
+            break
+    return operands
 
 
-def _iterates_results(iterable: ast.expr, result_names: set[str]) -> bool:
-    """Whether *iterable* is the result list, directly or via enumerate/zip-style calls."""
+def _result_item_names(
+    iterable: ast.expr, target: ast.expr, result_names: set[str]
+) -> set[str]:
+    """Names in a comprehension *target* that bind one gathered result each.
+
+    ``for r in rs`` binds ``r``. Through ``enumerate`` and ``zip`` only the
+    target position fed by the result list counts, so the index in
+    ``for i, r in enumerate(rs)`` or the partner in ``zip(keys, rs)`` is never
+    mistaken for a result. Other calls may ignore their argument and are not
+    followed.
+    """
     if isinstance(iterable, ast.Name):
-        return iterable.id in result_names
-    return isinstance(iterable, ast.Call) and any(
-        isinstance(arg, ast.Name) and arg.id in result_names for arg in iterable.args
+        if iterable.id in result_names and isinstance(target, ast.Name):
+            return {target.id}
+        return set()
+    if not (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id in {"enumerate", "zip"}
+        and not iterable.keywords
+        and isinstance(target, (ast.Tuple, ast.List))
+        # `zip(*cols, rs)` / `for *a, r in ...` hide the width, so positions
+        # cannot be lined up.
+        and not any(isinstance(arg, ast.Starred) for arg in iterable.args)
+        and not any(isinstance(element, ast.Starred) for element in target.elts)
+    ):
+        return set()
+    if iterable.func.id == "enumerate":
+        # enumerate(rs) / enumerate(rs, start) yields (index, result)
+        positions = [1] if _is_result_name(iterable.args[:1], result_names) else []
+        width = 2
+    else:
+        positions = [
+            index
+            for index, arg in enumerate(iterable.args)
+            if _is_result_name([arg], result_names)
+        ]
+        width = len(iterable.args)
+    if len(target.elts) != width:
+        return set()
+    return {
+        element.id
+        for position in positions
+        if isinstance(element := target.elts[position], ast.Name)
+    }
+
+
+def _is_result_name(args: list[ast.expr], result_names: set[str]) -> bool:
+    """Whether *args* is exactly one plain reference to the gather results."""
+    return (
+        len(args) == 1 and isinstance(args[0], ast.Name) and args[0].id in result_names
     )
 
 
@@ -1093,8 +1146,7 @@ def _comprehension_checks_exceptions(
     """
     item_names: set[str] = set()
     for generator in node.generators:
-        if _iterates_results(generator.iter, result_names):
-            item_names |= _bound_names(generator.target)
+        item_names |= _result_item_names(generator.iter, generator.target, result_names)
     if not item_names:
         return False
     if isinstance(node, ast.DictComp):

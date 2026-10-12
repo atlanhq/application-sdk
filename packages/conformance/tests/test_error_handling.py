@@ -2651,6 +2651,74 @@ async def run():
     )
 
 
+def test_p010_comprehension_checking_enumerate_index_still_fires() -> None:
+    """Only the enumerate position holding the result is a gathered value."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for index, item in enumerate(gathered) if isinstance(index, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_zip_partner_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for key, item in zip(keys, gathered) if isinstance(key, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_arbitrary_call_still_fires() -> None:
+    """A call that merely receives the results may return something unrelated."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in to_unrelated_items(gathered) if isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_short_circuited_check_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if False and isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_no_finding_guarded_exception_check() -> None:
+    """A non-literal guard before the exception test leaves the test reachable."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if item is not None and isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
 def test_p010_comprehension_dropping_exceptions_still_fires() -> None:
     """Keeping only the successes is the silent swallow, not an inspection."""
     _single(
