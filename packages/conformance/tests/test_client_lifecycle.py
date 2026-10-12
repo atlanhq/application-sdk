@@ -527,7 +527,12 @@ def test_p057_silent_when_base_close_is_in_finally() -> None:
         "    try:\n        await client.load()\n    except Exception:\n"
         "        await client.close()\n        raise\n",
     ],
-    ids=["async-with-under-if", "close-under-if", "async-with-in-loop", "close-in-except"],
+    ids=[
+        "async-with-under-if",
+        "close-under-if",
+        "async-with-in-loop",
+        "close-in-except",
+    ],
 )
 def test_p056_fires_when_cleanup_only_runs_on_some_paths(body: str) -> None:
     fs = _p056("async def f(flag):\n    client = SourceClient()\n" + body)
