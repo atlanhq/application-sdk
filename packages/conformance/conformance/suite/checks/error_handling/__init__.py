@@ -58,6 +58,7 @@ from ._constants import (
     SERIES,
 )
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
+from ._sdk_errors import sdk_error_names
 
 __all__ = [
     "ACTIVITY_DECORATORS",
@@ -84,8 +85,14 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-def scan_text(text: str, file: str) -> list[Finding]:
-    """Scan Python source *text* and return all E-series findings."""
+def scan_text(
+    text: str, file: str, *, path: Path | None = None, root: Path | None = None
+) -> list[Finding]:
+    """Scan Python source *text* and return all E-series findings.
+
+    *path* and *root* let E004 follow the scanned repo's own imports when it
+    proves an error class is an SDK ``AppError`` (see :mod:`._sdk_errors`).
+    """
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -103,6 +110,7 @@ def scan_text(text: str, file: str) -> list[Finding]:
         atlan_ioerror_imported=atlan_ioerror,
         legacy_aliases=legacy_aliases,
         local_helpers=local_helpers,
+        sdk_errors=sdk_error_names(tree, path=path, root=root),
     )
     checker.visit(tree)
     return checker._findings
@@ -118,7 +126,7 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
         rel = path.relative_to(root)
     except ValueError:
         rel = path
-    return scan_text(text, str(rel))
+    return scan_text(text, str(rel), path=path, root=root)
 
 
 main = make_cli_main(

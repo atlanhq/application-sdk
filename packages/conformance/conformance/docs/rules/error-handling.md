@@ -181,8 +181,11 @@ recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failur
 at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
-through such a helper (directly, or via a local assigned from one).  Severing the chain
-is how a frame holding a resolved credential avoids emitting a raw traceback;
+through such a helper (directly, or via a local assigned from one), or hands it as
+`cause=exc` to an SDK error — a class imported from `application_sdk.errors`, or an app
+class whose base chain reaches one — which the SDK renders on the wire through
+`sanitize_cause_repr`. An app class merely taking a `cause` proves nothing.  Severing
+the chain is how a frame holding a resolved credential avoids emitting a raw traceback;
 severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
 the only way to clear E004 at such a site is a warning/error log, which is exactly what
 L009 forbids before a raise.
@@ -207,6 +210,15 @@ that the return hands back, or passes it only into class-like   constructors or 
 containers; a lowercase wrapper   (`discard(helper(exc))`) keeps it opaque; - the name
 still resolves to that helper: not rebound in any enclosing   function, not declared
 `nonlocal` or `global`, and not reassigned   at module level.
+
+A helper that branches — a classifier walking the cause chain — is proven from its
+signature instead: its return annotation names an error class (`-> AppError`, `->
+AppError | None`, `-> Optional[AppError]`) and the binding is passed to an
+exception-annotated parameter, it never falls off its end, and every `return` in it
+builds a class-like constructor from that parameter or a local still carrying it there
+(a local rebound to anything else stops carrying it).  When `None` is a possible result,
+the call must be assigned to a name that the very next statement exits on when it is
+`None`.
 
 `except Exception:` with no `as` binding still fires.
 

@@ -366,10 +366,12 @@ _CONTRACT_RULES = (
     RuleDefinition(
         id="F008",
         canonical_reference=(
-            "atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and "
-            "returns the failed row with `exc.to_failure_details()`; only the gate-transient "
-            "categories are re-raised, on purpose, so the gate fails open on a blip instead "
-            "of the handler crashing on an expected failure."
+            "atlan-mysql-app app/handler.py — the auth probe returns a NOT_READY verdict "
+            "carrying the typed error for a definitive source state, and raises only the "
+            "retryable SOURCE_UNAVAILABLE leaf `transient_failure` classifies for a server "
+            "blip (`raise transient from e`). Its tests/unit/test_preflight_conformance.py "
+            "`recoverable_transient` scenario asserts the raise, and a clean READY from a "
+            "later run against the recovered source."
         ),
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
@@ -378,9 +380,30 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Return expected typed preflight failures rather than letting them escape.",
-        full_description="Return expected typed preflight failures rather than letting them escape.",
-        rationale="The target origin-based gate applies hard mode to handler raises; a raised transient is no longer a fail-open request.",
+        short_description=(
+            "Return verdicts for source states; raise only retryable, non-deprecated transients."
+        ),
+        full_description=(
+            "An expected failure of the source — bad credentials, a missing grant, an "
+            "absent object — is a verdict: return it as a failed PreflightCheck carrying "
+            "the typed error. The one thing a handler may raise is a transient — the "
+            "source could not be asked this time — as a retryable leaf whose category is "
+            "SOURCE_UNAVAILABLE or TIMEOUT. The gate records that raise as an unverifiable "
+            "source (a NOT_READY output and a would_block row classified "
+            "source_unverifiable), never blocks a hard run on either category, and the "
+            "run proceeds; it does not ask the handler again. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED, "
+            "RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the gate "
+            "deprecated that idiom. A raise whose category or retryability the checker "
+            "cannot read from the error class (or a literal ``retryable=``) stays flagged."
+        ),
+        rationale=(
+            "The gate classifies by who raised: anything the handler raises is its "
+            "statement about the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf "
+            "is reported as an unverifiable source and never blocks; any other raised "
+            "failure loses the check "
+            "row a returned verdict carries, and a raised fail-open category is a "
+            "deprecated request the gate no longer honours as plumbing."
+        ),
         help_uri=f"{_HELP_BASE}#f008",
         remediation_reference=RemediationReference(
             kind=RemediationKind.SKILL,

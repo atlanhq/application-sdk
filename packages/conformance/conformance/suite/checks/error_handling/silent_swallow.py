@@ -105,7 +105,7 @@ class SilentSwallowMixin:
         # disqualify. A severed raise that carries the caught exception through a
         # redaction helper does not: it preserves the cause in the only form that
         # is safe to emit from a frame holding a resolved credential.
-        scope = redaction_scope(node)
+        scope = redaction_scope(node, sdk_errors=self._sdk_errors)
         if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
             node.body, scope=scope
         ):

@@ -9,6 +9,16 @@ from typing import NamedTuple
 from .._ast_common._exc_info import has_exc_info_traceback
 from .._ast_common._sanitizers import expr_sanitizes_name
 from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
+from ._sdk_errors import names_sdk_error
+
+
+def _dotted_name(node: ast.AST | None) -> str | None:
+    """``Leaf`` for a Name, ``alias.Leaf`` for a one-level Attribute, else None."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
+    return None
 
 
 def _get_name(node: ast.expr | ast.AST | None) -> str | None:
@@ -252,6 +262,7 @@ class RedactionScope(NamedTuple):
 
     exc_name: str
     redacted_at: dict[int, frozenset[str]]
+    sdk_errors: frozenset[str] = frozenset()
 
 
 def _references_any(expr: ast.expr, names: frozenset[str]) -> bool:
@@ -449,7 +460,9 @@ def _track_carried(
     return live
 
 
-def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
+def redaction_scope(
+    handler: ast.ExceptHandler, *, sdk_errors: frozenset[str] = frozenset()
+) -> RedactionScope | None:
     """Find where *handler*'s caught exception survives in redacted form.
 
     ``None`` when the handler does not bind the exception (``except Exception:``)
@@ -472,7 +485,7 @@ def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
         return None
     redacted_at: dict[int, frozenset[str]] = {}
     _track_carried(handler.body, handler.name, set(), redacted_at, _derives_from_cause)
-    return RedactionScope(handler.name, redacted_at)
+    return RedactionScope(handler.name, redacted_at, sdk_errors)
 
 
 def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
@@ -489,7 +502,31 @@ def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
         return False
     if expr_sanitizes_name(stmt.exc, scope.exc_name):
         return True
+    if _sdk_error_takes_cause(stmt.exc, scope.exc_name, scope.sdk_errors):
+        return True
     return _references_any(stmt.exc, scope.redacted_at.get(id(stmt), frozenset()))
+
+
+def _sdk_error_takes_cause(
+    expr: ast.expr, exc_name: str, sdk_errors: frozenset[str]
+) -> bool:
+    """True when *expr* is an SDK error given the caught exception as ``cause=``.
+
+    ``AppError(cause=exc)`` is the SDK's own redaction path: the wire envelope
+    renders the cause with ``sanitize_cause_repr``, so the failure survives in
+    redacted form even after ``from None`` drops the raw traceback. The class
+    must be proven an SDK error (:mod:`._sdk_errors`); an app class that merely
+    takes a ``cause`` may format it raw. Only the binding itself counts —
+    ``cause=str(exc)`` is text.
+    """
+    if not isinstance(expr, ast.Call) or not names_sdk_error(
+        sdk_errors, _dotted_name(expr.func)
+    ):
+        return False
+    return any(
+        kw.arg == "cause" and isinstance(kw.value, ast.Name) and kw.value.id == exc_name
+        for kw in expr.keywords
+    )
 
 
 def _raise_carries_cause(stmt: ast.Raise, scope: RedactionScope | None) -> bool:
@@ -620,6 +657,7 @@ class TypedFailureScope(NamedTuple):
     typed_binding: bool = False
     local_helpers: Mapping[str, ast.FunctionDef] | None = None
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    guarded_calls: frozenset[int] = frozenset()
 
 
 # Calls that turn the caught exception into text.  A string is the failure
@@ -750,8 +788,11 @@ def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
         *function.args.kwonlyargs,
     ]
 
+    # *live* is seeded with the parameter and loses it on rebinding, so the
+    # parameter's name alone is not evidence: ``exc = None; return E(cause=exc)``
+    # carries nothing.
     def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
-        return _references_any(value, frozenset({exc_name, *live}))
+        return _references_any(value, frozenset(live))
 
     typed: set[str] = set()
     for parameter in parameters:
@@ -768,6 +809,227 @@ def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
         ):
             typed.add(parameter.arg)
     return frozenset(typed)
+
+
+def _is_error_class_name(name: str | None) -> bool:
+    """A class-like leaf named as an error: ``AppError``, ``exc.NotFoundError``."""
+    leaf = name.rsplit(".", 1)[-1] if name else None
+    return (
+        _class_like(leaf) and leaf is not None and leaf.endswith(("Error", "Exception"))
+    )
+
+
+def _is_none_constant(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _annotated_error_return(function: ast.FunctionDef) -> bool | None:
+    """Whether *function*'s return annotation promises an error class.
+
+    ``None`` when it does not (no annotation, ``bool``, ``dict``, a result row,
+    a string annotation the checker does not parse). Otherwise whether ``None``
+    is a possible result too: ``False`` for ``-> AppError``, ``True`` for
+    ``-> AppError | None`` and ``-> Optional[AppError]``.
+    """
+    annotation = function.returns
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Subscript) and _get_name(annotation.value) in {
+        "Optional",
+        "typing.Optional",
+    }:
+        return True if _is_error_class_name(_get_name(annotation.slice)) else None
+    members: list[ast.expr] = []
+    pending = [annotation]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            pending.extend([node.left, node.right])
+        else:
+            members.append(node)
+    errors = [m for m in members if not _is_none_constant(m)]
+    if not errors or not all(_is_error_class_name(_get_name(m)) for m in errors):
+        return None
+    return len(errors) != len(members)
+
+
+def _annotated_error_parameters(function: ast.FunctionDef) -> frozenset[str]:
+    """Parameters annotated as an exception: what an error-returning helper classifies."""
+    return frozenset(
+        parameter.arg
+        for parameter in [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+        if parameter.annotation is not None
+        and _is_error_class_name(_get_name(parameter.annotation))
+    )
+
+
+def _helper_typed_parameters(
+    helper: ast.FunctionDef, call: ast.Call, guarded_calls: frozenset[int]
+) -> frozenset[str]:
+    """Parameters through which *helper* hands its argument back as typed data.
+
+    A straight-line helper is proven from its body (:func:`_typed_helper_parameters`).
+    One that branches or loops — a classifier walking the cause chain — is
+    proven from its signature instead: it returns an error class and takes the
+    failure as an exception-annotated parameter. When ``None`` is a possible
+    result, *call* must sit behind a guard that exits on ``None`` (see
+    :func:`_none_guarded_calls`); otherwise the handler may hand back nothing.
+    """
+    proven = _typed_helper_parameters(helper)
+    if proven:
+        return proven
+    optional = _annotated_error_return(helper)
+    if optional is None or (optional and id(call) not in guarded_calls):
+        return frozenset()
+    return frozenset(
+        parameter
+        for parameter in _annotated_error_parameters(helper)
+        if _every_return_builds_from(helper, parameter, allow_none=optional)
+    )
+
+
+def _every_return_builds_from(
+    function: ast.FunctionDef, parameter: str, *, allow_none: bool
+) -> bool:
+    """True when every path through *function* hands back a constructor built from *parameter*.
+
+    The annotation names the type that comes back; this proves the failure is
+    in it. The body must not fall off its end (:func:`_body_always_exits`), and
+    each ``return`` must be a class-like call whose arguments read *parameter* or
+    a local still carrying it at that return. Provenance is the flow-sensitive
+    :func:`_track_carried` the straight-line summary uses: a local rebound to
+    anything else stops carrying it, and a loop that walks the cause chain
+    (``current = current.__cause__``) keeps it. A ``None`` return is allowed
+    only when the annotation itself admits ``None``.
+    """
+    if not _body_always_exits(function.body):
+        return False
+
+    # Only *live* counts, never the parameter's name on its own: the tracking is
+    # seeded with the parameter and drops it the moment the body rebinds it, so a
+    # rebound ``exc`` no longer carries the failure, and nor does a copy of it.
+    def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _references_any(value, frozenset(live))
+
+    def carries_input_or_none(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _is_none_constant(value) or carries_input(value, exc_name, live)
+
+    carried_at: dict[int, frozenset[str]] = {}
+    _track_carried(function.body, parameter, {parameter}, carried_at, carries_input)
+    # A walk over the cause chain ends with ``current = None``: that holds
+    # nothing *else*, it only stops the walk. Such a name counts at a return
+    # only where an enclosing ``isinstance(name, ...)`` proves it is not None.
+    maybe_none_at: dict[int, frozenset[str]] = {}
+    _track_carried(
+        function.body, parameter, {parameter}, maybe_none_at, carries_input_or_none
+    )
+    narrowed_at = _isinstance_narrowed_returns(function.body)
+    typed = 0
+    for stmt in _iter_block(function.body):
+        if not isinstance(stmt, ast.Return):
+            continue
+        if stmt.value is None or _is_none_constant(stmt.value):
+            if not allow_none:
+                return False
+            continue
+        value = stmt.value
+        if not (isinstance(value, ast.Call) and _class_like(_get_name(value.func))):
+            return False
+        carried = frozenset(
+            {
+                *carried_at.get(id(stmt), frozenset()),
+                *(
+                    maybe_none_at.get(id(stmt), frozenset())
+                    & narrowed_at.get(id(stmt), frozenset())
+                ),
+            }
+        )
+        if not any(
+            _references_any(arg, carried)
+            for arg in [*value.args, *[kw.value for kw in value.keywords]]
+        ):
+            return False
+        typed += 1
+    return typed > 0
+
+
+def _rebound_names_in(stmt: ast.stmt) -> set[str]:
+    """Names *stmt* itself binds: assignment, augmented/annotated, ``for``, ``with``."""
+    targets: list[ast.expr] = []
+    if isinstance(stmt, ast.Assign):
+        targets = list(stmt.targets)
+    elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):
+        targets = [stmt.target]
+    elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+        targets = [stmt.target]
+    elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+        targets = [i.optional_vars for i in stmt.items if i.optional_vars]
+    names = {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+    return names | _walrus_names(stmt)
+
+
+def _isinstance_narrowed_returns(body: list[ast.stmt]) -> dict[int, frozenset[str]]:
+    """Map each ``return`` to the names an enclosing ``if isinstance(name, ...)`` narrows.
+
+    Only the ``if`` body counts (not ``else``), and only a bare ``isinstance``
+    test whose first argument is a plain name the body never rebinds: there the
+    name is an instance of the tested type, so it is not ``None``.
+    """
+    narrowed: dict[int, set[str]] = {}
+    for stmt in _iter_block(body):
+        if not isinstance(stmt, ast.If):
+            continue
+        test = stmt.test
+        if not (
+            isinstance(test, ast.Call)
+            and _get_name(test.func) == "isinstance"
+            and test.args
+            and isinstance(test.args[0], ast.Name)
+        ):
+            continue
+        name = test.args[0].id
+        if any(name in _rebound_names_in(inner) for inner in _iter_block(stmt.body)):
+            continue  # rebound inside the narrowed block: the test no longer holds
+        for inner in _iter_block(stmt.body):
+            if isinstance(inner, ast.Return):
+                narrowed.setdefault(id(inner), set()).add(name)
+    return {key: frozenset(names) for key, names in narrowed.items()}
+
+
+def _none_guarded_calls(body: list[ast.stmt]) -> frozenset[int]:
+    """Calls assigned to a name the very next statement exits on when it is ``None``::
+
+    failure = _classify(exc)
+    if failure is None:
+        raise TransientError(message="…", cause=exc) from None
+    """
+    guarded: set[int] = set()
+    for stmt, following in zip(body, body[1:], strict=False):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
+            continue
+        test = following.test if isinstance(following, ast.If) else None
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == target.id
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Is)
+            and _is_none_constant(test.comparators[0])
+            and isinstance(following, ast.If)
+            and _body_always_exits(following.body)
+        ):
+            guarded.add(id(value))
+    return frozenset(guarded)
 
 
 def _function_binds_name(
@@ -898,6 +1160,7 @@ def _expression_uses_typed_helper(
     *,
     local_helpers: Mapping[str, ast.FunctionDef] | None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> bool:
     """True when a proven same-module helper, called with the failure, produces *value*.
 
@@ -915,7 +1178,7 @@ def _expression_uses_typed_helper(
         helper = local_helpers.get(helper_name)
         if helper is None or _function_binds_name(enclosing_function, helper_name):
             continue
-        for parameter in _typed_helper_parameters(helper):
+        for parameter in _helper_typed_parameters(helper, node, guarded_calls):
             argument = _call_argument_for_parameter(node, helper, parameter)
             if isinstance(argument, ast.Name) and argument.id in carrying_names:
                 return True
@@ -930,6 +1193,7 @@ def _derives_typed_failure(
     typed_binding: bool = False,
     local_helpers: Mapping[str, ast.FunctionDef] | None = None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> bool:
     """True when *value* carries the caught exception out as typed data."""
     return (
@@ -941,6 +1205,7 @@ def _derives_typed_failure(
             live,
             local_helpers=local_helpers,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         )
     )
 
@@ -950,6 +1215,7 @@ def _typed_failure_deriver(
     *,
     local_helpers: Mapping[str, ast.FunctionDef] | None = None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> Callable[[ast.expr, str, set[str]], bool]:
     """:func:`_derives_typed_failure` bound to a handler's local context."""
 
@@ -961,6 +1227,7 @@ def _typed_failure_deriver(
             typed_binding=typed_binding,
             local_helpers=local_helpers,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         )
 
     return derives
@@ -1017,6 +1284,7 @@ def typed_failure_scope(
         return None
     typed_binding = _handler_binds_typed_error(handler)
     helper_context = local_helpers if not _handler_rebinds_exception(handler) else None
+    guarded_calls = _none_guarded_calls(handler.body)
     carried_at: dict[int, frozenset[str]] = {}
     live_at_end = _track_carried(
         handler.body,
@@ -1027,6 +1295,7 @@ def typed_failure_scope(
             typed_binding,
             local_helpers=helper_context,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         ),
     )
     return TypedFailureScope(
@@ -1036,6 +1305,7 @@ def typed_failure_scope(
         typed_binding,
         helper_context,
         enclosing_function,
+        guarded_calls,
     )
 
 
@@ -1050,6 +1320,7 @@ def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) ->
         typed_binding=scope.typed_binding,
         local_helpers=scope.local_helpers,
         enclosing_function=scope.enclosing_function,
+        guarded_calls=scope.guarded_calls,
     )
 
 
@@ -1302,6 +1573,7 @@ def _staged_row_is_returned(
             scope.typed_binding,
             local_helpers=scope.local_helpers,
             enclosing_function=scope.enclosing_function,
+            guarded_calls=scope.guarded_calls,
         ),
     )
     below = TypedFailureScope(
@@ -1311,6 +1583,7 @@ def _staged_row_is_returned(
         scope.typed_binding,
         scope.local_helpers,
         scope.enclosing_function,
+        scope.guarded_calls,
     )
     returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
     if not returns:
