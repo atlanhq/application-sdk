@@ -153,7 +153,7 @@ within the grammar.
 |---|---|
 | `AUTH_INVALID_CREDENTIALS` | category prefix; "invalid credentials" is the cross-connector subtype |
 | `PERMISSION_DENIED` | category prefix; no further subtype needed (this IS the common case) |
-| `DEPENDENCY_UNAVAILABLE_NETWORK` | category prefix; "network" subtype distinguishes from other unavailability modes |
+| `SOURCE_UNAVAILABLE_NETWORK` | category prefix; "network" subtype distinguishes an unreachable source from other unavailability modes |
 | `INVALID_INPUT_CONFIG` | category prefix; "config" distinguishes from data / query-shape input errors |
 | `INTERNAL_QUERY_PREP_FAILED` | category prefix; "query_prep_failed" is specific enough to be a runbook entry |
 
@@ -195,28 +195,46 @@ three-value enum:
 - **APP_OWNER** — the app team that wrote the failing code must act. Connector
   bugs, SDK bugs, unimplemented capabilities, data-integrity failures.
 
-**The deliberate override pattern:** when an SDK base class's default
-`audience` doesn't fit your leaf's actual locus, override it. Example from
-Athena:
+**An unreachable source is not an override case.** When the customer's own
+source (their database, SaaS API, BI server, git remote) can't be reached,
+subclass `SourceUnavailableError`. It is already `audience=USER`, so nothing
+is overridden:
 
 ```python
 @dataclass(kw_only=True)
-class AthenaSourceUnreachable(DependencyUnavailableError):
-    """Athena endpoint not reachable.
+class <App>SourceUnreachable(SourceUnavailableError):
+    """Source endpoint not reachable (DNS, TCP, TLS, connection refused)."""
 
-    Audience overridden to USER (the SDK base defaults to PLATFORM) because
-    source-side reachability is the customer's network / firewall, not the
-    platform's.
-    """
-    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_NETWORK"
-    audience: ClassVar[Audience] = Audience.USER
+    code: ClassVar[str] = "SOURCE_UNAVAILABLE_NETWORK"
 ```
 
-**Note:** new code for an *unreachable* source raises `SourceUnavailableError`
-directly (already `audience=USER`), so no override is needed. The override
-pattern above still applies where no leaf fits the locus — e.g. a source-side
-*timeout* is an `AppTimeoutError` whose `APP_OWNER` default you override to
-`USER`.
+Never subclass `DependencyUnavailableError` and override its audience to
+`USER` for this. DEPENDENCY_UNAVAILABLE means an Atlan platform service
+(Dapr, Temporal, object store) is down, so a hard preflight gate never
+blocks on it. SOURCE_UNAVAILABLE blocks a hard gate on its final attempt.
+Typing an unreachable source as DEPENDENCY_UNAVAILABLE lets the run start
+anyway and fail later on the same fault. Conformance rule E021 flags this
+pattern.
+
+**The deliberate override pattern:** override `audience` only when no SDK
+leaf's default fits your leaf's actual locus. Example: a query against the
+source that exceeds its time budget is an `AppTimeoutError`. That leaf
+defaults to `APP_OWNER` because the locus of a timeout is usually unclear,
+but here the source is the slow party:
+
+```python
+@dataclass(kw_only=True)
+class <App>SourceQueryTimeout(AppTimeoutError):
+    """A metadata query exceeded its time budget on the source.
+
+    Audience overridden to USER (the SDK base defaults to APP_OWNER) because
+    the bottleneck is the customer's source: warehouse sizing, query queueing
+    or load on their side.
+    """
+
+    code: ClassVar[str] = "TIMEOUT_SOURCE_QUERY"
+    audience: ClassVar[Audience] = Audience.USER
+```
 
 If you're tempted to override `audience` more than once or twice per app,
 re-check the SDK base default — most apps don't need to override at all.
@@ -483,7 +501,7 @@ def test_<app>_auth_failed_payload(self):
 ```
 
 Cover audience overrides explicitly (a test that asserts the override took
-effect, e.g. `AthenaSourceUnreachable.audience is Audience.USER` not PLATFORM).
+effect, e.g. `<App>SourceQueryTimeout.audience is Audience.USER` not APP_OWNER).
 
 **`TestClassifier`** — parametrised tests over every marker in each tuple,
 asserting dispatch to the right typed class. Plus:

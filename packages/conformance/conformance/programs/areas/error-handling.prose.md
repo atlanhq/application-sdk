@@ -431,6 +431,20 @@ outcome mirroring the error-handling shape in the reference app named by
   and declares its gap under an `ignore[E020]` is converted to that typed
   catch.  Never give it a raise-only edit, which deletes the degradation.
 
+- **E021 DependencyUnavailableOverriddenToUser** — an error class whose
+  category is DEPENDENCY_UNAVAILABLE overrides `audience` to `USER`, so it says
+  "the customer's own system is down" under a category that means "an Atlan
+  platform service is down".  Re-base the class on `SourceUnavailableError`
+  (keep the class name and evidence fields), rename its `code` from
+  `DEPENDENCY_UNAVAILABLE_*` to `SOURCE_UNAVAILABLE_*`, and delete the
+  `audience` line, which the new base already sets.  Rename any tests that
+  assert the old code or category in the same edit.  This changes gate
+  behaviour for an app with a hard preflight gate: the failure now blocks on
+  the gate's final attempt, so the PR title and body must say so.  Mirror
+  `atlan-mysql-app app/failures.py`'s `SourceRestartingError`.  If the class
+  really covers an Atlan-side service, the override is the bug: delete the
+  `audience` line and keep the category.
+
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
   with the appropriate `AppError` subclass from
@@ -443,7 +457,7 @@ outcome mirroring the error-handling shape in the reference app named by
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
   `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure
