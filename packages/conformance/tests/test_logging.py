@@ -238,7 +238,61 @@ def write_assets():
     assert "L006" not in _ids(src)
 
 
-def test_l006_silent_for_zip_of_lists_built_in_bounded_loop() -> None:
+def test_l006_silent_for_zip_with_small_local_literal() -> None:
+    src = """
+from loguru import logger
+
+def transform(rows):
+    kinds = ["a", "b", "c"]
+    for kind, row in zip(kinds, rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" not in _ids(src)
+
+
+def test_l006_fires_for_zip_shadowed_by_parameter() -> None:
+    # A callee spelled ``zip`` that is not the builtin (e.g. zip_longest
+    # injected as a parameter) can yield for every unknown row.
+    src = """
+from loguru import logger
+
+def transform(rows, zip):
+    kinds = ["a", "b", "c"]
+    for kind, row in zip(kinds, rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_zip_shadowed_by_import_alias() -> None:
+    src = """
+from itertools import zip_longest as zip
+from loguru import logger
+
+def transform(rows):
+    for kind, row in zip(["a", "b", "c"], rows):
+        logger.info("transformed %s", kind)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_range_shadowed_in_module() -> None:
+    src = """
+from loguru import logger
+
+def range(n):
+    return load_all_rows()
+
+def process():
+    for row in range(3):
+        logger.info("row %s", row)
+"""
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_returned_constructor_field_across_methods() -> None:
+    # ``Batch`` may rebuild ``names`` from an unbounded source, so the
+    # producer's bounded loop proves nothing about ``result.names``.
     src = """
 from loguru import logger
 
@@ -254,11 +308,31 @@ class Runner:
 
     def transform(self):
         result = self.produce()
-        logger.info("available names: %s", result.names)
         for name, file in zip(result.names, result.files, strict=True):
             logger.info("transformed %s", name)
 """
-    assert "L006" not in _ids(src)
+    assert "L006" in _ids(src)
+
+
+def test_l006_fires_for_self_method_a_subclass_overrides() -> None:
+    # ``self.produce()`` dispatches to ``Child.produce`` at runtime; the
+    # enclosing class's small literal is not a bound on the inherited loop.
+    src = """
+from loguru import logger
+
+class Base:
+    def produce(self):
+        return ["a", "b", "c"]
+
+    def transform(self):
+        for name in self.produce():
+            logger.info("transformed %s", name)
+
+class Child(Base):
+    def produce(self):
+        return load_all_rows()
+"""
+    assert "L006" in _ids(src)
 
 
 def test_l006_fires_for_lists_built_from_unknown_input() -> None:
