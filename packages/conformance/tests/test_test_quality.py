@@ -103,6 +103,54 @@ def test_t005_still_fires_on_workflow_method_without_opt_out() -> None:
     assert "TestPipeline.test_run_pipeline" in findings[0].message
 
 
+def test_t005_silent_on_tuple_unpacked_opt_out() -> None:
+    findings = scan_text(
+        "class TestAdapter:\n"
+        "    __test__, marker = (False, None)\n"
+        "    def test_connect(self):\n"
+        "        run()\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_when_opt_out_is_conditionally_rebound() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = False\n"
+        "    if True:\n"
+        "        __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
+def test_t005_fires_when_opt_out_is_starred_unpacked() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    *__test__, marker = (False, None)\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_ignores_opt_out_assigned_inside_a_method() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    def helper(self):\n"
+        "        __test__ = False\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
 def test_t005_silent_on_bare_assert() -> None:
     findings = scan_text(
         "def test_foo():\n    x = compute()\n    assert x == 1\n",

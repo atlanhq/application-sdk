@@ -153,29 +153,103 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
+_PYTEST_OPT_OUT_ATTR = "__test__"
+
+
+def _assigned_value(
+    target: ast.expr, value: ast.expr | None
+) -> tuple[bool, ast.expr | None]:
+    """Return ``(binds, value)`` for ``__test__`` in an assignment *target*.
+
+    ``value`` is the expression bound to ``__test__``, or ``None`` when it
+    cannot be read statically (starred or length-mismatched unpacking).
+    """
+    if isinstance(target, ast.Name):
+        return target.id == _PYTEST_OPT_OUT_ATTR, value
+    if isinstance(target, ast.Starred):
+        return _assigned_value(target.value, None)[0], None
+    if isinstance(target, (ast.Tuple, ast.List)):
+        paired: list[ast.expr] | None = None
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(value.elts) == len(target.elts)
+            and not any(isinstance(e, ast.Starred) for e in target.elts)
+            and not any(isinstance(e, ast.Starred) for e in value.elts)
+        ):
+            paired = value.elts
+        result: tuple[bool, ast.expr | None] = (False, None)
+        for index, element in enumerate(target.elts):
+            binds, bound = _assigned_value(
+                element, paired[index] if paired is not None else None
+            )
+            if binds:
+                result = (True, bound)
+        return result
+    return False, None
+
+
+def _binds_opt_out_attr(node: ast.AST) -> bool:
+    """True when *node* binds ``__test__`` in the enclosing class scope.
+
+    Nested function, class and lambda bodies are their own scopes, so only
+    their names are checked.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if child.name == _PYTEST_OPT_OUT_ATTR:
+                return True
+            continue
+        if isinstance(child, ast.Lambda):
+            continue
+        if (
+            (
+                isinstance(child, ast.Name)
+                and child.id == _PYTEST_OPT_OUT_ATTR
+                and isinstance(child.ctx, (ast.Store, ast.Del))
+            )
+            or (
+                isinstance(child, ast.alias)
+                and (child.asname or child.name.split(".")[0]) == _PYTEST_OPT_OUT_ATTR
+            )
+            or (
+                isinstance(child, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar))
+                and child.name == _PYTEST_OPT_OUT_ATTR
+            )
+            or (
+                isinstance(child, ast.MatchMapping)
+                and child.rest == _PYTEST_OPT_OUT_ATTR
+            )
+        ):
+            return True
+        if _binds_opt_out_attr(child):
+            return True
+    return False
+
+
 def _class_has_pytest_collection_opt_out(cls: ast.ClassDef) -> bool:
-    """True when the class locally sets ``__test__`` to the literal ``False``."""
+    """True when the class body leaves ``__test__`` bound to the literal ``False``.
+
+    Only unconditional top-level assignments (including tuple unpacking) are
+    read. Any other binding — conditional, looped, imported, walrus, ``def`` —
+    makes the value unknown, and an unknown value counts as collected so the
+    class is still checked.
+    """
     test_value: ast.expr | None = None
     for stmt in cls.body:
-        value: ast.expr | None = None
         if isinstance(stmt, ast.Assign):
-            targets = stmt.targets
-            value = stmt.value
+            if _binds_opt_out_attr(stmt.value):
+                test_value = None
+            for target in stmt.targets:
+                binds, bound = _assigned_value(target, stmt.value)
+                if binds:
+                    test_value = bound
         elif isinstance(stmt, ast.AnnAssign):
-            targets = [stmt.target]
-            value = stmt.value
-        elif isinstance(stmt, ast.AugAssign):
-            targets = [stmt.target]
-        elif isinstance(stmt, ast.Delete):
-            targets = stmt.targets
-        else:
-            continue
-
-        if any(
-            isinstance(target, ast.Name) and target.id == "__test__"
-            for target in targets
-        ):
-            test_value = value
+            if stmt.value is not None:
+                binds, bound = _assigned_value(stmt.target, stmt.value)
+                if binds:
+                    test_value = bound
+        elif _binds_opt_out_attr(stmt):
+            test_value = None
 
     return isinstance(test_value, ast.Constant) and test_value.value is False
 
@@ -187,9 +261,9 @@ def _collect_tests(
 
     Mirrors pytest's default collection: module-level ``test*`` functions,
     and ``test*`` methods of module-level ``Test*`` classes (one level deep —
-    the same shape T001 mirrors). A class with a class-local literal
-    ``__test__ = False`` is excluded, as pytest does; inherited or dynamic
-    values are not inferred.
+    the same shape T001 mirrors). A class whose body unconditionally leaves
+    ``__test__`` bound to the literal ``False`` is excluded, as pytest does;
+    inherited, conditional or dynamic values are not inferred.
     """
     collected: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = []
     for node in tree.body:
