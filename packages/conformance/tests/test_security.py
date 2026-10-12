@@ -290,6 +290,76 @@ def test_s002_fires_on_environ_get() -> None:
     assert _ids('import os\nk = os.environ.get("AE_TOKEN")\n') == ["S002"]
 
 
+def test_s002_silent_on_dev_secret_store_bootstrap() -> None:
+    src = (
+        "import json\n"
+        "import os\n"
+        "from application_sdk.main import run_dev_combined\n"
+        "from application_sdk.testing.mocks import MockSecretStore\n"
+        "async def main():\n"
+        '    api_key = os.environ.get("SERVICE_API_KEY", '
+        'os.environ.get("E2E_SERVICE_PASSWORD", ""))\n'
+        "    secrets = {}\n"
+        "    if api_key:\n"
+        '        secrets["service"] = json.dumps({"token": api_key})\n'
+        '    credential_stores = {"default": MockSecretStore(secrets)}\n'
+        "    await run_dev_combined(ServiceApp, credential_stores=credential_stores)\n"
+    )
+    assert _ids(src) == []
+
+
+def test_s002_still_fires_when_dev_bootstrap_value_is_used_by_client() -> None:
+    src = (
+        "import json\n"
+        "import os\n"
+        "from application_sdk.main import run_dev_combined\n"
+        "from application_sdk.testing.mocks import MockSecretStore\n"
+        "async def main():\n"
+        '    api_key = os.environ.get("SERVICE_API_KEY", "")\n'
+        "    client = Client(token=api_key)\n"
+        "    secrets = {}\n"
+        "    if api_key:\n"
+        '        secrets["service"] = json.dumps({"token": api_key})\n'
+        '    credential_stores = {"default": MockSecretStore(secrets)}\n'
+        "    await run_dev_combined(ServiceApp, credential_stores=credential_stores)\n"
+    )
+    assert _ids(src) == ["S002"]
+
+
+def test_s002_still_fires_when_payload_also_consumes_credential() -> None:
+    src = (
+        "import json\n"
+        "import os\n"
+        "from application_sdk.main import run_dev_combined\n"
+        "from application_sdk.testing.mocks import MockSecretStore\n"
+        "async def main():\n"
+        '    api_key = os.environ.get("SERVICE_API_KEY", "")\n'
+        "    secrets = {}\n"
+        "    if api_key:\n"
+        '        secrets["service"] = json.dumps({"token": api_key, '
+        '"probe": send_to_service(api_key)})\n'
+        '    credential_stores = {"default": MockSecretStore(secrets)}\n'
+        "    await run_dev_combined(ServiceApp, credential_stores=credential_stores)\n"
+    )
+    assert _ids(src) == ["S002"]
+
+
+def test_s002_still_fires_when_mock_store_is_not_passed_to_dev_runner() -> None:
+    src = (
+        "import json\n"
+        "import os\n"
+        "from application_sdk.testing.mocks import MockSecretStore\n"
+        "async def main():\n"
+        '    api_key = os.environ.get("SERVICE_API_KEY", "")\n'
+        "    secrets = {}\n"
+        "    if api_key:\n"
+        '        secrets["service"] = json.dumps({"token": api_key})\n'
+        '    credential_stores = {"default": MockSecretStore(secrets)}\n'
+        "    await run_combined_mode(ServiceApp, credential_stores=credential_stores)\n"
+    )
+    assert _ids(src) == ["S002"]
+
+
 def test_s002_fires_on_environ_pop() -> None:
     # pop still returns (and exposes) the value, so it counts as a read
     assert _ids('import os\nk = os.environ.pop("ATLAN_API_KEY")\n') == ["S002"]
