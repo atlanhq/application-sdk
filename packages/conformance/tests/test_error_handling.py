@@ -3113,6 +3113,75 @@ def fail():
     _single(src, "E018")
 
 
+def test_p018_no_finding_for_external_precondition_translated_to_domain_error() -> None:
+    src = """\
+from backend_store.exceptions import PreconditionError
+from application_sdk.errors import DependencyUnavailableError
+
+class CheckpointConflict(DependencyUnavailableError):
+    code = "DEPENDENCY_UNAVAILABLE_SYNTHETIC_CHECKPOINT_CONFLICT"
+
+def update_local():
+    raise PreconditionError("concurrent update")
+
+def write_checkpoint():
+    try:
+        update_local()
+    except PreconditionError:
+        raise CheckpointConflict(message="retry")
+"""
+    assert "E018" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised_type"),
+    [
+        (
+            "from application_sdk.errors import PreconditionError",
+            "PreconditionError",
+        ),
+        (
+            "import application_sdk.errors as sdk_errors",
+            "sdk_errors.PreconditionError",
+        ),
+    ],
+)
+def test_p018_sdk_precondition_leaf_still_flagged(
+    imports: str, raised_type: str
+) -> None:
+    _single(
+        f"""\\
+{imports}
+
+def fail():
+    raise {raised_type}(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_non_exception_module_import_still_flagged() -> None:
+    _single(
+        """
+from domain_errors import PreconditionError
+
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_unresolved_precondition_leaf_still_flagged() -> None:
+    _single(
+        """\\
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
 @pytest.mark.parametrize(
     ("imports", "cancelled_error"),
     [
