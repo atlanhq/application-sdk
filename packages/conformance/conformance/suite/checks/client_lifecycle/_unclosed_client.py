@@ -128,8 +128,9 @@ class _MustRun:
     over statement blocks: a block reaches a site if any of its statements
     does; an ``if`` only if both arms do; a ``match`` only if every case does
     and the last is a bare ``case _``; a loop never (it may run zero times); a
-    ``try`` if its body or ``finally`` does, or its ``else`` and every handler
-    do.  Sites inside a conditional expression (``a if c else b``, ``and`` /
+    ``try`` if its ``finally`` does, or if its body or ``else`` does *and* every
+    ``except`` handler does or re-raises — a handler that swallows the
+    exception is a path on which the rest of the body never ran.  Sites inside a conditional expression (``a if c else b``, ``and`` /
     ``or``) do not count.  Early ``return`` / ``raise`` are not modelled.
 
     With *lenient_finally*, any site anywhere inside a ``finally`` counts, so
@@ -156,6 +157,13 @@ class _MustRun:
             for node in (stmt, *(child for child, _ in _walk_scope(stmt)))
         )
 
+    def _handlers(self, node: ast.Try | ast.TryStar) -> bool:
+        """True if every ``except`` handler reaches a site or re-raises."""
+        return all(
+            self.block(h.body) or (bool(h.body) and isinstance(h.body[-1], ast.Raise))
+            for h in node.handlers
+        )
+
     def stmt(self, stmt: ast.stmt) -> bool:
         if id(stmt) in self.sites:
             return True
@@ -166,13 +174,9 @@ class _MustRun:
         if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
             return False
         if isinstance(stmt, (ast.Try, ast.TryStar)):
-            return (
-                self.block(stmt.body)
-                or self._finally(stmt.finalbody)
-                or (
-                    self.block(stmt.orelse)
-                    and all(self.block(h.body) for h in stmt.handlers)
-                )
+            return self._finally(stmt.finalbody) or (
+                (self.block(stmt.body) or self.block(stmt.orelse))
+                and self._handlers(stmt)
             )
         if isinstance(stmt, (ast.With, ast.AsyncWith)):
             return self.block(stmt.body)
@@ -204,7 +208,10 @@ class _MustRun:
         """True if every path from *stmt* to the end of *root* reaches a site.
 
         Checks the statements after *stmt* in its own block, then each enclosing
-        ``finally``, then climbs to the enclosing statement and repeats.
+        ``finally``, then climbs to the enclosing statement and repeats.  Leaving
+        a ``try`` body early through a handler skips the rest of the body, so
+        there the rest (or the ``else``) only counts if every handler also
+        reaches a site or re-raises.
         """
         current: ast.AST = stmt
         while current is not root and id(current) in self.links:
@@ -212,7 +219,12 @@ class _MustRun:
             if isinstance(current, ast.stmt):
                 block = getattr(parent, name)
                 index = next(i for i, s in enumerate(block) if s is current)
-                if self.block(block[index + 1 :]):
+                reached = self.block(block[index + 1 :])
+                if isinstance(parent, (ast.Try, ast.TryStar)) and name == "body":
+                    reached = (reached or self.block(parent.orelse)) and self._handlers(
+                        parent
+                    )
+                if reached:
                     return True
             if (
                 isinstance(parent, (ast.Try, ast.TryStar))
