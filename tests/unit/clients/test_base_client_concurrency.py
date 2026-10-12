@@ -20,6 +20,7 @@ from collections.abc import Awaitable, Callable
 import httpx
 import pytest
 
+from application_sdk.clients import base as base_module
 from application_sdk.clients.base import BaseClient
 
 _SLOW_DELAY_SECONDS = 0.2
@@ -34,10 +35,18 @@ class _PoolTransport(httpx.AsyncBaseTransport):
     """In-memory pool: ``/slow`` paths wait, and closing kills in-flight reads."""
 
     def __init__(self) -> None:
+        self.enter_calls = 0
         self.close_calls = 0
         self._closed = False
 
+    async def __aenter__(self) -> "_PoolTransport":
+        self.enter_calls += 1
+        self._closed = False
+        return self
+
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        if self.enter_calls == 0:
+            raise RuntimeError("transport used before __aenter__")
         self._closed = False  # a closed httpcore pool reopens on the next request
         if request.url.path.startswith("/slow"):
             await asyncio.sleep(_SLOW_DELAY_SECONDS)
@@ -184,3 +193,37 @@ async def test_closed_or_unused_client_does_not_warn() -> None:
 
     assert await _resource_warnings(closed) == []
     assert await _resource_warnings(unused) == []
+
+
+@pytest.mark.asyncio
+async def test_shared_transport_is_entered_once_and_exited_by_close() -> None:
+    client, pool = _client_with_pool()
+
+    await asyncio.gather(
+        *(client.execute_http_get_request(f"http://example.test{p}") for p in _PATHS)
+    )
+    assert (
+        pool.enter_calls == 1
+    ), "concurrent first requests entered the transport twice"
+    assert pool.close_calls == 0
+
+    await client.close()
+    assert pool.close_calls == 1
+
+    assert await client.execute_http_get_request("http://example.test/fast/again")
+    assert pool.enter_calls == 2, "a request after close() must re-enter the transport"
+    await client.close()
+
+
+@pytest.mark.asyncio
+async def test_finalizer_tolerates_cleared_module_globals(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, _ = _client_with_pool()
+    await client.execute_http_get_request("http://example.test/fast/a")
+    monkeypatch.setattr(base_module, "warnings", None)  # as at interpreter teardown
+
+    client.__del__()  # must not raise
+
+    monkeypatch.undo()
+    await client.close()
