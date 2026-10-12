@@ -308,6 +308,9 @@ def test_any_condition_on_the_way_is_not_reported(tmp_path: Path, row: str) -> N
         f"            return pick(exc.response.status_code, default=PreflightCheck(name='a', passed=False, error={_AUTH}))\n",
         f"            return wrap(PreflightCheck(name='a', passed=False, error={_AUTH}), cause=exc)\n",
         f"            PreflightCheck(name='a', passed=False, error={_AUTH})\n            raise {_INTERNAL}\n",
+        f"            PreflightOutput(checks=[PreflightCheck(name='a', passed=False, error={_AUTH})])\n            raise {_INTERNAL}\n",
+        f"            [PreflightCheck(name='a', passed=False, error={_AUTH})]\n            raise {_INTERNAL}\n",
+        f"            return await PreflightCheck(name='a', passed=False, error={_AUTH})\n",
         f"            try:\n                raise {_AUTH}\n            except Exception:\n                raise {_INTERNAL}\n",
         "            error = _classify(exc, AppPermissionDeniedError(\n"
         '                message="Cannot list objects.",\n'
@@ -327,6 +330,9 @@ def test_any_condition_on_the_way_is_not_reported(tmp_path: Path, row: str) -> N
         "row-as-wrapper-default",
         "row-in-wrapper",
         "unused-row",
+        "discarded-output",
+        "discarded-list",
+        "awaited-row",
         "try-body-with-handler",
         "classifier-default",
         "pass-through-else-leaf",

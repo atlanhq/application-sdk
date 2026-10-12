@@ -1,8 +1,8 @@
 """F021 PreflightFixedLeafInBroadExcept (CONNECT-1358).
 
-Flags a broad ``except`` inside ``preflight_check`` (or a helper it calls
-directly) that reports an Auth- or Permission-rooted error with nothing on the
-way to it that could pick a different one. Every failure in the ``try`` then
+Flags a broad ``except`` inside ``preflight_check`` (or a helper it reaches
+through direct calls, at any depth) that reports an Auth- or Permission-rooted
+error with nothing on the way to it that could pick a different one. Every failure in the ``try`` then
 reaches the customer as a credential or grant problem, and a hard-mode gate
 blocks the run on it: an empty credential, a DNS failure and a 500 all read as
 "grant access". The SDK's own subclasses outside ``application_sdk.errors``
@@ -15,15 +15,19 @@ condition makes the leaf unknown, and unknown is never reported. A leaf is
 reported only when it is raised, or is the ``error=`` of a ``PreflightCheck`` /
 ``PreflightOutput`` (directly or through ``.to_failure_details()``), and every
 step from the ``except`` to that site always runs: statement blocks, ``with``
-bodies, ``try ... finally``, and around a row only lists, tuples, sets,
-``await``, ``return``, another row, or ``.append`` / ``.extend`` /
-``.insert``. An ``if``, loop, ``match``, conditional or boolean expression, a
+bodies, ``try ... finally``, and around a row only lists, tuples,
+``return``, another row, or ``.append`` / ``.extend`` / ``.insert``. An
+``if``, loop, ``match``, conditional or boolean expression around the leaf, a
 ``try`` body with its own handlers or its ``else``, or an earlier statement in
 an enclosing block that can leave it (``raise``, ``return``, ``break``,
-``continue``, ``assert``) all make the leaf unknown. So ``if self.strict:`` is
-not reported either, and a clean F021 does not prove the classification is
-right. A helper only passed as a callback is not followed. Known gap: a leaf
-inside ``with contextlib.suppress(...)`` is still treated as reported.
+``continue``, ``assert``) all make the leaf unknown. So ``if self.strict:``
+around the leaf is not reported either, and a clean F021 does not prove the
+classification is right. A helper only passed as a callback is not followed.
+
+Known gaps: nothing after the site is read, so a ``finally``, an enclosing
+``try`` or a context manager (``contextlib.suppress``, an error translator)
+that replaces or swallows the raise, or a later ``raise`` that discards an
+appended row, still leaves the leaf reported.
 """
 
 from __future__ import annotations
@@ -73,8 +77,6 @@ _ALWAYS_RUNS: dict[type[ast.AST], tuple[str, ...]] = {
     ast.keyword: ("value",),
     ast.List: ("elts",),
     ast.Tuple: ("elts",),
-    ast.Set: ("elts",),
-    ast.Await: ("value",),
     ast.Return: ("value",),
     ast.Expr: ("value",),
 }
@@ -159,11 +161,19 @@ def _can_exit(stmt: ast.stmt) -> bool:
     return False
 
 
+def _adds_to_collection(node: ast.AST) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in _COLLECTORS
+    )
+
+
 def _collects(call: ast.Call, src: Source) -> bool:
     """A call that keeps a row as-is: another row, or adding it to a collection."""
     if any(_sdk(src, call.func, row) for row in _ROWS):
         return True
-    return isinstance(call.func, ast.Attribute) and call.func.attr in _COLLECTORS
+    return _adds_to_collection(call)
 
 
 def _report_site(leaf: ast.Call, src: Source, parents: _Parents) -> ast.AST | None:
@@ -188,12 +198,14 @@ def _always_reported(
 ) -> bool:
     """Whether every path through ``handler`` reports ``leaf``."""
     site = _report_site(leaf, src, parents)
-    if site is None or isinstance(parents[site][0], ast.Expr):
+    if site is None:
         return False
     for parent, field, index in _ancestry(site, parents, handler):
         if field not in _ALWAYS_RUNS.get(type(parent), ()):
             return False
         if isinstance(parent, ast.Call) and not _collects(parent, src):
+            return False
+        if isinstance(parent, ast.Expr) and not _adds_to_collection(parent.value):
             return False
         if isinstance(parent, (ast.Try, ast.TryStar)) and field == "body":
             if parent.handlers:

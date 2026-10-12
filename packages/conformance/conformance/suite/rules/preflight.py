@@ -744,16 +744,17 @@ _CONTRACT_RULES = (
         since="0.47.0",
         short_description="Classify a broadly caught preflight failure before naming it an auth or permission problem.",
         full_description=(
-            "A broad ``except`` in ``preflight_check`` or a helper it calls "
-            "directly raises, or puts in a ``PreflightCheck`` / ``PreflightOutput`` "
+            "A broad ``except`` in ``preflight_check`` or a helper it reaches "
+            "through direct calls raises, or puts in a ``PreflightCheck`` / ``PreflightOutput`` "
             "``error=``, an ``AuthError`` or ``AppPermissionDeniedError`` subclass "
-            "with no condition or early exit on the way to it, so every failure it "
+            "with no condition around it and no earlier exit, so every failure it "
             "catches is reported as a credential or grant problem. Classify it "
             "first — ``application_sdk.errors.classify_http_exception`` for httpx "
             "failures, or an ``isinstance`` chain — and fall back to a leaf that "
             "does not blame the customer (``InternalError`` when the cause is "
             "unknown), or narrow the except clause. The check judges the shape, "
-            "not the guard: any condition before the leaf, a leaf stored in a name "
+            "not the guard: a condition around the leaf or an earlier statement "
+            "that can exit, a leaf stored in a name "
             "or passed to another function, and callbacks produce no finding, so "
             "a clean F021 does not prove the classification is right."
         ),
