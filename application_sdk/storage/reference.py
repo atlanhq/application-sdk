@@ -111,6 +111,45 @@ def _make_storage_prefix(ref: FileReference, *, output_path: str | None = None) 
     )
 
 
+def _require_run_scoped_pin(
+    ref: FileReference, pinned: str, output_path: str | None
+) -> None:
+    """Reject a run-scoped-tier directory pin that sits outside the run prefix.
+
+    ``TRANSIENT`` and ``RETAINED`` data belongs to one run: cleanup deletes a
+    tracked ``TRANSIENT`` ref's whole prefix at run end, and ``RETAINED`` is
+    run-scoped by contract. Two runs pinning the same prefix outside their own
+    run prefix (``shared/results/``) would write the same keys, and either
+    run's cleanup would delete the other's data. The manifest makes leftovers
+    inert, not a concurrently running neighbour. ``PERSISTENT`` pins are
+    shared across runs by design and are never cleaned, so they are exempt.
+
+    Without *output_path* there is no run to scope to (local scripts, tests),
+    and no cleanup either, so the pin is accepted as given.
+
+    Raises:
+        StorageConfigError: If the pin escapes ``{output_path}/``.
+    """
+    from application_sdk.contracts.types import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        StorageTier,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageConfigError,
+    )
+
+    if ref.tier is StorageTier.PERSISTENT or not output_path:
+        return
+    run_prefix = output_path.strip("/") + "/"
+    if not (pinned.strip("/") + "/").startswith(run_prefix):
+        raise StorageConfigError(
+            f"Directory FileReference pins storage_path '{pinned}' outside its "
+            f"run prefix '{run_prefix}'. {ref.tier.value.upper()} data is "
+            f"run-scoped: pin it under the run prefix, or use "
+            f"StorageTier.PERSISTENT for data shared across runs.",
+            key=pinned,
+        )
+
+
 #: Per-destination mutex for the whole materialise-and-verify step.
 #:
 #: ``local_path`` is a deterministic function of (run, stage, entity), so
@@ -224,6 +263,8 @@ async def persist_file_reference(
         # consumer reads exactly the manifest's entries, so leftovers from an
         # earlier attempt under the same prefix are inert (FND-3762).
         pinned = key or ref.storage_path
+        if pinned:
+            _require_run_scoped_pin(ref, pinned, output_path)
         prefix = (
             pinned.rstrip("/") + "/"
             if pinned

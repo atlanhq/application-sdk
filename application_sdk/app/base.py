@@ -1922,9 +1922,9 @@ class App(ABC):
             # HEADed as an object key 404s on a prefix that is perfectly
             # intact, so the run fails claiming data is lost when it is not.
             if ref.manifest_path is not None:
-                # The producer wrote the manifest last, so its presence is the
-                # proof every listed object landed — no listing needed, and
-                # stray objects under a reused prefix cannot pad the count.
+                # The producer wrote the manifest last, so it names exactly the
+                # objects the hand-off covers; stray objects under a reused
+                # prefix cannot pad the count.
                 manifest = await _fetch_manifest(store, ref.manifest_path)
                 if manifest is None:
                     missing.append(f"{ref.manifest_path} (manifest)")
@@ -1933,6 +1933,21 @@ class App(ABC):
                 if listed < max(ref.file_count, 1):
                     missing.append(
                         f"{key}/ (manifest lists {listed}/{ref.file_count} files)"
+                    )
+                    continue
+                # The manifest proves every object landed when it was written,
+                # not that they are still there. One listing answers that for
+                # every entry; it is a subset check, so stray objects under a
+                # reused prefix still cannot stand in for a missing one.
+                present = set(
+                    await list_data_keys(key + "/", store=store, normalize=False)
+                )
+                absent = [
+                    e.path for e in manifest.files if f"{key}/{e.path}" not in present
+                ]
+                if absent:
+                    missing.append(
+                        f"{key}/ ({listed - len(absent)}/{listed} manifest objects)"
                     )
                     continue
             elif raw_key.endswith("/") or ref.file_count != 1:
@@ -2410,7 +2425,12 @@ class App(ABC):
                     # listing above never reaches it.
                     manifest_key: str | None = getattr(ref, "manifest_path", None)
                     if manifest_key:
-                        if _is_durable(manifest_key):
+                        if any(
+                            manifest_key.startswith(p)
+                            for p in PROTECTED_STORAGE_PREFIXES
+                        ):
+                            skipped += 1
+                        elif _is_durable(manifest_key):
                             skipped += 1
                             aliased += 1
                         elif await _delete_one(manifest_key):

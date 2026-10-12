@@ -587,6 +587,16 @@ class TestCleanupStorageDirectoryManifest:
         assert result.deleted_count == 2
 
     @pytest.mark.asyncio
+    async def test_manifest_under_a_protected_prefix_is_never_deleted(self) -> None:
+        protected = "persistent-artifacts/apps/test/file_refs/m2.sdk-manifest"
+        ref = FileReference(storage_path=self._DIR, manifest_path=protected)
+
+        result, deleted = await _run_cleanup_capturing_deletes([ref], [])
+
+        assert protected not in deleted
+        assert result.skipped_count == 1
+
+    @pytest.mark.asyncio
     async def test_transient_twin_does_not_delete_a_retained_manifest(self) -> None:
         refs = [
             FileReference(

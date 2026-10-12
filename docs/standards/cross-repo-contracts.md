@@ -114,7 +114,7 @@ route:
 | **Produced by** | `persist_file_reference()`'s directory branch in `application_sdk/storage/reference.py`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
 | **Served at** | `FileReference.manifest_path` on every durable directory ref, in Temporal payloads passed between tasks — and between apps when one app's output is another's input |
 | **Format** | JSON `{"version": 1, "files": [{"path", "sha256", "size_bytes"}]}`; `path` is relative to the ref's `storage_path` prefix, `/`-separated; `sha256` is lowercase hex |
-| **Read by** | `materialize_file_reference()` and `App.verify_refs()` in whatever SDK version the consuming app pins — so a producer on this SDK hands manifests to consumers on any version |
+| **Read by** | `materialize_file_reference()` and `App.verify_refs()` in consuming apps on an SDK that knows the field. An app on an older SDK drops `manifest_path` on decode and lists the data prefix instead (see below), so it never reads the manifest |
 | **Pinned by** | `tests/unit/storage/test_directory_manifest.py` |
 
 The manifest is the hand-off's statement of exactly which objects it covers.

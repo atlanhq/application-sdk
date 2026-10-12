@@ -307,7 +307,11 @@ and checks each against the manifest digest; it does not list the prefix. So:
 
 **Pinning a directory prefix.** Because consumers read the manifest, a directory
 ref may pin `storage_path` to a canonical prefix exactly as a single-file ref
-pins its key — on any tier:
+pins its key. For `TRANSIENT` and `RETAINED` refs the pin must sit under the
+run prefix (`output_path`), or persist raises `StorageConfigError`: two runs
+pinning one shared prefix would write the same keys, and either run's cleanup
+would delete the other's data. `PERSISTENT` pins may live anywhere under
+`persistent-artifacts/`:
 
 ```python
 return ExtractOutput(
@@ -318,8 +322,7 @@ return ExtractOutput(
 )
 ```
 
-A `TRANSIENT` pin is still deleted at end of run: cleanup deletes tracked refs
-by key (including the manifest), wherever they live.
+A `TRANSIENT` pin is still deleted at end of run, manifest included.
 
 **Refs without a manifest** — produced by an SDK that predates manifests, or
 built by hand — are materialized by listing the prefix. The listing is checked

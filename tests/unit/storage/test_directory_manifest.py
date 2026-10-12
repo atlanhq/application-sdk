@@ -211,26 +211,74 @@ class TestPinnedDirectoryStoragePath:
         assert first.storage_path != second.storage_path
         assert "/file_refs/" in f"/{first.storage_path}"
 
-    async def test_transient_pin_outside_run_prefix_is_allowed(
+    _RUN = "artifacts/apps/x/workflows/wf/run"
+
+    @pytest.mark.parametrize("tier", [StorageTier.TRANSIENT, StorageTier.RETAINED])
+    async def test_run_scoped_pin_outside_run_prefix_is_rejected(
+        self, store, tmp_path, tier
+    ) -> None:
+        """Two runs pinning ``shared/results/`` would delete each other's data."""
+        from application_sdk.storage.errors import StorageConfigError
+
+        _write_tree(tmp_path)
+        with pytest.raises(StorageConfigError):
+            await persist_file_reference(
+                store,
+                FileReference(
+                    local_path=str(tmp_path), storage_path="shared/results/", tier=tier
+                ),
+                output_path=self._RUN,
+            )
+
+        # Rejected before anything is written.
+        assert await _get_bytes("shared/results/a.json", store, normalize=False) is None
+
+    async def test_sibling_of_run_prefix_is_not_inside_it(
         self, store, tmp_path
     ) -> None:
-        """Decision: cleanup deletes by tracked ref, not by location."""
+        from application_sdk.storage.errors import StorageConfigError
+
         _write_tree(tmp_path)
+        with pytest.raises(StorageConfigError):
+            await persist_file_reference(
+                store,
+                FileReference(
+                    local_path=str(tmp_path), storage_path=self._RUN + "-2/t/"
+                ),
+                output_path=self._RUN,
+            )
+
+    @pytest.mark.parametrize("tier", [StorageTier.TRANSIENT, StorageTier.RETAINED])
+    async def test_pin_under_run_prefix_is_honoured(
+        self, store, tmp_path, tier
+    ) -> None:
+        _write_tree(tmp_path)
+        pin = f"{self._RUN}/transformed/table/"
+        durable = await persist_file_reference(
+            store,
+            FileReference(local_path=str(tmp_path), storage_path=pin, tier=tier),
+            output_path=self._RUN,
+        )
+
+        assert durable.storage_path == pin
+        assert durable.manifest_path is not None
+        assert durable.manifest_path.startswith(f"{self._RUN}/file_refs/")
+
+    async def test_persistent_pin_may_sit_outside_run_prefix(
+        self, store, tmp_path
+    ) -> None:
+        """PERSISTENT data is shared across runs by design and never cleaned."""
+        _write_tree(tmp_path)
+        pin = "persistent-artifacts/apps/x/connection-cache/"
         durable = await persist_file_reference(
             store,
             FileReference(
-                local_path=str(tmp_path),
-                storage_path="elsewhere/canonical/",
-                tier=StorageTier.TRANSIENT,
+                local_path=str(tmp_path), storage_path=pin, tier=StorageTier.PERSISTENT
             ),
-            output_path="artifacts/apps/x/workflows/wf/run",
+            output_path=self._RUN,
         )
 
-        assert durable.storage_path == "elsewhere/canonical/"
-        assert durable.manifest_path is not None
-        assert durable.manifest_path.startswith(
-            "artifacts/apps/x/workflows/wf/run/file_refs/"
-        )
+        assert durable.storage_path == pin
 
 
 class TestMaterializeWithManifest:
@@ -440,15 +488,26 @@ class TestFallbackWithoutManifest:
 
     async def test_over_count_warns_but_materialises(self, store, tmp_path) -> None:
         """Hand-built refs keep the default file_count=1 whatever they hold."""
+        from unittest.mock import patch
+
+        from application_sdk.storage import reference
+
         for rel, data in _FILES.items():
             await _put(_PIN + rel, data, store, normalize=False)
         ref = FileReference(
             local_path=str(tmp_path / "consumer"), storage_path=_PIN, is_durable=True
         )
 
-        result = await materialize_file_reference(store, ref)
+        with patch.object(reference.logger, "warning") as warning:
+            result = await materialize_file_reference(store, ref)
 
         assert _local_files(Path(result.local_path)) == set(_FILES)
+        warning.assert_any_call(
+            "file_ref.materialize.count_mismatch",
+            storage_path=_PIN,
+            file_count=1,
+            files_listed=len(_FILES),
+        )
 
     async def test_empty_listing_for_declared_files_fails_retryably(
         self, store, tmp_path
