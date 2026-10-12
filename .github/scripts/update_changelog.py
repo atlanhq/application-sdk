@@ -7,15 +7,16 @@ introduced since the last release. It categorizes commits according to
 conventional commit types and creates sections that match the project's
 changelog format.
 
-Usage: python update_changelog.py <current_version> <new_version>
+Usage: python update_changelog.py <current_version> <new_version> [--sections all|legacy|auto]
 """
 
+import argparse
 import json
 import os
 import re
 import subprocess
-import sys
 from datetime import datetime
+from pathlib import Path
 
 
 def _get_repo() -> tuple[str, str]:
@@ -141,7 +142,19 @@ SECTIONS = (
 )
 EXCLUDED_TYPES = frozenset({"ci"})
 
-_TYPE_TO_SECTION = {t: key for key, _, types in SECTIONS for t in types}
+# The notes as they were before FND-3748: Features (feat, docs) and Bug Fixes
+# only. Kept for app repos whose CI shims are not yet gated on `gate-check`
+# (see sections_for_repo): rendering chores there would move the bump PR on
+# every Renovate merge and re-run its full, still-ungated CI each time.
+LEGACY_SECTIONS = (
+    ("features", "Features", ("feat", "docs")),
+    ("fixes", "Bug Fixes", ("fix",)),
+)
+
+# What marks a repo whose bump-PR CI is gated on the opt-in label: the
+# bootstrap shims carry it once the repo has resynced onto the FND-3748
+# templates, and they all arrive in the same resync.
+OPT_IN_MARKER = "'gate-check'"
 _CONVENTIONAL_RE = re.compile(
     r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<desc>.*)$",
     re.IGNORECASE,
@@ -151,18 +164,38 @@ _CONVENTIONAL_RE = re.compile(
 _SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
 
 
-def categorize_commits(commits):
+def sections_for_repo(root="."):
+    """Pick SECTIONS or LEGACY_SECTIONS for the repo checked out at ``root``.
+
+    Full notes only once the repo's own workflows gate bump-PR CI on
+    `gate-check`, so the extra bump-PR pushes they cause never run ahead of
+    that gate: each app repo switches over in the same resync that gates it.
+    """
+    workflows = Path(root) / ".github" / "workflows"
+    for path in sorted(workflows.glob("*.y*ml")) if workflows.is_dir() else []:
+        try:
+            if OPT_IN_MARKER in path.read_text(encoding="utf-8"):
+                return SECTIONS
+        except OSError:
+            continue
+    return LEGACY_SECTIONS
+
+
+def categorize_commits(commits, sections=SECTIONS):
     """
     Categorize commits based on conventional commit types.
 
     Args:
         commits (list): List of `sha7|author|subject` lines
+        sections: SECTIONS or LEGACY_SECTIONS
 
     Returns:
-        dict: One list of `(commit_link, author, message)` per SECTIONS key.
-        `ci` commits and sub-package commits are omitted.
+        dict: One list of `(commit_link, author, message)` per section key.
+        `ci` commits and sub-package commits are omitted, as is any type the
+        sections don't render (everything outside feat/docs/fix in legacy).
     """
-    categories = {key: [] for key, _, _ in SECTIONS}
+    categories = {key: [] for key, _, _ in sections}
+    type_to_section = {t: key for key, _, types in sections for t in types}
 
     owner, repo = _get_repo()
 
@@ -187,7 +220,9 @@ def categorize_commits(commits):
         if commit_type in EXCLUDED_TYPES:
             continue
 
-        section = _TYPE_TO_SECTION.get(commit_type, "other")
+        section = type_to_section.get(commit_type, "other")
+        if section not in categories:
+            continue
         msg = message_subject if section == "other" else match["desc"]
         if match and match["breaking"]:
             msg = f"**BREAKING:** {msg}"
@@ -206,7 +241,9 @@ def get_full_changelog_url(current_version, new_version):
     )
 
 
-def format_changelog_section(categories, current_version, new_version):
+def format_changelog_section(
+    categories, current_version, new_version, sections=SECTIONS
+):
     """
     Format the changelog section according to the project's format.
 
@@ -225,7 +262,7 @@ def format_changelog_section(categories, current_version, new_version):
     full_changelog_url = get_full_changelog_url(current_version, new_version)
     changelog += f"Full Changelog: {full_changelog_url}\n\n"
 
-    for key, heading, _ in SECTIONS:
+    for key, heading, _ in sections:
         if not categories[key]:
             continue
         changelog += f"### {heading}\n\n"
@@ -287,22 +324,41 @@ def update_changelog_file(changelog_content):
         f.write(new_content)
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: python update_changelog.py <current_version> <new_version>")
-        sys.exit(1)
-
-    current_version = sys.argv[1]
-    new_version = sys.argv[2]
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Prepend a CHANGELOG section.")
+    parser.add_argument("current_version")
+    parser.add_argument("new_version")
+    parser.add_argument(
+        "--sections",
+        choices=("all", "legacy", "auto"),
+        default="all",
+        help=(
+            "all: every type but ci (default). legacy: Features + Bug Fixes "
+            "only. auto: all once this repo's workflows gate bump-PR CI on "
+            "`gate-check`, else legacy (what fleet app repos pass)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    current_version = args.current_version
+    new_version = args.new_version
+    sections = {
+        "all": SECTIONS,
+        "legacy": LEGACY_SECTIONS,
+    }.get(args.sections) or sections_for_repo()
+    print(
+        "Changelog sections: "
+        + ", ".join(heading for _, heading, _ in sections)
+        + f" ({args.sections})"
+    )
 
     commits = get_commits_since_last_tag(current_version)
     if not commits:
         print("No new commits found to add to the changelog.")
         return
 
-    categories = categorize_commits(commits)
+    categories = categorize_commits(commits, sections)
     changelog_content = format_changelog_section(
-        categories, current_version, new_version
+        categories, current_version, new_version, sections
     )
     # Print the new content to the console
     print(changelog_content)

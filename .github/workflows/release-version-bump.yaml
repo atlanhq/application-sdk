@@ -197,7 +197,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
+        # `auto` (FND-3748): full notes — every type but `ci` — only once this
+        # repo's shims gate bump-PR CI on `gate-check`; until its resync lands,
+        # the old Features/Bug Fixes notes, so Renovate merges keep not moving
+        # the bump PR and its still-ungated CI does not re-run on each one.
+        run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}" --sections auto
 
       # Restore the pristine push path — see the rewrite step above. Runs on the
       # same guard so it is a no-op for every caller that did not opt in.

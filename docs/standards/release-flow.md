@@ -24,6 +24,12 @@ feat/fix commit merged to main
   type is rendered except `ci` (FND-3748): the release notes are the human review gate for
   a semver release, so any change to what ships — `perf`, `refactor`, `chore(deps)` — must
   appear in them. Non-conventional subjects are listed under *Other Changes*.
+  *Rollout:* app repos pass `--sections auto`, which renders the full notes only once the
+  repo's own workflows carry the `gate-check` gate (below) and otherwise keeps the old
+  Features + Bug Fixes notes byte for byte. Rendering chores moves the bump PR on every
+  Renovate merge, so each repo switches over in the same `bootstrap --resync` that gates
+  its bump-PR CI — the extra pushes never run ahead of the gate. The SDK repo renders the
+  full notes immediately; it gates its own bump PRs from the same merge.
 - Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
   that PR is already open, re-syncs its title, body and label to the version this run
   produced (`.github/scripts/upsert_release_pr.py`).
@@ -41,8 +47,9 @@ a stale title misleads reviewers rather than mis-tagging a release.
 `.github/scripts/release_bump_debounce.py`). Each force-push is a `synchronize` that re-runs
 all PR CI on the bump PR, and most merges change nothing it would ship: Renovate commits are
 forced to `chore`, which does not move the version past the first patch bump. Since FND-3748
-chores do appear in the rendered notes, so a Renovate merge changes the CHANGELOG section and
-is pushed — which is affordable only because bump-PR CI is opt-in (next section). The push is
+chores do appear in the rendered notes of a repo whose bump-PR CI is gated, so there a Renovate
+merge changes the CHANGELOG section and is pushed — affordable only because that CI is opt-in
+(next section). An ungated app repo keeps the old notes, so Renovate merges still don't push. The push is
 skipped when the open branch
 already carries the computed version (in every version file) and the same CHANGELOG section,
 date aside, **and** still merges cleanly onto the new tip. Anything the script cannot establish

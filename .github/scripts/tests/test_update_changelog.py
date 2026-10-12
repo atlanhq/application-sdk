@@ -406,3 +406,116 @@ class TestCategorizeCommits:
         section = update_changelog.format_changelog_section(cats, "1.0.0", "1.1.0")
         headings = [ln for ln in section.splitlines() if ln.startswith("### ")]
         assert headings == [f"### {h}" for _, h, _ in update_changelog.SECTIONS]
+
+
+# ---------------------------------------------------------------------------
+# Per-repo rollout: full notes only once the repo's bump-PR CI is gated
+# ---------------------------------------------------------------------------
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_TEMPLATES = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
+
+
+@pytest.mark.usefixtures("fixed_repo")
+class TestLegacySections:
+    SUBJECTS = [
+        "feat: add thing",
+        "chore(deps): update pyarrow",
+        "docs: explain thing",
+        "perf: rewrite hot loop",
+        "fix(io): repair thing",
+        "ci: tweak workflow",
+        "Merge something unconventional",
+    ]
+
+    def test_renders_exactly_the_pre_fnd_3748_notes(self) -> None:
+        """Same headings, entries and order the old generator produced, so the
+        FND-3322 debounce sees no change in a repo that has not resynced."""
+        lines = [_line(s, sha=f"{i:07d}") for i, s in enumerate(self.SUBJECTS)]
+        sections = update_changelog.LEGACY_SECTIONS
+        cats = update_changelog.categorize_commits(lines, sections)
+        body = update_changelog.format_changelog_section(
+            cats, "1.0.0", "1.1.0", sections
+        )
+        link = "https://github.com/testorg/testrepo/commit/"
+        expected = (
+            "### Features\n\n"
+            f"- add thing (by @dev in [0000000]({link}0000000))\n"
+            f"- explain thing (by @dev in [0000002]({link}0000002))\n\n"
+            "### Bug Fixes\n\n"
+            f"- repair thing (by @dev in [0000004]({link}0000004))\n\n"
+        )
+        assert body.endswith(expected)
+        assert body.count("### ") == 2
+
+    def test_a_renovate_merge_does_not_change_legacy_notes(self) -> None:
+        sections = update_changelog.LEGACY_SECTIONS
+        before = update_changelog.categorize_commits([_line("fix: a")], sections)
+        after = update_changelog.categorize_commits(
+            [_line("fix: a"), _line("chore(deps): bump x", sha="def5678")], sections
+        )
+        assert before == after
+
+
+class TestSectionsForRepo:
+    def _repo(self, tmp_path: Path, workflow: str | None) -> Path:
+        if workflow is not None:
+            wf = tmp_path / ".github" / "workflows"
+            wf.mkdir(parents=True)
+            (wf / "tests.yaml").write_text(workflow)
+        return tmp_path
+
+    def test_gated_repo_gets_full_notes(self, tmp_path: Path) -> None:
+        root = self._repo(tmp_path, "if: contains(labels, 'gate-check')\n")
+        assert update_changelog.sections_for_repo(root) is update_changelog.SECTIONS
+
+    @pytest.mark.parametrize("workflow", ["on: push\n", None])
+    def test_ungated_repo_keeps_legacy_notes(
+        self, tmp_path: Path, workflow: str | None
+    ) -> None:
+        root = self._repo(tmp_path, workflow)
+        assert (
+            update_changelog.sections_for_repo(root) is update_changelog.LEGACY_SECTIONS
+        )
+
+    @pytest.mark.parametrize(
+        "template",
+        ["tests.yaml", "checks.yml", "conformance.yaml", "vulnerability-scan.yml"],
+    )
+    def test_every_gated_shim_carries_the_marker(self, template: str) -> None:
+        """The coupling: the resync that gates a repo is what flips its notes."""
+        text = (_TEMPLATES / template).read_text(encoding="utf-8")
+        assert update_changelog.OPT_IN_MARKER in text
+
+
+class TestSectionsWiring:
+    def test_app_bump_workflow_passes_auto(self) -> None:
+        text = (_REPO_ROOT / ".github/workflows/release-version-bump.yaml").read_text()
+        assert "update_changelog.py" in text
+        assert "--sections auto" in text
+
+    def test_sdk_release_keeps_full_notes(self) -> None:
+        """The SDK gates its own bump PRs from the moment this merges."""
+        text = (_REPO_ROOT / ".github/workflows/release.yaml").read_text()
+        assert "update_changelog.py" in text
+        assert "--sections" not in text
+
+    @pytest.mark.parametrize(
+        ("flag", "expected"), [("all", "SECTIONS"), ("legacy", "LEGACY_SECTIONS")]
+    )
+    def test_main_selects_sections(
+        self, monkeypatch: pytest.MonkeyPatch, flag: str, expected: str
+    ) -> None:
+        seen = {}
+        monkeypatch.setattr(
+            update_changelog, "get_commits_since_last_tag", lambda v: ["a|b|feat: x"]
+        )
+        monkeypatch.setattr(update_changelog, "update_changelog_file", lambda c: None)
+
+        def capture(commits, sections):
+            seen["sections"] = sections
+            return {key: [] for key, _, _ in sections}
+
+        monkeypatch.setattr(update_changelog, "categorize_commits", capture)
+        update_changelog.main(["1.0.0", "1.0.1", "--sections", flag])
+        assert seen["sections"] is getattr(update_changelog, expected)
