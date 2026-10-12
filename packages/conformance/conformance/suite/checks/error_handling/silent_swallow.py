@@ -458,6 +458,15 @@ class SilentSwallowMixin:
             for statement in class_node.body
         ):
             return None
+        # ``self._helper = other`` anywhere in the class shadows the method on
+        # instances, so the lexical definition no longer proves the callee.
+        if any(
+            isinstance(node, ast.Attribute)
+            and node.attr == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in ast.walk(class_node)
+        ):
+            return None
         return helper
 
     @staticmethod
@@ -515,44 +524,59 @@ class SilentSwallowMixin:
                         return True
             if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
                 return True
+            if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+                return True
+            if isinstance(node, ast.MatchMapping) and node.rest == name:
+                return True
         return False
 
     @staticmethod
-    def _expression_uses_parameter(expression: ast.expr, parameter: str) -> bool:
-        """Whether an eagerly evaluated value passed to a log uses its input."""
-        if isinstance(expression, ast.Name):
-            return expression.id == parameter and isinstance(expression.ctx, ast.Load)
-        if isinstance(
-            expression,
-            (
-                ast.BoolOp,
-                ast.Compare,
-                ast.DictComp,
-                ast.GeneratorExp,
-                ast.IfExp,
-                ast.Lambda,
-                ast.ListComp,
-                ast.NamedExpr,
-                ast.SetComp,
-            ),
-        ):
-            return False
+    def _expression_represents_parameter(expression: ast.expr, parameter: str) -> bool:
+        """Whether a value passed to a log carries its input's identity or text.
+
+        Allowlisted shapes only: the bare name (``%s`` / ``exc_info=``),
+        ``str()`` / ``repr()`` of it, an f-string field of it, or ``%``
+        formatting with it as an operand. Lossy derivations such as
+        ``bool(problem)`` or ``type(problem)`` do not surface the exception.
+        """
+
+        def is_parameter(node: ast.AST) -> bool:
+            return (
+                isinstance(node, ast.Name)
+                and node.id == parameter
+                and isinstance(node.ctx, ast.Load)
+            )
+
+        if is_parameter(expression):
+            return True
         if isinstance(expression, ast.Call):
-            if any(isinstance(arg, ast.Starred) for arg in expression.args) or any(
-                keyword.arg is None for keyword in expression.keywords
+            return (
+                isinstance(expression.func, ast.Name)
+                and expression.func.id in {"str", "repr"}
+                and len(expression.args) == 1
+                and not expression.keywords
+                and is_parameter(expression.args[0])
+            )
+        if isinstance(expression, ast.JoinedStr):
+            return any(
+                isinstance(value, ast.FormattedValue)
+                and value.format_spec is None
+                and is_parameter(value.value)
+                for value in expression.values
+            )
+        if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Mod):
+            if not (
+                isinstance(expression.left, ast.Constant)
+                and isinstance(expression.left.value, str)
             ):
                 return False
-            children = [
-                *expression.args,
-                *(keyword.value for keyword in expression.keywords),
-            ]
-        else:
-            children = list(ast.iter_child_nodes(expression))
-        return any(
-            SilentSwallowMixin._expression_uses_parameter(child, parameter)
-            for child in children
-            if isinstance(child, ast.expr)
-        )
+            operands = (
+                expression.right.elts
+                if isinstance(expression.right, ast.Tuple)
+                else [expression.right]
+            )
+            return any(is_parameter(operand) for operand in operands)
+        return False
 
     def _helper_logs_parameter_before_return(
         self, helper: ast.FunctionDef, parameter: str
@@ -595,7 +619,7 @@ class SilentSwallowMixin:
             if isinstance(call, ast.Await):
                 call = call.value
             if isinstance(call, ast.Call) and any(
-                self._expression_uses_parameter(value, parameter)
+                self._expression_represents_parameter(value, parameter)
                 for value in [*call.args, *(keyword.value for keyword in call.keywords)]
             ):
                 return True
@@ -622,6 +646,16 @@ class SilentSwallowMixin:
         ):
             return False
         receiver = caller_parameters[0].arg
+        # A rebound receiver (``self = proxy``) no longer resolves to this class.
+        if any(
+            self._statement_rebinds_name(statement, receiver)
+            for statement in caller.body
+        ) or any(
+            isinstance(node, ast.Nonlocal) and receiver in node.names
+            for node in ast.walk(caller)
+        ):
+            return False
+        caller_is_classmethod = bool(caller.decorator_list)
         for statement in statements:
             if isinstance(statement, ast.Expr):
                 expression = statement.value
@@ -640,6 +674,10 @@ class SilentSwallowMixin:
                     continue
                 helper = self._class_helper(class_node, call.func.attr)
                 if helper is None:
+                    continue
+                # ``cls.method(x)`` on a plain method is unbound: ``x`` lands in
+                # ``self``, so the descriptor-binding argument shift is wrong.
+                if caller_is_classmethod and not helper.decorator_list:
                     continue
                 argument = self._bound_method_argument(call, helper, handler.name)
                 if (
