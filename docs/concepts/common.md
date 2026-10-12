@@ -292,10 +292,6 @@ own typed error before the call that can fail; the fallback is for causes you ca
 and `InternalError` files them against the app rather than the customer (conformance rule
 F021).
 
-The helper only picks the leaf. A retryable leaf does not make a check advisory: in
-`preflight_check`, whether the error is a blocking check or an advisory row on a `READY`
-verdict is still the handler's decision.
-
 ### Catch by shape or by domain
 
 ```python
