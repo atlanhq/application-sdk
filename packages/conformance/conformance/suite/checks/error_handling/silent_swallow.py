@@ -963,8 +963,8 @@ def _inspection_aliases(
                 ...
 
     Only whole-list copies are tracked -- ``dest.extend(var)``,
-    ``dest.append(var)`` and ``dest += var`` -- and transitively, so a chain of
-    copies resolves too. Element-wise copies are deliberately excluded: those
+    ``dest.append(var)``, ``dest += var`` and ``dest = var`` -- and
+    transitively, so a chain of copies resolves too. Element-wise copies are deliberately excluded: those
     require the caller to have touched each element already.
     """
     names = {var_name}
@@ -995,22 +995,42 @@ def _inspection_aliases(
             ):
                 dest = node.target.id
                 src = node.value.id
+            # `dest = var` / `dest: list = var` — a plain rebinding
+            elif (
+                isinstance(node, (ast.Assign, ast.AnnAssign))
+                and isinstance(node.value, ast.Name)
+                and len(targets := _assign_targets(node)) == 1
+                and isinstance(targets[0], ast.Name)
+            ):
+                dest = targets[0].id
+                src = node.value.id
             if src in names and dest is not None and dest not in names:
                 names.add(dest)
                 changed = True
     return names
 
 
+def _assign_targets(node: ast.Assign | ast.AnnAssign) -> list[ast.expr]:
+    """Targets of an assignment; chained ``a = b = x`` yields several."""
+    return node.targets if isinstance(node, ast.Assign) else [node.target]
+
+
+def _is_exception_class_name(name: str) -> bool:
+    """Whether *name* reads as an exception class (``AppError``, ``FooException``).
+
+    Types cannot be resolved from the AST, so this leans on the PEP 8
+    convention that exception class names end in ``Error`` or ``Exception``.
+    """
+    return name == "BaseException" or name.endswith(("Error", "Exception"))
+
+
 def _is_exception_type(node: ast.AST) -> bool:
-    """Whether an isinstance type expression includes Exception or BaseException."""
+    """Whether an isinstance type expression names an exception class."""
     if isinstance(node, ast.Name):
-        return node.id in {"Exception", "BaseException"}
+        return _is_exception_class_name(node.id)
     if isinstance(node, ast.Attribute):
-        return (
-            isinstance(node.value, ast.Name)
-            and node.value.id == "builtins"
-            and node.attr in {"Exception", "BaseException"}
-        )
+        # `builtins.Exception`, `errors.AppError`, `pkg.errors.AppError`
+        return _is_exception_class_name(node.attr)
     if isinstance(node, ast.Tuple):
         return any(_is_exception_type(element) for element in node.elts)
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):

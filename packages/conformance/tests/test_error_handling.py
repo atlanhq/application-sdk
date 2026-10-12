@@ -2583,6 +2583,74 @@ async def run():
     )
 
 
+def test_p010_no_finding_custom_exception_type_comprehension() -> None:
+    """A typed error class (by the Error/Exception naming convention) counts."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, AppError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_dotted_custom_exception_type_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, errors_mod.FetchError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_plain_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_no_finding_annotated_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes: list = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_plain_alias_not_inspected_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    return outcomes
+""",
+        "E010",
+    )
+
+
 def test_p010_comprehension_dropping_exceptions_still_fires() -> None:
     """Keeping only the successes is the silent swallow, not an inspection."""
     _single(
