@@ -1945,16 +1945,70 @@ def get_value():
     )
 
 
-def test_p007_no_finding_log_before_return() -> None:
-    _none(
-        """\
-def get_value():
-    try:
-        return fetch()
-    except KeyError:
-        logger.warning("key missing", exc_info=True)
-        return None
+def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _failed_check(self, label, problem, started):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+        return FailedCheck(label=label, error=problem)
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._failed_check("keys", problem, started))
+            return Verdict(checks=checks)
 """
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _empty_check(self, problem):
+        return EmptyCheck()
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._empty_check(problem))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_logs_unrelated_data() -> None:
+    src = """\
+class Probe:
+    def _report(self, detail):
+        logger.warning("other operation failed: %s", detail, exc_info=detail)
+        return EmptyCheck()
+
+    def inspect(self, unrelated):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._report(unrelated))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_json_parse_failure_returning_original_value() -> None:
+    _single(
+        """\
+def decode_setting(value):
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+""",
+        "E007",
     )
 
 
