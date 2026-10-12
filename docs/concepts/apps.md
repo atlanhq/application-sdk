@@ -790,14 +790,18 @@ probe is skipped silently only when the handler already returned `NOT_READY`, si
 blocked or reported on that verdict whatever storage would have said.
 
 Note the deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure
-confirmed across the gate's retry attempts blocks in hard mode — a store rejecting every upload
-for hours is not the transient blip fail-open protects.
+confirmed across the gate's retry attempts becomes the verdict. Whether it then blocks in hard mode
+depends on its category. In-cluster, every probed store is Atlan-side, so the failure is
+`DEPENDENCY_UNAVAILABLE` and is reported as `would_block`, never blocked. In SDR mode the store is
+the customer's own bucket: a missing binding (`PRECONDITION`), a denied grant (`PERMISSION`) or
+rejected credentials (`AUTH`) block, while an unreachable store (`SOURCE_UNAVAILABLE`) does not.
 
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:
 
-- **In hard mode an overrun blocks the run**, so the declared budget and the handler's actual cost
-  must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
+- **An overrun is never a verdict.** It is classified `TIMEOUT`, which does not block even in hard
+  mode, so a handler that overruns leaves the gate with no evidence about the source. The declared
+  budget and the handler's actual cost must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
 - **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
   outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
   blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not

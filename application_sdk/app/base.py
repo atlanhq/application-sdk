@@ -1029,12 +1029,15 @@ class App(ABC):
     traced multi-hour extractions dying at the final upload to that
     condition). A failed probe — after the gate's retry attempts are exhausted
     — appends a typed platform-attributed check and downgrades a ``READY`` or
-    ``PARTIAL`` verdict to ``NOT_READY``, so :attr:`preflight_gate_mode`
-    decides whether it blocks; soft mode only reports it as ``would_block``.
+    ``PARTIAL`` verdict to ``NOT_READY``. In hard mode it blocks only when its
+    category is in ``GATE_BLOCKING_CATEGORIES``: in-cluster stores are
+    Atlan-side and map to ``DEPENDENCY_UNAVAILABLE``, which is reported as
+    ``would_block``; in SDR mode a missing binding, denied grant or rejected
+    credential on the customer's bucket blocks. Soft mode only reports it.
 
     Deliberately opt-in while the fleet's probe precision is measured: the probe
-    costs under a second per run against healthy storage, but a hard-mode app
-    turning this on is trusting a storage canary to abort real runs — and the
+    costs under a second per run against healthy storage, but a hard-mode SDR
+    app turning this on is trusting a storage canary to abort real runs — and the
     probe is stricter than a small-artifact-only workload's real writes, which
     never touch multipart at all.
 
