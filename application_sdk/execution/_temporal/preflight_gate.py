@@ -1626,8 +1626,9 @@ def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
     message = (
         f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
         "is deprecated until application-sdk "
-        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; return READY with the failed check as "
-        f"an advisory row instead. From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
+        f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; raise a retryable SourceUnavailableError "
+        "leaf instead, which the gate retries on its next attempt and never blocks on. "
+        f"From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
         "is reported as an unverifiable source; it never blocks a hard gate."
     )
     warnings.warn(message, DeprecationWarning, stacklevel=2)

@@ -439,6 +439,42 @@ except Exception as exc:
     )
 
 
+def test_p004_no_finding_when_severed_raise_hands_the_cause_to_a_typed_error() -> None:
+    # A typed error given the caught exception as ``cause=`` carries it through
+    # the SDK's own redaction: the wire envelope renders it with
+    # sanitize_cause_repr, so ``from None`` severs only the raw traceback.
+    assert "E004" not in _findings(
+        """\
+try:
+    found = read_store(credential)
+except Exception as exc:
+    raise StoreTransientError(message="store did not answer", cause=exc) from None
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        'StoreTransientError(message="store did not answer", cause=str(exc))',
+        'StoreTransientError(message="store did not answer", cause=previous)',
+        'make_store_error(message="store did not answer", cause=exc)',
+        'StoreTransientError(message="store did not answer", context=exc)',
+    ],
+    ids=["stringified-cause", "other-cause", "lowercase-factory", "other-keyword"],
+)
+def test_p004_still_flags_severed_raise_without_a_typed_cause(raised: str) -> None:
+    assert "E004" in _findings(
+        f"""\
+def probe(previous):
+    try:
+        found = read_store(credential)
+    except Exception as exc:
+        raise {raised} from None
+"""
+    )
+
+
 def test_p004_no_finding_when_severed_raise_uses_staged_redacted_local() -> None:
     # The redacted text may be built up over several statements before the
     # raise references it — the fixpoint in redaction_scope() resolves the chain.
@@ -3953,11 +3989,18 @@ _SEVERED_RAISE_GUARD = """\
             raise StoreTransientError(message="unavailable", cause=exc) from None
 """
 
+_SEVERED_UNCAUSED_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable") from None
+"""
+
 
 @pytest.mark.parametrize(
     "annotation", ["AppError | None", "Optional[AppError]", "AccessDeniedError"]
 )
-@pytest.mark.parametrize("guard", [_EXITING_GUARD, _CHAINED_RAISE_GUARD])
+@pytest.mark.parametrize(
+    "guard", [_EXITING_GUARD, _CHAINED_RAISE_GUARD, _SEVERED_RAISE_GUARD]
+)
 def test_typed_failure_no_finding_when_annotated_helper_classifies_the_caught_error(
     annotation: str, guard: str
 ) -> None:
@@ -3967,11 +4010,11 @@ def test_typed_failure_no_finding_when_annotated_helper_classifies_the_caught_er
     assert "E007" not in findings
 
 
-def test_typed_failure_severed_guard_raise_is_still_e004() -> None:
-    # The helper proof clears the return (E007), but ``from None`` on the other
-    # exit severs the chain, which E004 judges on its own.
+def test_typed_failure_severed_guard_raise_without_a_cause_is_still_e004() -> None:
+    # The helper proof clears the return (E007), but the other exit severs the
+    # chain and drops the cause, which E004 judges on its own.
     src = _ANNOTATED_CLASSIFIER.format(
-        annotation="AppError | None", guard=_SEVERED_RAISE_GUARD
+        annotation="AppError | None", guard=_SEVERED_UNCAUSED_GUARD
     )
     assert _findings(src) == ["E004"]
 

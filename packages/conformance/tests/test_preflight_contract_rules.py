@@ -553,3 +553,123 @@ def test_f007_reports_each_failed_error_on_one_line(tmp_path):
     assert len(messages) == 2
     assert any("RateLimitedError" in m for m in messages)
     assert any("InternalError" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# F008: a retryable, non-deprecated transient may be raised
+# ---------------------------------------------------------------------------
+
+# The gate's no-verdict path retries a raise on the next attempt, and never
+# blocks on SOURCE_UNAVAILABLE or TIMEOUT. A retryable leaf in one of those is
+# "ask me again", not an expected failure escaping. The fail-open categories
+# the gate deprecated (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED,
+# CANCELLED) stay flagged, as does any raise whose category or retryability the
+# detector cannot read.
+_TRANSIENT_IMPORTS = (
+    "from typing import ClassVar\n"
+    "from application_sdk.errors import (\n"
+    "    AppError, AppTimeoutError, CancelledError, DependencyUnavailableError,\n"
+    "    FailureCategory, RateLimitedError, ResourceExhaustedError,\n"
+    "    SourceUnavailableError,\n"
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Server restarting")'),
+        ("", 'AppTimeoutError(message="Probe outran its budget")'),
+        (
+            "class SourceRestartingError(SourceUnavailableError):\n"
+            '    code: ClassVar[str] = "SOURCE_UNAVAILABLE_EXAMPLE_RESTART"\n',
+            "SourceRestartingError()",
+        ),
+        ("", 'SourceUnavailableError(message="Server restarting", retryable=True)'),
+    ],
+    ids=["sdk-source-unavailable", "sdk-timeout", "app-leaf", "explicit-retryable"],
+)
+def test_retryable_transient_raise_is_not_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" not in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    [
+        "DependencyUnavailableError",
+        "RateLimitedError",
+        "ResourceExhaustedError",
+        "CancelledError",
+    ],
+)
+def test_deprecated_fail_open_category_raise_is_f008(tmp_path: Path, leaf: str) -> None:
+    assert "F008" in check(
+        tmp_path, f'raise {leaf}(message="Blip")', _TRANSIENT_IMPORTS
+    )
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Down", retryable=False)'),
+        (
+            "class DefinitiveOutageError(SourceUnavailableError):\n"
+            "    default_retryable: ClassVar[bool] = False\n",
+            "DefinitiveOutageError()",
+        ),
+        (
+            "class StoreBlipError(SourceUnavailableError):\n"
+            "    category: ClassVar[FailureCategory] = FailureCategory.DEPENDENCY_UNAVAILABLE\n",
+            "StoreBlipError()",
+        ),
+        (
+            "class UnknownCategoryError(AppError):\n"
+            "    category: ClassVar[FailureCategory] = pick_category()\n",
+            "UnknownCategoryError()",
+        ),
+        ("", 'SourceUnavailableError(message="Down", retryable=flag)'),
+    ],
+    ids=[
+        "explicit-not-retryable",
+        "class-not-retryable",
+        "category-overridden-to-deprecated",
+        "unknown-category",
+        "unknown-retryable",
+    ],
+)
+def test_transient_raise_the_detector_cannot_clear_is_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+def test_sdk_error_category_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_category
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert sdk_error_category(f"application_sdk.errors.{name}") == (
+            cls.category.name,
+            cls.default_retryable,
+        ), name
+
+
+def test_raisable_transient_categories_match_the_gate():
+    from conformance.suite.checks.preflight._contracts import (
+        RAISABLE_TRANSIENT_CATEGORIES,
+    )
+
+    from application_sdk.execution._temporal.preflight_gate import (
+        DEPRECATED_FAIL_OPEN_CATEGORIES,
+        GATE_NEVER_BLOCKING_CATEGORIES,
+    )
+
+    assert RAISABLE_TRANSIENT_CATEGORIES == {
+        c.name for c in GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES
+    }

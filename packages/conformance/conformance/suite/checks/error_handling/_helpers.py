@@ -489,7 +489,26 @@ def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
         return False
     if expr_sanitizes_name(stmt.exc, scope.exc_name):
         return True
+    if _typed_error_takes_cause(stmt.exc, scope.exc_name):
+        return True
     return _references_any(stmt.exc, scope.redacted_at.get(id(stmt), frozenset()))
+
+
+def _typed_error_takes_cause(expr: ast.expr, exc_name: str) -> bool:
+    """True when *expr* is a typed error given the caught exception as ``cause=``.
+
+    ``AppError(cause=exc)`` is the SDK's own redaction path: the wire envelope
+    renders the cause with ``sanitize_cause_repr``, so the failure survives in
+    redacted form even after ``from None`` drops the raw traceback. Only the
+    binding itself counts — ``cause=str(exc)`` is text, and a lowercase factory
+    proves nothing about what it builds.
+    """
+    if not isinstance(expr, ast.Call) or not _class_like(_get_name(expr.func)):
+        return False
+    return any(
+        kw.arg == "cause" and isinstance(kw.value, ast.Name) and kw.value.id == exc_name
+        for kw in expr.keywords
+    )
 
 
 def _raise_carries_cause(stmt: ast.Raise, scope: RedactionScope | None) -> bool:

@@ -306,20 +306,32 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Return expected typed preflight failures rather than letting them escape.
+> Return verdicts for source states; raise only retryable, non-deprecated transients.
 
-**Rationale:** The target origin-based gate applies hard mode to handler raises; a raised transient is
-no longer a fail-open request.
+**Rationale:** The gate classifies by who raised: anything the handler raises is its statement about
+the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf earns a retry and never a
+block; any other raised failure loses the check row a returned verdict carries, and a
+raised fail-open category is a deprecated request the gate no longer honours as
+plumbing.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-openapi-app app/handler.py — `_check_spec_source` catches AppError and returns the
-  failed row with `exc.to_failure_details()`; only the gate-transient categories are
-  re-raised, on purpose, so the gate fails open on a blip instead of the handler
-  crashing on an expected failure.
+- **Compliant example:** atlan-mysql-app app/handler.py — the auth probe returns a NOT_READY verdict carrying the
+  typed error for a definitive source state, and raises only the retryable
+  SOURCE_UNAVAILABLE leaf `transient_failure` classifies for a server blip (`raise
+  transient from e`). Its tests/unit/test_preflight_conformance.py
+  `recoverable_transient` scenario asserts the raise and the clean READY on the next
+  attempt.
 - **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
-Return expected typed preflight failures rather than letting them escape.
+An expected failure of the source — bad credentials, a missing grant, an absent object —
+is a verdict: return it as a failed PreflightCheck carrying the typed error. The one
+thing a handler may raise is a transient that says "ask me again": a retryable leaf
+whose category is SOURCE_UNAVAILABLE or TIMEOUT. The gate retries that raise on its next
+attempt and never blocks a hard run on it. Never raise DEPENDENCY_UNAVAILABLE,
+RATE_LIMITED, RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the
+gate deprecated that idiom. A raise whose category or retryability the checker cannot
+read from the error class (or a literal `retryable=`) stays flagged.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f008).
