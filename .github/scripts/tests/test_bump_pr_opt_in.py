@@ -103,6 +103,45 @@ class TestClear:
         }
 
 
+class TestEnsureLabel:
+    @pytest.mark.parametrize(
+        ("code", "stderr", "ok"),
+        [
+            (0, "", True),
+            (1, 'label with name "gate-check" already exists', True),
+            (1, "HTTP 403: Resource not accessible by integration", False),
+        ],
+    )
+    def test_only_unexpected_failures_warn(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        code: int,
+        stderr: str,
+        ok: bool,
+    ) -> None:
+        monkeypatch.setattr(
+            bump_pr_opt_in,
+            "run",
+            lambda cmd: subprocess.CompletedProcess(cmd, code, "", stderr),
+        )
+        assert bump_pr_opt_in.ensure_label_exists("o/r") is ok
+        assert ("::warning::" in capsys.readouterr().out) is (not ok)
+
+
+def test_gh_calls_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stalled `gh` call reads as a failed call instead of hanging the job."""
+
+    def hang(cmd, **kwargs):
+        assert kwargs["timeout"] == bump_pr_opt_in.GH_TIMEOUT_S
+        raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
+
+    monkeypatch.setattr(bump_pr_opt_in.subprocess, "run", hang)
+    result = bump_pr_opt_in.run(["gh", "api", "x"])
+    assert result.returncode != 0
+    assert "timed out" in result.stderr
+
+
 # ── check ─────────────────────────────────────────────────────────────────────
 
 

@@ -48,16 +48,31 @@ LEGACY_OPT_IN_LABEL = "e2e"
 BUMP_BRANCH_PREFIX = "bump-version"
 OPT_IN_DESCRIPTION = "Run the full release gate on this bump-version PR's head"
 OPT_IN_COLOR = "fbca04"
+# Per `gh` call. A stalled API request must not hold the bump job (or the
+# gate it feeds) open until the job's own timeout; a timeout reads as a
+# failed call, which every caller already handles.
+GH_TIMEOUT_S = 120
 
 
 def run(cmd: list[str]) -> subprocess.CompletedProcess:
-    """Single seam so tests can stub the `gh` CLI."""
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+    """Single seam so tests can stub the `gh` CLI. Bounded by GH_TIMEOUT_S."""
+    try:
+        return subprocess.run(
+            cmd, capture_output=True, text=True, check=False, timeout=GH_TIMEOUT_S
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            cmd, 124, "", f"timed out after {GH_TIMEOUT_S}s"
+        )
 
 
-def ensure_label_exists(repo: str) -> None:
-    """Create the opt-in label if missing. "Already exists" is the common case."""
-    run(
+def ensure_label_exists(repo: str) -> bool:
+    """Create the opt-in label if missing. "Already exists" is the common case.
+
+    Any other failure is surfaced as a warning — without the label a reviewer
+    has nothing to add from the UI — but never fails the release push.
+    """
+    result = run(
         [
             "gh",
             "label",
@@ -71,6 +86,13 @@ def ensure_label_exists(repo: str) -> None:
             OPT_IN_DESCRIPTION,
         ]
     )
+    if result.returncode == 0 or "already exists" in result.stderr.lower():
+        return True
+    print(
+        f"::warning::could not create the '{OPT_IN_LABEL}' label on {repo}; "
+        f"reviewers must create it to opt in: {result.stderr.strip()}"
+    )
+    return False
 
 
 def open_pr_labels(repo: str, base: str, head: str) -> tuple[int, set[str]] | None:

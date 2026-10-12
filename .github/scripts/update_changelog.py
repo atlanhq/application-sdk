@@ -188,12 +188,9 @@ def categorize_commits(commits):
             continue
 
         section = _TYPE_TO_SECTION.get(commit_type, "other")
-        if section == "other":
-            msg = message_subject
-        else:
-            msg = match["desc"]
-            if match["breaking"]:
-                msg = f"**BREAKING:** {msg}"
+        msg = message_subject if section == "other" else match["desc"]
+        if match and match["breaking"]:
+            msg = f"**BREAKING:** {msg}"
         categories[section].append((commit_link, author_name, msg))
 
     return categories

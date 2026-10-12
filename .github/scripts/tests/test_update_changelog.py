@@ -370,6 +370,11 @@ class TestCategorizeCommits:
         cats = update_changelog.categorize_commits([_line("feat(api)!: drop v1")])
         assert cats["features"][0][2] == "**BREAKING:** drop v1"
 
+    @pytest.mark.parametrize("subject", ["test!: drop fixture", "revert!: undo api"])
+    def test_breaking_marker_kept_in_other(self, subject: str) -> None:
+        cats = update_changelog.categorize_commits([_line(subject)])
+        assert cats["other"][0][2] == f"**BREAKING:** {subject}"
+
     @pytest.mark.parametrize(
         "subject", ["feat(conformance): new rule", "fix(contract-toolkit)!: x"]
     )
