@@ -153,6 +153,33 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
+def _class_has_pytest_collection_opt_out(cls: ast.ClassDef) -> bool:
+    """True when the class locally sets ``__test__`` to the literal ``False``."""
+    test_value: ast.expr | None = None
+    for stmt in cls.body:
+        value: ast.expr | None = None
+        if isinstance(stmt, ast.Assign):
+            targets = stmt.targets
+            value = stmt.value
+        elif isinstance(stmt, ast.AnnAssign):
+            targets = [stmt.target]
+            value = stmt.value
+        elif isinstance(stmt, ast.AugAssign):
+            targets = [stmt.target]
+        elif isinstance(stmt, ast.Delete):
+            targets = stmt.targets
+        else:
+            continue
+
+        if any(
+            isinstance(target, ast.Name) and target.id == "__test__"
+            for target in targets
+        ):
+            test_value = value
+
+    return isinstance(test_value, ast.Constant) and test_value.value is False
+
+
 def _collect_tests(
     tree: ast.Module,
 ) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
@@ -160,13 +187,15 @@ def _collect_tests(
 
     Mirrors pytest's default collection: module-level ``test*`` functions,
     and ``test*`` methods of module-level ``Test*`` classes (one level deep —
-    the same shape T001 mirrors).
+    the same shape T001 mirrors). A class with a class-local literal
+    ``__test__ = False`` is excluded, as pytest does; inherited or dynamic
+    values are not inferred.
     """
     collected: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = []
     for node in tree.body:
         if is_test_function(node):
             collected.append((node, node.name))
-        elif is_test_class(node):
+        elif is_test_class(node) and not _class_has_pytest_collection_opt_out(node):
             for sub in node.body:
                 if is_test_function(sub):
                     collected.append((sub, f"{node.name}.{sub.name}"))

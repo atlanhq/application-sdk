@@ -74,6 +74,35 @@ def test_t005_fires_on_class_method_with_no_assertion() -> None:
     assert "TestFoo.test_bar" in findings[0].message
 
 
+def test_t005_silent_on_pytest_opted_out_class_with_abstract_test_methods() -> None:
+    findings = scan_text(
+        "from abc import abstractmethod\n"
+        "class TestAdapter:\n"
+        "    __test__ = False\n"
+        "    @abstractmethod\n"
+        "    def test_connect(self):\n"
+        "        raise NotImplementedError\n"
+        "    @abstractmethod\n"
+        "    def test_disconnect(self):\n"
+        "        raise NotImplementedError\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_still_fires_on_workflow_method_without_opt_out() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        super().run_pipeline()\n"
+        "        print('completed')\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
 def test_t005_silent_on_bare_assert() -> None:
     findings = scan_text(
         "def test_foo():\n    x = compute()\n    assert x == 1\n",
