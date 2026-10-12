@@ -19,8 +19,9 @@ rewritten into a recognised shape or suppressed with a reason.
 (``name = Subclass(...)``) from its line to the next rebinding of that name.
 The client is *closed* if an ``async with <name>`` statement, or a ``try``
 whose ``finally`` calls ``await <name>.close()`` (anywhere inside it, so the
-``if owns_client:`` ownership guard is accepted), follows the binding in its
-own block or an enclosing one, or if such a ``try`` encloses the binding (see
+``if owns_client:`` ownership guard is accepted), is the next statement after
+the binding — only inert statements that make no call (:func:`_is_inert`) may
+sit between — or if such a ``try`` encloses the binding (see
 :func:`_cleanup_follows`).  It has *escaped* — and is skipped — if it is
 returned, yielded, passed as an argument, stored on an attribute / in a
 container, or referenced from a nested scope.  A plain local alias
@@ -32,8 +33,8 @@ fires.
 ``P057`` flags a ``close`` method defined directly on a registered subclass
 unless its body awaits ``super().close()`` (or an explicit
 ``<Base>.close(self)`` on a strict ancestor) as a statement directly in the
-body, or directly in the ``finally`` of a ``try`` directly in the body.
-``BaseClient.close()`` is a coroutine, so a bare call only builds a coroutine
+body, or directly in the ``finally`` of a ``try`` directly in the body, with
+only inert statements before it in that block.  ``BaseClient.close()`` is a coroutine, so a bare call only builds a coroutine
 object and releases nothing.
 """
 
@@ -124,33 +125,82 @@ def _parent_links(root: ast.AST) -> _Links:
 _TRY_NODES = (ast.Try, ast.TryStar)
 _LOOP_NODES = (ast.For, ast.AsyncFor, ast.While)
 
+#: Simple statements that may sit between a binding and its cleanup.
+_INERT_STMTS = (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Expr, ast.Pass)
+
+#: Expression nodes that make an otherwise simple statement able to leave the
+#: function early: a call or ``await`` runs arbitrary code that may raise.
+_EXITING_EXPRS = (ast.Call, ast.Await, ast.Yield, ast.YieldFrom)
+
+#: Blocks the next-statement scan may climb out of to the enclosing block's
+#: following statement.  Leaving a ``try`` / ``except`` / loop body can divert
+#: control (to a handler, an ``else``, another iteration), so the climb stops.
+_TRANSPARENT_BLOCKS = (ast.If, ast.With, ast.AsyncWith, ast.Match, ast.match_case)
+
+
+def _is_inert(stmt: ast.stmt) -> bool:
+    """True if *stmt* cannot leave the function before the next statement.
+
+    Only simple assignments and expression statements that make no call and
+    await nothing (``owns_client = self.client is None``, a docstring).
+    Anything that calls code — including ``await client.load()`` — may raise,
+    and a ``return`` / ``raise`` / compound statement may leave or divert.
+    Plain attribute and operator evaluation are treated as non-raising.
+    """
+    return isinstance(stmt, _INERT_STMTS) and not any(
+        isinstance(node, _EXITING_EXPRS) for node in ast.walk(stmt)
+    )
+
+
+def _next_effective(stmts: list[ast.stmt], sites: set[int]) -> bool | None:
+    """Scan *stmts* past inert statements: True at a site, False at anything else.
+
+    ``None`` means the block ran out with only inert statements.
+    """
+    for stmt in stmts:
+        if id(stmt) in sites:
+            return True
+        if not _is_inert(stmt):
+            return False
+    return None
+
 
 def _cleanup_follows(binding: ast.stmt, sites: set[int], links: _Links) -> bool:
-    """True if a cleanup statement in *sites* structurally follows *binding*.
+    """True if a cleanup statement in *sites* is guaranteed to follow *binding*.
 
-    The recognised shapes only, no path analysis: a site statement later in the
-    binding's own block, or later in any enclosing block, or a ``try`` that
-    encloses the binding (its ``finally`` is the cleanup).  A site nested under
-    an ``if`` / ``match`` / ``except`` / loop that does not also hold the binding
-    is never reached here, because only sibling statements are inspected.  The
-    climb stops at a loop: cleanup after the loop closes only the last
-    iteration's client.
+    The recognised shapes only, no path analysis:
+
+    * a ``try`` that encloses the binding and whose ``finally`` is the cleanup
+      (not across a loop: that closes only the last iteration's client); or
+    * the cleanup is the next statement after the binding, with only inert
+      statements (:func:`_is_inert`) between — climbing out of an ``if`` /
+      ``with`` / ``match`` body to the statement after it when the binding's
+      block runs out.
+
+    Any call, ``await``, ``return``, ``raise`` or compound statement between the
+    binding and the cleanup could leave before it, so it fires — move the
+    cleanup up, or wrap the work in the ``try``.
     """
     current: ast.AST = binding
+    while id(current) in links:
+        parent, name = links[id(current)]
+        if isinstance(parent, _TRY_NODES) and name != "finalbody":
+            if id(parent) in sites:
+                return True
+        if isinstance(parent, _LOOP_NODES):
+            break
+        current = parent
+
+    current = binding
     while id(current) in links:
         parent, name = links[id(current)]
         if isinstance(current, ast.stmt):
             block = getattr(parent, name)
             index = next(i for i, s in enumerate(block) if s is current)
-            if any(id(s) in sites for s in block[index + 1 :]):
-                return True
-        if (
-            isinstance(parent, _TRY_NODES)
-            and name != "finalbody"
-            and id(parent) in sites
-        ):
-            return True
-        if isinstance(parent, _LOOP_NODES):
+            found = _next_effective(block[index + 1 :], sites)
+            if found is not None:
+                return found
+        if not isinstance(parent, _TRANSPARENT_BLOCKS):
             return False
         current = parent
     return False
@@ -350,7 +400,9 @@ def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -
 
     The documented fix shapes only, no path analysis: an ``await`` of the base
     close as a statement directly in the override's body, or directly in the
-    ``finally`` of a ``try`` that is itself directly in the body.  Anything else
+    ``finally`` of a ``try`` that is itself directly in the body — and in either
+    block only inert statements (:func:`_is_inert`) may come before it, since a
+    call or ``await`` that raises first would skip it.  Anything else
     — under an ``if``, a loop, an ``except`` handler, a ``try`` body or
     ``else``, a nested helper, or not awaited (``BaseClient.close()`` is a
     coroutine) — fires, even where every path happens to close.  An explicit
@@ -380,12 +432,17 @@ def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -
             SDK_BASE_CLIENTS | ancestors
         )
 
-    body: list[ast.stmt] = getattr(func, "body", [])
-    return any(
-        is_base_close(stmt)
-        or (isinstance(stmt, _TRY_NODES) and any(map(is_base_close, stmt.finalbody)))
-        for stmt in body
-    )
+    def closes_first(stmts: list[ast.stmt]) -> bool:
+        for stmt in stmts:
+            if is_base_close(stmt):
+                return True
+            if isinstance(stmt, _TRY_NODES) and closes_first(stmt.finalbody):
+                return True
+            if not _is_inert(stmt):
+                return False
+        return False
+
+    return closes_first(getattr(func, "body", []))
 
 
 def check_p057(
@@ -445,13 +502,12 @@ class _Lifecycle:
     """How a function treats one locally constructed client."""
 
     closed: bool = False
-    closed_outside_finally: bool = False
-    closed_on_some_paths: bool = False
+    #: Some ``async with`` / ``close()`` exists, but not in a recognised shape.
+    close_skippable: bool = False
     escaped: bool = False
-    #: Statements that close the client: ``async with`` statements and ``try``
-    #: statements whose ``finally`` closes it; and bare ``await close()`` ones.
-    protected: set[int] = field(default_factory=set)
-    unprotected: set[int] = field(default_factory=set)
+    #: ``async with`` statements, and ``try`` statements whose ``finally``
+    #: closes the client.
+    sites: set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -519,8 +575,8 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
     considered between the line it takes the client and its next rebinding.
     Cleanup only counts in a recognised shape (:func:`_cleanup_follows`): an
     ``async with`` statement, or a ``try`` whose ``finally`` closes the client,
-    that follows the binding in its own or an enclosing block, or a ``try``
-    that encloses the binding.  Anywhere inside the ``finally`` counts — a
+    that is the next non-inert statement after the binding, or a ``try`` that
+    encloses the binding.  Anywhere inside the ``finally`` counts — a
     condition there is the ownership-guard shape (``finally: if owns_client:
     await client.close()``).
     """
@@ -544,14 +600,11 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
                     and item.context_expr.id == span.name
                     for item in node.items
                 ):
-                    state.protected.add(id(node))
-                    state.closed_on_some_paths = True
+                    state.sites.add(id(node))
+                    state.close_skippable = True
             elif _is_close_call_on(node, span.name):
-                owners = scope.finally_of.get(id(node), [])
-                state.protected.update(owners)
-                if not owners and isinstance(parent, ast.Expr):
-                    state.unprotected.add(id(parent))
-                state.closed_on_some_paths = True
+                state.sites.update(scope.finally_of.get(id(node), []))
+                state.close_skippable = True
             elif (
                 isinstance(node, ast.Name)
                 and node.id == span.name
@@ -567,10 +620,7 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
     if state.escaped:
         return state
 
-    if _cleanup_follows(binding, state.protected, scope.links):
-        state.closed = True
-    elif _cleanup_follows(binding, state.protected | state.unprotected, scope.links):
-        state.closed_outside_finally = True
+    state.closed = _cleanup_follows(binding, state.sites, scope.links)
     return state
 
 
@@ -615,15 +665,11 @@ def check_p056(
             state = _lifecycle(scope, scope.span(name, stmt.lineno), stmt)
             if state.closed or state.escaped:
                 continue
-            if state.closed_outside_finally:
+            if state.close_skippable:
                 how = (
-                    f"'{name}.close()' is only reached when no exception is raised "
-                    "before it"
-                )
-            elif state.closed_on_some_paths:
-                how = (
-                    f"'{name}' is only closed inside a branch, loop or handler, "
-                    "not by an 'async with' or 'finally' that follows it"
+                    f"'{name}' is closed, but not by an 'async with' or 'finally' "
+                    "guaranteed to run: an exception, return or branch before "
+                    "it can skip the close"
                 )
             else:
                 how = f"'{name}' is never closed"

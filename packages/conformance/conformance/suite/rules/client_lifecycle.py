@@ -35,18 +35,20 @@ clear the first.
 
 Both rules match the documented cleanup *shapes*, not paths.  Cleanup counts
 only as an ``async with`` statement or a ``try`` whose ``finally`` closes the
-client, placed after the binding in its own or an enclosing block (or a
-``try`` that encloses the binding); for ``P057``, ``await super().close()``
-directly in the override's body or in the ``finally`` of a ``try`` directly in
-it.  Every recognised shape is exception-safe by construction.  Cleanup nested
+client that is the *next statement* after the binding (or a ``try`` that
+encloses the binding); for ``P057``, ``await super().close()`` directly in the
+override's body or in the ``finally`` of a ``try`` directly in it.  Only inert
+statements — assignments and expressions that make no call and await nothing —
+may come before the cleanup: a call, ``await``, ``return``, ``raise`` or
+branch there could leave before it.  Every recognised shape is
+exception-safe by construction.  Cleanup nested
 under an ``if``, a loop or an ``except`` handler fires even when every arm
 closes: a path analysis complete enough to accept those cannot be built
 statically, and the fix — restructure into a recognised shape, or suppress
 with a reason — is one edit.  The one accepted condition is a guard inside
 the ``finally`` itself (``finally: if owns_client: await client.close()``),
-which decides who owns the client rather than whether cleanup runs.  An
-exception raised between the binding and the ``try`` that follows it is not
-modelled: the documented shape puts the ``try`` on the next line.  A module-level client is a process-lifetime singleton
+which decides who owns the client rather than whether cleanup runs.  A
+module-level client is a process-lifetime singleton
 and is out of scope.  A ``close()`` reached only on the happy path (not in a
 ``finally``) still fires: the exception path is exactly when it leaks.
 
@@ -157,10 +159,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "neither is a module-level client.  A plain local alias\n"
             "(``alias = client``) is not a hand-off and is tracked too.  The\n"
             "check matches **shapes, not paths**: the ``async with`` or the\n"
-            "``try`` / ``finally`` must follow the binding in its own block or an\n"
-            "enclosing one (or the ``try`` must enclose the binding).  Cleanup\n"
-            "nested under an ``if``, a loop or an ``except`` handler fires even\n"
-            "when every arm closes — restructure it, or suppress with a reason.\n"
+            "``try`` / ``finally`` must be the next statement after the binding\n"
+            "(or the ``try`` must enclose the binding).  Only assignments that\n"
+            "make no call may sit between: a call such as ``await\n"
+            "client.load()``, a ``return`` or a branch before the cleanup could\n"
+            "skip it.  Cleanup nested under an ``if``, a loop or an ``except``\n"
+            "handler fires even when every arm closes — restructure it, or\n"
+            "suppress with a reason.\n"
             "A condition inside the ``finally`` itself (``if owns_client:``) is\n"
             "accepted as an ownership guard.\n"
             "Subclasses are resolved by module-qualified name across the repo,\n"
@@ -222,7 +227,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "without ``await`` releases nothing.  The check matches **shapes,\n"
             "not paths**: the awaited call must be a statement directly in the\n"
             "override's body, or directly in the ``finally`` of a ``try`` that is\n"
-            "directly in the body.  A call in a nested helper, or under an\n"
+            "directly in the body, with no call or ``await`` before it in that\n"
+            "block (one that raises would skip it).  A call in a nested helper, or under an\n"
             "``if``, a loop or an ``except`` handler — even in every arm — does\n"
             "not satisfy the rule.  An explicit ``<Base>.close(self)`` counts\n"
             "only when ``<Base>`` is a strict ancestor.\n"
@@ -232,6 +238,15 @@ RULES: tuple[RuleDefinition, ...] = (
             "    async def close(self) -> None:\n"
             "        self.session_token = None\n"
             "        await super().close()\n"
+            "\n"
+            "If the subclass cleanup calls or awaits anything, run it in a\n"
+            "``try`` and the super call in the ``finally``::\n"
+            "\n"
+            "    async def close(self) -> None:\n"
+            "        try:\n"
+            "            await self.flush()\n"
+            "        finally:\n"
+            "            await super().close()\n"
             "\n"
             "See " + _CLIENTS_DOC + ".\n"
             "\n"

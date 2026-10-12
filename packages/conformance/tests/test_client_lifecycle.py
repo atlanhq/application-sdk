@@ -76,7 +76,7 @@ def test_p056_fires_when_close_is_outside_finally() -> None:
         "    await client.close()\n"
     )
     assert len(fs) == 1
-    assert "only reached when no exception is raised" in fs[0].message
+    assert "an exception, return or branch before it can skip" in fs[0].message
 
 
 def test_p056_fires_on_annotated_binding_and_sync_def() -> None:
@@ -517,6 +517,9 @@ def test_p057_silent_on_explicit_close_of_an_intermediate_ancestor() -> None:
         "            raise\n        else:\n            await super().close()\n",
         "        try:\n            await self.flush()\n        finally:\n"
         "            if self.session_token:\n                await super().close()\n",
+        "        await self.flush()\n        await super().close()\n",
+        "        try:\n            pass\n        finally:\n"
+        "            await self.flush()\n            await super().close()\n",
     ],
     ids=[
         "under-if",
@@ -528,6 +531,8 @@ def test_p057_silent_on_explicit_close_of_an_intermediate_ancestor() -> None:
         "try-body",
         "try-else",
         "guarded-in-finally",
+        "await-before-direct-close",
+        "await-before-close-in-finally",
     ],
 )
 def test_p057_fires_unless_base_close_is_in_a_recognised_shape(body: str) -> None:
@@ -574,7 +579,7 @@ def test_p057_silent_when_base_close_is_in_finally() -> None:
 def test_p056_fires_unless_cleanup_is_in_a_recognised_shape(body: str) -> None:
     fs = _p056("async def f(flag):\n    client = SourceClient()\n" + body)
     assert len(fs) == 1
-    assert "only closed inside a branch, loop or handler" in fs[0].message
+    assert "an exception, return or branch before it can skip" in fs[0].message
 
 
 @pytest.mark.parametrize(
@@ -585,23 +590,26 @@ def test_p056_fires_unless_cleanup_is_in_a_recognised_shape(body: str) -> None:
         "    for _ in range(3):\n        client = SourceClient()\n"
         "        try:\n            await client.load()\n"
         "        finally:\n            await client.close()\n",
-        "    client = SourceClient()\n    await client.load()\n"
+        "    client = SourceClient()\n    owns = flag is None\n"
         "    async with client:\n        pass\n",
         "    client = SourceClient()\n    try:\n        await client.load()\n"
         "    finally:\n        if flag:\n            await client.close()\n"
         "        else:\n            await client.close()\n",
         "    try:\n        client = SourceClient()\n        await client.load()\n"
         "    finally:\n        await client.close()\n",
-        "    client = SourceClient()\n    if flag:\n        await client.load()\n"
+        "    with flag:\n        client = SourceClient()\n"
         "    async with client:\n        pass\n",
+        "    client = SourceClient()\n    try:\n        await client.load()\n"
+        "    finally:\n        await client.flush()\n        await client.close()\n",
     ],
     ids=[
         "bound-and-closed-under-same-if",
         "bound-and-closed-in-same-loop",
-        "async-with-later-in-block",
+        "async-with-after-inert-statement",
         "close-in-both-arms-of-finally",
         "try-encloses-binding",
-        "bound-before-if-closed-after",
+        "bound-in-with-closed-after",
+        "close-anywhere-in-finally",
     ],
 )
 def test_p056_silent_on_a_recognised_shape(body: str) -> None:
@@ -617,14 +625,27 @@ def test_p056_fires_when_cleanup_after_a_loop_only_closes_the_last_client() -> N
     assert len(fs) == 1
 
 
-def test_p056_happy_path_message_for_both_arm_closes_outside_finally() -> None:
-    fs = _p056(
-        "async def f(flag):\n    client = SourceClient()\n"
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    await client.load()\n    async with client:\n        pass\n",
+        "    if flag:\n        return None\n    async with client:\n        pass\n",
+        "    if flag:\n        await client.load()\n"
+        "    try:\n        pass\n    finally:\n        await client.close()\n",
         "    if flag:\n        await client.close()\n"
-        "    else:\n        await client.close()\n"
-    )
+        "    else:\n        await client.close()\n",
+    ],
+    ids=[
+        "call-before-async-with",
+        "early-return-before-async-with",
+        "branch-before-try",
+        "both-arms-close-outside-finally",
+    ],
+)
+def test_p056_fires_when_something_can_leave_before_the_cleanup(body: str) -> None:
+    fs = _p056("async def f(flag):\n    client = SourceClient()\n" + body)
     assert len(fs) == 1
-    assert "only closed inside a branch, loop or handler" in fs[0].message
+    assert "an exception, return or branch before it can skip" in fs[0].message
 
 
 # ── Cross-file resolution + SDK-version gate (repo boundary) ────────────────
