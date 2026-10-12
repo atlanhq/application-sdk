@@ -1205,12 +1205,75 @@ def probe():
         _report_failure("operation", caught, endpoint)
         return None
 """,
+        # `exc_info` is a traceback switch: a truthy sanitized value still
+        # attaches the raw active traceback, so it proves no redaction.
+        """\
+def _report_failure(problem):
+    logger.error("failed", exc_info=safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A walrus in an `if` test replaces the failure before the log.
+        """\
+def _report_failure(problem):
+    if (problem := None):
+        pass
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A conditional module-level rebinding may replace the proven helper.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem))
+
+
+if DISABLE_LOGGING:
+    _report_failure = lambda problem: None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A positional-only parameter cannot be bound by keyword.
+        """\
+def _report_failure(problem, /):
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(problem=caught)
+        return None
+""",
     ],
     ids=[
         "conditional-bypass",
         "helper-unaccepted-debug-branch",
         "raw-exception",
         "sanitizes-other-value",
+        "sanitizer-in-exc-info",
+        "walrus-in-if-test",
+        "conditional-module-rebinding",
+        "positional-only-by-keyword",
     ],
 )
 def test_p004_still_flags_unproven_redacted_logging_helper(src: str) -> None:

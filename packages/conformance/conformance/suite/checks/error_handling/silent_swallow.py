@@ -13,6 +13,7 @@ from ._helpers import (
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _body_returns_typed_failure,
+    _call_argument_for_parameter,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -130,9 +131,16 @@ class SilentSwallowMixin:
         def _call_redacts_parameter(call: ast.Call, parameter: str) -> bool:
             sanitized = False
             raw = False
+            # `exc_info` is a traceback switch, not message text: any truthy
+            # value — a sanitized string included — attaches the raw active
+            # traceback, so a sanitizer there proves no redaction.
             pending: list[ast.AST] = [
                 *call.args,
-                *[keyword.value for keyword in call.keywords],
+                *[
+                    keyword.value
+                    for keyword in call.keywords
+                    if keyword.arg != "exc_info"
+                ],
             ]
             while pending:
                 current = pending.pop()
@@ -211,36 +219,29 @@ class SilentSwallowMixin:
             return active, exited
 
         def _helper_logs_parameter(helper: ast.FunctionDef, parameter: str) -> bool:
+            # A write to the parameter anywhere — an `if (p := None):` test, a
+            # walrus inside the log call's own arguments — can replace the
+            # failure before the sanitizer sees it; the flow below does not
+            # track values, so any rebinding leaves the proof incomplete.
+            if any(
+                (
+                    isinstance(descendant, ast.Name)
+                    and descendant.id == parameter
+                    and isinstance(descendant.ctx, (ast.Store, ast.Del))
+                )
+                or (
+                    isinstance(descendant, (ast.Global, ast.Nonlocal))
+                    and parameter in descendant.names
+                )
+                for statement in helper.body
+                for descendant in ast.walk(statement)
+            ):
+                return False
             paths = _logged_paths(helper.body, {False}, parameter)
             if paths is None:
                 return False
             all_paths = paths[0] | paths[1]
             return bool(all_paths) and all_paths == {True}
-
-        def _argument_for_parameter(
-            call: ast.Call, helper: ast.FunctionDef, parameter: str
-        ) -> ast.expr | None:
-            if any(isinstance(argument, ast.Starred) for argument in call.args) or any(
-                keyword.arg is None for keyword in call.keywords
-            ):
-                return None
-            positional = [*helper.args.posonlyargs, *helper.args.args]
-            if len(call.args) > len(positional):
-                return None
-            supplied = {
-                argument.arg: value
-                for argument, value in zip(positional, call.args, strict=False)
-            }
-            keyword_parameters = {
-                argument.arg
-                for argument in [*helper.args.args, *helper.args.kwonlyargs]
-            }
-            for keyword in call.keywords:
-                assert keyword.arg is not None
-                if keyword.arg not in keyword_parameters or keyword.arg in supplied:
-                    return None
-                supplied[keyword.arg] = keyword.value
-            return supplied.get(parameter)
 
         def _handler_logs_through_helper() -> bool:
             if node.name is None:
@@ -283,7 +284,7 @@ class SilentSwallowMixin:
                     *helper.args.kwonlyargs,
                 ]
                 for parameter in parameters:
-                    passed = _argument_for_parameter(call, helper, parameter.arg)
+                    passed = _call_argument_for_parameter(call, helper, parameter.arg)
                     if (
                         isinstance(passed, ast.Name)
                         and passed.id == node.name
