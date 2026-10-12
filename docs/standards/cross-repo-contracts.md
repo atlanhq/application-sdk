@@ -107,6 +107,37 @@ route:
   `atlan-default-<deployment>`, which reads as a legitimate queue and hangs the
   run silently.
 
+## The directory `FileReference` manifest (`manifest_path`)
+
+| | |
+|---|---|
+| **Produced by** | `persist_file_reference()`'s directory branch in `application_sdk/storage/reference.py`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
+| **Served at** | `FileReference.manifest_path` on every durable directory ref, in Temporal payloads passed between tasks — and between apps when one app's output is another's input |
+| **Format** | JSON `{"version": 1, "files": [{"path", "sha256", "size_bytes"}]}`; `path` is relative to the ref's `storage_path` prefix, `/`-separated; `sha256` is lowercase hex |
+| **Read by** | `materialize_file_reference()` and `App.verify_refs()` in whatever SDK version the consuming app pins — so a producer on this SDK hands manifests to consumers on any version |
+| **Pinned by** | `tests/unit/storage/test_directory_manifest.py` |
+
+The manifest is the hand-off's statement of exactly which objects it covers.
+It is written **last**, so its presence means every listed object landed, and
+it is read instead of listing the prefix.
+
+- **The location is carried, not derived.** The key is on the ref; it lives
+  under the tier's `file_refs/` namespace (`{base}/file_refs/{uuid}.manifest.json`)
+  and is never inside the data prefix or beside it. A consumer must read
+  `manifest_path` and never compute it from `storage_path`. Do not move the
+  manifest inside the prefix: an SDK that predates manifests lists the prefix
+  and would read it as a data file.
+- **The field is additive, and must stay optional.** An older SDK decodes a new
+  ref with the default `extra="ignore"`, drops `manifest_path`, and falls back to
+  listing — which is why the manifest must stay out of the prefix. Making the
+  field required, or forbidding extras on `FileReference`, breaks mixed-version
+  hand-offs mid-deploy.
+- **Adding a manifest field is safe; changing `version`, renaming a field, or
+  changing what `path` is relative to is not.** `DirectoryManifest` pins
+  `version` to `1`, so an older reader rejects a v2 manifest with
+  `StorageIntegrityError` rather than misreading it. Bumping it needs a reader
+  that accepts both, shipped first.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |

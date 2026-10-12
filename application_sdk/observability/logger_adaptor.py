@@ -299,6 +299,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "file_count",
         "files_skipped",
         "files_downloaded",
+        "files_listed",
+        "manifest_path",
         "chunk_size_bytes",
         "chunks_total",
         "chunks_completed",

@@ -1880,6 +1880,9 @@ class App(ABC):
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             exists,
         )
+        from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+            _fetch_manifest,
+        )
 
         if input.store is StoreTarget.UPSTREAM:
             store = self.context.upstream_storage or self.context.storage
@@ -1918,7 +1921,21 @@ class App(ABC):
             # Getting this wrong is not a near-miss: a one-file directory ref
             # HEADed as an object key 404s on a prefix that is perfectly
             # intact, so the run fails claiming data is lost when it is not.
-            if raw_key.endswith("/") or ref.file_count != 1:
+            if ref.manifest_path is not None:
+                # The producer wrote the manifest last, so its presence is the
+                # proof every listed object landed — no listing needed, and
+                # stray objects under a reused prefix cannot pad the count.
+                manifest = await _fetch_manifest(store, ref.manifest_path)
+                if manifest is None:
+                    missing.append(f"{ref.manifest_path} (manifest)")
+                    continue
+                listed = len(manifest.files)
+                if listed < max(ref.file_count, 1):
+                    missing.append(
+                        f"{key}/ (manifest lists {listed}/{ref.file_count} files)"
+                    )
+                    continue
+            elif raw_key.endswith("/") or ref.file_count != 1:
                 if ref.file_count < 1:
                     # ``len(found) < 0`` is false for every listing, so a
                     # zero-count ref would otherwise pass without checking
@@ -2259,7 +2276,8 @@ class App(ABC):
 
         1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
            intermediary files (``StorageTier.TRANSIENT``, the default).
-           Each key and its ``.sha256`` sidecar are deleted.
+           Each key and its ``.sha256`` sidecar are deleted, and a directory
+           ref's manifest (``manifest_path``) with it.
            ``RETAINED`` and ``PERSISTENT`` tier refs are skipped, and so is
            any key a ``TRANSIENT`` ref shares with one of them — a file key,
            its sidecar, or a key under a durable directory ref. Each such
@@ -2333,6 +2351,9 @@ class App(ABC):
                 durable_prefixes.append(durable_path)
             else:
                 durable_keys.update((durable_path, durable_path + ".sha256"))
+            durable_manifest: str | None = getattr(ref, "manifest_path", None)
+            if durable_manifest:
+                durable_keys.add(durable_manifest)
 
         def _is_durable(key: str) -> bool:
             return key in durable_keys or any(
@@ -2385,6 +2406,17 @@ class App(ABC):
                                 deleted += 1
                             else:
                                 errors += 1
+                    # The manifest sits outside the prefix by design, so the
+                    # listing above never reaches it.
+                    manifest_key: str | None = getattr(ref, "manifest_path", None)
+                    if manifest_key:
+                        if _is_durable(manifest_key):
+                            skipped += 1
+                            aliased += 1
+                        elif await _delete_one(manifest_key):
+                            deleted += 1
+                        else:
+                            errors += 1
                     if aliased:
                         _warn_durable_alias(storage_path, aliased)
                 else:

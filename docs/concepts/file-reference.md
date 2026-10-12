@@ -108,10 +108,13 @@ class FileReference(BaseModel, frozen=True):
     tier: StorageTier = StorageTier.TRANSIENT
     file_count: int = 1                # number of files; >1 for directory uploads
     auto_materialize: bool = True      # False = SDK never touches this ref
+    manifest_path: str | None = None   # directory refs: key of the exact-file-set manifest
 ```
 
-You never set `storage_path`, `is_durable`, or `file_count` yourself — the SDK
-fills them in during persist and materialize.
+You never set `is_durable`, `file_count`, or `manifest_path` yourself — the SDK
+fills them in during persist and materialize. `storage_path` is optional: leave
+it unset and the SDK generates a unique `file_refs/{uuid}` key, or set it to pin
+a canonical key (single file) or prefix (directory).
 
 > **On an entry point's contract, a `FileReference` must declare its shape.** An entry point's
 > `input`/return contracts are a public boundary — another app or the platform DAG reads what you
@@ -290,9 +293,47 @@ The SDK uploads every file in the directory recursively (bounded concurrency),
 preserves the directory structure under the storage prefix, and recreates it on
 download. `file_count` on the durable ref tells you how many files were uploaded.
 
+**The manifest.** After the last file lands, persist writes a manifest — every
+file's relative path, SHA-256 and size — and puts its key on the durable ref as
+`manifest_path`. The manifest lives under the tier's `file_refs/` namespace,
+never inside the data prefix. Materialize downloads exactly the manifest's files
+and checks each against the manifest digest; it does not list the prefix. So:
+
+- objects under the prefix that the manifest does not name — a failed earlier
+  attempt's leftovers, a timed-out attempt still writing — are ignored;
+- a listed file overwritten after the manifest was written fails with
+  `StorageIntegrityError` instead of being processed;
+- a missing manifest fails retryably rather than falling back to a listing.
+
+**Pinning a directory prefix.** Because consumers read the manifest, a directory
+ref may pin `storage_path` to a canonical prefix exactly as a single-file ref
+pins its key — on any tier:
+
+```python
+return ExtractOutput(
+    tables=FileReference(
+        local_path=str(output_dir),
+        storage_path=f"{output_path}/raw/table/",  # honoured; trailing / optional
+    )
+)
+```
+
+A `TRANSIENT` pin is still deleted at end of run: cleanup deletes tracked refs
+by key (including the manifest), wherever they live.
+
+**Refs without a manifest** — produced by an SDK that predates manifests, or
+built by hand — are materialized by listing the prefix. The listing is checked
+against `file_count` as a lower bound: fewer objects than declared fails
+retryably (`StorageError`, code `STR-009`), including an empty listing for a ref
+that declares any files — the default `file_count=1` does. More objects than
+declared only logs `file_ref.materialize.count_mismatch` at WARNING. A
+hand-built ref over a prefix that can legitimately be empty must declare
+`file_count=0`.
+
 The per-file sidecar fast-path applies inside directories too: on retry, files
-that already have a matching local sidecar are skipped; only changed or missing
-files are re-downloaded.
+whose local copy still matches are skipped (against the manifest digest when
+there is one, else the local sidecar); only changed or missing files are
+re-downloaded.
 
 ### Lazy Materialization
 

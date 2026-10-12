@@ -51,11 +51,17 @@ from application_sdk.common._listing import safe_list_directory
 from application_sdk.common.atomic import atomic_write
 from application_sdk.contracts.types import FileReference
 from application_sdk.storage._locks import PathLockRegistry
+from application_sdk.storage._manifest import (
+    MANIFEST_SUFFIX,
+    DirectoryManifest,
+    ManifestEntry,
+)
 
 if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.storage.batch import DataObject
+    from application_sdk.storage.ops import BoundStore
 
 from application_sdk.observability.logger_adaptor import get_logger
 from application_sdk.storage import integrity
@@ -66,16 +72,23 @@ logger = get_logger(__name__)
 _INFO_LOG_THRESHOLD = 10 * 1024 * 1024  # 10 MiB
 
 
-def _make_storage_path(ref: FileReference, *, output_path: str | None = None) -> str:
+def _make_storage_path(
+    ref: FileReference,
+    *,
+    output_path: str | None = None,
+    suffix: str | None = None,
+) -> str:
     """Generate a unique storage path for a single-file FileReference.
 
-    Delegates to :meth:`StorageTier._make_file_ref_path`.
+    Delegates to :meth:`StorageTier._make_file_ref_path`. *suffix* defaults to
+    the local file's extension; the directory branch passes the manifest suffix.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         APPLICATION_NAME,
     )
 
-    suffix = Path(ref.local_path).suffix if ref.local_path else ""
+    if suffix is None:
+        suffix = Path(ref.local_path).suffix if ref.local_path else ""
     return ref.tier._make_file_ref_path(
         suffix=suffix,
         run_prefix=output_path or "",
@@ -150,18 +163,21 @@ async def persist_file_reference(
     ``materialize_file_reference`` calls can verify integrity without
     re-downloading.
 
-    For directories, walks the directory tree, uploads each file under a
-    generated prefix, and writes per-file sidecars both to the store and
-    locally, so a same-pod materialize of the prefix downloads nothing.
-    Existing local ``.sha256`` sidecars in the tree are not uploaded.
+    For directories, walks the directory tree, uploads each file under the
+    pinned or generated prefix, and writes per-file sidecars both to the store
+    and locally, so a same-pod materialize of the prefix downloads nothing.
+    Existing local ``.sha256`` sidecars in the tree are not uploaded. Last, it
+    writes a manifest of the exact files (path, sha256, size) at a key outside
+    the prefix and returns it as ``manifest_path``; consumers download exactly
+    those files, so a pinned prefix reused across attempts is safe.
 
     Args:
         store: Destination obstore store.
         ref: An ephemeral ``FileReference`` with ``local_path`` set.
-        key: Explicit object-store key (single files only). Precedence:
-            ``key`` → ``ref.storage_path`` → UUID-keyed
-            ``file_refs/<uuid>.json`` fallback. Pass ``None`` (default)
-            to let ``ref.storage_path`` or the fallback decide.
+        key: Explicit object-store key (single file) or prefix
+            (directory). Precedence: ``key`` → ``ref.storage_path`` →
+            UUID-keyed ``file_refs/<uuid>`` fallback. Pass ``None``
+            (default) to let ``ref.storage_path`` or the fallback decide.
         output_path: Run-scoped base prefix (e.g.
             ``artifacts/apps/{app}/workflows/{wf_id}/{run_id}``).  Required
             when ``ref.tier`` is ``StorageTier.RETAINED``; ignored otherwise.
@@ -179,6 +195,7 @@ async def persist_file_reference(
         StorageError,
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _put,
         upload_file,
     )
 
@@ -201,7 +218,25 @@ async def persist_file_reference(
     # Grafana+ClickHouse. Do not rewrite to %-style; that would lose the promotion.
     if local.is_dir():
         # ── Directory upload ───────────────────────────────────────────────
-        prefix = _make_storage_prefix(ref, output_path=output_path)
+        # Same precedence as the single-file branch: explicit ``key`` →
+        # pinned ``ref.storage_path`` → generated UUID prefix. A pinned
+        # prefix is safe only because of the manifest written below: a
+        # consumer reads exactly the manifest's entries, so leftovers from an
+        # earlier attempt under the same prefix are inert (FND-3762).
+        pinned = key or ref.storage_path
+        prefix = (
+            pinned.rstrip("/") + "/"
+            if pinned
+            else _make_storage_prefix(ref, output_path=output_path)
+        )
+        # The manifest never lives inside the prefix: an older SDK lists the
+        # prefix and would read it as data. It goes under the tier's
+        # ``file_refs`` namespace rather than beside the prefix, because the
+        # sibling of a pinned canonical prefix sits inside the parent tree a
+        # publish step walks.
+        manifest_path = _make_storage_path(
+            ref, output_path=output_path, suffix=MANIFEST_SUFFIX
+        )
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
         files = await run_in_thread(safe_list_directory, local)
@@ -220,6 +255,8 @@ async def persist_file_reference(
             tier=str(ref.tier),
         )
 
+        entries: list[ManifestEntry] = []
+
         async def _upload_one(file_path: Path) -> None:
             relative = str(file_path.relative_to(local)).replace(os.sep, "/")
             file_key = f"{prefix}{relative}"
@@ -231,6 +268,8 @@ async def persist_file_reference(
             sha256 = await upload_file(file_key, file_path, store, normalize=False)
             # compute_hash defaults to True, so the digest is always returned here.
             assert sha256 is not None
+            size = (await run_in_thread(file_path.stat)).st_size
+            entries.append(ManifestEntry(path=relative, sha256=sha256, size_bytes=size))
             await run_in_thread(_write_local_sidecar, str(file_path), sha256)
 
         try:
@@ -243,6 +282,15 @@ async def persist_file_reference(
 
             sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
             await _gather_with_semaphore([_upload_one(fp) for fp in files], sem)
+            # Last, and only after every data object landed: a manifest's
+            # presence is the proof the hand-off is complete.
+            manifest = DirectoryManifest(files=sorted(entries, key=lambda e: e.path))
+            await _put(
+                manifest_path,
+                manifest.model_dump_json().encode(),
+                store,
+                normalize=False,
+            )
         except Exception as exc:
             # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
             logger.error(
@@ -258,6 +306,7 @@ async def persist_file_reference(
         logger.info(
             "file_ref.persist.complete",
             storage_path=prefix,
+            manifest_path=manifest_path,
             file_count=len(files),
             duration_ms=int((time.monotonic() - _t0) * 1000),
             tier=str(ref.tier),
@@ -268,6 +317,7 @@ async def persist_file_reference(
             storage_path=prefix,
             file_count=len(files),
             tier=ref.tier,
+            manifest_path=manifest_path,
         )
 
     else:
@@ -354,15 +404,22 @@ async def materialize_file_reference(
     stored sha256 sidecar confirms it is intact, the local sidecar is
     (re-)written and the function returns without downloading.
 
-    **Directory**: all files under the prefix are re-listed; each one whose
-    local copy matches its local ``.sha256`` sidecar is skipped, the rest are
-    downloaded.
+    **Directory with a manifest** (``ref.manifest_path`` set): the prefix is
+    not listed. Exactly the manifest's files are fetched; each one whose local
+    copy hashes to the manifest digest is skipped, the rest are downloaded and
+    checked against it.
+
+    **Directory without a manifest**: all files under the prefix are
+    re-listed; each one whose local copy matches its local ``.sha256`` sidecar
+    is skipped, the rest are downloaded. Fewer listed objects than
+    ``ref.file_count`` fails (retryable); more only warns.
 
     **Empty prefix**: nothing under the prefix, and either no object at the
     exact key or only a 0-byte directory marker. A ref whose ``local_path`` is
-    a directory is returned unchanged, naming that (normally empty) directory —
-    what an empty hand-off *means* is the consumer's judgement, not the storage
-    layer's. With no local directory to hand back, ``StorageNotFoundError`` is
+    a directory and that declares ``file_count=0`` is returned unchanged,
+    naming that (normally empty) directory. One that declares files fails
+    (retryable): an empty listing is also what missing list permission looks
+    like. With no local directory to hand back, ``StorageNotFoundError`` is
     raised as before.
 
     Args:
@@ -378,7 +435,10 @@ async def materialize_file_reference(
     Raises:
         StorageNotFoundError: If the key resolves to no objects and *ref* has
             no local directory to hand back.
-        StorageError: If the downloaded data does not match the stored sidecar.
+        StorageError: Retryable, if fewer objects are visible than the ref
+            declares, or its manifest is not in the store.
+        StorageIntegrityError: If downloaded data does not match the stored
+            sidecar or the manifest digest, or the manifest is malformed.
 
     Concurrency: a stable destination — ``ref.local_path``, or the resolved
     directory — is serialised under a per-path lock (CONNECT-1126), so
@@ -396,6 +456,15 @@ async def materialize_file_reference(
     if not ref.is_durable or ref.storage_path is None:
         return ref  # nothing to materialise
 
+    if ref.manifest_path is not None:
+        # The producer named exactly which objects the hand-off covers, so the
+        # prefix is not listed: retry leftovers and late writes under it are
+        # ignored by construction, and there is no paginated LIST to pay.
+        items = await _read_manifest_items(store, ref)
+        local_directory = _resolve_local_directory(ref, local_dir)
+        async with _materialize_guard(local_directory):
+            return await _materialize_directory(store, ref, items, local_directory)
+
     # Determine single-file vs directory by listing sub-keys under the path.
     # Sizes come back with the listing so the directory branch can chunk large
     # files without a per-file HEAD (BLDX-1513).
@@ -405,16 +474,27 @@ async def materialize_file_reference(
     data_objects = await list_data_objects(ref.storage_path, store)
 
     if data_objects:
-        if ref.local_path is not None:
-            local_directory = ref.local_path
-        elif local_dir is not None:
-            local_directory = local_dir
-        else:
-            local_directory = tempfile.mkdtemp()
-        Path(local_directory).mkdir(parents=True, exist_ok=True)
+        # No manifest, so the listing is all there is. It is a lower bound
+        # check only: an under-count is a hand-off that is not (yet) fully
+        # visible, but an over-count is expected — hand-built directory refs
+        # keep the default ``file_count=1`` whatever they hold.
+        if len(data_objects) < ref.file_count:
+            raise _handoff_not_visible(ref, found=len(data_objects))
+        if len(data_objects) > ref.file_count:
+            # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
+            logger.warning(
+                "file_ref.materialize.count_mismatch",
+                storage_path=ref.storage_path,
+                file_count=ref.file_count,
+                files_listed=len(data_objects),
+            )
+        local_directory = _resolve_local_directory(ref, local_dir)
         async with _materialize_guard(local_directory):
             return await _materialize_directory(
-                store, ref, data_objects, local_directory
+                store,
+                ref,
+                [(obj, None) for obj in data_objects],
+                local_directory,
             )
 
     # An empty listing does not mean "nothing is there". ``list_keys`` appends a
@@ -480,6 +560,13 @@ async def materialize_file_reference(
         # either, so a directory left behind by an earlier pass keeps its
         # contents, and this log must not assert they are not there.
         if local is not None and local.is_dir():
+            # A ref that declares files is not satisfied by an empty listing:
+            # GCS under conditional IAM lists empty without list permission,
+            # and a consumer handed an empty directory would process nothing
+            # without a word. Only a ref declaring zero files — the shape
+            # ``download()`` returns for an empty prefix — gets it back.
+            if ref.file_count > 0:
+                raise _handoff_not_visible(ref, found=0)
             # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
             logger.debug(
                 "file_ref.materialize.empty_prefix",
@@ -502,6 +589,125 @@ async def materialize_file_reference(
         return await _materialize_single_file(
             store, ref, local_dir, remote_meta=remote_meta
         )
+
+
+def _resolve_local_directory(ref: FileReference, local_dir: str | None) -> str:
+    """Pick and create the local directory a directory ref materialises into."""
+    if ref.local_path is not None:
+        local_directory = ref.local_path
+    elif local_dir is not None:
+        local_directory = local_dir
+    else:
+        local_directory = tempfile.mkdtemp()
+    Path(local_directory).mkdir(parents=True, exist_ok=True)
+    return local_directory
+
+
+def _handoff_not_visible(ref: FileReference, *, found: int) -> Exception:
+    """Retryable error for a directory hand-off with fewer objects than declared.
+
+    Retryable rather than a data-integrity failure: a short or empty listing is
+    as often the store's view (eventual listing, an IAM condition that lists
+    empty) as a lost upload, and the next attempt sees the store afresh. A
+    hand-off that is really short keeps failing until retries run out.
+    """
+    from application_sdk.errors import (  # noqa: PLC0415 — circular: errors imports storage evidence helpers
+        STORAGE_HANDOFF_INCOMPLETE,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+    )
+
+    return StorageError(
+        f"Directory FileReference '{ref.storage_path}' declares "
+        f"{ref.file_count} file(s) but {found} are visible under the prefix. "
+        f"Either the producer's upload is incomplete, or the store credentials "
+        f"lack list permission on this location.",
+        key=ref.storage_path,
+        error_code=STORAGE_HANDOFF_INCOMPLETE,
+    )
+
+
+async def _fetch_manifest(
+    store: BoundStore | ObjectStore, manifest_path: str
+) -> DirectoryManifest | None:
+    """Read and parse the manifest at *manifest_path*; ``None`` if absent.
+
+    Raises:
+        StorageIntegrityError: If the object is not a valid manifest.
+    """
+    from pydantic import (  # noqa: PLC0415 — keep pydantic.ValidationError import local to its only use
+        ValidationError,
+    )
+
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageIntegrityError,
+    )
+    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        _get_bytes,
+    )
+
+    raw = await _get_bytes(manifest_path, store, normalize=False)
+    if raw is None:
+        return None
+    try:
+        return DirectoryManifest.model_validate_json(raw)
+    except ValidationError as exc:
+        raise StorageIntegrityError(
+            f"Object '{manifest_path}' is not a valid directory manifest. "
+            f"Re-run the step that produced it.",
+            key=manifest_path,
+            check="manifest",
+            cause=exc,
+        ) from exc
+
+
+async def _read_manifest_items(
+    store: ObjectStore, ref: FileReference
+) -> list[tuple[DataObject, str | None]]:
+    """Fetch *ref*'s manifest and turn it into the exact objects to download."""
+    from application_sdk.storage.batch import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        DataObject,
+    )
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        StorageError,
+        StorageIntegrityError,
+    )
+
+    assert ref.manifest_path is not None and ref.storage_path is not None
+    manifest = await _fetch_manifest(store, ref.manifest_path)
+    if manifest is None:
+        # Not a fallback to listing: the ref says a manifest exists, so a
+        # listing could only pick up objects the producer did not hand off.
+        raise StorageError(
+            f"Directory FileReference '{ref.storage_path}' names manifest "
+            f"'{ref.manifest_path}', which is not in the store. Either it is "
+            f"not visible yet, or the store credentials lack read permission.",
+            key=ref.manifest_path,
+        )
+    if len(manifest.files) < ref.file_count:
+        raise StorageIntegrityError(
+            f"Manifest '{ref.manifest_path}' lists {len(manifest.files)} "
+            f"file(s) but the FileReference declares {ref.file_count}. Re-run "
+            f"the step that produced it.",
+            key=ref.manifest_path,
+            check="manifest",
+            expectation=f">= {ref.file_count} files",
+            observed=f"{len(manifest.files)} files",
+        )
+    prefix = ref.storage_path.rstrip("/") + "/"
+    return [
+        (
+            DataObject(
+                key=prefix + entry.path,
+                size=entry.size_bytes,
+                etag=None,
+                has_sidecar=False,
+            ),
+            entry.sha256,
+        )
+        for entry in manifest.files
+    ]
 
 
 # Structured kwargs in the logger calls of the two helpers below are intentional: every key used
@@ -724,7 +930,7 @@ async def _materialize_single_file(
 async def _materialize_directory(
     store: ObjectStore,
     ref: FileReference,
-    data_objects: list[DataObject],
+    items: list[tuple[DataObject, str | None]],
     local_directory: str,
 ) -> FileReference:
     """Materialise a durable directory-prefix ref (see ``materialize_file_reference``).
@@ -732,6 +938,14 @@ async def _materialize_directory(
     Callers hold the per-path materialise lock on *local_directory*, so two
     activities sharing one directory ref neither duplicate downloads nor
     share an in-flight chunked part file.
+
+    Args:
+        items: Each object to fetch, paired with the digest its manifest
+            records, or ``None`` when the objects came from a listing. With a
+            manifest digest the local copy is reused only if it hashes to that
+            digest, and a download that does not is rejected — independent of
+            the deployment verify switch, because the digest is what makes a
+            pinned prefix safe against a late overwrite.
     """
     from application_sdk.constants import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         FILE_REF_CHUNK_CONCURRENCY,
@@ -744,7 +958,7 @@ async def _materialize_directory(
 
     assert ref.storage_path is not None  # dispatcher returns early on bare refs
 
-    data_keys = [obj.key for obj in data_objects]
+    data_keys = [obj.key for obj, _ in items]
 
     _t0 = time.monotonic()
     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
@@ -758,7 +972,7 @@ async def _materialize_directory(
 
     prefix = ref.storage_path.rstrip("/") + "/"
 
-    async def _download_one(obj: DataObject) -> bool:
+    async def _download_one(obj: DataObject, expected_sha256: str | None) -> bool:
         """Download one file from the prefix. Returns True if skipped (cache hit)."""
         key = obj.key
         rel = key.removeprefix(prefix)
@@ -772,10 +986,22 @@ async def _materialize_directory(
         # file and its sidecar both exist and their hashes agree.
         # This makes same-pod retries (Temporal heartbeat timeouts,
         # OOM recoveries on the same node) free after the first pass.
-        if dest_path.exists() and dest_sidecar.exists():
+        # With a manifest the reference digest is the manifest's, not the
+        # local sidecar's: a file left by an earlier pass agrees with its own
+        # sidecar and may still not be the file this hand-off names.
+        if dest_path.exists() and (
+            expected_sha256 is not None or dest_sidecar.exists()
+        ):
             try:
                 local_hash = await integrity.sha256_file(dest_path)
-                if local_hash == dest_sidecar.read_text(encoding="utf-8").strip():
+                reference = (
+                    expected_sha256
+                    if expected_sha256 is not None
+                    else dest_sidecar.read_text(encoding="utf-8").strip()
+                )
+                if local_hash == reference:
+                    if expected_sha256 is not None:
+                        await run_in_thread(_write_local_sidecar, dest, local_hash)
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
                         "file_ref.materialize.skipped",
@@ -813,7 +1039,18 @@ async def _materialize_directory(
             file_size=obj.size,
             etag=obj.etag,
             sidecar_present=obj.has_sidecar,
+            expected_sha256=expected_sha256,
         )
+        if expected_sha256 is not None and sha256 is not None:
+            # The transfer layer skips this when verification is switched off
+            # deployment-wide; the manifest check must not be.
+            integrity.check_transfer_digest(
+                "download",
+                key,
+                expected=expected_sha256,
+                actual=sha256,
+                local_path=dest,
+            )
         if sha256 is not None:
             await run_in_thread(_write_local_sidecar, dest, sha256)
         return False
@@ -828,7 +1065,7 @@ async def _materialize_directory(
 
         sem = asyncio.Semaphore(MAX_CONCURRENT_STORAGE_TRANSFERS)
         results = await _gather_with_semaphore(
-            [_download_one(obj) for obj in data_objects], sem
+            [_download_one(obj, digest) for obj, digest in items], sem
         )
         skipped = sum(results)
     except Exception as exc:
@@ -858,6 +1095,7 @@ async def _materialize_directory(
         storage_path=ref.storage_path,
         file_count=len(data_keys),
         tier=ref.tier,
+        manifest_path=ref.manifest_path,
     )
 
 
