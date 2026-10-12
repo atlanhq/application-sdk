@@ -1424,6 +1424,7 @@ class AEClient:
         slug: str = "",
         retries: int = 4,
         retry_sleep_seconds: int = 5,
+        on_run_id: Callable[[str], None] | None = None,
     ) -> str:
         """POST ``/api/service/package-workflows?submit=true``.
 
@@ -1493,6 +1494,14 @@ class AEClient:
                 that has the slug should pass it.
             retries: Retries on top of the initial attempt.
             retry_sleep_seconds: Fixed gap between attempts.
+            on_run_id: Called the instant a run id becomes known — on a normal
+                2xx submit AND on the ambiguous-submit recovery path, where the
+                reconcile read adopts a run whose submit response was lost. It
+                fires *before* this method returns the id, so a caller that
+                tracks runs for teardown has the id recorded even if a later
+                step raises; AE submit is non-idempotent, so a lost response can
+                still have started a run teardown must terminate. Must be
+                idempotent — both paths can fire for one submit.
         """
         started = time.monotonic()
         # Wall clock, not the monotonic one above: this is compared against
@@ -1509,6 +1518,13 @@ class AEClient:
                     lookup.run_id,
                     slug,
                 )
+                # Record the recovered id the moment it is known, from inside
+                # the recovery path itself — not only once this method returns.
+                # A submit whose response was lost has still started a run, and
+                # a caller that tracks runs for teardown must not depend on the
+                # normal return to learn the id.
+                if on_run_id is not None:
+                    on_run_id(lookup.run_id)
                 return WriteRecovery(body={"run_id": lookup.run_id})
             return WriteRecovery(
                 proven_absent=lookup.conclusive and _RESUBMIT_WHEN_AE_REPORTS_NO_RUN
@@ -1556,6 +1572,12 @@ class AEClient:
             run_id = data.get("run_id") if isinstance(data, dict) else None
             if run_id:
                 self._warn_on_unsubstituted_parameters(body, run_id)
+                # Record before returning: tracking a run for teardown must not
+                # hinge on the caller's post-return bookkeeping. Idempotent with
+                # the recovery-path call above — a recovered submit comes back
+                # here as a 200 carrying the same id.
+                if on_run_id is not None:
+                    on_run_id(run_id)
                 return run_id
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",

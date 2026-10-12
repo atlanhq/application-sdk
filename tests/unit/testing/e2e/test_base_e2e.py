@@ -22,6 +22,7 @@ import pytest
 
 from application_sdk.contracts.types import ConnectionRef
 from application_sdk.testing.e2e._errors import (
+    AtlanApiTimeoutError,
     DAGProgressStalledError,
     HarnessMethodNotImplementedError,
     ManifestDagMissingError,
@@ -29,6 +30,7 @@ from application_sdk.testing.e2e._errors import (
     MissingHarnessClassAttrError,
     MissingHarnessEnvError,
     ProgressWatchdogUnreachableError,
+    RequestDelivery,
     WorkerNotHealthyError,
 )
 from application_sdk.testing.e2e.base import (
@@ -76,6 +78,11 @@ class _FakeAE:
 
     async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
         self.submits.append((payload, kwargs))
+        # The real client reports the id through this sink the instant it knows
+        # it, which is how a run gets tracked for teardown.
+        on_run_id = kwargs.get("on_run_id")
+        if on_run_id is not None:
+            on_run_id("run-1")
         return "run-1"
 
     async def poll_native_status(self, run_id: str, **kwargs: Any) -> Any:
@@ -1120,6 +1127,9 @@ class TestSubmitRetryKwargs:
         with pytest.raises(RuntimeError, match="stop after submit"):
             harness.run_full_dag()
         _, kwargs = harness._ae.submits[0]
+        # on_run_id is the teardown-tracking sink the submit always carries; the
+        # budget is the rest.
+        assert kwargs.pop("on_run_id") == harness._track_unsettled_run
         assert kwargs == {
             "slug": "slug",
             "retries": 60,
@@ -2122,6 +2132,29 @@ class _TerminatingFakeAE(_FakeAE):
         return True
 
 
+class _AmbiguousSubmitFakeAE(_TerminatingFakeAE):
+    """Submit fires ``on_run_id`` (the run was created) and *then* raises.
+
+    Models the ambiguous submit: AE accepted the run and started it, but the
+    response was lost or the call timed out, so ``submit_workflow`` raises after
+    the id is already known. The real client fires ``on_run_id`` from both the
+    normal 2xx path and the reconcile-recovery path for exactly this reason —
+    the id must be tracked for teardown even though the submit itself raised and
+    the caller never got a return value to record.
+    """
+
+    def __init__(self, *, error: BaseException, order: list[str] | None = None) -> None:
+        super().__init__(order=order)
+        self._submit_error = error
+
+    async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
+        self.submits.append((payload, kwargs))
+        on_run_id = kwargs.get("on_run_id")
+        if on_run_id is not None:
+            on_run_id("run-1")
+        raise self._submit_error
+
+
 def _stub_teardown_io(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None:
     """Replace the tenant-bound teardown steps with order-recording no-ops."""
 
@@ -2132,7 +2165,6 @@ def _stub_teardown_io(monkeypatch: pytest.MonkeyPatch, order: list[str]) -> None
         return None
 
     monkeypatch.setattr(_ConcreteE2ETest, "_delete_connections", _delete_connections)
-    monkeypatch.setattr(_ConcreteE2ETest, "_delete_seed_objects", _noop)
     monkeypatch.setattr(_ConcreteE2ETest, "_close_clients", _noop)
 
 
@@ -2221,6 +2253,41 @@ class TestTeardownTerminatesUnsettledRuns:
 
         assert ae.terminated == []
         assert order == ["delete_connections"]
+
+    def test_an_ambiguous_submit_that_started_a_run_is_terminated_at_teardown(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The orphan gap: a submit that starts a run and then raises/times out.
+
+        AE submit is non-idempotent, so a lost response can still have started a
+        run. The id is recorded via the ``on_run_id`` sink the instant it is
+        known — from inside the submit, not from the caller's post-return append
+        — so it is tracked for teardown even though ``run_full_dag`` raised
+        before it could record anything itself.
+        """
+        order: list[str] = []
+        ae = _AmbiguousSubmitFakeAE(
+            error=AtlanApiTimeoutError(
+                message=(
+                    "submit_workflow timed out after 1 attempt(s) "
+                    "[delivery=ambiguous]"
+                ),
+                operation="/submit",
+                delivery=RequestDelivery.AMBIGUOUS,
+            ),
+            order=order,
+        )
+        harness = self._harness(ae)
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(AtlanApiTimeoutError):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-1"]
+        # Stopped first, before the delete — the orphan must not race it.
+        assert order == ["terminate:run-1", "delete_connections"]
 
     def test_a_run_that_never_submitted_terminates_nothing(
         self, monkeypatch: pytest.MonkeyPatch

@@ -4281,14 +4281,18 @@ class BaseE2ETest:
                 *getattr(self, "_submitted_connection_qns", ()),
                 self.connection_qualified_name,
             ]
+        self._dag_submitted = True
+        # The run id is recorded via _track_unsettled_run the instant _submit
+        # knows it — on a normal submit AND on the ambiguous-submit recovery
+        # path, from inside _submit rather than here. AE submit is
+        # non-idempotent: a submit that starts a run but then raises/times out
+        # must not leave an untracked orphan, so tracking cannot wait for this
+        # call to return. Cleared only once AE reports the run terminal; every
+        # exit in between — the watchdog, the ceiling, a no-worker verdict, a
+        # failed manifest check — leaves a run that teardown has to stop.
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
-        # Recorded before anything else can raise, and cleared only once AE
-        # reports the run terminal: every exit in between — the watchdog, the
-        # ceiling, a no-worker verdict, a failed manifest check — leaves a run
-        # that teardown has to stop.
         unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
-        unsettled.append(run_id)
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point
@@ -4307,6 +4311,25 @@ class BaseE2ETest:
 
         return await self._read_atlas(ae_result)
 
+    def _track_unsettled_run(self, run_id: str) -> None:
+        """Record an AE run id teardown must terminate if it never settles.
+
+        Called the instant a run id becomes known — on a normal submit AND on
+        the ambiguous-submit recovery path, which is why it is a sink
+        :meth:`_submit` hands to ``submit_workflow`` rather than an append the
+        caller does once the submit returns: AE submit is non-idempotent, so a
+        submit that starts a run and then raises/times out must still leave the
+        id tracked. Idempotent — the recovery hook and the normal 2xx return can
+        both fire for one submit.
+
+        Only :meth:`run_full_dag` submissions are tracked. The connection-delete
+        and seed-publish DAGs are tenant-served quick runs that settle on their
+        own, so they are intentionally not recorded here.
+        """
+        unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
+        if run_id not in unsettled:
+            unsettled.append(run_id)
+
     async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
         """POST the run to AE, with the tenant-app cold-start budget applied.
 
@@ -4321,12 +4344,15 @@ class BaseE2ETest:
         """
         retry = self._submit_retry()
         if retry is None:
-            return await self._ae.submit_workflow(payload, slug=slug)
+            return await self._ae.submit_workflow(
+                payload, slug=slug, on_run_id=self._track_unsettled_run
+            )
         return await self._ae.submit_workflow(
             payload,
             slug=slug,
             retries=retry.retries,
             retry_sleep_seconds=retry.sleep_seconds,
+            on_run_id=self._track_unsettled_run,
         )
 
     async def _poll_dag(self, run_id: str) -> DAGRunResult:
