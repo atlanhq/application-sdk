@@ -67,6 +67,25 @@ _BLOCKING_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     thread_name_prefix="sdk-blocking-",
 )
 
+# The pool ``run_in_thread`` uses instead of _BLOCKING_EXECUTOR in this context.
+# The consolidated API host serves many apps from one process and gives each its
+# own pool (``handler.asgi``), so one app's stuck blocking calls exhaust only
+# that app's pool. Unset on the worker, which keeps the shared pool.
+_BLOCKING_EXECUTOR_OVERRIDE: contextvars.ContextVar[
+    concurrent.futures.Executor | None
+] = contextvars.ContextVar("_BLOCKING_EXECUTOR_OVERRIDE", default=None)
+
+
+@contextlib.contextmanager
+def blocking_executor(executor: concurrent.futures.Executor) -> Iterator[None]:
+    """Make ``run_in_thread`` use ``executor`` for the duration of the block."""
+    token = _BLOCKING_EXECUTOR_OVERRIDE.set(executor)
+    try:
+        yield
+    finally:
+        _BLOCKING_EXECUTOR_OVERRIDE.reset(token)
+
+
 # Executor for CancelHandle actions — a driver cancel (cursor.cancel(), a
 # statement-cancel request) fired when the task awaiting a run_in_thread call is
 # cancelled.
@@ -477,11 +496,12 @@ async def run_in_thread(
     if scopes:
         call = _tracked_offload(call, scopes, label)
     cancel_handle = _bound_handle(func)
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     with _auto_hold(_THREAD_HOLD_PREFIX + label, None):
         if cancel_handle is None:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            return await loop.run_in_executor(executor, call)
         try:
-            return await loop.run_in_executor(_BLOCKING_EXECUTOR, call)
+            return await loop.run_in_executor(executor, call)
         except asyncio.CancelledError:
             # Non-blocking: the action is handed to the cancel pool.
             cancel_handle.request()
