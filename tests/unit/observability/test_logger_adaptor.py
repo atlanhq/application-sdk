@@ -1982,8 +1982,9 @@ class TestLevelFiltering:
 class TestProcessV3CorrelationBridge:
     """`process()` falls back to v3 CorrelationContext when legacy ctx empty.
 
-    BLDX-1129 anchor: this exercises the inline import
-    `from application_sdk.observability.correlation import get_correlation_context`.
+    BLDX-1129 anchor: this exercises the module-level
+    `get_correlation_context` that `logger_adaptor` imports from
+    `application_sdk.observability.correlation`.
     """
 
     def test_v3_bridge_populates_correlation_id(
@@ -1994,9 +1995,8 @@ class TestProcessV3CorrelationBridge:
             "application_sdk.observability.logger_adaptor.correlation_context"
         ) as legacy:
             legacy.get.return_value = {}
-            # Inline import target
             with mock.patch(
-                "application_sdk.observability.correlation.get_correlation_context"
+                "application_sdk.observability.logger_adaptor.get_correlation_context"
             ) as v3:
                 v3.return_value = mock.Mock(correlation_id="v3-cid")
                 _, kwargs = logger_adapter.process("m", {})
@@ -2010,7 +2010,7 @@ class TestProcessV3CorrelationBridge:
         ) as legacy:
             legacy.get.return_value = {}
             with mock.patch(
-                "application_sdk.observability.correlation.get_correlation_context"
+                "application_sdk.observability.logger_adaptor.get_correlation_context"
             ) as v3:
                 v3.return_value = None
                 _, kwargs = logger_adapter.process("m", {})
@@ -3331,3 +3331,40 @@ class TestDiagnoseGating:
         """Raising a tenant's verbosity to DEBUG must not re-enable value rendering."""
         stderr = self._run_probe(tmp_path, {"ATLAN_LOG_LEVEL": "DEBUG"})
         assert _DIAGNOSE_CANARY not in stderr
+
+
+def test_apply_atlan_context_imports_nothing_at_log_time() -> None:
+    """The record patcher must not run an import statement while logging.
+
+    It runs on whichever thread logs. At DEBUG, the logger's own flush thread
+    logs asyncio's "Using selector" line while the main thread is still
+    initialising ``application_sdk.observability``; an import here would need
+    that package's module lock and deadlock the boot (``_DeadlockError`` on
+    ``application_sdk.observability.correlation``). A ``from ... import``
+    statement calls ``__import__`` on every execution, so refusing that import
+    catches a lazy import even when the module is already loaded.
+    """
+    import builtins
+
+    from application_sdk.observability.correlation import (
+        CorrelationContext,
+        _correlation_ctx,
+    )
+    from application_sdk.observability.logger_adaptor import _apply_atlan_context
+
+    real_import = builtins.__import__
+
+    def refuse_correlation_import(name, *args, **kwargs):
+        if name == "application_sdk.observability.correlation":
+            raise AssertionError("correlation imported at log time")
+        return real_import(name, *args, **kwargs)
+
+    token = _correlation_ctx.set(CorrelationContext(correlation_id="corr-123"))
+    try:
+        kwargs: dict[str, Any] = {}
+        with mock.patch("builtins.__import__", side_effect=refuse_correlation_import):
+            _apply_atlan_context(kwargs, prefer_caller=True)
+    finally:
+        _correlation_ctx.reset(token)
+
+    assert kwargs["correlation_id"] == "corr-123"
