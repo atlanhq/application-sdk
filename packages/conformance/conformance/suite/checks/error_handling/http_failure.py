@@ -46,61 +46,97 @@ def _int_constant(node: ast.expr) -> int | None:
     return None
 
 
+_StatusBound = tuple[str, str, int, bool]
+
+
 def _status_code_bound(
     left: ast.expr, op: ast.cmpop, right: ast.expr
-) -> tuple[str, int, bool] | None:
+) -> _StatusBound | None:
     """Normalize one comparison around ``status_code`` to a numeric bound.
 
-    The result is ``(lower/upper, value, inclusive)``. For example,
-    ``200 <= response.status_code`` becomes ``("lower", 200, True)``.
+    The result is ``(target, lower/upper, value, inclusive)`` where *target*
+    identifies the ``status_code`` expression compared. For example,
+    ``200 <= response.status_code`` becomes
+    ``(<response.status_code>, "lower", 200, True)``.
     """
     if isinstance(left, ast.Attribute) and left.attr == "status_code":
-        value = _int_constant(right)
-        if value is None:
-            return None
-        if isinstance(op, ast.Lt):
-            return "upper", value, False
-        if isinstance(op, ast.LtE):
-            return "upper", value, True
-        if isinstance(op, ast.Gt):
-            return "lower", value, False
-        if isinstance(op, ast.GtE):
-            return "lower", value, True
-    if isinstance(right, ast.Attribute) and right.attr == "status_code":
-        value = _int_constant(left)
-        if value is None:
-            return None
-        if isinstance(op, ast.Lt):
-            return "lower", value, False
-        if isinstance(op, ast.LtE):
-            return "lower", value, True
-        if isinstance(op, ast.Gt):
-            return "upper", value, False
-        if isinstance(op, ast.GtE):
-            return "upper", value, True
-    return None
+        target, value, flipped = left, _int_constant(right), False
+    elif isinstance(right, ast.Attribute) and right.attr == "status_code":
+        target, value, flipped = right, _int_constant(left), True
+    else:
+        return None
+    if value is None:
+        return None
+    if isinstance(op, (ast.Lt, ast.LtE)):
+        kind = "lower" if flipped else "upper"
+    elif isinstance(op, (ast.Gt, ast.GtE)):
+        kind = "upper" if flipped else "lower"
+    else:
+        return None
+    return ast.dump(target), kind, value, isinstance(op, (ast.LtE, ast.GtE))
 
 
-def _is_bounded_2xx_status_range(node: ast.expr) -> bool:
-    """Whether a chained comparison bounds ``status_code`` entirely to 2xx."""
-    if not isinstance(node, ast.Compare) or len(node.ops) != 2:
-        return False
+def _compare_status_bounds(node: ast.expr) -> list[_StatusBound] | None:
+    """Every link of a comparison as a ``status_code`` bound, or None."""
+    if not isinstance(node, ast.Compare):
+        return None
     operands = [node.left, *node.comparators]
-    bounds: list[tuple[str, int, bool]] = []
+    bounds: list[_StatusBound] = []
     for left, op, right in zip(operands, node.ops, operands[1:]):
         bound = _status_code_bound(left, op, right)
         if bound is None:
-            return False
+            return None
         bounds.append(bound)
+    return bounds
 
-    lower = [bound for bound in bounds if bound[0] == "lower"]
-    upper = [bound for bound in bounds if bound[0] == "upper"]
-    if len(lower) != 1 or len(upper) != 1:
+
+def _bounds_within_2xx(bounds: list[_StatusBound]) -> bool:
+    """Whether *bounds* all constrain ONE ``status_code`` to a range inside 2xx.
+
+    Bounds on different responses (``a.status_code <= 200 <= b.status_code``)
+    never form a range — each response is constrained only on one side.
+    """
+    if len({bound[0] for bound in bounds}) != 1:
         return False
+    lower = [v if inclusive else v + 1 for _, k, v, inclusive in bounds if k == "lower"]
+    upper = [v if inclusive else v - 1 for _, k, v, inclusive in bounds if k == "upper"]
+    if not lower or not upper:
+        return False
+    low, high = max(lower), min(upper)
+    return low >= 200 and high <= 299 and low <= high
 
-    lower_value = lower[0][1] if lower[0][2] else lower[0][1] + 1
-    upper_value = upper[0][1] if upper[0][2] else upper[0][1] - 1
-    return lower_value >= 200 and upper_value <= 299 and lower_value <= upper_value
+
+def _split_2xx_range_terms(values: list[ast.expr]) -> list[ast.expr]:
+    """Drop the and-joined terms that together bound one ``status_code`` to 2xx.
+
+    ``r.status_code >= 200 and r.status_code < 300`` is a success range spelled
+    as two comparisons; the remaining terms are returned for classification.
+    When the bound terms do not form a 2xx range, *values* is returned as-is.
+    """
+    bound_terms: list[ast.expr] = []
+    bounds: list[_StatusBound] = []
+    for value in values:
+        value_bounds = _compare_status_bounds(value)
+        if value_bounds is not None:
+            bound_terms.append(value)
+            bounds.extend(value_bounds)
+    if not bound_terms or not _bounds_within_2xx(bounds):
+        return values
+    return [value for value in values if value not in bound_terms]
+
+
+def _is_bounded_2xx_status_range(node: ast.expr) -> bool:
+    """Whether *node* bounds one ``status_code`` entirely to 2xx.
+
+    Accepts a chained comparison (``200 <= r.status_code < 300``) or an
+    and-joined pair (``r.status_code >= 200 and r.status_code < 300``).
+    """
+    bounds = _compare_status_bounds(node)
+    if bounds is not None:
+        return _bounds_within_2xx(bounds)
+    if isinstance(node, ast.BoolOp) and isinstance(node.op, ast.And):
+        return bool(node.values) and not _split_2xx_range_terms(node.values)
+    return False
 
 
 def _compare_is_failure(node: ast.Compare) -> bool:
@@ -127,12 +163,17 @@ def _is_http_failure_predicate(node: ast.expr) -> bool:
     qualify, but a success-shaped marker check ANDed/ORed with an unrelated
     failure (``resp.is_success and parsed is None`` — HTTP 200 with an empty body)
     does NOT.  A bounded 2xx status-code range is a success check, not failure.
-    For a BoolOp, at least one value must qualify on its own.
+    For a BoolOp, at least one value must qualify on its own; and-joined terms
+    that together bound one ``status_code`` to 2xx are a success range and are
+    set aside first.
     """
     if _is_bounded_2xx_status_range(node):
         return False
     if isinstance(node, ast.BoolOp):
-        return any(_is_http_failure_predicate(v) for v in node.values)
+        values = node.values
+        if isinstance(node.op, ast.And):
+            values = _split_2xx_range_terms(values)
+        return any(_is_http_failure_predicate(v) for v in values)
     # ``not <expr-touching-an-http-marker>`` — negation of a truthy marker.
     if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
         return _references_http_marker(node.operand)
@@ -147,8 +188,9 @@ def _is_http_success_predicate(node: ast.expr) -> bool:
 
     Only unambiguous forms qualify — a bare truthy marker (``if resp.is_success`` /
     ``if resp.ok``), an equality/identity against a non-None constant on the marker
-    (``status_code == 200`` / ``== 204``), or a bounded range wholly inside 2xx.
-    A BoolOp (``resp.is_success and parsed``) is deliberately excluded: its ``else``
+    (``status_code == 200`` / ``== 204``), or a bounded range wholly inside 2xx
+    (chained, or and-joined comparisons on the same ``status_code``). Any other
+    BoolOp (``resp.is_success and parsed``) is deliberately excluded: its ``else``
     also fires when the unrelated condition is falsy, so the branch is not purely
     a remote-failure path.
     """
