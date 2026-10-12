@@ -7,8 +7,10 @@ carries no structured logger. Handler code reports outcomes through its return
 value or a typed ``AppError``, and the SDK's shared routes log the result on
 both the worker and the host. So handler code does not log.
 
-The rule scans only the handler module named by ``[tool.atlan-app-api].handler``
-and the ``app/`` files it imports. An app without that block is not being
+The rule scans only the handler module named by ``[tool.atlan-app-api].handler``.
+The ``app/`` files it imports (a shared SQL client, say) also run on the worker,
+so they keep their logging and import the logger from
+``application_sdk.common.logger``. An app without that block is not being
 hosted, and the rule is silent for it.
 
 P-ids are a permanent public contract (see ``prescriptions.py``).
@@ -68,10 +70,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "and let the SDK's routes log it"
         ),
         full_description=(
-            "A file in a hosted app's handler code logs.  The handler code is the\n"
-            "module ``[tool.atlan-app-api].handler`` names plus every ``app/``\n"
-            "module it imports, which is exactly what the consolidated API host\n"
-            "installs.\n"
+            "A hosted app's handler module logs.  That is the module\n"
+            "``[tool.atlan-app-api].handler`` names.  The ``app/`` modules it\n"
+            "imports also run on the worker, so they may log; ``gen_app_api.py\n"
+            "fix`` moves their logger import to ``application_sdk.common.logger``,\n"
+            "which the consolidated API host also has.\n"
             "\n"
             "Fires on each of:\n"
             "\n"

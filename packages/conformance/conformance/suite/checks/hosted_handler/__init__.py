@@ -1,10 +1,11 @@
 """P-series hosted-handler check (P056 HostedHandlerLogs).
 
-Scans the handler code of an app that declares ``[tool.atlan-app-api]`` in its
-root ``pyproject.toml``: the module ``handler = "app.<module>:<Class>"`` names,
-plus every ``app/`` module it imports (relatively or absolutely), which is what
-the consolidated API host installs. Flags logging there. Silent for an app
-without the block.
+Scans the handler module of an app that declares ``[tool.atlan-app-api]`` in its
+root ``pyproject.toml`` (the module ``handler = "app.<module>:<Class>"`` names)
+and flags logging there: a handler reports through its return value or a typed
+``AppError``, and the SDK's routes log the outcome. The ``app/`` modules it
+imports also run on the worker, so their logging is left alone. Silent for an
+app without the block.
 
 Inline suppression: ``# conformance: ignore[P056] <reason>``.
 """
@@ -70,48 +71,11 @@ def _module_file(root: Path, module: str) -> Path | None:
     return None
 
 
-def _app_imports(tree: ast.Module, module: str) -> list[str]:
-    package = module.rpartition(".")[0]
-    found: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            if node.level:
-                parts = package.split(".")
-                parts = parts[: len(parts) - (node.level - 1)]
-                base = ".".join([*parts, node.module] if node.module else parts)
-            elif (node.module or "").split(".")[0] == APP:
-                base = node.module or ""
-            else:
-                continue
-            found.append(base)
-            found.extend(f"{base}.{a.name}" for a in node.names)
-        elif isinstance(node, ast.Import):
-            found.extend(a.name for a in node.names if a.name.split(".")[0] == APP)
-    return found
-
-
 def handler_files(root: Path) -> set[Path]:
-    """The hosted handler's files under ``root`` (empty when not hosted)."""
-    start = _handler_module(root)
-    if start is None:
-        return set()
-    files: set[Path] = set()
-    stack = [start]
-    while stack:
-        module = stack.pop()
-        path = _module_file(root, module)
-        if path is None or path in files:
-            continue
-        files.add(path)
-        source = safe_read_text(path)
-        if source is None:
-            continue
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            continue
-        stack.extend(_app_imports(tree, module))
-    return files
+    """The hosted handler's module file under ``root`` (empty when not hosted)."""
+    module = _handler_module(root)
+    path = None if module is None else _module_file(root, module)
+    return set() if path is None else {path}
 
 
 def _logger_names(tree: ast.AST) -> set[str]:

@@ -30,9 +30,11 @@ The reference migration is atlan-mysql-app#778.
 
    It makes imports between the handler's `app/` files relative
    (`from .client import SQLClient`), moves `run_in_thread` to
-   `application_sdk.common.concurrency`, and deletes logging statements from
-   the handler's files: hosted handler code does not log (conformance rule
-   P056). Review the removals; where a log line was the only report of a
+   `application_sdk.common.concurrency` and `get_logger` to
+   `application_sdk.common.logger`, and deletes logging statements from the
+   handler module only: a hosted handler does not log (conformance rule P056).
+   The other files (a shared client, say) also run on the worker, so they keep
+   their logs. Review the removals; where a log line was the only report of a
    failure, raise a typed `AppError` instead. Nothing else is committed: there
    is no `api/` folder.
 

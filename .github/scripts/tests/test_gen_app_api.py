@@ -184,3 +184,38 @@ def test_fix_refuses_to_leave_a_dangling_logger(tmp_path: Path) -> None:
         assert "still used" in str(exc)
     else:
         raise AssertionError("fix left a reference to a removed logger")
+
+
+def test_fix_keeps_logging_in_shared_files_and_moves_the_logger_import(
+    tmp_path: Path,
+) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    shared = (
+        "from application_sdk.observability.logger_adaptor import get_logger\n"
+        "from .failures import Boom\n"
+        "\n"
+        "logger = get_logger(__name__)\n"
+        "\n"
+        "\n"
+        "def connect():\n"
+        "    logger.info('connecting')\n"
+    )
+    (root / "app/client.py").write_text(shared)
+    assert gen.main(["check", "--root", str(root)]) == 1
+    assert gen.main(["fix", "--root", str(root)]) == 0
+    assert (root / "app/client.py").read_text() == shared.replace(
+        "application_sdk.observability.logger_adaptor", "application_sdk.common.logger"
+    )
+    assert gen.main(["check", "--root", str(root)]) == 0
+
+
+def test_check_refuses_the_process_wide_app_name(tmp_path: Path) -> None:
+    root = _app(
+        tmp_path,
+        "from application_sdk.constants import APPLICATION_NAME\n"
+        "from .client import C\n",
+    )
+    assert gen.check(root, gen.load(root)) == [
+        "app/handler.py:1: APPLICATION_NAME is the host's own name on the "
+        "consolidated host; use `self.context.app_name`"
+    ]

@@ -22,6 +22,7 @@ application_sdk/common/aws_utils_errors.py
 application_sdk/common/concurrency.py
 application_sdk/common/errors.py
 application_sdk/common/filter_matching.py
+application_sdk/common/logger.py
 application_sdk/common/models.py
 application_sdk/common/sql_filters.py
 application_sdk/common/sql_filters_errors.py

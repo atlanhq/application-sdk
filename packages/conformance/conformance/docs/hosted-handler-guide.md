@@ -15,8 +15,11 @@ log every outcome with the request id, on the worker and on the host alike.
    python3 <application-sdk>/.github/scripts/gen_app_api.py fix
    ```
 
-   It deletes the logging statements in the handler's files (a block left empty
+   It deletes the logging statements in the handler module (a block left empty
    gets `pass`) and refuses to finish if a removed logger is still referenced.
+   The other `app/` files the handler imports also run on the worker, so they
+   keep their logging; `fix` only moves their logger import to
+   `application_sdk.common.logger`, which the host also has.
 
 2. Review every removal. Where a log line was the only report of a failure,
    raise a typed `AppError` (or return a failed check) instead, so the failure

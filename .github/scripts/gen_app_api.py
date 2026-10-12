@@ -23,8 +23,12 @@ SQLClient``): the same file is ``app.handler`` in the worker and
 
 Usage, from the app repo root::
 
-    python3 <sdk>/.github/scripts/gen_app_api.py fix     # relative imports, no logging
+    python3 <sdk>/.github/scripts/gen_app_api.py fix     # relative imports, host-safe paths
     python3 <sdk>/.github/scripts/gen_app_api.py check   # CI: config valid, imports relative
+
+``fix`` deletes logging only from the handler module itself (P056). The other
+listed files also run on the worker, so their logging stays; only their logger
+import moves to a path the host has (:data:`KNOWN_MOVES`).
     python3 <sdk>/.github/scripts/gen_app_api.py build --out dist-api [--member api]
 
 ``check`` is a no-op for an app without ``[tool.atlan-app-api]``. ``build`` with
@@ -54,6 +58,9 @@ APP = "app"
 KNOWN_MOVES = {
     "from application_sdk.execution.heartbeat import run_in_thread": (
         "from application_sdk.common.concurrency import run_in_thread"
+    ),
+    "from application_sdk.observability.logger_adaptor import get_logger": (
+        "from application_sdk.common.logger import get_logger"
     ),
 }
 
@@ -433,12 +440,42 @@ def build(root: Path, out: Path, member: str | None = None) -> Path:
     return wheel
 
 
+#: A read of the process-wide app name (``application_sdk.constants``).
+_APPLICATION_NAME = re.compile(r"\bAPPLICATION_NAME\b")
+
+
+def handler_file(root: Path, config: Config) -> str:
+    """The handler module's own file: the only one ``fix`` strips logging from."""
+    rel = _module_file(root, config.handler_module)
+    if rel is None:
+        raise ValueError(
+            f"[tool.{SECTION}].handler module {config.handler_module} not found"
+        )
+    return rel
+
+
 def check(root: Path, config: Config) -> list[str]:
-    _, absolute = closure(root, config)
-    return [
+    files, absolute = closure(root, config)
+    problems = [
         f"{a} — the handler's files must import each other relatively (run `fix`)"
         for a in absolute
     ]
+    for rel in files:
+        if not rel.endswith(".py"):
+            continue
+        text = (root / rel).read_text(encoding="utf-8")
+        problems.extend(
+            f"{rel}: `{old}` is absent on the host (run `fix`)"
+            for old in KNOWN_MOVES
+            if old in text
+        )
+        problems.extend(
+            f"{rel}:{n}: APPLICATION_NAME is the host's own name on the "
+            "consolidated host; use `self.context.app_name`"
+            for n, line in enumerate(text.splitlines(), 1)
+            if _APPLICATION_NAME.search(line)
+        )
+    return problems
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -463,11 +500,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "fix":
+        for rel in strip_logging(args.root, [handler_file(args.root, config)]):
+            print(f"gen_app_api: removed logging statements from {rel}")
         files, _ = closure(args.root, config)
         for rel in fix_absolute_imports(args.root, files):
             print(f"gen_app_api: rewrote imports in {rel}")
-        for rel in strip_logging(args.root, files):
-            print(f"gen_app_api: removed logging statements from {rel}")
     problems = check(args.root, config)
     for problem in problems:
         print(f"::error::{problem}")

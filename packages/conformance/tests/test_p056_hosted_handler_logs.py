@@ -30,7 +30,9 @@ def _ids(root: Path) -> list[tuple[str, int]]:
     ]
 
 
-def test_logging_in_the_handler_and_its_imports_fires(tmp_path: Path) -> None:
+def test_logging_in_the_handler_module_fires_and_its_imports_may_log(
+    tmp_path: Path,
+) -> None:
     root = _app(
         tmp_path,
         {
@@ -46,8 +48,6 @@ def test_logging_in_the_handler_and_its_imports_fires(tmp_path: Path) -> None:
         },
     )
     assert _ids(root) == [
-        ("app/client.py", 1),
-        ("app/client.py", 2),
         ("app/handler.py", 1),
         ("app/handler.py", 3),
         ("app/handler.py", 5),
