@@ -6,6 +6,7 @@ This module provides the necessary abstractions (clients) for interacting with v
 
 1.  **`ClientInterface` (`application_sdk.clients`)**:
     *   **Purpose:** An abstract base class defining the minimal contract for all clients. It requires implementing an `async def load()` method for connection/setup and provides an optional `async def close()` for cleanup.
+    *   **Lifecycle:** Every client is an async context manager. `async with MyClient() as client:` calls `close()` when the block exits, including on an exception. `__aenter__` does not call `load()`, so call it inside the block with credentials. A subclass that overrides `close()` must call `super().close()`.
     *   **Extensibility:** Any class interacting with an external service should ideally inherit from this interface.
 
 2.  **Specialized Clients:** The SDK provides concrete client implementations for specific services:
@@ -127,6 +128,16 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 3.  **HTTP Request Methods:**
     *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
     *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
+
+4.  **Closing (`close` method):**
+    *   All requests on one client share `http_retry_transport` and its connection pool, so concurrent requests (for example under `asyncio.gather`) do not close each other's connections.
+    *   The pool stays open until `close()`. Use the client with `async with`, or call `close()` in a `finally` block, once you are done with it.
+
+```python
+async with MyApiClient() as client:
+    await client.load(credentials=credentials)
+    results = await asyncio.gather(*(client.fetch_data(e) for e in endpoints))
+```
 
 ### Example `BaseClient` Subclass
 
