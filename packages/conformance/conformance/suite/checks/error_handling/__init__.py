@@ -133,8 +133,15 @@ def scan_path(path: Path, root: Path) -> list[Finding]:
     return scan_text(text, str(rel), path=path, root=root)
 
 
+def _scan_all(paths: list[Path], root: Path) -> list[Finding]:
+    # scan_path, not scan_text: E004 and E021 follow the repo's own imports,
+    # which needs each file's path and the repo root.
+    return [finding for path in paths for finding in scan_path(path, root)]
+
+
 main = make_cli_main(
-    scan_text,
+    scan_all=_scan_all,
+    discover=discover,
     description="E-series: scan Python files for error-handling anti-patterns.",
 )
 """CLI entry point for E-series error-handling checks."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
@@ -191,6 +192,72 @@ def test_own_category_assignment_wins() -> None:
     assert _e021_lines(src) == []
 
 
+def test_later_audience_assignment_wins() -> None:
+    src = (
+        _HEADER + "from application_sdk.errors import DependencyUnavailableError\n\n\n"
+        "class Down(DependencyUnavailableError):\n"
+        "    audience = Audience.USER\n"
+        "    audience = Audience.PLATFORM\n"
+    )
+    assert _e021_lines(src) == []
+
+
+def test_later_category_assignment_wins() -> None:
+    src = (
+        _HEADER
+        + "from application_sdk.errors import DependencyUnavailableError, FailureCategory\n\n\n"
+        "class Down(DependencyUnavailableError):\n"
+        "    category = FailureCategory.SOURCE_UNAVAILABLE\n"
+        "    category = FailureCategory.DEPENDENCY_UNAVAILABLE\n"
+        "    audience = Audience.USER\n"
+    )
+    assert len(_e021_lines(src)) == 1
+
+
+def test_module_alias_to_an_app_module_is_not_followed(tmp_path) -> None:
+    """Documented limit: ``import app.base as base`` is not resolved."""
+    files = {
+        "app/__init__.py": "",
+        "app/base.py": (
+            "from application_sdk.errors import DependencyUnavailableError\n\n\n"
+            "class AppDependencyError(DependencyUnavailableError):\n    pass\n"
+        ),
+        "app/failures.py": (
+            _HEADER + "import app.base as base\n\n\n"
+            "class SourceDown(base.AppDependencyError):\n"
+            "    audience = Audience.USER\n"
+        ),
+    }
+    assert _scan_repo(tmp_path, files, "app/failures.py") == []
+
+
+def test_cli_follows_an_app_intermediate_in_another_module(tmp_path) -> None:
+    from conformance.suite.checks.error_handling import main
+
+    files = {
+        "app/__init__.py": "",
+        "app/base.py": (
+            "from application_sdk.errors import DependencyUnavailableError\n\n\n"
+            "class AppDependencyError(DependencyUnavailableError):\n    pass\n"
+        ),
+        "app/failures.py": (
+            _HEADER + "from app.base import AppDependencyError\n\n\n"
+            "class SourceDown(AppDependencyError):\n"
+            "    audience = Audience.USER\n"
+        ),
+    }
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    sarif = tmp_path / "out.sarif"
+
+    main([str(tmp_path / "app"), "--root", str(tmp_path), "--sarif-output", str(sarif)])
+
+    results = json.loads(sarif.read_text())["runs"][0]["results"]
+    assert [r["ruleId"] for r in results if r["ruleId"] == "E021"] == ["E021"]
+
+
 def test_unresolvable_app_base_stays_unflagged() -> None:
     """Without a repo root, an imported app base cannot be proven."""
     src = (
@@ -218,7 +285,8 @@ def test_inline_suppression() -> None:
         "    audience = Audience.USER\n"
     )
     findings = [f for f in scan_text(src, "x.py") if f.rule_id == "E021"]
-    assert all(f.suppressed for f in findings)
+    assert len(findings) == 1
+    assert findings[0].suppressed
 
 
 # ---------------------------------------------------------------------------

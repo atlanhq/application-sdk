@@ -89,8 +89,11 @@ def _sdk_name_category(name: str) -> _Category | None:
 
 
 def _assigned_category(body: list[ast.stmt]) -> _Category | None:
-    """The category a class body assigns itself, if it assigns one."""
-    for stmt in body:
+    """The category a class body assigns itself, if it assigns one.
+
+    The last assignment wins, as it does when Python executes the body.
+    """
+    for stmt in reversed(body):
         if isinstance(stmt, ast.Assign):
             targets = stmt.targets
             value: ast.expr | None = stmt.value

@@ -6,8 +6,11 @@ import ast
 
 
 def _assigns_user_audience(node: ast.ClassDef) -> ast.stmt | None:
-    """The ``audience = Audience.USER`` statement in *node*'s body, if any."""
-    for stmt in node.body:
+    """The body's last ``audience`` assignment, when it assigns ``USER``.
+
+    The last assignment wins, as it does when Python executes the body.
+    """
+    for stmt in reversed(node.body):
         if isinstance(stmt, ast.Assign):
             targets = stmt.targets
             value: ast.expr | None = stmt.value
@@ -16,12 +19,11 @@ def _assigns_user_audience(node: ast.ClassDef) -> ast.stmt | None:
             value = stmt.value
         else:
             continue
-        if (
-            any(isinstance(t, ast.Name) and t.id == "audience" for t in targets)
-            and isinstance(value, ast.Attribute)
-            and value.attr == "USER"
-        ):
+        if not any(isinstance(t, ast.Name) and t.id == "audience" for t in targets):
+            continue
+        if isinstance(value, ast.Attribute) and value.attr == "USER":
             return stmt
+        return None
     return None
 
 
