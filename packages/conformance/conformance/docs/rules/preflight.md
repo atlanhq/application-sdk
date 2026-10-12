@@ -649,14 +649,14 @@ never the problem.
 
 A broad `except` in `preflight_check` or a helper it calls directly raises, or puts in a
 `PreflightCheck` / `PreflightOutput` `error=`, an `AuthError` or
-`AppPermissionDeniedError` subclass on a path that no test on the caught exception
-selects. Classify it first — `application_sdk.errors.classify_http_exception` for httpx
-failures, or an `isinstance` chain — and fall back to a leaf that does not blame the
-customer (`InternalError` when the cause is unknown), or narrow the except clause. The
-check is deliberately narrow: shapes it cannot analyse (a leaf stored in a name or
-passed to another function, arbitrary predicate or classifier calls, conditional or
-unpacked stores, loops, callbacks) produce no finding, so a clean F021 does not prove
-the classification is right.
+`AppPermissionDeniedError` subclass with no condition or early exit on the way to it, so
+every failure it catches is reported as a credential or grant problem. Classify it first
+— `application_sdk.errors.classify_http_exception` for httpx failures, or an
+`isinstance` chain — and fall back to a leaf that does not blame the customer
+(`InternalError` when the cause is unknown), or narrow the except clause. The check
+judges the shape, not the guard: any condition before the leaf, a leaf stored in a name
+or passed to another function, and callbacks produce no finding, so a clean F021 does
+not prove the classification is right.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f021).

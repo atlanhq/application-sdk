@@ -1,64 +1,34 @@
 """F021 PreflightFixedLeafInBroadExcept (CONNECT-1358).
 
 Flags a broad ``except`` inside ``preflight_check`` (or a helper it calls
-directly) that reports an Auth- or Permission-rooted error on a path that no
-test on the caught exception selects. Every failure in the ``try`` then
-reaches the customer as a credential or grant problem: an empty credential, a
-DNS failure and a 500 all read as "grant access". The SDK's own subclasses
-outside ``application_sdk.errors`` (``SqlClientAuthFailedError``,
-``CredentialError``, ...) count too; a test pins ``_SDK_CUSTOMER_LEAVES`` to
-the SDK source.
+directly) that reports an Auth- or Permission-rooted error with nothing on the
+way to it that could pick a different one. Every failure in the ``try`` then
+reaches the customer as a credential or grant problem, and a hard-mode gate
+blocks the run on it: an empty credential, a DNS failure and a 500 all read as
+"grant access". The SDK's own subclasses outside ``application_sdk.errors``
+(``SqlClientAuthFailedError``, ``CredentialError``, ...) count too; a test pins
+``_SDK_CUSTOMER_LEAVES`` to the SDK source.
 
-Only a leaf F021 can see being reported is judged: ``raise Leaf(...)``, or the
-``error=`` of a ``PreflightCheck`` / ``PreflightOutput`` (directly or through
-``.to_failure_details()``). Its site must sit in contexts that always run or
-are gated by a modelled condition: statement blocks of the handler, ``if`` /
-``while`` / ``match`` / ``with`` / ``try ... finally`` bodies, and around a row
-only lists, tuples, sets, ``await``, ``return``, another row, or
-``.append`` / ``.extend`` / ``.insert`` on a collection. Unknown instead: a
-leaf or row that is only constructed (a bare expression statement), stored in
-a name, passed to any other function (a wrapper or a classifier default), or
-evaluated inside a boolean operand, a conditional expression around the leaf
-itself, a ``for`` body, or a ``try`` body whose own handlers could catch it. A
-helper only passed as a callback is not followed, since passing it does not
-prove it runs.
-
-Each reported leaf gets one of three outcomes from the conditions on its path
-(the enclosing ``if`` / ``while`` arm, a conditional-expression arm around a
-row, a ``match`` case, and every earlier early-exit guard such as
-``if C: raise`` in the same block):
-
-* **selected** — reaching it requires a discriminating exception predicate or
-  its complement (``isinstance(exc, PermissionError)``, a comparison on
-  ``exc.status`` / ``type(exc)`` / ``str(exc)``, or the ``else`` of one);
-* **unconditional** — it is reachable whatever was caught. Only this outcome
-  is reported;
-* **unknown** — the analysis cannot tell. No finding: a clean F021 is not a
-  proof that the classification is right.
-
-Supported: literals, ``not`` / ``and`` / ``or`` / conditional expressions,
-direct type and data predicates on the exception, tautologies every caught
-exception passes (``exc``, ``exc is not None``, ``isinstance(exc, Exception)``),
-conditions that do not involve the exception (``self.strict``: may be true or
-false, so it restricts an ``and`` but cannot excuse an ``or``), and simple
-``name = expr`` aliases in straight-line code before the test. Everything else
-touching the exception is unknown: any call it is passed to (a predicate or
-classifier whose semantics F021 does not know, including a leaf handed to it
-as a default), chained or unpacked targets, augmented assignment, and names
-bound off the leaf's straight-line path (in an earlier compound statement, a
-nested ``except``, a loop, or a walrus). An attribute store on an alias
-(``err.detail = ...``) does not rebind it. A nested ``except`` is judged on
-its own. Known limits: an early exit only counts as a flat ``if C: raise`` /
-``return`` in the same block (not one nested in ``with`` or both arms of an
-inner ``if``, nor an ``assert``); code after an unconditional ``raise`` /
-``return`` and a leaf inside ``with contextlib.suppress(...)`` are still
-treated as reached; comprehension filters are ignored.
+The rule judges the shape, not the guard. Whether a condition selects the
+caught exception is a dataflow question with no bounded answer, so any
+condition makes the leaf unknown, and unknown is never reported. A leaf is
+reported only when it is raised, or is the ``error=`` of a ``PreflightCheck`` /
+``PreflightOutput`` (directly or through ``.to_failure_details()``), and every
+step from the ``except`` to that site always runs: statement blocks, ``with``
+bodies, ``try ... finally``, and around a row only lists, tuples, sets,
+``await``, ``return``, another row, or ``.append`` / ``.extend`` /
+``.insert``. An ``if``, loop, ``match``, conditional or boolean expression, a
+``try`` body with its own handlers or its ``else``, or an earlier statement in
+an enclosing block that can leave it (``raise``, ``return``, ``break``,
+``continue``, ``assert``) all make the leaf unknown. So ``if self.strict:`` is
+not reported either, and a clean F021 does not prove the classification is
+right. A helper only passed as a callback is not followed. Known gap: a leaf
+inside ``with contextlib.suppress(...)`` is still treated as reported.
 """
 
 from __future__ import annotations
 
 import ast
-import enum
 from collections.abc import Iterator
 
 from conformance.suite.checks._ast_common import make_finding
@@ -87,24 +57,18 @@ _SDK_CUSTOMER_LEAVES = frozenset(
         "StoragePermissionError",
     }
 )
-_DATA_CALLS = frozenset({"type", "str", "repr", "getattr"})
-_BLOCK_FIELDS = frozenset({"body", "orelse", "finalbody", "cases"})
-_EXITS = (ast.Raise, ast.Return, ast.Continue, ast.Break)
-_LOOPS = (ast.For, ast.AsyncFor, ast.While)
+_EXITS = (ast.Raise, ast.Return, ast.Continue, ast.Break, ast.Assert)
 _NEW_SCOPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+_OWN_SCOPE_ENDS = (*_NEW_SCOPES, ast.ExceptHandler)
 _ROWS = ("PreflightCheck", "PreflightOutput")
 _COLLECTORS = frozenset({"append", "extend", "insert"})
-_CONTEXTS: dict[type[ast.AST], tuple[str, ...]] = {
+_BLOCKS = frozenset({"body", "finalbody"})
+_ALWAYS_RUNS: dict[type[ast.AST], tuple[str, ...]] = {
     ast.ExceptHandler: ("body",),
-    ast.If: ("body", "orelse"),
-    ast.While: ("body", "orelse"),
-    ast.IfExp: ("body", "orelse"),
-    ast.Match: ("cases",),
-    ast.match_case: ("body",),
     ast.With: ("body",),
     ast.AsyncWith: ("body",),
-    ast.Try: ("body", "orelse", "finalbody"),
-    ast.TryStar: ("body", "orelse", "finalbody"),
+    ast.Try: ("body", "finalbody"),
+    ast.TryStar: ("body", "finalbody"),
     ast.Call: ("args", "keywords"),
     ast.keyword: ("value",),
     ast.List: ("elts",),
@@ -114,61 +78,8 @@ _CONTEXTS: dict[type[ast.AST], tuple[str, ...]] = {
     ast.Return: ("value",),
     ast.Expr: ("value",),
 }
-_OWN_SCOPE_ENDS = (
-    ast.FunctionDef,
-    ast.AsyncFunctionDef,
-    ast.ClassDef,
-    ast.Lambda,
-    ast.ExceptHandler,
-)
 
-
-class _Reach(enum.Enum):
-    """Whether one condition on a path lets an arbitrary exception through."""
-
-    NEVER = "never"
-    REQUIRES = "requires an exception predicate"
-    UNKNOWN = "unknown"
-    FREE = "free"
-
-
-class _Outcome(enum.Enum):
-    SELECTED = "selected"
-    UNCONDITIONAL = "unconditional"
-    UNKNOWN = "unknown"
-
-
-class _Kind(enum.Enum):
-    """How a local name relates to the caught exception."""
-
-    EXCEPTION = "the exception object"
-    DATA = "data read from the exception"
-    BOOL = "a known guard value"
-    UNKNOWN = "unknown"
-
-
-_Value = tuple[_Kind, _Reach, _Reach]
-_Env = dict[str, _Value]
 _Parents = dict[ast.AST, tuple[ast.AST, str, int]]
-
-_UNKNOWN_VALUE: _Value = (_Kind.UNKNOWN, _Reach.UNKNOWN, _Reach.UNKNOWN)
-_UNRELATED = frozenset({_Reach.FREE, _Reach.NEVER})
-
-
-def _all(*reaches: _Reach) -> _Reach:
-    """Every condition must hold on this path."""
-    for strongest in (_Reach.NEVER, _Reach.REQUIRES, _Reach.UNKNOWN):
-        if strongest in reaches:
-            return strongest
-    return _Reach.FREE
-
-
-def _any(*reaches: _Reach) -> _Reach:
-    """At least one of these paths is taken."""
-    for weakest in (_Reach.FREE, _Reach.UNKNOWN, _Reach.REQUIRES):
-        if weakest in reaches:
-            return weakest
-    return _Reach.NEVER
 
 
 def _own_nodes(node: ast.AST) -> Iterator[ast.AST]:
@@ -203,207 +114,6 @@ def _customer_rooted(
     )
 
 
-def _kind(node: ast.expr, env: _Env) -> _Kind | None:
-    """How ``node``'s value relates to the exception; ``None`` when it does not."""
-    if isinstance(node, ast.Name):
-        value = env.get(node.id)
-        if value is None:
-            return None
-        kind, when_true, when_false = value
-        if kind is _Kind.BOOL and {when_true, when_false} <= _UNRELATED:
-            return None
-        return kind
-    if isinstance(node, (ast.Attribute, ast.Subscript)):
-        base = _kind(node.value, env)
-        if base in (_Kind.EXCEPTION, _Kind.DATA):
-            return _Kind.DATA
-        return None if base is None else _Kind.UNKNOWN
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.args:
-        if node.func.id in _DATA_CALLS:
-            if _kind(node.args[0], env) in (_Kind.EXCEPTION, _Kind.DATA):
-                return _Kind.DATA
-    related = any(
-        isinstance(n, ast.Name) and _kind(n, env) is not None for n in ast.walk(node)
-    )
-    return _Kind.UNKNOWN if related else None
-
-
-def _is_none(node: ast.expr) -> bool:
-    return isinstance(node, ast.Constant) and node.value is None
-
-
-def _reach(node: ast.expr, want: bool, env: _Env) -> _Reach:
-    """Whether ``node`` can evaluate to ``want`` for an arbitrary exception."""
-    if isinstance(node, ast.Constant):
-        return _Reach.FREE if bool(node.value) == want else _Reach.NEVER
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return _reach(node.operand, not want, env)
-    if isinstance(node, ast.BoolOp):
-        parts = [_reach(value, want, env) for value in node.values]
-        every = isinstance(node.op, ast.And) == want
-        return _all(*parts) if every else _any(*parts)
-    if isinstance(node, ast.IfExp):
-        return _any(
-            _all(_reach(node.test, True, env), _reach(node.body, want, env)),
-            _all(_reach(node.test, False, env), _reach(node.orelse, want, env)),
-        )
-    if isinstance(node, ast.Call) and _is_isinstance(node):
-        subject = _kind(node.args[0], env)
-        if subject is _Kind.EXCEPTION and _broad_types(node.args[1]):
-            return _Reach.FREE if want else _Reach.NEVER
-        if subject in (_Kind.EXCEPTION, _Kind.DATA):
-            return _Reach.REQUIRES
-    if isinstance(node, ast.Compare):
-        return _compare(node, want, env)
-    if isinstance(node, ast.Name) and node.id in env:
-        kind, when_true, when_false = env[node.id]
-        if kind is _Kind.BOOL:
-            return when_true if want else when_false
-        if kind is _Kind.EXCEPTION:
-            return _Reach.FREE if want else _Reach.NEVER
-        return _Reach.UNKNOWN
-    return _Reach.UNKNOWN if _kind(node, env) else _Reach.FREE
-
-
-def _is_isinstance(node: ast.Call) -> bool:
-    return (
-        isinstance(node.func, ast.Name)
-        and node.func.id == "isinstance"
-        and len(node.args) == 2
-        and not node.keywords
-    )
-
-
-def _broad_types(kinds: ast.expr) -> bool:
-    types = kinds.elts if isinstance(kinds, ast.Tuple) else [kinds]
-    return any(ast.unparse(t).rsplit(".", 1)[-1] in _BROAD for t in types)
-
-
-def _compare(node: ast.Compare, want: bool, env: _Env) -> _Reach:
-    operands = [node.left, *node.comparators]
-    kinds = [_kind(operand, env) for operand in operands]
-    if _Kind.UNKNOWN in kinds or _Kind.BOOL in kinds:
-        return _Reach.UNKNOWN
-    if not any(kinds):
-        return _Reach.FREE
-    if len(node.ops) == 1 and isinstance(
-        node.ops[0], (ast.Is, ast.IsNot, ast.Eq, ast.NotEq)
-    ):
-        left, right = operands
-        if (kinds[0] is _Kind.EXCEPTION and _is_none(right)) or (
-            kinds[1] is _Kind.EXCEPTION and _is_none(left)
-        ):
-            is_not_none = isinstance(node.ops[0], (ast.IsNot, ast.NotEq))
-            return _Reach.FREE if is_not_none == want else _Reach.NEVER
-    return _Reach.REQUIRES
-
-
-def _is_boolean(node: ast.expr, env: _Env) -> bool:
-    """Whether ``node`` only ever produces a truth value the evaluator models."""
-    if isinstance(node, (ast.Constant, ast.Compare)):
-        return True
-    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-        return True
-    if isinstance(node, ast.Call):
-        return _is_isinstance(node)
-    if isinstance(node, ast.BoolOp):
-        return all(_is_condition(value, env) for value in node.values)
-    if isinstance(node, ast.IfExp):
-        return _is_condition(node.body, env) and _is_condition(node.orelse, env)
-    if isinstance(node, ast.Name):
-        value = env.get(node.id)
-        return value is not None and value[0] is _Kind.BOOL
-    return False
-
-
-def _is_condition(node: ast.expr, env: _Env) -> bool:
-    """A truth value, or a value that does not involve the exception at all."""
-    return _is_boolean(node, env) or _kind(node, env) is None
-
-
-def _value_of(node: ast.expr, env: _Env) -> _Value | None:
-    """The value a simple ``name = node`` store binds; ``None`` when unrelated."""
-    kind = _kind(node, env)
-    if not _is_boolean(node, env):
-        if kind is None:
-            return None
-        if kind in (_Kind.EXCEPTION, _Kind.DATA):
-            return (kind, _Reach.UNKNOWN, _Reach.UNKNOWN)
-        return _UNKNOWN_VALUE
-    when_true, when_false = _reach(node, True, env), _reach(node, False, env)
-    if _Reach.UNKNOWN in (when_true, when_false):
-        return _UNKNOWN_VALUE
-    return (_Kind.BOOL, when_true, when_false)
-
-
-def _scope_nodes(node: ast.AST) -> Iterator[ast.AST]:
-    """Nodes in ``node``'s own scope; a nested def is yielded but not entered."""
-    for child in ast.iter_child_nodes(node):
-        yield child
-        if not isinstance(child, _NEW_SCOPES):
-            yield from _scope_nodes(child)
-
-
-def _binds(node: ast.AST) -> set[str]:
-    """The names this one node binds."""
-    if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
-        return {node.id}
-    if isinstance(node, ast.ExceptHandler) and node.name:
-        return {node.name}
-    if isinstance(node, (ast.Import, ast.ImportFrom)):
-        return {(a.asname or a.name).split(".")[0] for a in node.names}
-    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-        return {node.name}
-    return set()
-
-
-def _bound_names(node: ast.AST) -> set[str]:
-    """Names bound anywhere inside ``node``'s own scope, nested excepts included."""
-    names: set[str] = set()
-    for child in _scope_nodes(node):
-        names |= _binds(child)
-    return names
-
-
-def _position(node: ast.AST) -> tuple[int, int]:
-    return (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
-
-
-def _bound_before(handler: ast.ExceptHandler, point: ast.AST) -> set[str]:
-    """Names ``handler`` may bind in code that starts before ``point``."""
-    names: set[str] = set()
-    for node in _scope_nodes(handler):
-        if _position(node) < _position(point):
-            names |= _binds(node)
-    return names
-
-
-def _apply(stmt: ast.stmt, env: _Env) -> None:
-    """Replay one earlier statement's stores into ``env``."""
-    simple: tuple[str, ast.expr] | None = None
-    if (
-        isinstance(stmt, ast.Assign)
-        and len(stmt.targets) == 1
-        and isinstance(stmt.targets[0], ast.Name)
-    ):
-        simple = (stmt.targets[0].id, stmt.value)
-    elif (
-        isinstance(stmt, ast.AnnAssign)
-        and isinstance(stmt.target, ast.Name)
-        and stmt.value is not None
-    ):
-        simple = (stmt.target.id, stmt.value)
-    value = _value_of(simple[1], env) if simple else None
-    for name in _bound_names(stmt):
-        env[name] = _UNKNOWN_VALUE
-    if simple:
-        name = simple[0]
-        if value is None:
-            env.pop(name, None)
-        else:
-            env[name] = value
-
-
 def _parents(handler: ast.ExceptHandler) -> _Parents:
     """Map each node to its parent, the parent's field, and its index in it."""
     parents: _Parents = {}
@@ -416,59 +126,37 @@ def _parents(handler: ast.ExceptHandler) -> _Parents:
     return parents
 
 
-def _block(parent: ast.AST, field: str) -> list[ast.stmt]:
-    for name, value in ast.iter_fields(parent):
-        if name == field and isinstance(value, list):
-            return [s for s in value if isinstance(s, ast.stmt)]
-    return []
-
-
 def _ancestry(
     node: ast.AST, parents: _Parents, handler: ast.ExceptHandler
 ) -> list[tuple[ast.AST, str, int]]:
-    """``(parent, field, index)`` from the handler down to ``node``."""
+    """``(parent, field, index)`` from ``node`` up to the handler."""
     chain: list[tuple[ast.AST, str, int]] = []
     child = node
     while child is not handler:
         parent, field, index = parents[child]
         chain.append((parent, field, index))
         child = parent
-    chain.reverse()
     return chain
 
 
-def _env_at(
-    point: ast.AST, caught: str | None, parents: _Parents, handler: ast.ExceptHandler
-) -> _Env:
-    """Tracked local values when ``point`` is evaluated.
-
-    Every name the handler binds before ``point`` starts unknown; only the
-    straight-line stores on ``point``'s own path give one a value. Entering a
-    loop body makes every name that loop binds unknown again, because an
-    earlier iteration may have changed it.
-    """
-    env: _Env = {name: _UNKNOWN_VALUE for name in _bound_before(handler, point)}
-    if caught:
-        env[caught] = (_Kind.EXCEPTION, _Reach.UNKNOWN, _Reach.UNKNOWN)
-    for parent, field, index in _ancestry(point, parents, handler):
-        if field not in _BLOCK_FIELDS:
-            continue
-        if parent is not handler:
-            stale = set()
-            for header_field, value in ast.iter_fields(parent):
-                if header_field not in _BLOCK_FIELDS and isinstance(value, ast.AST):
-                    stale |= _bound_names(value)
-            if isinstance(parent, _LOOPS):
-                stale |= _bound_names(parent)
-            for name in stale:
-                env[name] = _UNKNOWN_VALUE
-        for stmt in _block(parent, field)[:index]:
-            _apply(stmt, env)
-    return env
+def _block(parent: ast.AST, field: str) -> list[ast.stmt]:
+    value = getattr(parent, field, None)
+    if not isinstance(value, list):
+        return []
+    return [s for s in value if isinstance(s, ast.stmt)]
 
 
-def _exits(body: list[ast.stmt]) -> bool:
-    return bool(body) and isinstance(body[-1], _EXITS)
+def _can_exit(stmt: ast.stmt) -> bool:
+    """Whether running ``stmt`` can leave the enclosing block early."""
+    pending: list[ast.AST] = [stmt]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, _EXITS):
+            return True
+        for child in ast.iter_child_nodes(node):
+            if not isinstance(child, _NEW_SCOPES):
+                pending.append(child)
+    return False
 
 
 def _collects(call: ast.Call, src: Source) -> bool:
@@ -476,20 +164,6 @@ def _collects(call: ast.Call, src: Source) -> bool:
     if any(_sdk(src, call.func, row) for row in _ROWS):
         return True
     return isinstance(call.func, ast.Attribute) and call.func.attr in _COLLECTORS
-
-
-def _case_reach(match: ast.Match, index: int, env: _Env) -> _Reach:
-    case = match.cases[index]
-    subject = _kind(match.subject, env)
-    guard = _reach(case.guard, True, env) if case.guard else _Reach.FREE
-    if subject is None:
-        return guard
-    if subject is _Kind.UNKNOWN or subject is _Kind.BOOL:
-        return _Reach.UNKNOWN
-    catch_all = isinstance(case.pattern, ast.MatchAs) and case.pattern.pattern is None
-    if catch_all and index == 0:
-        return guard
-    return _all(_Reach.REQUIRES, guard)
 
 
 def _report_site(leaf: ast.Call, src: Source, parents: _Parents) -> ast.AST | None:
@@ -509,93 +183,66 @@ def _report_site(leaf: ast.Call, src: Source, parents: _Parents) -> ast.AST | No
     return None
 
 
-def _outcome(
-    leaf: ast.Call,
-    src: Source,
-    caught: str | None,
-    parents: _Parents,
-    handler: ast.ExceptHandler,
-) -> _Outcome:
+def _always_reported(
+    leaf: ast.Call, src: Source, parents: _Parents, handler: ast.ExceptHandler
+) -> bool:
+    """Whether every path through ``handler`` reports ``leaf``."""
     site = _report_site(leaf, src, parents)
     if site is None or isinstance(parents[site][0], ast.Expr):
-        return _Outcome.UNKNOWN
-    conditions: list[_Reach] = []
+        return False
     for parent, field, index in _ancestry(site, parents, handler):
-        if field not in _CONTEXTS.get(type(parent), ()):
-            return _Outcome.UNKNOWN
+        if field not in _ALWAYS_RUNS.get(type(parent), ()):
+            return False
         if isinstance(parent, ast.Call) and not _collects(parent, src):
-            return _Outcome.UNKNOWN
+            return False
         if isinstance(parent, (ast.Try, ast.TryStar)) and field == "body":
             if parent.handlers:
-                return _Outcome.UNKNOWN
-        if isinstance(parent, (ast.If, ast.While, ast.IfExp)) and field in (
-            "body",
-            "orelse",
-        ):
-            env = _env_at(parent.test, caught, parents, handler)
-            conditions.append(_reach(parent.test, field == "body", env))
-        if isinstance(parent, ast.Match) and field == "cases":
-            env = _env_at(parent.subject, caught, parents, handler)
-            conditions.append(_case_reach(parent, index, env))
-        if field in _BLOCK_FIELDS:
-            for earlier in _block(parent, field)[:index]:
-                if not isinstance(earlier, ast.If):
-                    continue
-                env = _env_at(earlier.test, caught, parents, handler)
-                if _exits(earlier.body):
-                    conditions.append(_reach(earlier.test, False, env))
-                elif _exits(earlier.orelse):
-                    conditions.append(_reach(earlier.test, True, env))
-    reach = _all(*conditions)
-    if reach is _Reach.FREE:
-        return _Outcome.UNCONDITIONAL
-    if reach is _Reach.UNKNOWN:
-        return _Outcome.UNKNOWN
-    return _Outcome.SELECTED
+                return False
+        if field in _BLOCKS:
+            if any(_can_exit(stmt) for stmt in _block(parent, field)[:index]):
+                return False
+    return True
 
 
-def handler_outcomes(
-    reg: Registry,
-) -> Iterator[tuple[Source, ast.ExceptHandler, list[tuple[ast.Call, _Outcome]]]]:
-    """Every broad handler on a preflight path with its auth/permission leaves."""
+def _fixed_leaf(
+    checker: _Checker, src: Source, handler: ast.ExceptHandler
+) -> ast.Call | None:
+    parents = _parents(handler)
+    for node in _own_nodes(handler):
+        if not isinstance(node, ast.Call):
+            continue
+        if not _customer_rooted(checker, src, node.func):
+            continue
+        if _always_reported(node, src, parents, handler):
+            return node
+    return None
+
+
+def scan(reg: Registry) -> list[Finding]:
     checker = _Checker(reg)
+    findings: list[Finding] = []
     for src, method in reachable_preflight_sites(reg):
         for handler in iter_function_nodes(method):
             if not (isinstance(handler, ast.ExceptHandler) and _is_broad(src, handler)):
                 continue
-            parents = _parents(handler)
-            leaves = [
-                (node, _outcome(node, src, handler.name, parents, handler))
-                for node in _own_nodes(handler)
-                if isinstance(node, ast.Call)
-                and _customer_rooted(checker, src, node.func)
-            ]
-            yield src, handler, leaves
-
-
-def scan(reg: Registry) -> list[Finding]:
-    findings: list[Finding] = []
-    for src, handler, leaves in handler_outcomes(reg):
-        unconditional = [
-            leaf for leaf, outcome in leaves if outcome is _Outcome.UNCONDITIONAL
-        ]
-        if unconditional:
-            leaf = unconditional[0]
+            leaf = _fixed_leaf(checker, src, handler)
+            if leaf is None:
+                continue
             findings.append(
                 make_finding(
                     filename=src.rel,
                     rule_id=_F021,
                     node=handler,
                     message=(
-                        f"Broad except in preflight_check builds a fixed "
-                        f"{ast.unparse(leaf.func)} on a path no test on the caught "
-                        "exception selects, so an empty credential or an "
-                        "unreachable host reads as a customer credential or grant "
-                        "problem. Classify the caught exception first "
-                        "(application_sdk.errors.classify_http_exception for "
-                        "httpx, or an isinstance chain) and fall back to a leaf "
-                        "that does not blame the customer (InternalError when the "
-                        "cause is unknown), or narrow the except clause."
+                        f"Broad except in preflight_check reports a fixed "
+                        f"{ast.unparse(leaf.func)} for every failure it catches, so "
+                        "an empty credential or an unreachable host reads as a "
+                        "customer credential or grant problem. Classify the caught "
+                        "exception first (application_sdk.errors."
+                        "classify_http_exception for httpx, or an isinstance chain) "
+                        "and fall back to a leaf that does not blame the customer "
+                        "(InternalError when the cause is unknown), or narrow the "
+                        "except clause."
                     ),
                     directives=src.directives,
                 )
