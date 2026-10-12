@@ -208,6 +208,23 @@ class TestCategorize:
         assert len(cats["other"]) == 1
         assert len(cats["breaking"]) == 1
 
+    def test_ci_is_dropped(self) -> None:
+        cats = conformance_release.categorize(
+            [("abc1234", "ci: tweak workflow", ""), ("def5678", "ci(x): pin", "")]
+        )
+        assert all(len(v) == 0 for v in cats.values())
+
+    def test_breaking_ci_is_kept(self) -> None:
+        """A major bump must always have notes explaining it."""
+        cats = conformance_release.categorize([("abc1234", "ci!: drop runner", "")])
+        assert len(cats["breaking"]) == 1
+
+    def test_perf_and_refactor_land_in_other(self) -> None:
+        cats = conformance_release.categorize(
+            [("abc1234", "perf: faster", ""), ("def5678", "refactor: split", "")]
+        )
+        assert len(cats["other"]) == 2
+
     def test_empty_commits_gives_empty_cats(self) -> None:
         cats = conformance_release.categorize([])
         assert all(len(v) == 0 for v in cats.values())

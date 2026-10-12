@@ -122,17 +122,47 @@ def get_commits_since_last_tag(current_version):
     return _format_commits(_gh_api_commits(f"repos/{owner}/{repo}/commits?sha=HEAD"))
 
 
+# Changelog sections in render order: (key, heading, conventional types).
+# Every conventional type except `ci` is rendered (FND-3748): the release
+# changelog is the human review gate for a semver release, so any change to
+# what ships must be visible in it — a large `perf:` or `refactor:` PR used to
+# leave the notes empty. `ci` alone is dropped, because it only touches the
+# repo's own automation, never the released artefact.
+SECTIONS = (
+    ("features", "Features", ("feat",)),
+    ("fixes", "Bug Fixes", ("fix",)),
+    ("performance", "Performance", ("perf",)),
+    ("refactors", "Refactoring", ("refactor",)),
+    ("docs", "Documentation", ("docs",)),
+    ("chores", "Chores", ("chore", "build")),
+    # Anything else lands here with its full subject, so a non-conventional or
+    # unknown-type subject is still listed rather than silently dropped.
+    ("other", "Other Changes", ()),
+)
+EXCLUDED_TYPES = frozenset({"ci"})
+
+_TYPE_TO_SECTION = {t: key for key, _, types in SECTIONS for t in types}
+_CONVENTIONAL_RE = re.compile(
+    r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<desc>.*)$",
+    re.IGNORECASE,
+)
+# Sub-packages have their own CHANGELOGs and release pipelines; exclude their
+# commits from this changelog. Same predicate as release.py's _SUBPKG_RE.
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
+
+
 def categorize_commits(commits):
     """
     Categorize commits based on conventional commit types.
 
     Args:
-        commits (list): List of commit messages
+        commits (list): List of `sha7|author|subject` lines
 
     Returns:
-        dict: Categorized commits
+        dict: One list of `(commit_link, author, message)` per SECTIONS key.
+        `ci` commits and sub-package commits are omitted.
     """
-    categories = {"features": [], "fixes": [], "chores": [], "other": []}
+    categories = {key: [] for key, _, _ in SECTIONS}
 
     owner, repo = _get_repo()
 
@@ -147,24 +177,24 @@ def categorize_commits(commits):
 
         commit_hash, author_name, message_subject = parts
 
-        # Sub-packages have their own CHANGELOGs and release pipelines; exclude
-        # their commits from the SDK changelog.
-        if re.match(r"^[a-z]+\((contract-toolkit|conformance)\):", message_subject):
+        if _SUBPKG_RE.match(message_subject):
             continue
 
         commit_link = f"https://github.com/{owner}/{repo}/commit/{commit_hash}"
 
-        if re.match(r"^(feat|docs)(\(.*\))?:", message_subject):
-            msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message_subject)
-            categories["features"].append((commit_link, author_name, msg))
-        elif re.match(r"^fix(\(.*\))?:", message_subject):
-            msg = re.sub(r"^fix(\(.*\))?:\s*", "", message_subject)
-            categories["fixes"].append((commit_link, author_name, msg))
-        elif re.match(r"^(chore|build)(\(.*\))?:", message_subject):
-            msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message_subject)
-            categories["chores"].append((commit_link, author_name, msg))
+        match = _CONVENTIONAL_RE.match(message_subject)
+        commit_type = match["type"].lower() if match else None
+        if commit_type in EXCLUDED_TYPES:
+            continue
+
+        section = _TYPE_TO_SECTION.get(commit_type, "other")
+        if section == "other":
+            msg = message_subject
         else:
-            categories["other"].append((commit_link, author_name, message_subject))
+            msg = match["desc"]
+            if match["breaking"]:
+                msg = f"**BREAKING:** {msg}"
+        categories[section].append((commit_link, author_name, msg))
 
     return categories
 
@@ -198,18 +228,11 @@ def format_changelog_section(categories, current_version, new_version):
     full_changelog_url = get_full_changelog_url(current_version, new_version)
     changelog += f"Full Changelog: {full_changelog_url}\n\n"
 
-    if categories["features"]:
-        changelog += "### Features\n\n"
-        for commit_link, author_name, msg in categories["features"]:
-            short_sha = commit_link.split("/")[-1][:7]
-            changelog += (
-                f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
-            )
-        changelog += "\n"
-
-    if categories["fixes"]:
-        changelog += "### Bug Fixes\n\n"
-        for commit_link, author_name, msg in categories["fixes"]:
+    for key, heading, _ in SECTIONS:
+        if not categories[key]:
+            continue
+        changelog += f"### {heading}\n\n"
+        for commit_link, author_name, msg in categories[key]:
             short_sha = commit_link.split("/")[-1][:7]
             changelog += (
                 f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"

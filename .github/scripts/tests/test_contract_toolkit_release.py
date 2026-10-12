@@ -94,3 +94,30 @@ class TestEndToEndVersionChoice:
         bump = contract_toolkit_release.compute_bump(subject, "")
         assert bump == "major"
         assert contract_toolkit_release.bump_version("0.25.2", bump) == "0.26.0"
+
+
+# ---------------------------------------------------------------------------
+# categorize — every type but `ci` reaches the notes
+# ---------------------------------------------------------------------------
+
+
+class TestCategorize:
+    def test_ci_is_dropped(self) -> None:
+        cats = contract_toolkit_release.categorize(
+            [("abc1234", "ci: tweak workflow", "")]
+        )
+        assert all(len(v) == 0 for v in cats.values())
+
+    def test_breaking_ci_is_kept(self) -> None:
+        cats = contract_toolkit_release.categorize([("abc1234", "ci!: drop", "")])
+        assert len(cats["breaking"]) == 1
+
+    def test_non_ci_non_feat_fix_lands_in_other(self) -> None:
+        cats = contract_toolkit_release.categorize(
+            [
+                ("abc1234", "perf: faster", ""),
+                ("def5678", "refactor: split", ""),
+                ("0123456", "chore(deps): bump", ""),
+            ]
+        )
+        assert len(cats["other"]) == 3

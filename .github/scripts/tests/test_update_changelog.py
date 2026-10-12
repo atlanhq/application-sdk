@@ -312,3 +312,92 @@ class TestFormatCommits:
             f"{'b' * 7}||oldest",
             f"{'a' * 7}||newest",
         ]
+
+
+# ---------------------------------------------------------------------------
+# categorize_commits / format_changelog_section — every type but `ci` renders
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def fixed_repo(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GITHUB_REPOSITORY", "testorg/testrepo")
+
+
+def _line(subject: str, sha: str = "abc1234", author: str = "dev") -> str:
+    return f"{sha}|{author}|{subject}"
+
+
+@pytest.mark.usefixtures("fixed_repo")
+class TestCategorizeCommits:
+    @pytest.mark.parametrize(
+        ("subject", "section", "msg"),
+        [
+            ("feat: add thing", "features", "add thing"),
+            ("fix(io): repair thing", "fixes", "repair thing"),
+            ("perf: rewrite hot loop", "performance", "rewrite hot loop"),
+            ("refactor(core): split module", "refactors", "split module"),
+            ("docs: explain thing", "docs", "explain thing"),
+            ("chore(deps): update pyarrow", "chores", "update pyarrow"),
+            ("build: pin base image", "chores", "pin base image"),
+            ("test: cover edge case", "other", "test: cover edge case"),
+            ("revert: undo thing", "other", "revert: undo thing"),
+            (
+                "Merge something unconventional",
+                "other",
+                "Merge something unconventional",
+            ),
+        ],
+    )
+    def test_every_non_ci_type_is_rendered(
+        self, subject: str, section: str, msg: str
+    ) -> None:
+        cats = update_changelog.categorize_commits([_line(subject)])
+        assert cats[section] == [
+            ("https://github.com/testorg/testrepo/commit/abc1234", "dev", msg)
+        ]
+        assert sum(len(v) for v in cats.values()) == 1
+
+    @pytest.mark.parametrize(
+        "subject", ["ci: tweak workflow", "ci(release): pin action", "CI: shout"]
+    )
+    def test_ci_is_dropped(self, subject: str) -> None:
+        cats = update_changelog.categorize_commits([_line(subject)])
+        assert all(not v for v in cats.values())
+
+    def test_breaking_marker_kept_in_its_section(self) -> None:
+        """`feat!:` used to match no pattern and vanish from the notes."""
+        cats = update_changelog.categorize_commits([_line("feat(api)!: drop v1")])
+        assert cats["features"][0][2] == "**BREAKING:** drop v1"
+
+    @pytest.mark.parametrize(
+        "subject", ["feat(conformance): new rule", "fix(contract-toolkit)!: x"]
+    )
+    def test_subpackage_commits_excluded(self, subject: str) -> None:
+        cats = update_changelog.categorize_commits([_line(subject)])
+        assert all(not v for v in cats.values())
+
+    def test_perf_only_release_has_non_empty_notes(self) -> None:
+        """The FND-3748 regression: a perf-only release rendered no entries."""
+        cats = update_changelog.categorize_commits(
+            [_line("perf: 5k-line rewrite"), _line("ci: bump action", sha="def5678")]
+        )
+        section = update_changelog.format_changelog_section(cats, "1.0.0", "1.0.1")
+        assert "### Performance" in section
+        assert "- 5k-line rewrite (by @dev in [abc1234](" in section
+        assert "bump action" not in section
+
+    def test_sections_render_in_declared_order(self) -> None:
+        subjects = [
+            "test: t",
+            "chore: c",
+            "docs: d",
+            "refactor: r",
+            "perf: p",
+            "fix: f",
+            "feat: x",
+        ]
+        cats = update_changelog.categorize_commits([_line(s) for s in subjects])
+        section = update_changelog.format_changelog_section(cats, "1.0.0", "1.1.0")
+        headings = [ln for ln in section.splitlines() if ln.startswith("### ")]
+        assert headings == [f"### {h}" for _, h, _ in update_changelog.SECTIONS]

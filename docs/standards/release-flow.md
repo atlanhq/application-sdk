@@ -20,7 +20,10 @@ feat/fix commit merged to main
 - Reads the current version from `pyproject.toml`.
 - Analyses conventional commits since the last non-rc tag (`feat` → minor bump, `fix` → patch, `BREAKING CHANGE` / `!:` → major).
 - Updates `pyproject.toml` and regenerates `uv.lock`.
-- Prepends a new section to `CHANGELOG.md` with categorised commits.
+- Prepends a new section to `CHANGELOG.md` with categorised commits. Every conventional
+  type is rendered except `ci` (FND-3748): the release notes are the human review gate for
+  a semver release, so any change to what ships — `perf`, `refactor`, `chore(deps)` — must
+  appear in them. Non-conventional subjects are listed under *Other Changes*.
 - Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
   that PR is already open, re-syncs its title, body and label to the version this run
   produced (`.github/scripts/upsert_release_pr.py`).
@@ -37,8 +40,9 @@ a stale title misleads reviewers rather than mis-tagging a release.
 **The branch is only re-pushed when the release would change** (FND-3322,
 `.github/scripts/release_bump_debounce.py`). Each force-push is a `synchronize` that re-runs
 all PR CI on the bump PR, and most merges change nothing it would ship: Renovate commits are
-forced to `chore`, which neither moves the version past the first patch bump nor appears in
-the rendered notes (only Features and Bug Fixes do). The push is skipped when the open branch
+forced to `chore`, which does not move the version past the first patch bump. Since FND-3748
+chores do appear in the rendered notes, so a Renovate merge changes the CHANGELOG section and
+is pushed. The push is skipped when the open branch
 already carries the computed version (in every version file) and the same CHANGELOG section,
 date aside, **and** still merges cleanly onto the new tip. Anything the script cannot establish
 resolves to a push. A skipped branch stays on an older base; that is safe because it only edits
