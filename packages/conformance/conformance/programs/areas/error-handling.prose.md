@@ -361,11 +361,14 @@ outcome mirroring the error-handling shape in the reference app named by
 
 - **E014 ExceptLoopControlSwallow** — an `except` block inside a loop whose
   body is only `continue` / `break` / `pass`, with no logging, so a shrinking
-  result set has no explanation.  Add a log line before the loop-control
-  statement — DEBUG when skipping a bad item is routine, WARNING when it is
-  not — with `exc_info=True`.  Mirror `atlan-metabase-app
-  app/lineage/qi_reader.py`'s `iter_qi_records`, which skips an unparseable
-  line only after logging it with `exc_info=True`.
+  result set has no explanation.  Explain a tolerated skip before the
+  loop-control statement.  For an expected format/probe mismatch (for example,
+  trying candidate datetime formats), log a concise message at DEBUG without
+  `exc_info=True`, then continue.  Mirror `atlan-metabase-app app/utils.py:46`,
+  which logs the input and candidate format at DEBUG for a `ValueError` mismatch.
+  Reserve WARNING/ERROR with `exc_info=True` for genuine unexpected per-item
+  failures (or re-raise); `app/lineage/qi_reader.py`'s `iter_qi_records` shows
+  traceback logging for an unparseable QI line.
 
 - **E015 ExceptionTextInErrorMessage** — a typed error is raised with the
   caught exception interpolated into `message=` (`f"...{exc}"`, `str(exc)`,
