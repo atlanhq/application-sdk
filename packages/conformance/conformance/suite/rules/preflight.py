@@ -370,8 +370,8 @@ _CONTRACT_RULES = (
             "carrying the typed error for a definitive source state, and raises only the "
             "retryable SOURCE_UNAVAILABLE leaf `transient_failure` classifies for a server "
             "blip (`raise transient from e`). Its tests/unit/test_preflight_conformance.py "
-            "`recoverable_transient` scenario asserts the raise and the clean READY on the "
-            "next attempt."
+            "`recoverable_transient` scenario asserts the raise, and a clean READY from a "
+            "later run against the recovered source."
         ),
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
@@ -386,10 +386,12 @@ _CONTRACT_RULES = (
         full_description=(
             "An expected failure of the source — bad credentials, a missing grant, an "
             "absent object — is a verdict: return it as a failed PreflightCheck carrying "
-            "the typed error. The one thing a handler may raise is a transient that says "
-            '"ask me again": a retryable leaf whose category is SOURCE_UNAVAILABLE or '
-            "TIMEOUT. The gate retries that raise on its next attempt and never blocks a "
-            "hard run on it. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED, "
+            "the typed error. The one thing a handler may raise is a transient — the "
+            "source could not be asked this time — as a retryable leaf whose category is "
+            "SOURCE_UNAVAILABLE or TIMEOUT. The gate records that raise as an unverifiable "
+            "source (a NOT_READY output and a would_block row classified "
+            "source_unverifiable), never blocks a hard run on either category, and the "
+            "run proceeds; it does not ask the handler again. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED, "
             "RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the gate "
             "deprecated that idiom. A raise whose category or retryability the checker "
             "cannot read from the error class (or a literal ``retryable=``) stays flagged."
@@ -397,7 +399,8 @@ _CONTRACT_RULES = (
         rationale=(
             "The gate classifies by who raised: anything the handler raises is its "
             "statement about the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf "
-            "earns a retry and never a block; any other raised failure loses the check "
+            "is reported as an unverifiable source and never blocks; any other raised "
+            "failure loses the check "
             "row a returned verdict carries, and a raised fail-open category is a "
             "deprecated request the gate no longer honours as plumbing."
         ),

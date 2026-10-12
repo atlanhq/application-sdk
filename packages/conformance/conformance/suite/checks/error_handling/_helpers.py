@@ -9,6 +9,16 @@ from typing import NamedTuple
 from .._ast_common._exc_info import has_exc_info_traceback
 from .._ast_common._sanitizers import expr_sanitizes_name
 from ._constants import _BROAD_EXCEPT_TYPES, _LOG_METHODS, BUILTIN_RAISES
+from ._sdk_errors import names_sdk_error
+
+
+def _dotted_name(node: ast.AST | None) -> str | None:
+    """``Leaf`` for a Name, ``alias.Leaf`` for a one-level Attribute, else None."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+        return f"{node.value.id}.{node.attr}"
+    return None
 
 
 def _get_name(node: ast.expr | ast.AST | None) -> str | None:
@@ -252,6 +262,7 @@ class RedactionScope(NamedTuple):
 
     exc_name: str
     redacted_at: dict[int, frozenset[str]]
+    sdk_errors: frozenset[str] = frozenset()
 
 
 def _references_any(expr: ast.expr, names: frozenset[str]) -> bool:
@@ -449,7 +460,9 @@ def _track_carried(
     return live
 
 
-def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
+def redaction_scope(
+    handler: ast.ExceptHandler, *, sdk_errors: frozenset[str] = frozenset()
+) -> RedactionScope | None:
     """Find where *handler*'s caught exception survives in redacted form.
 
     ``None`` when the handler does not bind the exception (``except Exception:``)
@@ -472,7 +485,7 @@ def redaction_scope(handler: ast.ExceptHandler) -> RedactionScope | None:
         return None
     redacted_at: dict[int, frozenset[str]] = {}
     _track_carried(handler.body, handler.name, set(), redacted_at, _derives_from_cause)
-    return RedactionScope(handler.name, redacted_at)
+    return RedactionScope(handler.name, redacted_at, sdk_errors)
 
 
 def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
@@ -489,21 +502,26 @@ def _raise_redacts_cause(stmt: ast.Raise, scope: RedactionScope) -> bool:
         return False
     if expr_sanitizes_name(stmt.exc, scope.exc_name):
         return True
-    if _typed_error_takes_cause(stmt.exc, scope.exc_name):
+    if _sdk_error_takes_cause(stmt.exc, scope.exc_name, scope.sdk_errors):
         return True
     return _references_any(stmt.exc, scope.redacted_at.get(id(stmt), frozenset()))
 
 
-def _typed_error_takes_cause(expr: ast.expr, exc_name: str) -> bool:
-    """True when *expr* is a typed error given the caught exception as ``cause=``.
+def _sdk_error_takes_cause(
+    expr: ast.expr, exc_name: str, sdk_errors: frozenset[str]
+) -> bool:
+    """True when *expr* is an SDK error given the caught exception as ``cause=``.
 
     ``AppError(cause=exc)`` is the SDK's own redaction path: the wire envelope
     renders the cause with ``sanitize_cause_repr``, so the failure survives in
-    redacted form even after ``from None`` drops the raw traceback. Only the
-    binding itself counts — ``cause=str(exc)`` is text, and a lowercase factory
-    proves nothing about what it builds.
+    redacted form even after ``from None`` drops the raw traceback. The class
+    must be proven an SDK error (:mod:`._sdk_errors`); an app class that merely
+    takes a ``cause`` may format it raw. Only the binding itself counts —
+    ``cause=str(exc)`` is text.
     """
-    if not isinstance(expr, ast.Call) or not _class_like(_get_name(expr.func)):
+    if not isinstance(expr, ast.Call) or not names_sdk_error(
+        sdk_errors, _dotted_name(expr.func)
+    ):
         return False
     return any(
         kw.arg == "cause" and isinstance(kw.value, ast.Name) and kw.value.id == exc_name
@@ -864,7 +882,86 @@ def _helper_typed_parameters(
     optional = _annotated_error_return(helper)
     if optional is None or (optional and id(call) not in guarded_calls):
         return frozenset()
-    return _annotated_error_parameters(helper)
+    return frozenset(
+        parameter
+        for parameter in _annotated_error_parameters(helper)
+        if _every_return_builds_from(helper, parameter, allow_none=optional)
+    )
+
+
+def _own_scope_nodes(function: ast.FunctionDef) -> Iterator[ast.AST]:
+    """Every node in *function*'s body, not entering nested ``def``/``class``/``lambda``."""
+    pending: list[ast.AST] = list(function.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            continue
+        yield node
+        pending.extend(ast.iter_child_nodes(node))
+
+
+def _names_derived_from(function: ast.FunctionDef, parameter: str) -> frozenset[str]:
+    """*parameter* and every local assigned from it, to a fixpoint.
+
+    Loop-carried rebinding counts (``current = exc`` then
+    ``current = current.__cause__``), as does a ``for`` target over an iterable
+    built from it.
+    """
+    derived = {parameter}
+    bindings: list[tuple[list[ast.expr], ast.expr]] = []
+    for node in _own_scope_nodes(function):
+        if isinstance(node, ast.Assign):
+            bindings.append((node.targets, node.value))
+        elif (
+            isinstance(node, (ast.AnnAssign, ast.AugAssign)) and node.value is not None
+        ):
+            bindings.append(([node.target], node.value))
+        elif isinstance(node, ast.NamedExpr):
+            bindings.append(([node.target], node.value))
+        elif isinstance(node, (ast.For, ast.AsyncFor)):
+            bindings.append(([node.target], node.iter))
+    changed = True
+    while changed:
+        changed = False
+        for targets, value in bindings:
+            if not _references_any(value, frozenset(derived)):
+                continue
+            for target in targets:
+                for name in ast.walk(target):
+                    if isinstance(name, ast.Name) and name.id not in derived:
+                        derived.add(name.id)
+                        changed = True
+    return frozenset(derived)
+
+
+def _every_return_builds_from(
+    function: ast.FunctionDef, parameter: str, *, allow_none: bool
+) -> bool:
+    """True when every ``return`` hands back a constructor built from *parameter*.
+
+    The annotation names the type that comes back; this proves the failure is
+    in it. Each non-``None`` return must be a class-like call whose arguments
+    read *parameter* or a local derived from it. A bare or ``None`` return is
+    allowed only when the annotation itself admits ``None``.
+    """
+    derived = _names_derived_from(function, parameter)
+    returns = [n for n in _own_scope_nodes(function) if isinstance(n, ast.Return)]
+    typed = 0
+    for stmt in returns:
+        if stmt.value is None or _is_none_constant(stmt.value):
+            if not allow_none:
+                return False
+            continue
+        value = stmt.value
+        if not (isinstance(value, ast.Call) and _class_like(_get_name(value.func))):
+            return False
+        arguments = [*value.args, *[kw.value for kw in value.keywords]]
+        if not any(_references_any(arg, derived) for arg in arguments):
+            return False
+        typed += 1
+    return typed > 0
 
 
 def _none_guarded_calls(body: list[ast.stmt]) -> frozenset[int]:

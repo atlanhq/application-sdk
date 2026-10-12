@@ -693,6 +693,8 @@ class TestDeprecatedFailOpenTrain:
         assert "RateLimitedError" in text
         assert DEPRECATED_FAIL_OPEN_REMOVED_IN in text
         assert "raise a retryable SourceUnavailableError leaf" in text
+        assert "unverifiable source and never blocks" in text
+        assert "retries" not in text
         logged = [c.args[0] for c in mock_logger.warning.call_args_list]
         assert text in logged
 

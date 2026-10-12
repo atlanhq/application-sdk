@@ -559,9 +559,9 @@ def test_f007_reports_each_failed_error_on_one_line(tmp_path):
 # F008: a retryable, non-deprecated transient may be raised
 # ---------------------------------------------------------------------------
 
-# The gate's no-verdict path retries a raise on the next attempt, and never
-# blocks on SOURCE_UNAVAILABLE or TIMEOUT. A retryable leaf in one of those is
-# "ask me again", not an expected failure escaping. The fail-open categories
+# The gate's no-verdict path records a raise as an unverifiable source and never
+# blocks on SOURCE_UNAVAILABLE or TIMEOUT, so the run proceeds. A retryable leaf
+# in one of those is "could not ask this time", not an expected failure escaping. The fail-open categories
 # the gate deprecated (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED,
 # CANCELLED) stay flagged, as does any raise whose category or retryability the
 # detector cannot read.

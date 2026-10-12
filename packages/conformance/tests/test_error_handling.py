@@ -439,18 +439,147 @@ except Exception as exc:
     )
 
 
-def test_p004_no_finding_when_severed_raise_hands_the_cause_to_a_typed_error() -> None:
-    # A typed error given the caught exception as ``cause=`` carries it through
+_SDK_LEAF_PRELUDE = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
+"""
+
+
+@pytest.mark.parametrize(
+    "prelude, raised",
+    [
+        (_SDK_LEAF_PRELUDE, "StoreTransientError"),
+        (
+            "from application_sdk.errors import SourceUnavailableError\n",
+            "SourceUnavailableError",
+        ),
+        (
+            "from application_sdk.errors.leaves import SourceUnavailableError as Down\n",
+            "Down",
+        ),
+        ("from application_sdk import errors\n", "errors.SourceUnavailableError"),
+        (
+            "import application_sdk.errors as sdk_errors\n",
+            "sdk_errors.SourceUnavailableError",
+        ),
+        (
+            "from application_sdk import errors\n\n\n"
+            "class StoreTransientError(errors.SourceUnavailableError):\n    pass\n",
+            "StoreTransientError",
+        ),
+    ],
+    ids=[
+        "local-leaf",
+        "sdk-leaf",
+        "sdk-submodule-alias",
+        "module-attr",
+        "module-alias",
+        "local-leaf-attr-base",
+    ],
+)
+def test_p004_no_finding_when_severed_raise_hands_the_cause_to_a_typed_error(
+    prelude: str, raised: str
+) -> None:
+    # An SDK error given the caught exception as ``cause=`` carries it through
     # the SDK's own redaction: the wire envelope renders it with
     # sanitize_cause_repr, so ``from None`` severs only the raw traceback.
     assert "E004" not in _findings(
-        """\
+        prelude
+        + f"""\
+try:
+    found = read_store(credential)
+except Exception as exc:
+    raise {raised}(message="store did not answer", cause=exc) from None
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        "class StoreTransientError(Exception):\n"
+        "    def __init__(self, message, cause):\n"
+        '        super().__init__(f"{message}: {cause}")\n',
+        "from app.errors import StoreTransientError\n",
+        "",
+        "from somewhere.errors import SourceUnavailableError\n\n\n"
+        "class StoreTransientError(SourceUnavailableError):\n    pass\n",
+    ],
+    ids=[
+        "app-class-on-exception",
+        "unresolvable-import",
+        "undefined-name",
+        "lookalike-base",
+    ],
+)
+def test_p004_still_flags_severed_cause_to_an_unproven_error(prelude: str) -> None:
+    # Capitalisation is not proof of the SDK's redaction: an app error that
+    # formats its cause raw would put a credential-bearing exception in the log.
+    assert "E004" in _findings(
+        prelude
+        + """\
 try:
     found = read_store(credential)
 except Exception as exc:
     raise StoreTransientError(message="store did not answer", cause=exc) from None
 """
     )
+
+
+def _scan_repo(tmp_path, files: dict[str, str], target: str) -> list[str]:
+    from conformance.suite.checks.error_handling import scan_path
+
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return sorted(f.rule_id for f in scan_path(tmp_path / target, tmp_path))
+
+
+_SEVERED_HANDLER = """\
+from app.errors import StoreTransientError
+
+
+def probe(credential):
+    try:
+        return read_store(credential)
+    except Exception as exc:
+        raise StoreTransientError(message="store did not answer", cause=exc) from None
+"""
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_p004_resolves_an_sdk_leaf_defined_in_another_module(
+    tmp_path, relative
+) -> None:
+    handler = _SEVERED_HANDLER.replace(
+        "from app.errors", "from .errors" if relative else "from app.errors"
+    )
+    files = {
+        "app/__init__.py": "",
+        "app/errors.py": (
+            "from application_sdk.errors import SourceUnavailableError\n\n\n"
+            "class StoreTransientError(SourceUnavailableError):\n    pass\n"
+        ),
+        "app/handler.py": handler,
+    }
+    assert "E004" not in _scan_repo(tmp_path, files, "app/handler.py")
+
+
+def test_p004_flags_an_app_error_in_another_module_not_on_the_sdk_chain(
+    tmp_path,
+) -> None:
+    files = {
+        "app/__init__.py": "",
+        "app/errors.py": "class StoreTransientError(Exception):\n    pass\n",
+        "app/handler.py": _SEVERED_HANDLER,
+    }
+    assert "E004" in _scan_repo(tmp_path, files, "app/handler.py")
 
 
 @pytest.mark.parametrize(
@@ -3953,6 +4082,13 @@ def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
 # called with the caught exception, behind a guard that exits on ``None``, is the
 # failure carried out as typed data.
 _ANNOTATED_CLASSIFIER = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
 def _classify(exc: BaseException) -> {annotation}:
     current = exc
     while current is not None:
@@ -3995,9 +4131,7 @@ _SEVERED_UNCAUSED_GUARD = """\
 """
 
 
-@pytest.mark.parametrize(
-    "annotation", ["AppError | None", "Optional[AppError]", "AccessDeniedError"]
-)
+@pytest.mark.parametrize("annotation", ["AppError | None", "Optional[AppError]"])
 @pytest.mark.parametrize(
     "guard", [_EXITING_GUARD, _CHAINED_RAISE_GUARD, _SEVERED_RAISE_GUARD]
 )
@@ -4024,6 +4158,53 @@ def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
     annotation: str,
 ) -> None:
     src = _ANNOTATED_CLASSIFIER.format(annotation=annotation, guard=_EXITING_GUARD)
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '    return AppError(message="probe failed")\n',
+        '    return AppError(message="probe failed", cause=other)\n',
+        "    if isinstance(exc, DeniedError):\n"
+        '        return AccessDeniedError(message="denied", cause=exc)\n'
+        '    return AppError(message="probe failed")\n',
+        "    current = exc\n"
+        "    while current is not None:\n"
+        "        current = current.__cause__\n"
+        '    return AppError(message="probe failed")\n',
+    ],
+    ids=["discards", "other-cause", "one-return-discards", "walks-then-discards"],
+)
+def test_typed_failure_still_flags_annotated_helper_that_drops_the_failure(
+    body: str,
+) -> None:
+    # The annotation says what type comes back, not that the failure is in it:
+    # every typed return must be built from the parameter or a name derived
+    # from it.
+    src = (
+        "def _classify(exc: BaseException) -> AppError:\n"
+        + body
+        + """
+
+def probe(other):
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    )
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_returning_none_without_the_optional_form() -> (
+    None
+):
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AccessDeniedError", guard=_EXITING_GUARD
+    )
+    assert "return None" in src
     assert "E007" in _findings(src)
 
 

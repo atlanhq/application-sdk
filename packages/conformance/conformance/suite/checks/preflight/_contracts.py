@@ -101,8 +101,9 @@ _SDK_CATEGORY: dict[str, tuple[str, bool]] = {
     "InternalError": ("INTERNAL", False),
     "UnimplementedError": ("UNIMPLEMENTED", False),
 }
-#: Categories a handler may raise to say "ask me again": the gate's no-verdict
-#: path retries a raise on the next attempt, and never blocks on these. They are
+#: Categories a handler may raise for a source it could not ask this time: the
+#: gate's no-verdict path records the raise as an unverifiable source and never
+#: blocks on these, so the run proceeds. They are
 #: the gate's never-blocking categories minus the fail-open ones it deprecated
 #: (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED, CANCELLED), whose
 #: raise is the idiom F008 exists to retire. Pinned to the gate by a drift test.

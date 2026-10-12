@@ -13,9 +13,9 @@ description: >
   category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, and
   never on TIMEOUT or SOURCE_UNAVAILABLE; failures of the gate's own plumbing (its credential
   resolution, no worker) always fail open; a transient is raised as a
-  retryable SOURCE_UNAVAILABLE (or TIMEOUT) leaf, which the gate retries on its
-  next attempt and never blocks on, and the deprecated fail-open categories are
-  never raised. Classifies the app's
+  retryable SOURCE_UNAVAILABLE (or TIMEOUT) leaf, which the gate records as an
+  unverifiable source and never blocks on, so the run proceeds, and the
+  deprecated fail-open categories are never raised. Classifies the app's
   rollout bucket, sizes the check budget
   (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
   (preflight_gate_max_attempts) against what the handler actually costs, sizing
@@ -101,14 +101,17 @@ status. Read its `app/handler.py` before proposing changes.
   probes) are plumbing that fails open. So an uncaught probe exception
   (`INTERNAL`) is a reported failure that loses every other check, never a
   block. A transient — a server restarting, a probe that did not answer, a
-  429 — is "ask me again", and is the one thing to raise: a retryable leaf of
-  `SourceUnavailableError` (or `AppTimeoutError` for an overrun). The gate's
-  no-verdict path retries the raise on its next attempt and never blocks on
-  either category, so a blip neither aborts a healthy run nor greenlights a
-  source nothing verified. Classify it in one helper and re-raise only what it
-  returns (atlan-mysql-app `app/failures.py` `transient_failure`, asserted by its
-  `recoverable_transient` scenario). That attempt's other check rows are lost;
-  the retry re-runs them.
+  429 — means the source could not be asked this time, and is the one thing to
+  raise: a retryable leaf of `SourceUnavailableError` (or `AppTimeoutError` for
+  an overrun). The gate's no-verdict path records the raise as an unverifiable
+  source (`unverifiable_preflight_result`'s `NOT_READY` output and a
+  `would_block` row classified `source_unverifiable`) and never blocks on either
+  category, so the run proceeds in both modes. The gate does not ask the handler
+  again: a source fault is a verdict on the attempt it happens. So a blip
+  neither aborts a healthy run nor greenlights a source nothing verified.
+  Classify it in one helper and re-raise only what it returns (atlan-mysql-app
+  `app/failures.py` `transient_failure`, asserted by its `recoverable_transient`
+  scenario). The raise loses that attempt's other check rows.
 - A failed check should carry `error=<SDK leaf>(...).to_failure_details()` —
   category/code/audience/suggested_action flow to the Automation Engine and
   dashboards. Untyped failures fall back to the `PREFLIGHT_CHECK_FAILED`
@@ -239,7 +242,8 @@ Rules the skill enforces during adoption:
   fail *closed* on a blip. Never return it as a failed row on `READY` either:
   a failed mandatory row on `READY` is a green light nothing verified, and
   `assert_preflight_result` rejects it. Raise a retryable `SourceUnavailableError`
-  leaf (an `AppTimeoutError` for an overrun) so the gate asks again. Never raise
+  leaf (an `AppTimeoutError` for an overrun): the gate reports an unverifiable
+  source and the run proceeds. Never raise
   a `DependencyUnavailableError`, `RateLimitedError`, `ResourceExhaustedError`
   or `CancelledError` leaf for this: that is the deprecated fail-open idiom —
   it logs a `DeprecationWarning` and a `deprecated_fail_open` row, and F008
