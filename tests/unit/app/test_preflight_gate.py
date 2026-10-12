@@ -1058,7 +1058,7 @@ class TestWorkflowRowsAreLevelledLikeTheActivitys:
 class TestALostStorageRetryReportsTheStoreEvidence:
     """The storage deferral gives a flaky probe one retry, not a pass.
 
-    The only producer of the ``PreflightNoVerdict`` marker is the opt-in store
+    One producer of the ``PreflightNoVerdict`` marker is the opt-in store
     verification: a failed probe downgrades the verdict and defers it to the
     next attempt. When that attempt is killed, the deferred evidence is what
     the chain holds, and a store that refused the probe is a verdict on the run,
@@ -1108,6 +1108,58 @@ class TestALostStorageRetryReportsTheStoreEvidence:
 
     async def test_soft_mode_reports_would_block(self, safe_log) -> None:
         _, exec_patch = _exec(side_effect=self._killed_after_storage_deferral())
+        with _patched(True), exec_patch:
+            result = await _run_preflight_gate(
+                _ResolvableInput(), "myapp", "crawl", gate_mode="soft"
+            )
+        assert result is None
+        assert _row(safe_log)["outcome"] == "would_block"
+
+
+class TestALostRetryAfterAnUnreachableSourceBlocks:
+    """The other marker producer: a hard gate defers SOURCE_UNAVAILABLE (FND-3774).
+
+    A non-final attempt that found the source unreachable raises the marker so
+    the retry can answer. When Temporal kills that retry, the unreachable
+    evidence is the last the gate has, and a hard gate blocks on it.
+    """
+
+    @staticmethod
+    def _killed_after_unreachable_deferral():
+        from temporalio.exceptions import TimeoutType
+
+        unreachable = SourceUnavailableError(
+            message="private link down"
+        ).to_failure_details()
+        marker = _marker_with_payload(
+            unreachable,
+            {
+                "status": "not_ready",
+                "checks": [{"name": "reach", "passed": False}],
+                "attempt": 1,
+            },
+        )
+        timeout = _temporal_timeout(TimeoutType.START_TO_CLOSE)
+        timeout.__cause__ = marker
+        return _real_activity_error(timeout)
+
+    async def test_hard_mode_blocks(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=self._killed_after_unreachable_deferral())
+        with _patched(True), exec_patch:
+            with pytest.raises(ApplicationError) as excinfo:
+                await _run_preflight_gate(
+                    _ResolvableInput(), "myapp", "crawl", gate_mode="hard"
+                )
+        assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        row = _row(safe_log)
+        assert row["outcome"] == "blocked"
+        assert row["reason"] == FailureCategory.SOURCE_UNAVAILABLE.value
+        assert (
+            row[GATE_CLASSIFICATION_KEY] == PreflightClassification.SOURCE_UNVERIFIABLE
+        )
+
+    async def test_soft_mode_reports_would_block(self, safe_log) -> None:
+        _, exec_patch = _exec(side_effect=self._killed_after_unreachable_deferral())
         with _patched(True), exec_patch:
             result = await _run_preflight_gate(
                 _ResolvableInput(), "myapp", "crawl", gate_mode="soft"

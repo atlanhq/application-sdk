@@ -491,20 +491,35 @@ Hard mode applies to every outcome the gate can attribute to the **source**, not
 a platform blip must not fail a healthy run. The gate stamps which of the two happened as
 `gate_classification` on the outcome event, so the two are separable downstream.
 
-Among source-attributed outcomes, hard mode blocks only on a failure that is deterministic and that
-the customer can act on: the attributed `FailureDetails.category` (`details[0]`, the failure the
-row's `reason` names) must be `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`
+Among source-attributed outcomes, hard mode blocks only on a failure the customer can act on: the
+attributed `FailureDetails.category` (`details[0]`, the failure the row's `reason` names) must be
+`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND` or `SOURCE_UNAVAILABLE`
 (`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run proceeds, as in
-soft mode. Hard mode **never** blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or the four pre-3.35
-fail-open categories (`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not
-the customer. An untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
+soft mode. Hard mode **never** blocks on `TIMEOUT` or the four pre-3.35 fail-open categories
+(`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not the customer. An
+untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
+
+`SOURCE_UNAVAILABLE` blocks only on the gate's **final attempt** (`GATE_RETRIED_CATEGORIES`). On an
+earlier attempt a hard gate raises the retryable `PreflightNoVerdict` marker instead and emits no
+row, so a source that was unreachable for a moment gets the next attempt
+(`App.preflight_gate_max_attempts`, default 2) to answer `READY`. Soft mode never retries, because it
+never blocks. A source that is **cold** rather than down (a paused warehouse, a queued cluster)
+must not raise `SOURCE_UNAVAILABLE` for that: it reports `COLD`, `WARMING` or `QUEUED` from
+`Handler.warmup`, which the gate polls and the warmup posture decides (see
+[Waiting for a warmup](#waiting-for-a-warmup-opt-in)).
+
+When a verdict has several failed checks and no aggregate `result.error`, `details[0]` is the most
+decisive one: the first in a deterministic blocking category (`AUTH`, `PERMISSION`, ...), else the
+first `SOURCE_UNAVAILABLE`, else the first typed error. So an unreachable or timed-out row listed
+ahead of a failed login cannot let a run proceed on bad credentials. An aggregate `result.error` is
+always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
 | Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
-| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category, else `would_block` |
+| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only, earlier attempts retry), else `would_block` |
 | Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
-| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category, else `would_block` (an untyped crash is `INTERNAL`) |
+| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only), else `would_block` (an untyped crash is `INTERNAL`) |
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
@@ -617,11 +632,17 @@ causes separable in the dashboards.
 
 **Upgrading an app that is already on hard mode:** hard mode used to block on every
 source-attributed outcome whatever its category — a budget overrun, a lost frame, an unreachable
-source, an untyped handler crash. It now blocks only on the five customer-actionable categories
-above; the rest are reported as `would_block` and the run proceeds. A handler that wants a
-transient to stop a hard-gated run has to type it as one of those five, and an app that relied on a
-handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
+source, an untyped handler crash. Since v3.42.0 it blocks only on the customer-actionable
+categories above; the rest are reported as `would_block` and the run proceeds. A handler that
+wants a transient to stop a hard-gated run has to type it as one of those, and an app that relied
+on a handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
 policy alongside the hard-mode line at boot.
+
+**`SOURCE_UNAVAILABLE` blocks again (FND-3774).** v3.42.0 put `SOURCE_UNAVAILABLE` in the
+never-block set, so a hard-gated run proceeded past a source that was down and failed later on
+the same fault. It now blocks on the final attempt. A hard-mode app that raises or returns
+`SOURCE_UNAVAILABLE` to mean "the source is still warming up" must move that signal to
+`Handler.warmup`, or the run blocks.
 
 #### Sizing the check budget
 
@@ -794,7 +815,8 @@ confirmed across the gate's retry attempts becomes the verdict. Whether it then 
 depends on its category. In-cluster, every probed store is Atlan-side, so the failure is
 `DEPENDENCY_UNAVAILABLE` and is reported as `would_block`, never blocked. In SDR mode the store is
 the customer's own bucket: a missing binding (`PRECONDITION`), a denied grant (`PERMISSION`) or
-rejected credentials (`AUTH`) block, while an unreachable store (`SOURCE_UNAVAILABLE`) does not.
+rejected credentials (`AUTH`) block, and so does a store still unreachable on the final attempt
+(`SOURCE_UNAVAILABLE`).
 
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:

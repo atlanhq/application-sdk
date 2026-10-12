@@ -10,12 +10,13 @@ description: >
   source — a NOT_READY verdict, anything the handler raises, a probe
   overrunning the enforced budget, a running attempt Temporal had to kill, a
   provably absent credential — but blocks only when the attributed failure's
-  category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, and
-  never on TIMEOUT or SOURCE_UNAVAILABLE; failures of the gate's own plumbing (its credential
-  resolution, no worker) always fail open; a transient is raised as a
-  retryable SOURCE_UNAVAILABLE (or TIMEOUT) leaf, which the gate records as an
-  unverifiable source and never blocks on, so the run proceeds, and the
-  deprecated fail-open categories are never raised. Classifies the app's
+  category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, or
+  SOURCE_UNAVAILABLE still present on the gate's final attempt, and never on
+  TIMEOUT; failures of the gate's own plumbing (its credential resolution, no
+  worker) always fail open; an unreachable source is raised as a retryable
+  SOURCE_UNAVAILABLE leaf, which a hard gate retries and then blocks on; compute
+  that is cold, warming or queued is reported from Handler.warmup, never raised;
+  and the deprecated fail-open categories are never raised. Classifies the app's
   rollout bucket, sizes the check budget
   (preflight_gate_timeout_seconds, default 150s, ceiling 300s) and retry attempts
   (preflight_gate_max_attempts) against what the handler actually costs, sizing
@@ -96,19 +97,25 @@ status. Read its `app/handler.py` before proposing changes.
   that escapes `preflight_check` is the handler's statement about the source if
   typed, or an app fault if untyped, and hard mode decides on the attempt it
   happens: it **blocks** when the category is `AUTH`, `PERMISSION`,
-  `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, and reports `would_block`
-  otherwise. Only the gate's own frames (credential resolution, the store
+  `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, retries `SOURCE_UNAVAILABLE`
+  and blocks on it at the final attempt, and reports `would_block` otherwise. Only the gate's own frames (credential resolution, the store
   probes) are plumbing that fails open. So an uncaught probe exception
   (`INTERNAL`) is a reported failure that loses every other check, never a
   block. A transient — a server restarting, a probe that did not answer, a
   429 — means the source could not be asked this time, and is the one thing to
   raise: a retryable leaf of `SourceUnavailableError` (or `AppTimeoutError` for
   an overrun). The gate's no-verdict path records the raise as an unverifiable
-  source (`unverifiable_preflight_result`'s `NOT_READY` output and a
-  `would_block` row classified `source_unverifiable`) and never blocks on either
-  category, so the run proceeds in both modes. The gate does not ask the handler
-  again: a source fault is a verdict on the attempt it happens. So a blip
-  neither aborts a healthy run nor greenlights a source nothing verified.
+  source (`unverifiable_preflight_result`'s `NOT_READY` output, row classified
+  `source_unverifiable`). `TIMEOUT` never blocks. `SOURCE_UNAVAILABLE` in hard
+  mode is retried: a non-final attempt hands it to the next attempt
+  (`preflight_gate_max_attempts`, default 2), and only the final attempt blocks,
+  so a blip clears on the retry while a source that is really down stops the run
+  before extraction fails on it. Soft mode reports `would_block` on the first
+  attempt and proceeds. Every other source fault is a verdict on the attempt it
+  happens. A source whose compute is cold, warming or queued is **not**
+  unavailable: report that from `Handler.warmup` (`COLD` / `WARMING` /
+  `QUEUED`) and mark the checks that need compute `WARMUP`; raising
+  `SourceUnavailableError` for it blocks a hard-gated run.
   Classify it in one helper and re-raise only what it returns (atlan-mysql-app
   `app/failures.py` `transient_failure`, asserted by its `recoverable_transient`
   scenario). The raise loses that attempt's other check rows.
@@ -243,7 +250,8 @@ Rules the skill enforces during adoption:
   a failed mandatory row on `READY` is a green light nothing verified, and
   `assert_preflight_result` rejects it. Raise a retryable `SourceUnavailableError`
   leaf (an `AppTimeoutError` for an overrun): the gate reports an unverifiable
-  source and the run proceeds. Never raise
+  source; a hard gate retries the former and blocks if it persists to the final
+  attempt, and the latter proceeds. Never raise
   a `DependencyUnavailableError`, `RateLimitedError`, `ResourceExhaustedError`
   or `CancelledError` leaf for this: that is the deprecated fail-open idiom —
   it logs a `DeprecationWarning` and a `deprecated_fail_open` row, and F008

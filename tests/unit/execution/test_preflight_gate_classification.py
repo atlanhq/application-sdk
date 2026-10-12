@@ -511,16 +511,18 @@ class TestHandlerRaisedBlockPassesThrough:
 
 # One leaf per category outside the deprecated fail-open train: each is a
 # typed handler-origin failure the mode must apply to. A hard gate blocks on the
-# first list (GATE_BLOCKING_CATEGORIES) and reports the second (FND-3040).
+# first list (GATE_BLOCKING_CATEGORIES; SOURCE_UNAVAILABLE on the final attempt,
+# which a call outside an activity context is) and reports the second (FND-3040,
+# FND-3774).
 _HARD_BLOCKING_TYPED_LEAVES: list[AppError] = [
     AuthError(message="bad"),
     AppPermissionDeniedError(message="no grant"),
     NotFoundError(message="no such database"),
     InvalidInputError(message="bad host"),
     PreconditionError(message="wrong state"),
+    SourceUnavailableError(message="no answer"),
 ]
 _HARD_REPORTED_TYPED_LEAVES: list[AppError] = [
-    SourceUnavailableError(message="no answer"),
     AlreadyExistsError(message="exists"),
     AppTimeoutError(message="source read timed out"),
     DataIntegrityError(message="corrupt catalog"),
