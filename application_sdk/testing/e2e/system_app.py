@@ -144,10 +144,14 @@ class SystemAppE2ETest(BaseE2ETest):
         """Start the version :meth:`_bootstrap_workflow` published, via AE.
 
         *payload* is the Heracles envelope :class:`BaseE2ETest` builds for every
-        run; this path sends no envelope, so it is unused.
+        run; this path sends no envelope, so it is unused. The run id goes to
+        :meth:`_track_unsettled_run` the instant it is known, including on the
+        ambiguous-submit recovery path, as :meth:`BaseE2ETest._submit` does.
         """
         del payload
-        return await self._ae.submit_published_version(slug)
+        return await self._ae.submit_published_version(
+            slug, on_run_id=self._track_unsettled_run
+        )
 
     async def _assert_deployed_manifest_matches(self, slug: str) -> None:
         """No-op: AE ran the published seed, and nothing republished over it."""

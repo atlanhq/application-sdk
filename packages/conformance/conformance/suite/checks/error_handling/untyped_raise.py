@@ -93,24 +93,36 @@ class UntypedRaiseMixin:
         if exc_name not in LEAF_CLASSES:
             return
 
-        # asyncio.CancelledError is stdlib cancellation control flow, not the
-        # same-named application_sdk.errors AppError leaf. Resolve the import
-        # binding before comparing the class's terminal name.
-        if exc_name == "CancelledError":
-            raised_type = exc_node.func if isinstance(exc_node, ast.Call) else exc_node
-            attributes: list[str] = []
-            while isinstance(raised_type, ast.Attribute):
-                attributes.append(raised_type.attr)
-                raised_type = raised_type.value
-            if isinstance(raised_type, ast.Name):
-                origin = self._import_origins.get(raised_type.id)
-                if origin is not None:
-                    imported_type = ".".join((origin, *reversed(attributes)))
-                    if imported_type in {
-                        "asyncio.CancelledError",
-                        "asyncio.exceptions.CancelledError",
-                    }:
-                        return
+        raised_type = exc_node.func if isinstance(exc_node, ast.Call) else exc_node
+        attributes: list[str] = []
+        while isinstance(raised_type, ast.Attribute):
+            attributes.append(raised_type.attr)
+            raised_type = raised_type.value
+
+        imported_type: str | None = None
+        if isinstance(raised_type, ast.Name):
+            origin = self._import_origins.get(raised_type.id)
+            if origin is not None:
+                imported_type = ".".join((origin, *reversed(attributes)))
+
+        # Backend libraries can expose control-flow exceptions from an
+        # `exceptions` module. A same-named type from such a non-SDK module is not
+        # an application_sdk.errors AppError leaf. Keep arbitrary external
+        # origins and unresolved names conservative.
+        if exc_name != "CancelledError" and imported_type is not None:
+            origin_module = imported_type.rpartition(".")[0]
+            if "exceptions" in origin_module.split(
+                "."
+            ) and not imported_type.startswith("application_sdk.errors."):
+                return
+        # asyncio.CancelledError is stdlib cancellation control flow. Keep its
+        # precise existing exception: only exact asyncio origins are exempt, so
+        # a same-named class from another module is still checked.
+        elif imported_type in {
+            "asyncio.CancelledError",
+            "asyncio.exceptions.CancelledError",
+        }:
+            return
 
         # Sanctioned bare-parent form: InternalError(classification_pending=True)
         if exc_name == "InternalError":

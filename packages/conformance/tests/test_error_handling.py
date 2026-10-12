@@ -1945,6 +1945,59 @@ def get_value():
     )
 
 
+def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _failed_check(self, label, problem, started):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+        return FailedCheck(label=label, error=problem)
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._failed_check("keys", problem, started))
+            return Verdict(checks=checks)
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _empty_check(self, problem):
+        return EmptyCheck()
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._empty_check(problem))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_logs_unrelated_data() -> None:
+    src = """\
+class Probe:
+    def _report(self, detail):
+        logger.warning("other operation failed: %s", detail, exc_info=detail)
+        return EmptyCheck()
+
+    def inspect(self, unrelated):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._report(unrelated))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_no_finding_log_before_return() -> None:
     _none(
         """\
@@ -1955,6 +2008,142 @@ def get_value():
         logger.warning("key missing", exc_info=True)
         return None
 """
+    )
+
+
+def test_p007_still_flags_classmethod_calling_unbound_plain_helper() -> None:
+    # ``cls._report(problem)`` binds ``problem`` to ``self``; the logged
+    # ``problem`` parameter is its ``None`` default.
+    src = """\
+class Probe:
+    def _report(self, problem=None):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_no_finding_classmethod_calling_classmethod_helper() -> None:
+    src = """\
+class Probe:
+    @classmethod
+    def _report(cls, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_receiver_rebound_before_helper_call() -> None:
+    src = """\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self, silent_proxy):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self = silent_proxy
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_instance_attribute_shadows_helper() -> None:
+    src = """\
+class Probe:
+    def __init__(self, silent):
+        self._failed = silent
+
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    ["bool(problem)", "type(problem)", "problem is None", "len(str(problem))"],
+)
+def test_p007_still_flags_when_helper_logs_lossy_derivation(logged: str) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", {logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        '"failed: %s", problem',
+        '"failed: %s", str(problem)',
+        '"failed: %r", repr(problem)',
+        'f"failed: {problem}"',
+        '"failed: %s" % problem',
+        '"failed", exc_info=problem',
+    ],
+)
+def test_p007_no_finding_when_helper_logs_exception_representation(
+    logged: str,
+) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning({logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_json_parse_failure_returning_original_value() -> None:
+    _single(
+        """\
+def decode_setting(value):
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+""",
+        "E007",
     )
 
 
@@ -3111,6 +3300,100 @@ def fail():
     raise {leaf}(message="something went wrong")
 """
     _single(src, "E018")
+
+
+def test_p018_no_finding_for_external_precondition_translated_to_domain_error() -> None:
+    src = """\
+from backend_store.exceptions import PreconditionError
+from application_sdk.errors import DependencyUnavailableError
+
+class CheckpointConflict(DependencyUnavailableError):
+    code = "DEPENDENCY_UNAVAILABLE_SYNTHETIC_CHECKPOINT_CONFLICT"
+
+def update_local():
+    raise PreconditionError("concurrent update")
+
+def write_checkpoint():
+    try:
+        update_local()
+    except PreconditionError:
+        raise CheckpointConflict(message="retry")
+"""
+    assert "E018" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised_type"),
+    [
+        (
+            "from application_sdk.errors import PreconditionError",
+            "PreconditionError",
+        ),
+        (
+            "import application_sdk.errors as sdk_errors",
+            "sdk_errors.PreconditionError",
+        ),
+    ],
+)
+def test_p018_sdk_precondition_leaf_still_flagged(
+    imports: str, raised_type: str
+) -> None:
+    _single(
+        f"""\\
+{imports}
+
+def fail():
+    raise {raised_type}(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_non_exception_module_import_still_flagged() -> None:
+    _single(
+        """
+from domain_errors import PreconditionError
+
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
+@pytest.mark.parametrize("local_first", [True, False])
+def test_p018_function_local_import_does_not_mask_module_sdk_leaf(
+    local_first: bool,
+) -> None:
+    local = """\
+def translate():
+    from backend_store.exceptions import PreconditionError
+    raise PreconditionError("concurrent update")
+"""
+    sdk = """\
+def fail():
+    raise PreconditionError(message="state conflict")
+"""
+    body = local + "\n" + sdk if local_first else sdk + "\n" + local
+    src = "from application_sdk.errors import PreconditionError\n\n" + body
+    # The module-level SDK leaf raise must still be flagged; the name's
+    # provenance is ambiguous, so the local raise is flagged conservatively too.
+    sdk_line = (
+        src.splitlines().index('    raise PreconditionError(message="state conflict")')
+        + 1
+    )
+    e018_lines = [f.line for f in scan_text(src, "fake.py") if f.rule_id == "E018"]
+    assert sdk_line in e018_lines
+
+
+def test_p018_unresolved_precondition_leaf_still_flagged() -> None:
+    _single(
+        """\\
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
 
 
 @pytest.mark.parametrize(

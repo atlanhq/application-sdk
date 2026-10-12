@@ -633,9 +633,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E014",
         canonical_reference=(
-            "atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an "
-            "unparseable line only after logging it with exc_info=True. A bare `continue` "
-            "in an except block turns a shrinking result set into a mystery."
+            "atlan-metabase-app app/utils.py — the expected ValueError for a candidate "
+            "date-format mismatch is logged at DEBUG without exc_info before continuing. "
+            "For an unparseable QI line, app/lineage/qi_reader.py's `iter_qi_records` "
+            "logs at WARNING with exc_info=True before continuing. Reserve tracebacks for "
+            "genuine unexpected failures, not routine format probes."
         ),
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
@@ -656,9 +658,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "An ``except`` block inside a loop whose body is only ``continue``,\n"
             "``break``, or ``pass`` — with no logging call — silently swallows the\n"
             "exception and resumes or exits the iteration.  This is the loop-body twin\n"
-            "of P001/P002 (ruff S112 family).  At minimum log at DEBUG before the loop\n"
-            "control statement; if the exception signals a genuine error, re-raise or\n"
-            "log at WARNING/ERROR with ``exc_info=True``.\n"
+            "of P001/P002 (ruff S112 family).  Explain a tolerated skip before the loop\n"
+            "control statement.  For an expected format/probe mismatch, use a concise\n"
+            "DEBUG diagnostic without ``exc_info=True``.  If the exception signals a\n"
+            "genuine unexpected error, re-raise or log at WARNING/ERROR with\n"
+            "``exc_info=True``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
         remediation_reference=RemediationReference(

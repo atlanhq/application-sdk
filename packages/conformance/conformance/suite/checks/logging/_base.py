@@ -27,6 +27,7 @@ class _MixinBase:
     _is_adapter_file: bool
     _findings: list[Finding]
     _loop_stack: list[ast.For | ast.AsyncFor | ast.While]
+    _bounded_loop_caps: dict[ast.For | ast.AsyncFor, int]
     _except_stack: list[ast.ExceptHandler]
     _in_main_block: int
     # True when the module is a standalone script/CLI (shebang / __main__
