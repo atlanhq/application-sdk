@@ -853,6 +853,13 @@ class SilentSwallowMixin:
                     ):
                         inspected = True
                         break
+                # A comprehension checks per-item values under its bound name;
+                # connect that name back to the gather result before counting it.
+                if isinstance(
+                    node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+                ) and _comprehension_checks_exceptions(node, names):
+                    inspected = True
+                    break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -956,8 +963,8 @@ def _inspection_aliases(
                 ...
 
     Only whole-list copies are tracked -- ``dest.extend(var)``,
-    ``dest.append(var)`` and ``dest += var`` -- and transitively, so a chain of
-    copies resolves too. Element-wise copies are deliberately excluded: those
+    ``dest.append(var)``, ``dest += var`` and ``dest = var`` -- and
+    transitively, so a chain of copies resolves too. Element-wise copies are deliberately excluded: those
     require the caller to have touched each element already.
     """
     names = {var_name}
@@ -988,10 +995,169 @@ def _inspection_aliases(
             ):
                 dest = node.target.id
                 src = node.value.id
+            # `dest = var` / `dest: list = var` — a plain rebinding
+            elif (
+                isinstance(node, (ast.Assign, ast.AnnAssign))
+                and isinstance(node.value, ast.Name)
+                and len(targets := _assign_targets(node)) == 1
+                and isinstance(targets[0], ast.Name)
+            ):
+                dest = targets[0].id
+                src = node.value.id
             if src in names and dest is not None and dest not in names:
                 names.add(dest)
                 changed = True
     return names
+
+
+def _assign_targets(node: ast.Assign | ast.AnnAssign) -> list[ast.expr]:
+    """Targets of an assignment; chained ``a = b = x`` yields several."""
+    return node.targets if isinstance(node, ast.Assign) else [node.target]
+
+
+def _is_exception_class_name(name: str) -> bool:
+    """Whether *name* reads as an exception class (``AppError``, ``FooException``).
+
+    Types cannot be resolved from the AST, so this leans on the PEP 8
+    convention that exception class names end in ``Error`` or ``Exception``.
+    """
+    return name == "BaseException" or name.endswith(("Error", "Exception"))
+
+
+def _is_exception_type(node: ast.AST) -> bool:
+    """Whether an isinstance type expression names an exception class."""
+    if isinstance(node, ast.Name):
+        return _is_exception_class_name(node.id)
+    if isinstance(node, ast.Attribute):
+        # `builtins.Exception`, `errors.AppError`, `pkg.errors.AppError`
+        return _is_exception_class_name(node.attr)
+    if isinstance(node, ast.Tuple):
+        return any(_is_exception_type(element) for element in node.elts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _is_exception_type(node.left) or _is_exception_type(node.right)
+    return False
+
+
+def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
+    """Whether *node* positively tests a bound comprehension item as an exception.
+
+    Negations (``not isinstance(r, Exception)``) and comparisons
+    (``isinstance(r, Exception) == False``) are deliberately not followed: they
+    select the successes and drop the failures, which is the silent swallow
+    E010 exists to catch.
+    """
+    if isinstance(node, ast.Call):
+        return (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "isinstance"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in item_names
+            and _is_exception_type(node.args[1])
+        )
+    if isinstance(node, ast.BoolOp):
+        return any(
+            _condition_checks_exception(value, item_names)
+            for value in _reachable_operands(node)
+        )
+    if isinstance(node, ast.IfExp):
+        return _condition_checks_exception(node.test, item_names)
+    return False
+
+
+def _reachable_operands(node: ast.BoolOp) -> list[ast.expr]:
+    """Operands of *node* up to a literal that short-circuits the rest.
+
+    ``False and isinstance(r, Exception)`` never evaluates the test, so it must
+    not count as one. Only literal constants are folded; any other operand may
+    take either value at runtime.
+    """
+    stop_on = isinstance(node.op, ast.Or)
+    operands: list[ast.expr] = []
+    for value in node.values:
+        operands.append(value)
+        if isinstance(value, ast.Constant) and bool(value.value) is stop_on:
+            break
+    return operands
+
+
+def _result_item_names(
+    iterable: ast.expr, target: ast.expr, result_names: set[str]
+) -> set[str]:
+    """Names in a comprehension *target* that bind one gathered result each.
+
+    ``for r in rs`` binds ``r``. Through ``enumerate`` and ``zip`` only the
+    target position fed by the result list counts, so the index in
+    ``for i, r in enumerate(rs)`` or the partner in ``zip(keys, rs)`` is never
+    mistaken for a result. Other calls may ignore their argument and are not
+    followed.
+    """
+    if isinstance(iterable, ast.Name):
+        if iterable.id in result_names and isinstance(target, ast.Name):
+            return {target.id}
+        return set()
+    if not (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id in {"enumerate", "zip"}
+        and not iterable.keywords
+        and isinstance(target, (ast.Tuple, ast.List))
+        # `zip(*cols, rs)` / `for *a, r in ...` hide the width, so positions
+        # cannot be lined up.
+        and not any(isinstance(arg, ast.Starred) for arg in iterable.args)
+        and not any(isinstance(element, ast.Starred) for element in target.elts)
+    ):
+        return set()
+    if iterable.func.id == "enumerate":
+        # enumerate(rs) / enumerate(rs, start) yields (index, result)
+        positions = [1] if _is_result_name(iterable.args[:1], result_names) else []
+        width = 2
+    else:
+        positions = [
+            index
+            for index, arg in enumerate(iterable.args)
+            if _is_result_name([arg], result_names)
+        ]
+        width = len(iterable.args)
+    if len(target.elts) != width:
+        return set()
+    return {
+        element.id
+        for position in positions
+        if isinstance(element := target.elts[position], ast.Name)
+    }
+
+
+def _is_result_name(args: list[ast.expr], result_names: set[str]) -> bool:
+    """Whether *args* is exactly one plain reference to the gather results."""
+    return (
+        len(args) == 1 and isinstance(args[0], ast.Name) and args[0].id in result_names
+    )
+
+
+def _comprehension_checks_exceptions(
+    node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+    result_names: set[str],
+) -> bool:
+    """Whether a comprehension over the gather results tests each item as an exception.
+
+    The test may sit in a filter (``[r for r in rs if isinstance(r, Exception)]``)
+    or in the element itself (``any(isinstance(r, Exception) for r in rs)``).
+    """
+    item_names: set[str] = set()
+    for generator in node.generators:
+        item_names |= _result_item_names(generator.iter, generator.target, result_names)
+    if not item_names:
+        return False
+    if isinstance(node, ast.DictComp):
+        elements: list[ast.expr] = [node.key, node.value]
+    else:
+        elements = [node.elt]
+    conditions = [c for generator in node.generators for c in generator.ifs]
+    return any(
+        _condition_checks_exception(expression, item_names)
+        for expression in (*conditions, *elements)
+    )
 
 
 def _cancelled_task_names(

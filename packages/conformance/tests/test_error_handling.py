@@ -2528,6 +2528,264 @@ async def run():
     )
 
 
+def test_p010_no_finding_base_exception_list_comprehension() -> None:
+    """Classifying every gathered value in a comprehension handles failures too."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, BaseException)]
+    if errors:
+        for error in errors:
+            logger.error("job failed: %s", error)
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_any_over_gathered_results() -> None:
+    """An exception test in the element, not a filter, still inspects each item."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    if any(isinstance(item, Exception) for item in gathered):
+        return None
+    return gathered
+"""
+    )
+
+
+def test_p010_no_finding_enumerate_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for i, item in enumerate(gathered) if isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_zip_dict_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = {key: item for key, item in zip(keys, gathered) if isinstance(item, Exception)}
+    return errors
+"""
+    )
+
+
+def test_p010_no_finding_custom_exception_type_comprehension() -> None:
+    """A typed error class (by the Error/Exception naming convention) counts."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, AppError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_dotted_custom_exception_type_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, errors_mod.FetchError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_plain_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_no_finding_annotated_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes: list = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_plain_alias_not_inspected_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    return outcomes
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_enumerate_index_still_fires() -> None:
+    """Only the enumerate position holding the result is a gathered value."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for index, item in enumerate(gathered) if isinstance(index, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_zip_partner_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for key, item in zip(keys, gathered) if isinstance(key, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_arbitrary_call_still_fires() -> None:
+    """A call that merely receives the results may return something unrelated."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in to_unrelated_items(gathered) if isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_short_circuited_check_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if False and isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_no_finding_guarded_exception_check() -> None:
+    """A non-literal guard before the exception test leaves the test reachable."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if item is not None and isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_comprehension_dropping_exceptions_still_fires() -> None:
+    """Keeping only the successes is the silent swallow, not an inspection."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if not isinstance(item, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_comparing_exception_test_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, Exception) == False]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_without_exception_classification_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, int)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_unrelated_iterable_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in other_values if isinstance(item, BaseException)]
+    return gathered
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_unrelated_value_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    unrelated = None
+    errors = [item for item in gathered if isinstance(unrelated, BaseException)]
+    return errors
+""",
+        "E010",
+    )
+
+
 def test_p010_no_finding_without_return_exceptions() -> None:
     _none(
         """\
