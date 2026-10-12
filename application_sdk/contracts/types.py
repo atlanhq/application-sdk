@@ -458,6 +458,15 @@ class FileReference(BaseModel, frozen=True):
             custom retry/timeout/streaming behavior the interceptor cannot
             provide (e.g. multi-GB files, lazy-streaming reads, or
             deferred materialization).
+        manifest_path: Object-store key of the directory manifest — the
+            exact list of files (relative path, sha256, size) a directory
+            ref covers. Written by ``persist_file_reference`` as the last
+            object of a directory upload, at a key outside ``storage_path``.
+            When set, materialize downloads exactly those files and never
+            lists the prefix, so stray objects under a reused prefix are
+            ignored. ``None`` for single-file refs and for directory refs
+            from producers that predate manifests; those fall back to
+            listing ``storage_path``.
     """
 
     local_path: str | None = None
@@ -466,6 +475,7 @@ class FileReference(BaseModel, frozen=True):
     file_count: int = 1
     tier: StorageTier = StorageTier.TRANSIENT
     auto_materialize: bool = True
+    manifest_path: str | None = None
 
     @staticmethod
     def from_local(

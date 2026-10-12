@@ -557,3 +557,56 @@ class TestCleanupStorageNeverDeletesDurableAlias:
         )
 
         assert deleted == [self._KEY]
+
+
+class TestCleanupStorageDirectoryManifest:
+    """FND-3762: a directory ref's manifest sits outside its prefix by design,
+    so the prefix listing never reaches it. Cleanup must delete it with a
+    TRANSIENT ref and protect it for a durable one."""
+
+    _DIR = "artifacts/apps/test/workflows/wf-test/r1/file_refs/d1/"
+    _MANIFEST = "artifacts/apps/test/workflows/wf-test/r1/file_refs/m1.sdk-manifest"
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        _clear_app_state()
+
+    @pytest.mark.asyncio
+    async def test_transient_directory_ref_deletes_its_manifest(self) -> None:
+        ref = FileReference(storage_path=self._DIR, manifest_path=self._MANIFEST)
+        listing = [[{"path": self._DIR + "a.json"}]]
+
+        result, deleted = await _run_cleanup_capturing_deletes([ref], listing)
+
+        assert sorted(deleted) == sorted([self._DIR + "a.json", self._MANIFEST])
+        assert result.deleted_count == 2
+
+    @pytest.mark.asyncio
+    async def test_manifest_under_a_protected_prefix_is_never_deleted(self) -> None:
+        protected = "persistent-artifacts/apps/test/file_refs/m2.sdk-manifest"
+        ref = FileReference(storage_path=self._DIR, manifest_path=protected)
+
+        result, deleted = await _run_cleanup_capturing_deletes([ref], [])
+
+        assert protected not in deleted
+        assert result.skipped_count == 1
+
+    @pytest.mark.asyncio
+    async def test_transient_twin_does_not_delete_a_retained_manifest(self) -> None:
+        refs = [
+            FileReference(
+                storage_path=self._DIR,
+                manifest_path=self._MANIFEST,
+                tier=StorageTier.RETAINED,
+            ),
+            FileReference(storage_path=self._DIR, manifest_path=self._MANIFEST),
+        ]
+
+        _, deleted = await _run_cleanup_capturing_deletes(refs, [])
+
+        assert self._MANIFEST not in deleted
