@@ -49,7 +49,6 @@ from conformance.suite.checks._ast_common import (
     discover,
     make_cli_main,
 )
-from conformance.suite.checks._ast_common._imports import collect_import_origins
 from conformance.suite.checks._version import (
     locked_sdk_version,
     parse_version,
@@ -57,13 +56,7 @@ from conformance.suite.checks._version import (
 )
 from conformance.suite.schema.findings import Finding
 
-from ._unclosed_client import (
-    ClassRecord,
-    check_p056,
-    check_p057,
-    collect_class_bases,
-    resolve_subclasses,
-)
+from ._unclosed_client import ModuleIndex, Registry, check_p056, check_p057
 
 SERIES = "P"
 
@@ -91,24 +84,23 @@ def sdk_has_shared_pool(root: Path) -> bool:
 class _ParsedFile:
     """One parsed source file and what both rules need from it."""
 
-    __slots__ = ("directives", "origins", "records", "rel", "tree")
+    __slots__ = ("directives", "index", "rel")
 
     def __init__(self, text: str, rel: str) -> None:
         self.rel = rel
-        self.tree: ast.AST = ast.parse(text, filename=rel)
+        tree = ast.parse(text, filename=rel)
         self.directives: dict[int, _IgnoreDirective] = _parse_directives(text)
-        self.origins = collect_import_origins(self.tree)
-        self.records: list[ClassRecord] = collect_class_bases(self.tree, self.origins)
+        self.index = ModuleIndex.build(tree, rel)
 
 
 def _scan_parsed(files: list[_ParsedFile]) -> list[Finding]:
-    subclasses = resolve_subclasses(r for f in files for r in f.records)
-    if not subclasses:
+    registry = Registry([f.index for f in files])
+    if not registry.subclasses:
         return []
     findings: list[Finding] = []
     for f in files:
-        findings.extend(check_p057(f.records, subclasses, f.rel, f.directives))
-        findings.extend(check_p056(f.tree, subclasses, f.rel, f.directives, f.origins))
+        findings.extend(check_p057(f.index, registry, f.rel, f.directives))
+        findings.extend(check_p056(f.index, registry, f.rel, f.directives))
     return findings
 
 

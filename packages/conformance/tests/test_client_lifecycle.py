@@ -338,6 +338,97 @@ def test_p057_silent_on_non_subclass_close() -> None:
     assert scan_text(src, "app/x.py") == []
 
 
+def test_p057_fires_when_base_close_is_not_awaited() -> None:
+    """``BaseClient.close()`` is a coroutine; a bare call releases nothing."""
+    src = _METABASE_SHAPED_CLIENT + "        super().close()\n"
+    assert len(_rule(src, "P057")) == 1
+
+
+def test_p057_fires_when_base_close_is_only_in_a_nested_helper() -> None:
+    src = _METABASE_SHAPED_CLIENT + (
+        "        async def release():\n" "            await BaseClient.close(self)\n"
+    )
+    assert len(_rule(src, "P057")) == 1
+
+
+def test_p057_inline_suppression() -> None:
+    src = _METABASE_SHAPED_CLIENT.replace(
+        "    async def close(self) -> None:\n",
+        "    async def close(self) -> None:  # conformance: ignore[P057] pool closed elsewhere\n",
+    )
+    fs = _rule(src, "P057")
+    assert len(fs) == 1 and fs[0].suppressed
+
+
+# ── Ownership tracking: aliases and rebinding ───────────────────────────────
+
+
+def test_p056_fires_through_a_local_alias() -> None:
+    """``alias = client`` keeps the client local; it is not a hand-off."""
+    fs = _p056(
+        "async def f():\n"
+        "    client = SourceClient()\n"
+        "    await client.load()\n"
+        "    alias = client\n"
+        "    await alias.load()\n"
+    )
+    assert len(fs) == 1
+
+
+@pytest.mark.parametrize(
+    "tail",
+    [
+        "    try:\n        await alias.load()\n    finally:\n        await alias.close()\n",
+        "    async with alias:\n        await alias.load()\n",
+        "    return alias\n",
+        "    self.client = alias\n",
+    ],
+    ids=[
+        "alias-closed-in-finally",
+        "alias-async-with",
+        "alias-returned",
+        "alias-stored",
+    ],
+)
+def test_p056_follows_the_alias_to_its_close_or_owner(tail: str) -> None:
+    assert not _p056(
+        "async def f(self):\n"
+        "    client = SourceClient()\n"
+        "    alias = client\n" + tail
+    )
+
+
+def test_p056_rebinding_does_not_close_the_first_client() -> None:
+    fs = _p056(
+        "async def f():\n"
+        "    client = SourceClient()\n"
+        "    await client.load()\n"
+        "    client = SourceClient()\n"
+        "    try:\n"
+        "        await client.load()\n"
+        "    finally:\n"
+        "        await client.close()\n"
+    )
+    assert [f.line for f in fs] == [8]
+
+
+# ── Subclass resolution: import forms and module identity ───────────────────
+
+
+def test_p056_fires_on_unaliased_dotted_sdk_import() -> None:
+    src = (
+        "import application_sdk.clients\n"
+        "\n"
+        "class C(application_sdk.clients.BaseClient):\n"
+        "    pass\n"
+        "\n"
+        "async def f():\n"
+        "    c = C()\n"
+        "    await c.load()\n"
+    )
+    assert len(_rule(src, "P056")) == 1
+
+
 # ── Cross-file resolution + SDK-version gate (repo boundary) ────────────────
 
 _HANDLER = (
@@ -442,3 +533,80 @@ def test_reaches_the_runner(tmp_path: Path) -> None:
     runner_main(["--repo", str(root), "--series", "P", "--output", str(out)])
     results = json.loads(out.read_text(encoding="utf-8"))["runs"][0]["results"]
     assert {r["ruleId"] for r in results} >= {"P056", "P057"}
+
+
+def _write(root: Path, files: dict[str, str]) -> Path:
+    for rel, text in files.items():
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    (root / "uv.lock").write_text(_uv_lock("3.46.0"), encoding="utf-8")
+    return root
+
+
+def test_same_bare_name_in_unrelated_modules_stays_distinct(tmp_path: Path) -> None:
+    """Only the module whose ``Client`` subclasses BaseClient is in scope."""
+    root = _write(
+        tmp_path,
+        {
+            "app/source.py": (
+                "from application_sdk.clients.base import BaseClient\n"
+                "\n"
+                "class Client(BaseClient):\n"
+                "    pass\n"
+            ),
+            "app/cache.py": (
+                "class Client:\n"
+                "    async def close(self):\n"
+                "        self.items = []\n"
+                "\n"
+                "async def warm():\n"
+                "    c = Client()\n"
+                "    await c.fill()\n"
+            ),
+            "app/crawl.py": (
+                "from app.source import Client\n"
+                "\n"
+                "async def crawl():\n"
+                "    c = Client()\n"
+                "    await c.load()\n"
+            ),
+        },
+    )
+    fs = scan_all(discover(root), root)
+    assert [(f.rule_id, f.file) for f in fs] == [("P056", "app/crawl.py")]
+
+
+def test_resolves_relative_imports_and_package_reexports(tmp_path: Path) -> None:
+    root = _write(
+        tmp_path,
+        {
+            "app/__init__.py": "",
+            "app/clients/__init__.py": "from .source import SourceClient\n",
+            "app/clients/source.py": (
+                "from application_sdk.clients import BaseClient\n"
+                "\n"
+                "class SourceClient(BaseClient):\n"
+                "    pass\n"
+            ),
+            "app/handler.py": (
+                "from .clients import SourceClient\n"
+                "\n"
+                "async def handle():\n"
+                "    c = SourceClient()\n"
+                "    await c.load()\n"
+            ),
+            "app/worker.py": (
+                "from app.clients import SourceClient as Src\n"
+                "\n"
+                "async def work():\n"
+                "    c = Src()\n"
+                "    await c.load()\n"
+            ),
+        },
+    )
+    fs = scan_all(discover(root), root)
+    assert sorted((f.rule_id, f.file) for f in fs) == [
+        ("P056", "app/handler.py"),
+        ("P056", "app/worker.py"),
+    ]

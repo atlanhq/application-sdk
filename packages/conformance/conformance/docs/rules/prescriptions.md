@@ -2940,8 +2940,9 @@ See https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/clients.m
 
 This is a **heuristic** that reasons within one function.  A client that is returned,
 yielded, stored on an attribute or container, or passed as an argument has moved to
-another owner and is not flagged; neither is a module-level client.  Subclasses are
-resolved by name across the repo, transitively, from a `BaseClient` imported from
+another owner and is not flagged; neither is a module-level client.  A plain local alias
+(`alias = client`) is not a hand-off and is tracked too. Subclasses are resolved by
+module-qualified name across the repo, transitively, from a `BaseClient` imported from
 `application_sdk.clients`.  The check is silent unless the app's `uv.lock` resolves an
 SDK whose `BaseClient` shares its pool.
 
@@ -2954,7 +2955,7 @@ deliberate exception and stays visible in SARIF.
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `client-lifecycle` · **Autofixable:** yes · **Since:** 0.47.0
 
-> `close()` override on a BaseClient subclass never calls `super().close()`
+> `close()` override on a BaseClient subclass never awaits `super().close()`
 
 **Rationale:** BaseClient.close() releases the shared httpx connection pool. A subclass that overrides
 close() without calling super().close() keeps that pool open even when every caller
@@ -2973,10 +2974,13 @@ closes the client correctly (FND-3778).
   still leaks if the subclass's close() skips super().close(), so clearing P056 does not
   clear this.
 
-A `BaseClient` subclass defines `close()` and its body never calls `super().close()`.
-`BaseClient.close()` releases the shared `httpx.AsyncClient` and its connection pool; an
-override that skips it (for example, one that only clears a session token) leaves the
-pool open even when callers close the client in a `finally` or with `async with`.
+A `BaseClient` subclass defines `close()` and its own body never awaits
+`super().close()`.  `BaseClient.close()` releases the shared `httpx.AsyncClient` and its
+connection pool; an override that skips it (for example, one that only clears a session
+token) leaves the pool open even when callers close the client in a `finally` or with
+`async with`.  `BaseClient.close()` is a coroutine, so a call without `await` releases
+nothing, and a call inside a nested helper only counts if the override runs it — neither
+satisfies the rule.
 
 Fix — keep the subclass cleanup and add the super call:
 
@@ -2988,10 +2992,10 @@ async def close(self) -> None:
 
 See https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/clients.md.
 
-Subclasses are resolved by name across the repo, transitively, from a `BaseClient`
-imported from `application_sdk.clients`; an override on an intermediate subclass counts.
-The check is silent unless the app's `uv.lock` resolves an SDK whose `BaseClient` shares
-its pool.
+Subclasses are resolved by module-qualified name across the repo, transitively, from a
+`BaseClient` imported from `application_sdk.clients`; an override on an intermediate
+subclass counts.  The check is silent unless the app's `uv.lock` resolves an SDK whose
+`BaseClient` shares its pool.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P057] <reason>` records a
 deliberate exception and stays visible in SARIF.

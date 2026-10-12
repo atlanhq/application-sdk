@@ -19,7 +19,7 @@ same signal statically, through each app's own conformance scan:
   instance to a local name and neither enters it with ``async with`` nor calls
   ``await <name>.close()`` in a ``finally``.
 * ``P057`` CloseOverrideSkipsSuper — a ``BaseClient`` subclass overrides
-  ``close()`` and never calls ``super().close()``, so the shared pool is never
+  ``close()`` and never awaits ``super().close()``, so the shared pool is never
   released even by callers that close correctly.
 
 Why the rules are narrow and heuristic
@@ -28,11 +28,16 @@ Ownership of a client is a runtime fact.  ``P056`` only reasons within a single
 function: a client that is returned, yielded, stored on an attribute or in a
 container, or passed as an argument has moved to another owner and is an
 accepted false negative — tracking it across functions would trade a WARN's
-precision for a guess.  A module-level client is a process-lifetime singleton
+precision for a guess.  A plain local alias (``alias = client``) is not a hand-off:
+the alias is tracked too.  Each binding is tracked from its line to the next
+rebinding of its name, so closing a second client under the same name does not
+clear the first.  A module-level client is a process-lifetime singleton
 and is out of scope.  A ``close()`` reached only on the happy path (not in a
 ``finally``) still fires: the exception path is exactly when it leaks.
 
-Subclass resolution is name-keyed across the repo and transitive, seeded only
+Subclass resolution is by module-qualified name (``app.client.Client``, following
+relative imports and package re-exports) across the repo and transitive, so two
+unrelated classes that share a bare name stay distinct.  It is seeded only
 from a ``BaseClient`` imported from ``application_sdk.clients`` /
 ``application_sdk.clients.base`` — an unrelated ``BaseClient`` from another
 library never seeds it.  A factory that returns a client (``build_client(...)``)
@@ -134,8 +139,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "This is a **heuristic** that reasons within one function.  A client\n"
             "that is returned, yielded, stored on an attribute or container, or\n"
             "passed as an argument has moved to another owner and is not flagged;\n"
-            "neither is a module-level client.  Subclasses are resolved by name\n"
-            "across the repo, transitively, from a ``BaseClient`` imported from\n"
+            "neither is a module-level client.  A plain local alias\n"
+            "(``alias = client``) is not a hand-off and is tracked too.\n"
+            "Subclasses are resolved by module-qualified name across the repo,\n"
+            "transitively, from a ``BaseClient`` imported from\n"
             "``application_sdk.clients``.  The check is silent unless the app's\n"
             "``uv.lock`` resolves an SDK whose ``BaseClient`` shares its pool.\n"
             "\n"
@@ -180,16 +187,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "(FND-3778)."
         ),
         short_description=(
-            "`close()` override on a BaseClient subclass never calls "
+            "`close()` override on a BaseClient subclass never awaits "
             "`super().close()`"
         ),
         full_description=(
-            "A ``BaseClient`` subclass defines ``close()`` and its body never calls\n"
-            "``super().close()``.  ``BaseClient.close()`` releases the shared\n"
+            "A ``BaseClient`` subclass defines ``close()`` and its own body never\n"
+            "awaits ``super().close()``.  ``BaseClient.close()`` releases the shared\n"
             "``httpx.AsyncClient`` and its connection pool; an override that skips\n"
             "it (for example, one that only clears a session token) leaves the pool\n"
             "open even when callers close the client in a ``finally`` or with\n"
-            "``async with``.\n"
+            "``async with``.  ``BaseClient.close()`` is a coroutine, so a call\n"
+            "without ``await`` releases nothing, and a call inside a nested helper\n"
+            "only counts if the override runs it — neither satisfies the rule.\n"
             "\n"
             "Fix — keep the subclass cleanup and add the super call::\n"
             "\n"
@@ -199,7 +208,8 @@ RULES: tuple[RuleDefinition, ...] = (
             "\n"
             "See " + _CLIENTS_DOC + ".\n"
             "\n"
-            "Subclasses are resolved by name across the repo, transitively, from a\n"
+            "Subclasses are resolved by module-qualified name across the repo,\n"
+            "transitively, from a\n"
             "``BaseClient`` imported from ``application_sdk.clients``; an override\n"
             "on an intermediate subclass counts.  The check is silent unless the\n"
             "app's ``uv.lock`` resolves an SDK whose ``BaseClient`` shares its pool.\n"
