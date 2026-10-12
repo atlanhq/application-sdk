@@ -6,9 +6,9 @@ it can actually fail (T014) and actually measures the code that ships
 parsed deterministically via :mod:`tomllib`.
 
 * ``T014`` CoverageGateDisabled — ``[tool.coverage]`` is configured (any
-  ``run``/``report``/... subtable present) but
-  ``[tool.coverage.report].fail_under`` is absent or ``0`` — coverage is
-  measured and reported but can never fail a run.
+  ``run``/``report``/... subtable present) but the effective floor — a
+  CI-declared one (below) or else ``[tool.coverage.report].fail_under`` — is
+  absent or ``0``: coverage is measured and reported but can never fail a run.
 * ``T015`` CoverageOmitsProductCode — ``[tool.coverage.run].omit`` contains a
   pattern targeting real code under ``app/`` (not one of the recognised
   legitimate exclusions: ``app/generated/**``, test infra living under
@@ -27,21 +27,24 @@ with ``fail_under`` absent from ``pyproject.toml`` entirely.
 
 CI-declared fail-under
 -----------------------
-Two conventions are in use across connector apps, both matched:
+The floor T014 reads is the one gating the *unit* tier, by workflow shape:
 
-* ``connector-unit-tests`` composite action: a ``fail-under:`` input to the
-  ``uses: atlanhq/application-sdk/.github/actions/connector-unit-tests@...``
-  step, e.g. ``fail-under: "60"``.
-* ``tests-reusable.yaml`` composite workflow: a ``--cov-fail-under=N`` flag
-  embedded in the ``pytest-args`` input's value.
+* ``tests-reusable.yaml`` caller (a file whose ``uses:`` names it): the
+  ``unit-coverage-fail-under:`` input, which the reusable forwards to
+  ``connector-unit-tests`` as ``coverage report --fail-under``. Omitted, the
+  reusable's own default applies — ``SDK_UNIT_COVERAGE_FLOOR`` (``0``), so
+  ``pyproject.toml`` never gates that tier. ``--cov-fail-under`` in such a
+  file is ignored: the reusable passes ``pytest-args`` to the integration
+  tier only, so a floor there says nothing about unit coverage.
+* Any other workflow: a ``connector-unit-tests`` ``fail-under:`` input
+  (e.g. ``fail-under: "60"``) or a ``--cov-fail-under=N`` pytest-cov flag.
 
-If either pattern matches anywhere under ``.github/workflows/``, that value
-is the effective floor — it wins over ``[tool.coverage.report].fail_under``
-in ``pyproject.toml`` (matching coverage.py's own CLI-overrides-config
-precedence). T014 only fires when *neither* source declares a non-zero
-floor. When multiple workflow files or matches are found, the first
-non-``None`` match (files sorted by name) is used — connector apps have at
-most one CI-enforced floor in practice, so this is not expected to matter.
+A CI value is the effective floor — it wins over
+``[tool.coverage.report].fail_under`` (matching coverage.py's own
+CLI-overrides-config precedence). T014 fires when the effective floor is
+absent or ``0``. When several workflow files declare one, the first file
+(sorted by name) that does is used — connector apps have one test workflow
+in practice.
 
 Inline suppression
 -------------------
@@ -58,7 +61,7 @@ Known coverage limits (intentional — biased toward zero false positives):
 * T015's ``source``-excludes-``app/`` check only fires when ``source`` is
   configured at all; an absent ``source`` key (coverage.py's default,
   effectively "everything importable") is not flagged.
-* T014's CI cross-check only recognises the two conventions above. A
+* T014's CI cross-check only recognises the conventions above. A
   bespoke workflow enforcing coverage some other way (a custom script, a
   third composite action) is invisible to this check and may still produce
   a false positive — suppress with a reason in that case.
@@ -71,6 +74,10 @@ import sys
 import tomllib
 from pathlib import Path
 
+# Read as a module attribute, not imported by value, for the reason
+# bootstrap_drift gives: tests move the constant, and a by-value copy would not
+# follow. ``test_bootstrap`` pins it to tests-reusable.yaml's real default.
+from conformance.bootstrap import extract as bootstrap_extract
 from conformance.suite.checks._ast_common import (
     make_cli_main,
     make_toml_finding,
@@ -86,8 +93,21 @@ RULE_T015 = "T015"
 # used only to pick a human-friendly anchor line for the finding.
 _COVERAGE_TABLE_RE = re.compile(r"^\[tool\.coverage(\.\w+)?\]\s*(#.*)?$")
 
-# The two CI-declared-floor conventions in use across connector apps — see
-# "CI-declared fail-under" in the module docstring.
+# A workflow file that calls tests-reusable.yaml — see "CI-declared
+# fail-under" in the module docstring.
+_REUSABLE_CALLER_RE = re.compile(
+    r"^\s*(?:-\s*)?uses:\s*[\"']?[\w.-]+/application-sdk/\.github/workflows/"
+    r"tests-reusable\.ya?ml@",
+    re.MULTILINE,
+)
+
+# A tests-reusable.yaml caller's unit-tier floor input.
+_UNIT_COVERAGE_INPUT_RE = re.compile(
+    r"^\s*unit-coverage-fail-under:\s*[\"']?(?P<value>\d+(?:\.\d+)?)",
+    re.MULTILINE,
+)
+
+# The two floors a non-reusable workflow can declare.
 _CI_FAIL_UNDER_RE = re.compile(
     r"""
     fail-under:\s*["']?(?P<input_value>\d+(?:\.\d+)?)   # connector-unit-tests input
@@ -115,14 +135,14 @@ def discover(root: Path) -> list[Path]:
 
 
 def _ci_declared_fail_under(root: Path) -> float | None:
-    """Return the coverage floor declared in the repo's own CI workflows, if any.
+    """Return the unit-tier coverage floor the repo's CI workflows set, if any.
 
-    Scans every ``.github/workflows/*.yml``/``*.yaml`` for either the
-    ``connector-unit-tests`` action's ``fail-under:`` input or a
-    ``--cov-fail-under=N`` flag embedded in a ``tests-reusable.yaml``
-    ``pytest-args`` override (see the module docstring). Returns the first
-    match found (files sorted by name), or ``None`` if neither convention
-    appears anywhere.
+    Scans every ``.github/workflows/*.yml``/``*.yaml`` (see "CI-declared
+    fail-under" in the module docstring). A ``tests-reusable.yaml`` caller
+    always yields a floor — its ``unit-coverage-fail-under`` input, else the
+    reusable's default — and its ``pytest-args`` are not read. Other files
+    yield a ``fail-under:`` input or ``--cov-fail-under=N`` flag. Returns the
+    first file's floor (files sorted by name), or ``None`` if no file sets one.
     """
     workflows_dir = root / ".github" / "workflows"
     if not workflows_dir.is_dir():
@@ -134,6 +154,11 @@ def _ci_declared_fail_under(root: Path) -> float | None:
             text = path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
             continue
+        if _REUSABLE_CALLER_RE.search(text):
+            unit = _UNIT_COVERAGE_INPUT_RE.search(text)
+            if unit is None:
+                return float(bootstrap_extract.SDK_UNIT_COVERAGE_FLOOR)
+            return float(unit.group("value"))
         m = _CI_FAIL_UNDER_RE.search(text)
         if m is None:
             continue
@@ -231,13 +256,27 @@ def _source_excludes_app(source: object) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _t014_message() -> str:
+def _t014_message(ci_fail_under: float | None) -> str:
+    if ci_fail_under is not None:
+        cause = (
+            "the CI coverage floor for the unit tier is 0 (a tests-reusable.yaml "
+            "caller without unit-coverage-fail-under inherits 0), which overrides "
+            "[tool.coverage.report].fail_under"
+        )
+    else:
+        cause = (
+            "[tool.coverage.report].fail_under is absent or 0 and no CI workflow "
+            "declares a fail-under/--cov-fail-under floor"
+        )
     return (
-        "[tool.coverage] is configured but [tool.coverage.report].fail_under is "
-        "absent or 0, and no CI workflow declares a fail-under/--cov-fail-under "
-        "override — coverage is measured and reported but can never fail a run. "
-        "Set fail_under to the repo's current measured percentage (or higher) and "
-        "ratchet it up over time; the agreed target for unit tests is 90-100%."
+        f"[tool.coverage] is configured but {cause} — coverage is measured and "
+        "reported but can never fail a run. Set the floor to the current measured "
+        "unit coverage, rounded down to a whole number (never above): a "
+        'tests-reusable.yaml caller sets `unit-coverage-fail-under: "<N>"`, the '
+        "input that gates its unit tier (leave --cov-fail-under=0 in "
+        "integration pytest-args alone); a connector-unit-tests user sets its "
+        "`fail-under:` input; otherwise set fail_under in pyproject.toml. "
+        "Ratchet it up over time; the agreed target for unit tests is 90-100%."
     )
 
 
@@ -309,7 +348,7 @@ def scan_text(
                 file=file,
                 line=_key_line(text, "fail_under", table_anchor),
                 column=1,
-                message=_t014_message(),
+                message=_t014_message(ci_fail_under),
                 suppressions=suppressions,
             )
         )
