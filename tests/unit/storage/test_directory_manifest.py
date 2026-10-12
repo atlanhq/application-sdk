@@ -21,7 +21,7 @@ from pathlib import Path
 import pytest
 
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.storage._manifest import DirectoryManifest
+from application_sdk.storage._manifest import MANIFEST_SUFFIX, DirectoryManifest
 from application_sdk.storage.errors import StorageError, StorageIntegrityError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _get_bytes, _put
@@ -95,6 +95,26 @@ class TestPersistWritesManifest:
         parent = _PIN.rstrip("/").rsplit("/", 1)[0] + "/"
         assert not durable.manifest_path.startswith(parent)
 
+    async def test_manifest_key_never_matches_a_json_glob(
+        self, store, tmp_path
+    ) -> None:
+        """Publish converters and apps glob run prefixes with ``**/*.json``.
+
+        Regression: a ``.manifest.json`` key under ``{run}/file_refs/`` was
+        parsed as asset records by a walk of the run prefix.
+        """
+        from fnmatch import fnmatch
+
+        _write_tree(tmp_path)
+        durable = await persist_file_reference(
+            store,
+            FileReference(local_path=str(tmp_path), tier=StorageTier.RETAINED),
+            output_path="artifacts/apps/x/workflows/wf/run",
+        )
+
+        assert durable.manifest_path is not None
+        assert not fnmatch(durable.manifest_path, "*.json")
+
     async def test_manifest_is_written_after_every_data_object(
         self, store, tmp_path
     ) -> None:
@@ -151,7 +171,7 @@ class TestPersistWritesManifest:
         ):
             await _persist(store, tmp_path)
 
-        assert not any(k.endswith(".manifest.json") for k in written)
+        assert not any(k.endswith(MANIFEST_SUFFIX) for k in written)
 
 
 class TestPinnedDirectoryStoragePath:
@@ -340,7 +360,7 @@ class TestMaterializeWithManifest:
         _write_tree(tmp_path / "producer")
         durable = await _persist(store, tmp_path / "producer")
         ref = _cross_pod(
-            durable, tmp_path / "consumer", manifest_path="file_refs/gone.manifest.json"
+            durable, tmp_path / "consumer", manifest_path="file_refs/gone.sdk-manifest"
         )
 
         with pytest.raises(StorageError) as exc:
@@ -396,7 +416,7 @@ class TestFallbackWithoutManifest:
             file_count: int = 1
 
         wire = FileReference(
-            storage_path=_PIN, is_durable=True, manifest_path="m.manifest.json"
+            storage_path=_PIN, is_durable=True, manifest_path="m.sdk-manifest"
         ).model_dump_json()
 
         assert _OldFileReference.model_validate_json(wire).storage_path == _PIN

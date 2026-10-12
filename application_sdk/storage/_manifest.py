@@ -11,9 +11,12 @@ after every data object landed. A consumer that has one downloads exactly its
 entries and checks each against the manifest's digest. It never lists.
 
 Location: under the tier's ``file_refs`` namespace
-(``{base}/file_refs/{uuid}.manifest.json``), never inside the data prefix. An
+(``{base}/file_refs/{uuid}.sdk-manifest``), never inside the data prefix. An
 older SDK still lists the prefix, and a manifest inside it would be read as a
-data file. The key travels on the ref as ``FileReference.manifest_path``, so
+data file. The suffix is deliberately not ``.json``: publish converters and
+apps glob run prefixes with ``**/*.json`` and would parse the manifest as asset
+records — the same reason ``CurrentStateStore`` names its manifest
+``.sdk-manifest``. The key travels on the ref as ``FileReference.manifest_path``, so
 consumers never derive it from the prefix. The wire format is a cross-repo
 contract; see ``docs/standards/cross-repo-contracts.md``.
 """
@@ -24,8 +27,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-#: Suffix of a manifest key, so it is recognisable in a listing of ``file_refs/``.
-MANIFEST_SUFFIX = ".manifest.json"
+#: Suffix of a manifest key. Never ``.json``: see the module docstring.
+MANIFEST_SUFFIX = ".sdk-manifest"
 
 
 class ManifestEntry(BaseModel, frozen=True):

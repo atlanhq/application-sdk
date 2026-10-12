@@ -122,8 +122,11 @@ It is written **last**, so its presence means every listed object landed, and
 it is read instead of listing the prefix.
 
 - **The location is carried, not derived.** The key is on the ref; it lives
-  under the tier's `file_refs/` namespace (`{base}/file_refs/{uuid}.manifest.json`)
-  and is never inside the data prefix or beside it. A consumer must read
+  under the tier's `file_refs/` namespace (`{base}/file_refs/{uuid}.sdk-manifest`)
+  and is never inside the data prefix or beside it. The suffix must never be
+  `.json`: publish converters and apps glob run prefixes with `**/*.json` and
+  would parse it as asset records (the same constraint as the current-state
+  `.sdk-manifest` below). A consumer must read
   `manifest_path` and never compute it from `storage_path`. Do not move the
   manifest inside the prefix: an SDK that predates manifests lists the prefix
   and would read it as a data file.

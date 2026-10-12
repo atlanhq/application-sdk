@@ -434,7 +434,7 @@ class TestVerifyRefsWithManifest(_ResetsRegistries):
     """
 
     _DIR = f"{PREFIX}/table/"
-    _MANIFEST = "artifacts/apps/a/workflows/wf-1/run-1/file_refs/m.manifest.json"
+    _MANIFEST = "artifacts/apps/a/workflows/wf-1/run-1/file_refs/m.sdk-manifest"
 
     def _app_with(self, store: object) -> App:
         app = _make_app()

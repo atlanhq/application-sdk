@@ -565,7 +565,7 @@ class TestCleanupStorageDirectoryManifest:
     TRANSIENT ref and protect it for a durable one."""
 
     _DIR = "artifacts/apps/test/workflows/wf-test/r1/file_refs/d1/"
-    _MANIFEST = "artifacts/apps/test/workflows/wf-test/r1/file_refs/m1.manifest.json"
+    _MANIFEST = "artifacts/apps/test/workflows/wf-test/r1/file_refs/m1.sdk-manifest"
 
     def setup_method(self) -> None:
         AppRegistry.reset()

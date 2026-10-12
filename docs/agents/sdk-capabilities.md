@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.44.0
-source-sha:    801721f4adbd80cd75b93bb7e53b7d6af7f1cb34
-source-date:   2026-10-09T13:35:24+01:00
+sdk-version:   3.45.0
+source-sha:    e294b5ed55215d531dcf1ac03428be6a29f8972d
+source-date:   2026-10-12T12:41:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -7471,6 +7471,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `file_count: int` `= 1`
   - `tier: StorageTier` `= StorageTier.TRANSIENT`
   - `auto_materialize: bool` `= True`
+  - `manifest_path: str | None`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
