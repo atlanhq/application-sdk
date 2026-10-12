@@ -2289,6 +2289,32 @@ class TestTeardownTerminatesUnsettledRuns:
         # Stopped first, before the delete — the orphan must not race it.
         assert order == ["terminate:run-1", "delete_connections"]
 
+    def test_a_run_from_an_overridden_submit_without_the_sink_is_terminated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A subclass ``_submit`` that never fires ``on_run_id`` still has its
+        returned id tracked: run_full_dag records it on return as an idempotent
+        fallback, so a stalled run from such a suite is not an orphan."""
+        order: list[str] = []
+        ae = _TerminatingFakeAE(poll=RuntimeError("watchdog stop"), order=order)
+
+        class _OwnSubmit(_ConcreteE2ETest):
+            async def _submit(self, payload: dict[str, Any], *, slug: str) -> str:
+                return "run-own"
+
+        harness = _OwnSubmit()
+        harness.connection_qualified_name = "default/test/1234567890"
+        harness._ae = ae
+        _stub_bootstrap(monkeypatch)
+        _stub_teardown_io(monkeypatch, order)
+
+        with pytest.raises(RuntimeError, match="watchdog stop"):
+            harness.run_full_dag()
+        harness.teardown_method(None)
+
+        assert ae.terminated == ["run-own"]
+        assert order == ["terminate:run-own", "delete_connections"]
+
     def test_a_run_that_never_submitted_terminates_nothing(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

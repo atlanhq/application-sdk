@@ -1660,6 +1660,7 @@ class AEClient:
         *,
         retries: int = _PUBLISH_REPLICATION_ATTEMPTS - 1,
         retry_sleep_seconds: int = _PUBLISH_REPLICATION_SLEEP_SECONDS,
+        on_run_id: Callable[[str], None] | None = None,
     ) -> str:
         """POST ``/automation/api/v1/workflows/<slug>/submit`` — run *our* DAG.
 
@@ -1720,6 +1721,12 @@ class AEClient:
                 :func:`~application_sdk.testing.harness.starters.publish_seed_version`.
             retries: Retries on top of the initial attempt.
             retry_sleep_seconds: Fixed gap between attempts.
+            on_run_id: Called the instant a run GUID becomes known — on a
+                normal 2xx submit AND on the ambiguous-submit recovery path —
+                before this method returns it. Same contract as
+                :meth:`submit_workflow`'s: a caller tracking runs for teardown
+                has the id even if a later step raises. Must be idempotent —
+                both paths can fire for one submit.
 
         Returns:
             The run GUID AE assigned.
@@ -1744,6 +1751,10 @@ class AEClient:
                     lookup.run_id,
                     slug,
                 )
+                # Record the adopted id from inside recovery, as
+                # submit_workflow does: a lost response has still started a run.
+                if on_run_id is not None:
+                    on_run_id(lookup.run_id)
                 # Shaped as AE's own envelope so the extraction below has one
                 # path rather than one per origin.
                 return WriteRecovery(body={"data": {"guid": lookup.run_id}})
@@ -1788,6 +1799,9 @@ class AEClient:
             if isinstance(data, dict):
                 run_id = data.get("guid") or data.get("run_id")
             if run_id:
+                # Idempotent with the recovery-path call above.
+                if on_run_id is not None:
+                    on_run_id(str(run_id))
                 return str(run_id)
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run guid\nresponse={body!r}",

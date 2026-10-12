@@ -4292,7 +4292,10 @@ class BaseE2ETest:
         # failed manifest check — leaves a run that teardown has to stop.
         run_id = await self._submit(payload, slug=slug)
         logger.info("AE submit returned run_id=%s", run_id)
-        unsettled = self.__dict__.setdefault("_unsettled_run_ids", [])
+        # Idempotent fallback for an overridden _submit that does not wire the
+        # sink: the returned id is tracked either way.
+        self._track_unsettled_run(run_id)
+        unsettled = self._unsettled_run_ids
 
         # Before the poll: submit is what makes Heracles fetch the tenant pod's
         # manifest and publish it over our seed, so this is the earliest point

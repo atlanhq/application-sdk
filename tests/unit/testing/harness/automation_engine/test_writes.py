@@ -505,6 +505,42 @@ class TestSubmitPublishedVersion:
         ):
             assert await client.submit_published_version("s") == "run-adopted"
 
+    async def test_a_normal_submit_reports_its_guid_to_on_run_id(self) -> None:
+        """The teardown-tracking sink fires before the id is returned, so a
+        caller's tracking never hinges on its own post-return bookkeeping."""
+        client = _client()
+        seen: list[str] = []
+        with patch.object(
+            client, "_request", return_value=(200, {"data": {"guid": "run-9"}})
+        ):
+            got = await client.submit_published_version("s", on_run_id=seen.append)
+        assert got == "run-9"
+        assert seen == ["run-9"]
+
+    async def test_the_recovery_path_reports_the_adopted_guid_to_on_run_id(
+        self,
+    ) -> None:
+        """A lost response has still started a run; the adopted id reaches the
+        sink from inside recovery, and again via the 2xx return — hence the
+        idempotency requirement."""
+        client = _client()
+        seen: list[str] = []
+        timeout = AtlanApiTimeoutError(
+            message="lost", operation="submit", delivery=RequestDelivery.AMBIGUOUS
+        )
+        with (
+            patch.object(client, "_request", side_effect=timeout),
+            patch.object(
+                client,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="run-adopted", conclusive=True),
+            ),
+            patch(_SLEEP),
+        ):
+            got = await client.submit_published_version("s", on_run_id=seen.append)
+        assert got == "run-adopted"
+        assert set(seen) == {"run-adopted"}
+
 
 class TestForeignPublishedDag:
     """Which graph AE will run, read back by node name rather than by version."""
