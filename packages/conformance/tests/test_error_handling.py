@@ -1110,6 +1110,113 @@ def probe():
     )
 
 
+def test_p004_no_finding_when_module_helper_logs_redacted_caught_exception() -> None:
+    # The helper forwards the received exception through a sanitizer on every
+    # branch, even though the except handler itself contains no logger call.
+    src = """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error(
+            "%s failed [%s]: %s",
+            operation,
+            classification.code,
+            sanitize_cause_repr(problem),
+        )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        _report_failure("authentication", caught, classification)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A conditional exit before the helper can bypass the log, like the
+        # unclassified arm of the pg_stat_statements probe.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        if classification is None:
+            raise
+        _report_failure("query", caught, classification)
+        return None
+""",
+        # Every helper branch needs a warning/error/critical log; DEBUG is not enough.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.debug("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, classify_failure(caught))
+        return None
+""",
+        # The helper exposes the exception raw instead of redacting it.
+        """\
+def _report_failure(operation, problem):
+    logger.error("%s failed: %s", operation, problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught)
+        return None
+""",
+        # A sanitizer in the helper is not enough when it is applied to a
+        # different value than the caught exception.
+        """\
+def _report_failure(operation, problem, endpoint):
+    logger.error(
+        "%s failed: %s", operation, sanitize_cause_repr(endpoint)
+    )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, endpoint)
+        return None
+""",
+    ],
+    ids=[
+        "conditional-bypass",
+        "helper-unaccepted-debug-branch",
+        "raw-exception",
+        "sanitizes-other-value",
+    ],
+)
+def test_p004_still_flags_unproven_redacted_logging_helper(src: str) -> None:
+    assert "E004" in _findings(src)
+
+
 def test_p004_still_flags_row_built_by_a_lowercase_helper() -> None:
     # The classifier returns an AppError, but recognition is by construction
     # of a capitalised type: a lowercase helper wrapping a lowercase classifier
