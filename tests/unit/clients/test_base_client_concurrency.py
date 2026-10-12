@@ -13,6 +13,9 @@ still runs, including the ``__aexit__`` that closes its transport.
 """
 
 import asyncio
+import gc
+import warnings
+from collections.abc import Awaitable, Callable
 
 import httpx
 import pytest
@@ -107,3 +110,77 @@ async def test_custom_transport_set_in_load_stays_open_between_calls() -> None:
 
     await client.close()
     assert pool.close_calls == 1, "close() must release the shared transport once"
+
+
+@pytest.mark.asyncio
+async def test_async_with_closes_the_shared_transport_on_exit() -> None:
+    client, pool = _client_with_pool()
+
+    async with client as entered:
+        assert entered is client
+        assert await client.execute_http_get_request("http://example.test/fast/a")
+        assert pool.close_calls == 0
+
+    assert pool.close_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_async_with_closes_the_shared_transport_when_the_block_raises() -> None:
+    client, pool = _client_with_pool()
+
+    with pytest.raises(RuntimeError, match="boom"):
+        async with client:
+            raise RuntimeError("boom")
+
+    assert pool.close_calls == 1
+
+
+class _CloseWithoutSuper(_LoadedClient):
+    async def close(self, *args: object, **kwargs: object) -> None:
+        return None
+
+
+async def _resource_warnings(scenario: Callable[[], Awaitable[None]]) -> list[str]:
+    """Run a scenario that drops its client, then collect it."""
+    gc.collect()  # drop other tests' garbage so only this scenario's client counts
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        await scenario()
+        gc.collect()
+    return [str(w.message) for w in caught if w.category is ResourceWarning]
+
+
+@pytest.mark.asyncio
+async def test_unclosed_client_warns_when_collected() -> None:
+    async def unclosed() -> None:
+        client, _ = _client_with_pool()
+        await client.execute_http_get_request("http://example.test/fast/a")
+
+    messages = await _resource_warnings(unclosed)
+
+    assert len(messages) == 1 and "_LoadedClient was not closed" in messages[0]
+
+
+@pytest.mark.asyncio
+async def test_close_override_without_super_warns_when_collected() -> None:
+    async def override_skips_super() -> None:
+        client = _CloseWithoutSuper()
+        client.http_retry_transport = _PoolTransport()
+        async with client:
+            await client.execute_http_get_request("http://example.test/fast/a")
+
+    assert len(await _resource_warnings(override_skips_super)) == 1
+
+
+@pytest.mark.asyncio
+async def test_closed_or_unused_client_does_not_warn() -> None:
+    async def closed() -> None:
+        client, _ = _client_with_pool()
+        async with client:
+            await client.execute_http_get_request("http://example.test/fast/a")
+
+    async def unused() -> None:
+        _client_with_pool()
+
+    assert await _resource_warnings(closed) == []
+    assert await _resource_warnings(unused) == []

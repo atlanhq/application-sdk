@@ -1,3 +1,4 @@
+import warnings
 from typing import Any
 
 import httpx
@@ -135,6 +136,19 @@ class BaseClient(ClientInterface):
         self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
             limits=_HTTP_POOL_LIMITS,
         )
+        # True between the first request and close(): the pool may hold sockets.
+        self._pool_open = False
+
+    def __del__(self) -> None:
+        if getattr(self, "_pool_open", False):
+            warnings.warn(
+                f"{type(self).__name__} was not closed; its connection pool may "
+                "still hold sockets. Use 'async with' or call close(), and call "
+                "super().close() from a close() override.",
+                ResourceWarning,
+                source=self,
+                stacklevel=2,
+            )
 
     async def load(self, **kwargs: Any) -> None:
         """
@@ -175,9 +189,13 @@ class BaseClient(ClientInterface):
 
         Requests borrow ``http_retry_transport`` without closing it, so that
         concurrent requests on one client do not tear down each other's
-        connections. Call this once the client is no longer needed.
+        connections. Call this once the client is no longer needed, or use
+        the client as an async context manager (``async with``), which calls it
+        on exit. A subclass that overrides ``close()`` must call
+        ``super().close()``, or the connection pool stays open.
         """
         await self.http_retry_transport.aclose()
+        self._pool_open = False
 
     async def execute_http_get_request(
         self,
@@ -228,6 +246,7 @@ class BaseClient(ClientInterface):
             ... )
         """
         ssl_context = get_ssl_context()
+        self._pool_open = True
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=_SharedTransport(self.http_retry_transport),
@@ -311,6 +330,7 @@ class BaseClient(ClientInterface):
             ... )
         """
         ssl_context = get_ssl_context()
+        self._pool_open = True
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
             transport=_SharedTransport(self.http_retry_transport),
