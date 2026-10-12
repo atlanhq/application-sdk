@@ -123,7 +123,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("batch_index", "int", "active"),
         SdkField("metrics", "dict[str, Any] | None", "active"),
         SdkField("records", "int", "active"),
-        SdkField("status", "str", "active"),
+        SdkField("status", "ColumnBatchStatus | None", "active"),
     ),
     "ExtractionInput": (
         SdkField("agent_json", "AgentCredentialSpec | None", "active"),
@@ -133,6 +133,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("credential_guid", "str", "active"),
         SdkField("credential_ref", "CredentialRef | None", "active"),
         SdkField("exclude_filter", "FilterMap | str", "active"),
+        SdkField("exclude_table_regex", "str", "active"),
         SdkField("extraction_method", "str", "active"),
         SdkField("include_filter", "FilterMap | str", "active"),
         SdkField("output_path", "str", "active"),
@@ -391,6 +392,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("credential_guid", "str", "active"),
         SdkField("credential_ref", "CredentialRef | None", "active"),
         SdkField("exclude_filter", "FilterMap | str", "active"),
+        SdkField("exclude_table_regex", "str", "active"),
         SdkField("extraction_method", "str", "active"),
         SdkField("include_filter", "FilterMap | str", "active"),
         SdkField("incremental_extraction", "bool", "active"),
@@ -563,6 +565,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("application_name", "str", "active"),
         SdkField("connection_qualified_name", "str", "active"),
         SdkField("correlation_id", "str", "active"),
+        SdkField("output_path", "str", "active"),
         SdkField("workflow_id", "str", "active"),
         SdkField("workflow_slug", "str", "active"),
     ),
@@ -642,7 +645,7 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("upload_concurrency", "int", "active"),
         SdkField("workflow_id", "str", "active"),
         SdkField("workflow_slug", "str", "active"),
-        SdkField("workflow_run_id", "str", "active"),
+        SdkField("workflow_run_id", "str", "deprecated"),
     ),
     "WriteCurrentStateOutput": (
         SdkField("artifacts", "dict[str, Any] | None", "active"),
@@ -654,6 +657,95 @@ SDK_TEMPLATE_CONTRACT_FIELDS: dict[str, tuple[SdkField, ...]] = {
         SdkField("incremental_diff_s3_prefix", "str", "active"),
         SdkField("metrics", "dict[str, Any] | None", "active"),
         SdkField("status", "OutputStatus", "active"),
+    ),
+}
+
+
+SDK_TEMPLATE_CONTRACT_BASES: dict[str, frozenset[str]] = {
+    "ExecuteColumnBatchInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "ExecuteColumnBatchOutput": frozenset({"Output"}),
+    "ExtractionInput": frozenset({"Input"}),
+    "ExtractionOutput": frozenset({"Output", "PublishInputMixin"}),
+    "ExtractionTaskInput": frozenset({"Input"}),
+    "ExtractionTaskOutput": frozenset({"Output"}),
+    "FetchColumnsIncrementalInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "FetchColumnsInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchColumnsOutput": frozenset({"Output"}),
+    "FetchDatabasesInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchDatabasesOutput": frozenset({"Output"}),
+    "FetchIncrementalMarkerInput": frozenset({"Input"}),
+    "FetchIncrementalMarkerOutput": frozenset({"Output"}),
+    "FetchProceduresInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchProceduresOutput": frozenset({"Output"}),
+    "FetchSchemasInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchSchemasOutput": frozenset({"Output"}),
+    "FetchTablesIncrementalInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "FetchTablesInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchTablesOutput": frozenset({"Output"}),
+    "FetchViewsInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "FetchViewsOutput": frozenset({"Output"}),
+    "IncrementalExtractionInput": frozenset({"ExtractionInput", "Input"}),
+    "IncrementalExtractionOutput": frozenset(
+        {"ExtractionOutput", "Output", "PublishInputMixin"}
+    ),
+    "IncrementalTaskInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "PrepareColumnQueriesInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "PrepareColumnQueriesOutput": frozenset({"Output"}),
+    "PrimeAuthOutput": frozenset({"Output"}),
+    "QueryBatchInput": frozenset({"Input"}),
+    "QueryBatchOutput": frozenset({"Output"}),
+    "QueryExtractionInput": frozenset({"Input"}),
+    "QueryExtractionOutput": frozenset({"Output"}),
+    "QueryFetchInput": frozenset({"Input"}),
+    "QueryFetchOutput": frozenset({"Output"}),
+    "ReadCurrentStateInput": frozenset({"Input"}),
+    "ReadCurrentStateOutput": frozenset({"Output"}),
+    "TransformInput": frozenset({"ExtractionTaskInput", "Input"}),
+    "TransformOutput": frozenset({"Output"}),
+    "UpdateMarkerInput": frozenset({"Input"}),
+    "UpdateMarkerOutput": frozenset({"Output"}),
+    "WriteCurrentStateInput": frozenset(
+        {"ExtractionTaskInput", "IncrementalTaskInput", "Input"}
+    ),
+    "WriteCurrentStateOutput": frozenset({"Output"}),
+}
+
+
+class TemplateRunContract(NamedTuple):
+    """The Input and Output type names of an SDK template's ``run()``."""
+
+    input: str
+    output: str
+
+
+# ── SDK template run() contracts ──────────────────────────────────────────────
+# An app that subclasses a template and writes no ``run()`` of its own inherits
+# the template's, and ``_collect_implicit_ep`` registers it with the input type
+# ``get_type_hints`` reports on that inherited method. The runtime validates the
+# payload against exactly that model, so K018 pairs such an app with it.
+#
+# ``BaseMetadataExtractor`` is absent on purpose: its ``run`` is still
+# ``App.run``, so a subclass without its own ``run()`` has no implicit
+# entrypoint at all.
+#
+# ``tests/test_sdk_contract_mixins.py`` rebuilds this table from the live
+# templates the same way the runtime does and fails on any drift.
+SDK_TEMPLATE_RUN_CONTRACTS: dict[str, TemplateRunContract] = {
+    "SqlApp": TemplateRunContract("ExtractionInput", "ExtractionOutput"),
+    "SqlMetadataExtractor": TemplateRunContract("ExtractionInput", "ExtractionOutput"),
+    "IncrementalSqlMetadataExtractor": TemplateRunContract(
+        "IncrementalExtractionInput", "IncrementalExtractionOutput"
+    ),
+    "SqlQueryExtractor": TemplateRunContract(
+        "QueryExtractionInput", "QueryExtractionOutput"
     ),
 }
 

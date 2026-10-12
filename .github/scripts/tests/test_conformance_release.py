@@ -894,6 +894,28 @@ class TestPathspecExclusions:
             "feat(conformance): add O007 rule",
         ]
 
+    def test_sdk_ledger_only_commit_is_kept(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _git(tmp_path, "init")
+        _git(tmp_path, "config", "user.email", "test@example.com")
+        _git(tmp_path, "config", "user.name", "Test")
+        _git(tmp_path, "config", "commit.gpgsign", "false")
+        _commit(tmp_path, "chore: initial commit", {"README.md": "init\n"})
+        _git(tmp_path, "tag", BASE_TAG)
+        _commit(
+            tmp_path,
+            "fix(conformance): sunset a field",
+            {"contract_schema.lock.json": "{}\n"},
+        )
+        _commit(
+            tmp_path, "chore: nested ledger", {"x/contract_schema.lock.json": "{}\n"}
+        )
+        monkeypatch.chdir(tmp_path)
+        subjects, _bodies = conformance_release.commits_since_tag(BASE_TAG)
+        assert "fix(conformance): sunset a field" in subjects
+        assert "nested ledger" not in subjects
+
     def test_lock_only_history_yields_no_release(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

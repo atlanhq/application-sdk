@@ -91,6 +91,7 @@ Results that are SUPPRESSED or WARNING never fail the gate.
 | `atlan/since` | `string` | no | SDK version the rule was introduced |
 | `atlan/forcesExternalInfluence` | `bool` | no | Structural, rule-level guarantee that every fix for this rule counts as having used untrusted external content (e.g. C001), independent of the per-result `atlan/externalInfluence` below |
 | `atlan/canonicalReference` | `string` | no | The reference-app file that already has the compliant shape (`RuleDefinition.canonical_reference`); present on every app-facing rule so the remediation model knows which of `atlan-mysql-app` / `atlan-metabase-app` / `atlan-openapi-app` to open before fixing |
+| `atlan/remediationReference` | `object` | no | How the fix is performed (`RuleDefinition.remediation_reference`): `{"kind", "target", "note"}`. `kind` is `"prescription"` or `"command"` on an auto-fixable rule, and `"skill"`, `"guide"` or `"decision"` on a migration rule. A `skill` target is a directory under `skills-dir`; a `prescription` or `guide` target is a file path relative to the `conformance` package; a `command` target is the command line; a `decision` target names who decides and `note` states the choice. Present on every app-facing rule |
 
 ### 4.2 Result properties (`result.properties`)
 

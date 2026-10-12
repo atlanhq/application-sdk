@@ -1,0 +1,204 @@
+/// Renders a system app's input contract (`contract/generated/input.pkl`): the
+/// Pkl source of the DAG node class a calling connector adds to its
+/// `extraNodes` to start the app.
+///
+/// A system app has no manifest of its own. Its callers declare its node, so
+/// without this every caller hand-copies the app's args (as `PopularityNode`
+/// does) and the copies drift. The generated class is derived from the app's
+/// `inputs` instead and synced into the toolkit as `src/system/<name>.pkl`,
+/// so every connector imports it through its existing toolkit dependency:
+///
+/// - Each input is one typed property, named in camelCase and rendered under
+///   its snake_case arg name.
+/// - A required input is a property with no default, so a caller that does
+///   not set it fails to render.
+/// - Any other input is optional and rendered only when set; the app applies
+///   its own default otherwise.
+/// - A nullable input also accepts `new App.ExplicitNull {}`, which sends the
+///   arg as `None`. Leaving the property unset cannot: it omits the arg.
+/// - A non-string input also accepts a `DagRef` (`$.node.outputs.x` or an
+///   exact `{{param}}` placeholder), the values callers pass at run time.
+/// - Args the app does not declare, and raw `args` entries for args it does,
+///   are refused, so every value goes through its typed property.
+module com.atlan.app.contract.InputContract
+
+import "Inputs.pkl" as InputsPkg
+
+/// Pkl keywords, quoted with backticks when an input name maps to one.
+const local keywords: Set<String> = Set(
+  "abstract", "amends", "as", "class", "const", "delete", "else", "extends",
+  "external", "false", "fixed", "for", "function", "hidden", "if", "import",
+  "in", "is", "let", "local", "module", "new", "nothing", "null", "open",
+  "out", "outer", "override", "protected", "read", "record", "super", "switch",
+  "this", "throw", "trace", "true", "typealias", "unknown", "vararg", "when"
+)
+
+/// Node properties (`DAGNode`'s, and the generated `inputArgs`) a generated
+/// input property would override.
+const local dagNodeProperties: Set<String> = Set(
+  "nodeType", "displayName", "workflowType", "appName", "taskQueue", "args",
+  "dependsOn", "dependsOnCondition", "errorHandling", "inputArgs"
+)
+
+/// Class names a nested object may not take in the generated module: they
+/// would shadow the toolkit import or a base type its properties use.
+const local reservedClassNames: Set<String> = Set(
+  "App", "Any", "Boolean", "Int", "Number", "String", "Listing", "Mapping",
+  "List", "Map", "Set", "RenderDirective"
+)
+
+/// The camelCase property name for a snake_case input name.
+const function propertyName(name: String): String =
+  let (parts = name.split("_").filter((p) -> !p.isEmpty))
+  parts.first + parts.drop(1).map((p) -> p.capitalize()).join("")
+
+const local function ident(name: String): String =
+  let (p = propertyName(name))
+  if (keywords.contains(p)) "`\(p)`" else p
+
+const local function pklStr(s: String): String =
+  "\"" + s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n")
+    .replaceAll("\r", "\\r").replaceAll("\t", "\\t") + "\""
+
+const local function docLines(doc: String, indent: String): String =
+  if (doc == "") ""
+  else doc.split("\n").map((l) -> if (l.isEmpty) "\(indent)///\n" else "\(indent)/// \(l)\n").join("")
+
+const local function bounds(base: String, min: Number?, max: Number?): String =
+  if (min != null && max != null) "\(base)(isBetween(\(min), \(max)))"
+  else if (min != null) "\(base)(this >= \(min))"
+  else if (max != null) "\(base)(this <= \(max))"
+  else base
+
+/// The Pkl type of a field's value, without `DagRef` or nullability.
+const local function valueType(f: InputsPkg.InputField): String =
+  if (f is InputsPkg.StringField) "String"
+  else if (f is InputsPkg.IntField) bounds("Int", f.min, f.max)
+  else if (f is InputsPkg.FloatField) bounds("Number", f.min, f.max)
+  else if (f is InputsPkg.BoolField) "Boolean"
+  else if (f is InputsPkg.EnumField) f.values.toList().map((v) -> pklStr(v)).join("|")
+  else if (f is InputsPkg.ListField) "Listing<\(valueType(f.items))>(length <= \(f.maxItems))"
+  else if (f is InputsPkg.MapField) "Mapping<String, \(valueType(f.values))>(length <= \(f.maxItems))"
+  else if (f is InputsPkg.ObjectField) f.className
+  else if (f is InputsPkg.JsonObjectField)
+    throw("InputContract: a JsonObjectField has no typed caller-side shape. Declare an ObjectField or MapField.")
+  // ConnectionRef, FileReference and TreeSelection values come from upstream
+  // nodes at run time, so a caller can only pass a reference to one.
+  else "App.DagRef"
+
+/// The property's declared type: a reference is accepted wherever a literal
+/// string is not already, `ExplicitNull` wherever the input is nullable, and
+/// only required inputs are non-nullable.
+const local function propertyType(f: InputsPkg.InputField): String =
+  let (v = valueType(f))
+  let (r = if (f is InputsPkg.StringField || v == "App.DagRef") v else "\(v)|App.DagRef")
+  let (t = if (f.nullable) "\(r)|App.ExplicitNull" else r)
+  if (f.required) t
+  else if (t.contains("|")) "(\(t))?"
+  else "\(t)?"
+
+const local function renderProperty(name: String, f: InputsPkg.InputField): String =
+  docLines(f.doc, "  ") +
+    (if (f.lifecycle == "active") ""
+     else "  @Deprecated { message = \(pklStr(f.lifecycleMessage ?? "Deprecated by the app; it may stop reading this input."))" + " }\n") +
+    "  \(ident(name)): \(propertyType(f))\n"
+
+/// One arg entry: always set when required, otherwise only when non-null.
+/// `self` is the expression the property is read through (`` or `o.`). A
+/// nullable input's `ExplicitNull` renders as JSON `null`, through a directive
+/// because the manifest's renderer drops null entries.
+const local function renderArg(name: String, f: InputsPkg.InputField, self: String, indent: String): String =
+  let (ref = "\(self)\(ident(name))")
+  let (typed = (r: String) -> if (f is InputsPkg.ObjectField) "render\(f.className)(\(r))" else r)
+  let (value = (r: String) ->
+    if (f.nullable) "if (\(r) is App.ExplicitNull) new RenderDirective { text = \"null\" } else \(typed.apply(r))"
+    else typed.apply(r))
+  if (f.required) "\(indent)[\(pklStr(name))] = \(value.apply(ref))\n"
+  else "\(indent)when (\(ref) != null) { [\(pklStr(name))] = \(value.apply("\(ref)!!")) }\n"
+
+/// A nested object's class and the function rendering it to its wire mapping.
+const local function renderObject(o: InputsPkg.ObjectField): String =
+  docLines(o.doc, "") +
+    "class \(o.className) {\n" +
+    o.fields.toMap().entries.map((e) -> renderProperty(e.key, e.value)).join("\n") +
+    "}\n\n" +
+    "const local function render\(o.className)(v: \(o.className)|App.DagRef): Mapping<String, Any>|String =\n" +
+    "  if (v is String) v\n" +
+    "  else\n" +
+    "    let (o = v as \(o.className))\n" +
+    "    new Mapping {\n" +
+    o.fields.toMap().entries.map((e) -> renderArg(e.key, e.value, "o.", "      ")).join("") +
+    "    }\n"
+
+/// Refuses inputs whose generated property names collide, and object classes
+/// whose names collide with the node class or a name the module uses.
+const local function check(className: String, inputs: Map<String, InputsPkg.InputField>, objects: List<InputsPkg.ObjectField>): Any =
+  let (clashBase = inputs.keys.filter((k) -> dagNodeProperties.contains(propertyName(k))))
+  let (scopes = List(inputs.keys) + objects.map((o) -> o.fields.keys))
+  let (merged = scopes.flatMap((ks) ->
+    ks.toList().filter((k) -> ks.toList().any((j) -> j != k && propertyName(j) == propertyName(k)))))
+  let (clashClass = objects.map((o) -> o.className).filter((c) -> c == className || reservedClassNames.contains(c)))
+  if (!clashBase.isEmpty)
+    throw("App.pkl: `inputs` key(s) \(clashBase.toList().sort()) would become input-contract properties \(clashBase.toList().sort().map((k) -> propertyName(k))), which the node already defines. Rename the input(s).")
+  else if (!merged.isEmpty)
+    throw("App.pkl: input key(s) \(merged.sort()) map to the same camelCase input-contract property. Rename one of each pair.")
+  else if (!clashClass.isEmpty)
+    throw("App.pkl: ObjectField className(s) \(clashClass.sort()) clash with the input contract's node class `\(className)` or a name it uses. Rename the object(s), or set inputContractClassName.")
+  else null
+
+/// The caller node module's source.
+///
+/// - `appName`, `workflowType`, `taskQueue` and `displayName` become the
+///   node's defaults; a caller may override them.
+/// - `objects` is every nested object class, dependencies first, one per
+///   `className`.
+/// - `toolkitImport` is how the generated module imports the toolkit,
+///   normally `../App.pkl` from its synced home, `src/system/<name>.pkl`.
+function render(
+  className: String,
+  appName: String,
+  displayName: String,
+  workflowType: String,
+  taskQueue: String,
+  inputs: Map<String, InputsPkg.InputField>,
+  objects: List<InputsPkg.ObjectField>,
+  toolkitImport: String
+): String =
+  let (_check = check(className, inputs, objects))
+  let (keys = inputs.keys.toList())
+  "// Generated by app-contract-toolkit from the `\(appName)` contract's `inputs`. Do not edit.\n" +
+    "//\n" +
+    "// Synced into app-contract-toolkit as `system/\(appName).pkl`. A caller imports\n" +
+    "// `@app-contract-toolkit/system/\(appName).pkl` and adds `new \(className) { ... }`\n" +
+    "// to its contract's `extraNodes`.\n" +
+    "\n" +
+    "import \(pklStr(toolkitImport)) as App\n" +
+    "\n" +
+    "/// Starts `\(appName)` from a caller's DAG.\n" +
+    "open class \(className) extends App.DAGNode {\n" +
+    keys.map((k) -> renderProperty(k, inputs[k])).join("\n") +
+    "\n" +
+    "  displayName = \(pklStr(displayName))\n" +
+    "  workflowType = \(pklStr(workflowType))\n" +
+    "  appName = \(pklStr(appName))\n" +
+    "  taskQueue = \(pklStr(taskQueue))\n" +
+    "  args = inputArgs\n" +
+    "\n" +
+    "  /// The args the typed properties render to.\n" +
+    "  hidden fixed inputArgs: Mapping<String, Any> = new {\n" +
+    keys.map((k) -> renderArg(k, inputs[k], "", "    ")).join("") +
+    "  }\n" +
+    "\n" +
+    "  // Every arg must be one the app declares, set through its typed property.\n" +
+    "  _nodeArgsCheck =\n" +
+    "    let (undeclared = args.keys.toList().filter((k) -> !argNames.contains(k)))\n" +
+    "    let (overridden = args.keys.toList().filter((k) -> argNames.contains(k) && args[k] != inputArgs.getOrNull(k)))\n" +
+    "    if (!undeclared.isEmpty)\n" +
+    "      throw(\"\(className).args sets \\(undeclared), which `\(appName)` does not declare. Its inputs are \\(argNames.toList()).\")\n" +
+    "    else if (!overridden.isEmpty)\n" +
+    "      throw(\"\(className).args sets \\(overridden) directly, bypassing their typed properties. Set the properties instead.\")\n" +
+    "    else null\n" +
+    "}\n" +
+    "\n" +
+    "const local argNames: Set<String> = Set(\(keys.map((k) -> pklStr(k)).join(", ")))\n" +
+    objects.map((o) -> "\n" + renderObject(o)).join("")

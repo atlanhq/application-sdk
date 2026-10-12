@@ -13,7 +13,7 @@ COMMENTER_INTENT, etc.). Follow
 1. `.mothership/pr-review/ORCHESTRATION.md` — your playbook (MANDATORY)
 2. `.mothership/pr-review/severity-rubric.yaml` — pattern → severity map + severity calibration and confidence floors (single source for both)
 3. `.mothership/pr-review/references/retro-log.md` — **MANDATORY: do-not-flag list.** Every candidate finding MUST be checked against the patterns here; matches are withdrawn silently with no inline comment or auto-fix. This is the ONLY do-not-flag list — no other file may carry one.
-4. `.mothership/rules/*.md` (the review rules — shared with the loop lane) + `.mothership/pr-review/references/*.md` + `agents/*.md`
+4. `.mothership/rules/*.md` (the review rules) + `.mothership/pr-review/references/*.md` + `agents/*.md`
 5. For `contract-toolkit/**` PRs: `contract-toolkit/AGENTS.md`, `.mothership/pr-review/agents/toolkit-review.md`, and `.mothership/pr-review/references/toolkit-consumer-registry.md`
 
 PR metadata and the authoritative diff are fetched in Phase 0 via
@@ -112,6 +112,18 @@ recommend no action on is not a finding). These apply to nits ONLY —
 Critical/Important/regressions are always raised, including on code the
 resolver just pushed.
 
+Every review, first or re-review, is **approach-first** (ORCHESTRATION.md
+§2e″). Judge from the code and its evidence, never from the PR's title, body or
+comments — the author's framing is a claim to verify. First decide whether the
+approach is right; if it has more cons than pros, raise that directly, once, in
+this round (**Wrong approach** + the concrete alternative) instead of filing
+the instance fixes it would make moot. Once an approach stands, a gap that
+follows from its deliberate trade-off is by design; severity follows real
+reach, not an input you constructed; never prescribe data-flow/binding analysis
+or new machinery to close a hypothetical; a narrower sub-case of a class
+already raised and addressed is at most a nit; and a class that recurs across rounds
+becomes one "approach not converging" finding (→ `NEEDS_HUMAN`), not another fix.
+
 ## Path Forward on Every Finding
 
 For each finding, include a `path_forward` in the inline comment:
@@ -119,6 +131,8 @@ For each finding, include a `path_forward` in the inline comment:
 - **Temporary fix + follow-up** — quick fix X, but the right solution is Y
 - **Wrong approach** — this PR's approach won't work, do Y instead
 - **Design decision needed** — needs team discussion before proceeding
+- **Accept as documented limitation** — pin the behaviour with a test and a
+  docstring note, when a sound fix is out of proportion (ORCHESTRATION §2e″)
 
 Don't just say "this is wrong." Say what the right path forward is.
 

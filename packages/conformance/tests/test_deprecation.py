@@ -132,6 +132,40 @@ def test_b001_fires_on_deprecated_method_call() -> None:
     assert "upload_to_atlan" in findings[0].message
 
 
+def test_b001_never_matches_a_deprecated_property_as_a_call() -> None:
+    # A property is read, not called: ``x.client(...)`` cannot be a use of the
+    # deprecated ``BaseE2ETest.client`` property (FND-2711).
+    manifest = Manifest(
+        symbols=(
+            DeprecatedSymbol(
+                symbol="client",
+                kind="property",
+                module="application_sdk.testing.e2e.base",
+                marker_via="decorator",
+                message="BaseE2ETest.client is deprecated.",
+                migration_target=True,
+                removal_version=None,
+            ),
+        ),
+    )
+    src = "import boto3\n\ns3 = boto3.Session(region_name='x').client('s3')\n"
+    tree, directives = _tree_and_directives(src)
+    assert scan_consumer(tree, "x.py", manifest, directives) == []
+
+
+def test_b001_silent_on_boto3_session_client_with_committed_manifest() -> None:
+    # The FND-2711 regression against the real manifest: every AWS-backed
+    # connector calls ``session.client("s3")`` / ``("sts")``.
+    src = (
+        "import boto3\n\n"
+        "def make(region):\n"
+        "    session = boto3.Session(region_name=region)\n"
+        "    return session.client('s3'), session.client('sts')\n"
+    )
+    tree, directives = _tree_and_directives(src)
+    assert scan_consumer(tree, "app/clients.py", load_manifest(), directives) == []
+
+
 def test_b001_fires_on_deprecated_enum_member() -> None:
     src = (
         "from application_sdk.common.types import DataframeType\n"
@@ -544,6 +578,24 @@ def test_extractor_finds_decorated_method() -> None:
     method = next(s for s in sites if s.symbol == "m")
     assert method.kind == "method"
     assert method.marker_via == "decorator"
+
+
+def test_extractor_records_deprecated_property_as_property() -> None:
+    src = (
+        "import functools\n"
+        "from typing_extensions import deprecated\n\n"
+        "class A:\n"
+        "    @property\n"
+        "    @deprecated('gone soon')\n"
+        "    def client(self):\n"
+        "        pass\n\n"
+        "    @functools.cached_property\n"
+        "    @deprecated('gone soon')\n"
+        "    def session(self):\n"
+        "        pass\n"
+    )
+    kinds = {s.symbol: s.kind for s in extract_sites(ast.parse(src))}
+    assert kinds == {"client": "property", "session": "property"}
 
 
 def test_extractor_finds_qualified_decorator() -> None:
@@ -1550,3 +1602,162 @@ def test_passing_the_notice_as_a_variable_still_trips_b002() -> None:
     tree, directives = _tree_and_directives(src)
     findings = scan_authoring(tree, "application_sdk/x.py", "3.36.0", directives)
     assert [f.rule_id for f in findings] == ["B002"]
+
+
+# ── B007: pyarrow receivers traced through rebinding and method chains ──────────
+
+
+def test_b007_exempts_pyarrow_table_rebound_by_a_method() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "table = pq.read_table(path)\n"
+        + "table = table.rename_columns([c.lower() for c in table.column_names])\n"
+        + "for row in table.to_pylist():\n"
+        + "    pass\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_exempts_to_pylist_on_a_pyarrow_column() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "for batch in pq.ParquetFile(path).iter_batches():\n"
+        + "    names = batch.column('type_name').to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_exempts_a_parameter_annotated_as_pyarrow() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "def rows(table: pa.Table) -> list:\n"
+        + "    return table.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_still_fires_after_leaving_pyarrow_for_pandas() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow.parquet as pq\n"
+        + "frame = pq.read_table(path).to_pandas()\n"
+        + "rows = frame.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_still_fires_on_an_unresolved_helper_result() -> None:
+    src = _SDK_IMPORT + "rows = load_arrow_batch(path).to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_still_fires_on_a_subscript_of_an_unresolved_frame() -> None:
+    src = _SDK_IMPORT + "values = frame['col'].to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_local_binding_shadows_a_pyarrow_import_of_the_same_name() -> None:
+    src = (
+        _SDK_IMPORT
+        + "from pyarrow import table\n"
+        + "def rows(r):\n"
+        + "    table = r.read()\n"
+        + "    return table.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_fires_on_column_of_an_unresolved_receiver() -> None:
+    src = _SDK_IMPORT + "values = reader.column('a').to_pylist()\n"
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_fires_on_batches_of_an_sdk_reader() -> None:
+    src = (
+        _SDK_IMPORT
+        + "for batch in ParquetFileReader(path).iter_batches():\n"
+        + "    rows = batch.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_follows_a_long_rebinding_chain() -> None:
+    lines = ["import pyarrow.parquet as pq\n", "t0 = pq.read_table(path)\n"]
+    lines += [f't{i} = t{i - 1}.select(["a"])\n' for i in range(1, 12)]
+    src = _SDK_IMPORT + "".join(lines) + "rows = t11.to_pylist()\n"
+    assert _b007(src) == []
+
+
+def test_b007_exempts_an_optional_pyarrow_annotation() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "from typing import Optional\n"
+        + "def a(t: pa.Table | None) -> list:\n"
+        + "    return t.to_pylist()\n"
+        + "def b(t: Optional[pa.Table]) -> list:\n"
+        + "    return t.to_pylist()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_pyarrow_import_in_a_helper_does_not_exempt_a_module_name() -> None:
+    # The import binds `frame` only inside `helper`; the module-level `frame`
+    # is still the fixture's reader frame.
+    src = (
+        _SDK_IMPORT
+        + "from fixtures import frame\n"
+        + "def helper():\n"
+        + "    import pyarrow as frame\n"
+        + "    return frame\n"
+        + "rows = frame.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_pyarrow_import_in_an_enclosing_scope_still_exempts() -> None:
+    src = (
+        _SDK_IMPORT
+        + "def rows(path):\n"
+        + "    import pyarrow.parquet as pq\n"
+        + "    def inner():\n"
+        + "        return pq.ParquetFile(path).read().to_pylist()\n"
+        + "    return inner()\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_local_import_shadows_a_module_pyarrow_import() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "def rows():\n"
+        + "    from fixtures import pa\n"
+        + "    return pa.to_pylist()\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]
+
+
+def test_b007_comprehension_of_pyarrow_method_chains_is_exempt() -> None:
+    src = (
+        _SDK_IMPORT
+        + "import pyarrow as pa\n"
+        + "table = pa.table({'x': [1]})\n"
+        + "columns = [table.column('x') for _ in range(1)]\n"
+        + "pairs = (table.column('x'), table.column('x'))\n"
+        + "rows = [col.to_pylist() for col in columns]\n"
+        + "more = [col.to_pylist() for col in pairs]\n"
+    )
+    assert _b007(src) == []
+
+
+def test_b007_comprehension_of_reader_method_chains_still_fires() -> None:
+    src = (
+        _SDK_IMPORT
+        + "columns = [reader.column('x') for _ in range(1)]\n"
+        + "rows = [col.to_pylist() for col in columns]\n"
+    )
+    assert [f.rule_id for f in _b007(src)] == ["B007"]

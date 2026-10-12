@@ -331,6 +331,23 @@ class TestSqlMetadataExtractorPrepareSql:
         )
         assert result == "AND name !~ 'tmp_.*'"
 
+    def test_temp_table_fragment_comments_are_stripped(self) -> None:
+        # FND-2733: a documented fragment injected verbatim nests its block
+        # comment inside the template's header comment and breaks the SQL.
+        class _E(SqlMetadataExtractor):
+            _app_registered = True
+            extract_temp_table_regex_table_sql = (
+                "/*\n * {exclude_table_regex} - pattern\n */\n"
+                "AND name !~ '{exclude_table_regex}'"
+            )
+
+        extractor = _E.__new__(_E)
+        result = extractor._prepare_sql(
+            "/* {temp_table_regex_sql} */ SELECT 1 {temp_table_regex_sql}",
+            ExtractionTaskInput(temp_table_regex="tmp_.*"),
+        )
+        assert result == ("/* AND name !~ 'tmp_.*' */ SELECT 1 AND name !~ 'tmp_.*'")
+
     def test_temp_table_fragment_uses_column_variant_in_column_mode(self) -> None:
         class _E(SqlMetadataExtractor):
             _app_registered = True

@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import create_multiarch_manifest as mod  # noqa: E402
 
-HARBOR = "registry.atlan.com/public/app-runtime-base"
+OTHER = "registry.example.com/public/app-runtime-base"
 GHCR = "ghcr.io/atlanhq/app-runtime-base"
 SOURCES = [f"{GHCR}:sha-abc1234-amd64", f"{GHCR}:sha-abc1234-arm64"]
 
@@ -37,7 +37,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list:
 def test_one_create_per_repository(calls: list) -> None:
     """Not one per tag. A ladder of five tags across two registries is two
     calls; ten would re-copy the image eight extra times."""
-    tags = [f"{HARBOR}:latest", f"{HARBOR}:3", f"{GHCR}:latest", f"{GHCR}:3"]
+    tags = [f"{OTHER}:latest", f"{OTHER}:3", f"{GHCR}:latest", f"{GHCR}:3"]
     mod.create_manifests(tags, SOURCES)
     assert len(calls) == 2
 
@@ -45,7 +45,7 @@ def test_one_create_per_repository(calls: list) -> None:
 def test_every_tag_reaches_the_index(calls: list) -> None:
     """A dropped tag is invisible: the job stays green and the alias simply
     keeps pointing at the previous release."""
-    tags = [f"{HARBOR}:latest", f"{HARBOR}:3.1.4", f"{HARBOR}:3.1", f"{GHCR}:latest"]
+    tags = [f"{OTHER}:latest", f"{OTHER}:3.1.4", f"{OTHER}:3.1", f"{GHCR}:latest"]
     mod.create_manifests(tags, SOURCES)
 
     tagged = [
@@ -57,24 +57,24 @@ def test_every_tag_reaches_the_index(calls: list) -> None:
 def test_both_architectures_are_passed_as_sources(calls: list) -> None:
     """One source would produce a single-arch index that still pulls fine on
     the runner that built it — and fails on the tenant's node."""
-    mod.create_manifests([f"{HARBOR}:latest"], SOURCES)
+    mod.create_manifests([f"{OTHER}:latest"], SOURCES)
     assert calls[0][-2:] == SOURCES
 
 
 def test_sources_come_after_the_tag_flags(calls: list) -> None:
     """`imagetools create [OPTIONS] [SOURCE...]` — a source before a --tag is
     parsed as the flag's value."""
-    mod.create_manifests([f"{HARBOR}:latest", f"{HARBOR}:3"], SOURCES)
+    mod.create_manifests([f"{OTHER}:latest", f"{OTHER}:3"], SOURCES)
     cmd = calls[0]
     assert cmd.index("--tag") < cmd.index(SOURCES[0])
 
 
 def test_repository_order_follows_first_appearance(calls: list) -> None:
-    """Harbor first means a partial failure leaves the public catalog advanced
-    and GHCR behind — the direction build-security.md's recovery note assumes."""
-    tags = [f"{HARBOR}:latest", f"{GHCR}:latest", f"{HARBOR}:3"]
+    """Repositories are written in the order the ladder lists them, so a partial
+    failure always leaves the later ones behind, never an arbitrary subset."""
+    tags = [f"{OTHER}:latest", f"{GHCR}:latest", f"{OTHER}:3"]
     mod.create_manifests(tags, SOURCES)
-    assert calls[0][calls[0].index("--tag") + 1].startswith(HARBOR)
+    assert calls[0][calls[0].index("--tag") + 1].startswith(OTHER)
     assert calls[1][calls[1].index("--tag") + 1].startswith(GHCR)
 
 
@@ -95,8 +95,8 @@ def test_an_untagged_reference_is_rejected() -> None:
 
 
 def test_blank_lines_from_the_heredoc_are_dropped() -> None:
-    assert mod.parse_tags(f"{HARBOR}:latest\n\n  \n{GHCR}:latest\n") == [
-        f"{HARBOR}:latest",
+    assert mod.parse_tags(f"{OTHER}:latest\n\n  \n{GHCR}:latest\n") == [
+        f"{OTHER}:latest",
         f"{GHCR}:latest",
     ]
 
@@ -109,7 +109,7 @@ def test_no_tags_is_an_error() -> None:
 
 def test_no_sources_is_an_error() -> None:
     with pytest.raises(ValueError):
-        mod.create_manifests([f"{HARBOR}:latest"], [])
+        mod.create_manifests([f"{OTHER}:latest"], [])
 
 
 # ── Failure propagation ──────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ def test_a_docker_failure_is_not_swallowed(monkeypatch: pytest.MonkeyPatch) -> N
 
     monkeypatch.setattr(mod, "run", boom)
     with pytest.raises(subprocess.CalledProcessError):
-        mod.create_manifests([f"{HARBOR}:latest"], SOURCES)
+        mod.create_manifests([f"{OTHER}:latest"], SOURCES)
 
 
 def test_main_reports_a_docker_failure_as_a_nonzero_exit(
@@ -139,7 +139,7 @@ def test_main_reports_a_docker_failure_as_a_nonzero_exit(
         [
             "create_multiarch_manifest.py",
             "--tags",
-            f"{HARBOR}:latest",
+            f"{OTHER}:latest",
             "--source",
             SOURCES[0],
         ],

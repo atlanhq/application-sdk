@@ -11,6 +11,7 @@ from application_sdk.errors.leaves import (
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
     NotFoundError,
+    PreconditionError,
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger
@@ -77,6 +78,16 @@ async def get_deployment_secret(key: str) -> Any:
     except Exception:
         logger.error("Failed to fetch deployment config key: %s", key, exc_info=True)
         return None
+
+
+@dataclass(kw_only=True)
+class SecretStoreNotConfiguredError(PreconditionError):
+    """Secret store required by get_secret / resolve_credential but not configured."""
+
+    code: ClassVar[str] = "PRECONDITION_SECRET_STORE_NOT_CONFIGURED"
+    message: str = "No secret store configured"
+    resource: str | None = "secret_store"
+    expected_state: str | None = "configured"
 
 
 @dataclass(kw_only=True)

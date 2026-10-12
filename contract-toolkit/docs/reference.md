@@ -93,7 +93,7 @@ The single entry point for all new native app contracts. Supersedes `NativeApp.p
 | `docsUrl` | String | `""` | Documentation link. Emitted as top-level `docs_url` in `atlan.yaml` (omitted when empty). |
 | `logo` | String | `icon` | Logo URL. |
 | `helpdeskLink` | String | `""` | Helpdesk link for credential form. |
-| `type` | String | `"connector"` | Marketplace type. |
+| `type` | String | `"connector"` | Marketplace type, emitted as top-level `type`. `"system"` switches on system-app mode; see [System Apps](#system-apps). |
 | `visibility` | String | `"public"` | Marketplace visibility. |
 | `argoPackageNames` | Listing\<String\> | `[]` | Argo WorkflowTemplate package names — the single knob for Argo package naming. Rendered into `atlan.yaml` as `argo_package_names` (between `visibility` and `build_tag`) when non-empty, consumed by the marketplace; the e2e harness's `argo_package_name` is taken from the first entry (falls back to `@atlan/{name}` when empty). |
 | `buildTag` | String | `"v1"` | Emitted as `build_tag`. |
@@ -162,6 +162,194 @@ that app's manifest. For a **multi-entrypoint** app, declare `schedules` on each
 entrypoint renders its own manifest.
 
 See [`examples/scheduled/`](../examples/scheduled/) for a full worked example.
+(Same field/behaviour exists on the legacy `NativeApp.pkl`.)
+
+### Streaming Dispatch on Event Triggers
+
+By default an event trigger fires a **fresh top-level workflow run** per ingest batch,
+and that run reads its events back out of the workflow's Iceberg events table. For a
+genuinely continuous, high-volume, seconds-level-latency workload that round trip is
+the cost — so AE offers a second dispatch shell: one short run per Kafka micro-batch,
+handed its events directly, with no Iceberg write on the path at all.
+
+Opt in per trigger via `EventTriggerConfig`:
+
+**`EventTriggerConfig`:**
+
+`EventTriggerConfig` separates two categories. **Contract** — what this app consumes
+and what it asserts about delivery (`maxRetries`, `ackPaths`) — survives any change to
+how AE dispatches. **Dispatch mechanics** — which AE execution shell to use — lives
+under `streaming` and is meaningless outside AE's current implementation.
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `maxRetries` | `Int` (≥ 0) | `3` | Redelivery bound for the batch path. **Inert under `streaming.enabled`, and suppressed from the rendered manifest** — the streaming path reads neither it nor `ack_paths`; a run's retries are Temporal's, set by AE. |
+| `ackPaths` | `Listing<String>` | `new Listing {}` | JSONPaths to the ack parquet. Empty renders AE's fire-and-forget `[""]`, never `[]` — and `[""]` is still rendered under streaming, because AE rejects a workflow whose event trigger has no `ack_paths` at all. **Declaring a real path alongside `streaming.enabled` is refused at eval time** — see Caveats. |
+| `streaming.enabled` | `Boolean` | `false` | Route this trigger to the streaming shell instead of a per-batch top-level run. |
+
+`enabled` is the whole surface. There is deliberately **no size or timing knob**: AE
+bounds a micro-batch by BYTES, not by a count the contract picks, and the unit of work
+is one Dapr bulk delivery split to fit the object it writes. A per-trigger count would
+not survive that split, and would describe a queue this shell does not have.
+
+The entrypoint also needs **`streamingWorkflowType`** — the workflow type the
+DAG dispatches when any of its triggers stream:
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `streamingWorkflowType` | `String?` | `null` | Workflow type dispatched under streaming. **Required** when any trigger sets `streaming.enabled`. |
+
+Streaming is a different execution, not a faster one: the batch shell's workflow reads
+the entrypoint's Iceberg events table, while the streaming shell hands the run its
+events directly and never writes that table. Those are two different workflow types in
+the app, so one `workflowType` (or `workflowTypeOverride` on NativeApp.pkl) cannot
+serve both.
+
+#### Your streaming workflow must handle both delivery forms
+
+When streaming is on, the extract node renders the streaming type and gains **two**
+args:
+
+| Arg | Value | When |
+|---|---|---|
+| `args.batch` | `$.event.batch` | the events inline (a list of `{id, topic, data}`) when the serialised micro-batch fits AE's inline cap — otherwise `null` |
+| `args.batch_key` | `$.event.batch_key` | **always** — the object-store key the batch can be read from |
+
+Read the key whenever `batch` is null. A workflow that only ever reads `batch` works
+perfectly in testing and then applies **nothing, silently**, the first time a batch
+goes over the cap — and because AE acks Kafka once the run starts, those events are
+gone. Both args are rendered together for exactly this reason; there is no contract
+shape that yields one without the other.
+
+**In an SDK app, only `batch_key` reaches your code.** The generated
+`AppInputContract` (`app/generated/_input.py`) declares `batch_key: str` while
+streaming is on, and does **not** declare `batch`. The SDK's `Input` drops undeclared
+keys, so the inline `batch` never arrives; the SDK logs it as an unknown key once per
+run. Read the events from `batch_key` every time.
+
+`batch` is left out on purpose. Its envelope (`{id, topic, data}`, with an arbitrary
+`data` payload) has no typed contract yet, and an untyped `list[dict[str, Any]]`
+fails the SDK's payload-safety check (`AAF-CTR-002`) even with `MaxItems`, because
+the inner dict is unbounded too. Declaring it would mean opting the whole input class
+out of that check. For `batch` to reach an SDK app, the envelope first needs a real
+typed definition.
+
+**Both directions are refused at eval time**, because both leave a contract saying one
+thing while the node renders the other:
+
+| Declared | Refused because |
+|---|---|
+| triggers stream, no `streamingWorkflowType` | the node dispatches the **batch** workflow, which starts with no events in its arguments |
+| `streamingWorkflowType` set, nothing streams | the node renders the batch type and the declared streaming type is dropped |
+
+The first was observed end to end on a tenant before the refusal existed: AE dispatched
+the run, the batch workflow started with nothing to apply, and nothing reported an
+error — streaming was on in name only. The second is its mirror and fails just as
+quietly, which is why a declared-but-inert value is refused here the same way it is
+for `ackPaths`.
+
+Streaming is declared **per entrypoint**, like `schedules` and `artifactSchemas`. A
+trigger binds to an entrypoint by containment — `events` lives in that entrypoint's
+`contract` — so for a **multi-entrypoint** app, declare `events` and
+`streamingWorkflowType` on each [entrypoint's `contract`](#multi-entrypoint-bundle),
+since each entrypoint renders its own manifest. Declaring either on a bundle root is
+refused at eval time: the root renders no manifest, so both would be dropped silently.
+
+An app may therefore have as many streaming entrypoints as it likes, each with its own
+topics and its own workflow type. One entrypoint has exactly one
+`streamingWorkflowType`, because the extract node it names is per-entrypoint.
+
+### A streaming entrypoint holds streaming triggers and nothing else
+
+An entrypoint renders **one** extract node, and every trigger on it — each schedule,
+each event trigger — starts that same node. Its `workflow_type` is therefore a
+property of the entrypoint, not of the trigger that fired, and it has only two
+possible shapes: the batch type, which reads the Iceberg events table, or the
+streaming type, which reads `args.batch`. They are mutually exclusive.
+
+So a streaming entrypoint may not also carry a schedule or a non-streaming event
+trigger. Both are refused at eval time, because both fail silently otherwise:
+
+| On a streaming entrypoint | What happens without the refusal |
+|---|---|
+| a non-streaming event trigger | starts the streaming workflow with `args.batch` resolving to nothing; applies nothing |
+| a schedule | same, and a scheduled run carries no events at all |
+
+Put the streaming triggers on their own entrypoint — `examples/streaming` is that
+shape, and `examples/scheduled` is the batch-plus-schedules shape.
+
+```pkl
+// Required whenever any trigger below streams.
+streamingWorkflowType = "example-app:cdc-stream"
+
+events {
+  // Streaming: one short run per Kafka micro-batch.
+  new EventTriggerSpec {
+    name = "cdc-user-realtime"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.user_realtime" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+  // A second topic on the same shell — same declaration, no knobs to tune.
+  new EventTriggerSpec {
+    name = "cdc-audit"
+    source = new EventSource { name = "atlan-kafka"; topic = "example.cdc.audit" }
+    triggerConfig = new EventTriggerConfig {
+      streaming { enabled = true }
+    }
+  }
+}
+```
+
+Renders into each trigger's `trigger_config`:
+
+```json
+{
+  "ack_paths": [""],
+  "streaming_enabled": true
+}
+```
+
+Note the absence of `max_retries`: it is inert on this path, so it is not rendered
+rather than shipped as a key AE will not act on. AE defaults it to `3` when absent.
+
+**Writing the DAG.** A streaming DAG does not read the Iceberg events table — it reads
+its events inline from the `$.event.*` jsonpath namespace:
+
+| Path | Shape |
+|---|---|
+| `$.event.batch_key` | **Always set.** The object-store key holding the batch as a list of `{id, topic, data}` envelopes. Read it whenever `batch` is null. |
+| `$.event.batch` | The same list inline when the batch fits AE's inline cap — **`null` when it does not**. |
+| `$.event.event_count` | Always set: how many events the batch holds. |
+| `$.event.topic` | Always set: the Kafka topic the batch came from. Not derivable from the payload — a Debezium record carries `__op` and `__source_ts_ms`, nothing naming its table. |
+
+These four are the whole namespace. AE builds the event context in one place
+(`automation_engine/workflows/streaming_batch.py`) and sends nothing else, so a DAG
+reading any other `$.event.*` path fails its node with `did not match any value`.
+
+**Caveats.**
+
+- The streaming keys are emitted **only** when `streaming.enabled` is true, so a trigger
+  that does not opt in renders byte-identically to before this feature existed.
+- **`ackPaths` together with `streaming.enabled` is refused at eval time.** Declaring an
+  ack path is an explicit at-least-once durability assertion, and the streaming path
+  writes no acks and has no watchdog backstop — so the contract would read as "acked once
+  the DAG produced its output" and behave as fire-and-forget. That costs events, not
+  latency, so it is refused rather than silently voided. Drop `ackPaths`, or drop
+  `streaming`.
+- **Handle `batch = null`.** Over AE's inline cap only the key is sent. A workflow that
+  reads `batch` alone applies nothing and reports success, and Kafka is already acked
+  by then — see *Your streaming workflow must handle both delivery forms* above. An
+  SDK app's generated input model carries only `batch_key`, so it reads the key every
+  time.
+- There is no watchdog backstop on this path. A run that exhausts its Temporal retries
+  is not recovered: its events were acked to Kafka when the run started.
+- The streaming DAG receives its events at `args.batch` (`$.event.batch`) when they fit
+  inline, and otherwise reads `args.batch_key` (`$.event.batch_key`), which is always
+  set. It must not expect to read the Iceberg events table — the streaming path never
+  writes it.
+
 (Same field/behaviour exists on the legacy `NativeApp.pkl`.)
 
 ### Legacy Workflow Type Aliases
@@ -521,6 +709,8 @@ These fields are emitted into `app/generated/_e2e_base.py` and are required by `
 | `argoTemplateName` | String | `"atlan-{name}"` | Argo WorkflowTemplate resource name as deployed in-cluster. Matches `taskQueuePrefix` by default. |
 | `appServiceUrl` | String | `"http://{name}.{name}-app.svc.cluster.local"` | In-cluster Dapr service URL forwarded to by the e2e harness. Override when the app's Kubernetes service name deviates from the standard `{name}-app` pattern. |
 
+A system app (`type = "system"`) gets a base that extends `SystemAppE2ETest` instead. That class submits straight to Automation Engine on the system-app tenant pool, so the base carries only `connector_short_name` (plus `connection_type` / `connection_category` when a `connector` is declared): no `argo_*` names and no `app_service_url`, because no Heracles envelope is sent. A bundle entrypoint of a system app is generated the same way and keeps its `manifest_path` and `entrypoint`. When the app generates no `manifest.json`, the base carries a comment telling the suite to set `manifest_path` to a fixture DAG copied from a calling connector's manifest, and to set `required_dag_nodes`.
+
 #### Credential bodies in `_e2e_credential.py` — direct + agent (both always emitted)
 
 Every credential-config app (`hasCredentialConfig` + non-empty `credentialAuthOptions`) gets **two** classes in `app/generated/_e2e_credential.py`. There is **no contract flag** — the credential mode is a per-test-run concern, so the e2e test imports whichever shape a given run needs (an app can be tested in both modes):
@@ -646,7 +836,7 @@ class LineagePublishStep {               // wraps LineagePublishNode
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `hasCredentialConfig` | Boolean | `true` | Whether to generate credential JSON. |
+| `hasCredentialConfig` | Boolean | `true` (`false` when `type = "system"`) | Whether to generate credential JSON. |
 | `connectorConfigName` | String | `"atlan-connectors-{name}"` | Credential configmap name. Override to share credentials across entrypoints. |
 | `credentialConnectorType` | String | `"rest"` | Default connector type (`"jdbc"`, `"rest"`). |
 | `credentialCommonFields` | Listing<CredentialFieldEntry> | `[]` | Fields shared across all auth types. |
@@ -669,6 +859,7 @@ The auth-type radio's `ui.hidden` is auto-derived from `credentialAuthOptions.le
 | Property | Type | Description |
 |---|---|---|
 | `uiConfig` | UIConfig | Setup form definition with tasks, rules. |
+| `inputs` | Mapping<FieldName, InputField> | Typed inputs with no setup-form widget. System apps only; see [System App Inputs](#system-app-inputs). |
 
 ### Deploy Configuration
 
@@ -827,6 +1018,130 @@ Use the typed `vpa` field rather than `overrides`: the chart key is `vpa`, and a
 
 For the single-pool case use key `"default"`. See `examples/deploy/` for the full single-pool example and `examples/pools/` for the two-pool example.
 
+### System Apps
+
+A system app runs only inside a tenant and is started by other apps' DAG nodes (popularity, publish, query intelligence, ...). It has no marketplace card. Set `type = "system"`:
+
+- `marketplaceCard` and `hasCredentialConfig` default to `false`.
+- `atlan.yaml` keeps `type: system` but carries **no `entrypoints` block**. Downstream reads an entrypoint with no `marketplace_card` key as a card, so no block is the only shape that cannot surface one. This matches the hand-written `atlan.yaml` of existing system apps.
+- `marketplaceCard = true`, or `packageId` on any `Entrypoint`, fails at `pkl eval`: with no `entrypoints` block they would be dropped silently.
+
+What does **not** change:
+
+- `manifest.json` and the workflow configmap still follow `uiConfig`. A system app with a setup form keeps it; one without renders no manifest.
+- `_input.py` is rendered from `uiConfig`, from `inputs` (below), or both. A system app's input class extends the SDK's `Input` rather than `ExtractionInput`.
+- `_e2e_base.py` extends `SystemAppE2ETest` and omits the `argo_*` names and `app_service_url`; see [E2E Test Harness](#e2e-test-harness).
+- Hiding the app's own listing is the Global Marketplace App row's `is_system_app` flag. Only a GM admin sets it, so the toolkit does not emit it.
+
+See `examples/system-app/`.
+
+### System App Inputs
+
+Every `_input.py` field is an `InputField` from `src/Inputs.pkl`, rendered by one renderer. A `uiConfig` widget derives its field: `TagsInput` becomes `ListField { items = new StringField {} }`, `NumericInput` becomes `IntField { default = 0 }`, and so on, so a type renders the same way wherever it was declared.
+
+A system app's inputs are the args its callers' DAG nodes pass, so there is no `uiConfig` to derive them from. Declare them in `inputs`, keyed by the arg name callers send (snake_case, used as-is). The toolkit renders them into `app/generated/_input.py` as `AppInputContract(Input)`. The app imports that class, subclassing it to add validators or properties, instead of hand-maintaining its own model.
+
+```pkl
+inputs {
+  ["connection_qualified_name"] = new StringField { required = true }
+  ["window_days"] = new IntField { default = 30; min = 1 }
+  ["lake_provider"] = new EnumField { values { "local"; "aws"; "gcp"; "azure" }; default = "local" }
+  ["include_filter"] = new MapField { values = new ListField { items = new StringField {} } }
+  ["column_mapping"] = new ObjectField {
+    className = "ColumnMapping"
+    fields { ["query_id"] = new StringField { default = "QUERY_ID" } }
+  }
+}
+```
+
+| Field class | Renders | Notes |
+|---|---|---|
+| `StringField` | `str` | |
+| `IntField` / `FloatField` | `int` / `float` | `min` / `max` render `ge=` / `le=`. A `default` outside them fails at `pkl eval`: the generated model does not validate defaults, so it would reach the app unchecked. |
+| `BoolField` | `bool` | |
+| `EnumField` | `Literal[...]` | `default` must be one of `values`. |
+| `ListField` | `Annotated[list[T], MaxItems(n)]` | `items` is a scalar field; `maxItems` defaults to 1000. Default elements are checked against `items`, bounds included. |
+| `MapField` | `Annotated[dict[str, V], MaxItems(n)]` | `values` is a scalar field or a `ListField`. Its only default is `{}`. |
+| `ObjectField` | its own model class | `className` must be unique. `extra="forbid"` by default; `allowExtra = true` renders `extra="ignore"`. |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | the SDK types of the same name | `FileReferenceField` is the way to hand over large or binary payloads. |
+| `JsonObjectField` | `Annotated[dict[str, Any], MaxItems(n)]` | Opaque. Exists for widgets that post free-form JSON; `inputs` refuses it. |
+
+Every field also takes `doc` (rendered as a docstring), `required`, `nullable` (renders `T | None`), `lifecycle` / `lifecycleMessage` (as on widgets) and `coerceJsonString` (also accept the value as a JSON-encoded string, via one generated `field_validator`).
+
+**Defaults** resolve in one order for every field:
+
+1. `required = true`: no default.
+2. An explicit `default`.
+3. `nullable = true`: `None`.
+4. The type's natural empty value: `[]`, `{}`, or an object with every field at its default.
+
+A scalar that reaches step 4 fails at `pkl eval`. It has no natural empty value, and inventing one (`""`, `0`) would hide a missing argument.
+
+**What changes:** `_input.py` and `app/generated/__init__.py` are emitted when `inputs` is non-empty, even with no `uiConfig`.
+
+**What does not:** `manifest.json` and the workflow configmap follow `uiConfig` only, so declaring inputs never creates a manifest. The publish-step scaffold fields (`output_dir`, ...) are added only for an app that renders a manifest.
+
+**Refused at `pkl eval`:**
+
+- `inputs` on a non-system app. No manifest arg would pass them, so every run would see only their defaults.
+- `inputs` on a multi-entrypoint bundle root, which renders no `_input.py`.
+- A key that is also a `uiConfig` field, or that the generated class already declares (base, credential, publish or streaming fields).
+- Two different `ObjectField`s with the same `className`, or a `className` that would shadow a name `_input.py` declares or imports (`Input`, `AppInputContract`, `Field`, `ConnectionRef`, ...).
+- A field name or `className` that is a Python keyword (`class`, `lambda`, `None`, ...).
+- A `JsonObjectField`, at any depth. Declare the shape with an `ObjectField`, or a `MapField` of a known value type.
+
+### System App Input Contract
+
+A system app has no manifest of its own: each caller declares the app's DAG node. Hand-written node classes such as `PopularityNode` restate the app's args and drift from them. A system app with `inputs` therefore also renders `contract/generated/input.pkl`: the node class callers add to their `extraNodes`, with one typed property per input.
+
+The file is synced into the toolkit as `src/system/<name>.pkl`. Any connector, whether internal, public or partner-built, then imports it through the toolkit dependency it already has, and the toolkit version it pins fixes the contract version:
+
+```pkl
+// caller's contract/app.pkl
+import "@app-contract-toolkit/system/popularity.pkl" as Popularity
+
+extraNodes {
+  ["popularity"] = new Popularity.PopularityNode {
+    connectionQualifiedName = "$.extract.outputs.connection_qualified_name"
+    windowDays = "{{popularity-window-days}}"
+    includeFilter = "{{include-filter}}"
+    dependsOn { "qi" }
+  }
+}
+```
+
+How each input becomes a property:
+
+| Input | Property |
+|---|---|
+| Name | camelCase of the arg name (`window_days` → `windowDays`), rendered under the arg name. A Pkl keyword is quoted with backticks. |
+| `required = true` | No default: a caller that does not set it fails to render. Adding a required input to the app fails every caller's render until the caller sets it. |
+| Otherwise | Nullable, default `null`, and rendered only when set; the app applies its own default. |
+| `nullable = true` | Also accepts `new App.ExplicitNull {}`, which sends the arg as `None`. An unset property cannot: it omits the arg. A required nullable input stays required. |
+| `StringField` | `String` |
+| `IntField` / `FloatField` | `Int` / `Number`, with `min` / `max` as a constraint |
+| `BoolField` | `Boolean` |
+| `EnumField` | A union of its string values |
+| `ListField` / `MapField` | `Listing<T>` / `Mapping<String, V>`, length-bounded by `maxItems` |
+| `ObjectField` | A generated class of the same `className`, rendered to its wire mapping |
+| `ConnectionRefField` / `FileReferenceField` / `TreeSelectionField` | `DagRef` only: these values come from upstream nodes at run time |
+| `lifecycle` not `active` | `@Deprecated`, with `lifecycleMessage` |
+
+Every non-string property also accepts a `DagRef`: an upstream node's output (`$.extract.outputs.x`) or an exact workflow parameter placeholder (`{{window-days}}`). Because the property type is a union, a literal collection or object is written with `new` (`typesToIgnore = new Listing { "SHOW" }`), not amended in place.
+
+The node takes `appName = name`, `workflowType` (or `name`), `taskQueue = "<taskQueuePrefix>-{deployment_name}"` and `displayName` from the app's contract. A caller may override any of them, and sets `dependsOn` / `dependsOnCondition` itself.
+
+**Refused:**
+
+- At the caller's render: a missing required input, an undeclared property, any `args` key the app does not declare, a raw `args` entry for one it does (set the property instead), and a value outside its input's type or bounds.
+- At the system app's render: an input whose property name would override a node property (`depends_on` → `dependsOn`, or `inputArgs`), two inputs mapping to the same property, and an `ObjectField` whose `className` is the node class or a Pkl type the module uses (`String`, `Listing`, `App`, ...).
+
+**Knobs:** `inputContractClassName` (default: `name` in PascalCase plus `Node`), `inputContractPath` (default `contract/generated/input.pkl`) and `inputContractToolkitImport` (default `../App.pkl`, which resolves from the synced home `src/system/<name>.pkl`; only a contract that evaluates the file in place changes it).
+
+**Syncing.** The copy in the app's repo is the sync source: it is generated with the app's contract and not evaluated there. When the app releases, its `src/system/<name>.pkl` in the toolkit is replaced with that copy, never edited by hand, so the toolkit always carries a contract the app generated. Because a caller's toolkit version fixes the contract it renders against, while a tenant runs whatever app version is installed, a system app keeps its inputs backward compatible: no removed or retyped input and no new required input. The toolkit does not compare one release's inputs with the last. The app repo's `B005` conformance rule does, checking the generated `AppInputContract` against its `contract_schema.lock.json`, and it blocks only where that repo's conformance is enforced.
+
+**What does not change:** the toolkit's hand-written nodes (`PopularityNode`, `QueryIntelligenceNode`, `PublishNode`, ...) stay as they are. A caller moves to the generated node once the app's contract is synced into `src/system/`.
+
 ### Multi-Entrypoint Bundle
 
 Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-entrypoint contracts are separate files that each `amend App.pkl`.
@@ -834,7 +1149,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `entrypoints` | Listing<Entrypoint> | `[]` | SDK routing endpoints and (optionally) marketplace card definitions. When non-empty, enables bundle mode. All entrypoints are routable via `?entrypoint=`; only those with `packageId` set render as marketplace cards. |
-| `marketplaceCard` | Boolean | `true` | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
+| `marketplaceCard` | Boolean | `true` (`false` when `type = "system"`) | Whether this app appears in the marketplace. Single-entrypoint apps auto-derive `package_id: "@atlan/{name}"` from this default. Set to `false` for purely behind-the-scenes apps with no marketplace presence. Has no effect on multi-entrypoint apps; use `Entrypoint.packageId` per-entrypoint instead. |
 | `emitAtlanYaml` | Boolean | `true` | Emit `atlan.yaml`. |
 | `emitEntrypoints` | Boolean | `true` | **Deprecated** — use `Entrypoint.packageId` to control card presence. Emit the `entrypoints:` block. Will be removed in the next minor version. |
 | `emitGeneratedArtifacts` | Boolean | `true` | Re-export entrypoint contract files. |
@@ -853,6 +1168,7 @@ Set `entrypoints` to serve multiple marketplace tiles from one deployment. Per-e
 | `categories` | Listing\<String\> | `[]` | Marketplace category tags for this entrypoint. |
 | `docsUrl` | String? | null | Documentation URL. Falls back to the app-level `docsUrl` when null. |
 | `packageId` | String? | null | Stable marketplace package ID (e.g. `"@atlan/qlik-sense"`). When set, emits `package_id:` and `marketplace_card: true` in `atlan.yaml`. Required for multi-entrypoint apps to preserve backward compat with legacy Argo workflows that reference the app by its stable card ID. Entrypoints without a `packageId` are routable but do not appear as marketplace cards. |
+| `e2eOverrides` | E2EOverrides | `{}` | E2E-harness-only overrides for a bundle entrypoint. Optional `connectorShortName`, `argoPackageName`, `argoTemplateName` and `connectorConfigName` replace the values generated into `app/generated/<entrypoint>/_e2e_base.py`; an unset field keeps the derived value. Changes no other generated file: not `atlan.yaml`, the manifests or the marketplace card. Use it when an entrypoint's e2e identity can't be derived, e.g. its name matches no `argoPackageNames` leaf and `packageId` would re-key the card. |
 | `contract` | Typed? | null | The entrypoint's `App.pkl` contract whose `output.files` are emitted. |
 
 Bundle output layout:
@@ -871,6 +1187,8 @@ app/generated/
 ```
 
 Credential files are hoisted by matching `connectorConfigName`. If two entrypoints produce the same filename with different content, generation fails — use unique `connectorConfigName` values for genuinely different credentials.
+
+**Per-entrypoint input class names:** in a bundle, each entrypoint's `_input.py` declares its class as `<PascalCase(entrypoint name)>AppInputContract` (`crawler` → `CrawlerAppInputContract`, `query-miner` → `QueryMinerAppInputContract`; `-` and `_` both split words) and ends with `AppInputContract = <that class>`, so existing `from app.generated.<entrypoint>._input import AppInputContract` imports keep working. Give each entrypoint a distinct class name so tools that key contracts by class name (the conformance contract ledger) do not conflate them; import the unique name in new code. Generation fails when two entrypoints map to the same class name (`foo-bar` and `foo_bar`) or a name does not start with a letter. Single-entrypoint contracts are unchanged: `app/generated/_input.py` still declares `class AppInputContract` and emits no alias.
 
 ### Other App.pkl Properties
 
@@ -1085,6 +1403,8 @@ contract/app.pkl
     ├─▶ miner/manifest.json
     └─▶ miner/_input.py
 ```
+
+Each `{entrypoint}/_input.py` uses the same per-entrypoint class naming and `AppInputContract` alias as an `App.pkl` bundle (see [Multi-Entrypoint Bundle](#multi-entrypoint-bundle)).
 
 `atlan-connectors-agent.json` is intentionally not part of this app output shape. Apps reference that shared configmap from `AgentSelector.agentConfigEntries`; the canonical payload is owned by `AgentConfig.pkl` and generated separately.
 
@@ -1835,8 +2155,28 @@ the [`full`](../examples/full/) example.
 |---|---|---|---|
 | `Radio` | `radio` | `str` | `possibleValues` (required), `default` (required) |
 | `DropDown` | `select` | `str` or `list[str]` | `possibleValues`, `multiSelect`, `default` |
-| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags |
+| `TagsInput` | `select` (mode=tags) | `list[str]` | Free-form tags. Settings below. |
 | `BooleanInput` | `boolean` | `bool` | `defaultSelection` |
+
+`TagsInput` settings. Each one is optional; unset emits no key, so output only
+changes for the settings an app sets.
+
+| Setting | Renders | Effect |
+|---|---|---|
+| `placeholderText` | `ui.placeholder` | Example text shown while no tags are entered. Never submitted. |
+| `tokenSeparators` | `ui.tokenSeparators` | Splits typed or pasted text into tags. Parts are not trimmed, so use `{ ", "; "," }` for comma lists. Empty separators are rejected. |
+| `enabled` | `ui.disabled` | `false` disables the field. |
+| `byocDisabled` | `ui.BYOCdisabled` | `true` disables the field only in BYOC mode. |
+| `allowClear` | `ui.allowClear` | Shows a button that clears every tag; clearing submits `[]`. |
+| `maxTagCount` | `ui.maxTagCount` | Collapses tags past this count into `+N`; `"responsive"` fits the width. A number must be at least 1. Display only. |
+| `maxTagTextLength` | `ui.maxTagTextLength` | Truncates each chip's text. Must be at least 1. Display only. |
+| `openByDefault` | `ui.open` | Opens the dropdown. |
+
+Not supported yet: default tags and suggested values. Both need a frontend
+change first (the `select` widget does not parse a JSON value in tags mode, and
+`ui.open` is always emitted, which keeps a suggestion list closed). Per-tag
+format checks are app-side validation; the `select` widget has no setting for
+them.
 
 #### Connection & Credential
 
@@ -1889,7 +2229,7 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `SqlTree` | `sqltree` | `dict[str, Any]` | `sqlQuery`, `cred`, `excludePatterns`, `databaseExcludePatterns`, `desc`, `multiSelect` (emits `ui.multiple`), `dependsOn` (scope to sibling field), `databasesUnselectable` (lock DB-level selection), `additionalPropertiesToIncludeInCredentialBody`, `validationRules`, `includeDefault` |
-| `APITree` | `apitree` | `dict[str, Any]` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc` |
+| `APITree` | `apitree` | `dict[str, Any]`, or `TreeSelection` with `treeSelection = true` | Legacy API tree. Emits `{}` as the config default; generated input also accepts JSON object strings such as `"{}"` and coerces them to dicts. `credentialType`, `metadataTemplate`, `desc`, `treeSelection` (see [Payload-safe tree selections](#payload-safe-tree-selections-treeselection)) |
 | `ApiTreeSelect` | `apiTreeSelect` | `dict[str, Any]` | Workflows-v2 API tree selector used by Power BI-style metadata pickers. Emits `{}` as the config default; generated input also accepts JSON object strings. `credentialType`, `cred`, `metadataTemplate`, `metadataTransformer`, `strict`, `multiSelect`, `desc` |
 | `DsnTreeMap` | `dsnTreeMap` | `dict[str, Any]` | Maps DSN names to connection qualified names. `mapConfig` carries heading/content/input/connection labels. |
 | `GlossarySelector` | `GlossarySelector` | `str` | Glossary picker. `selectorMode = "multiple"`, `showGlossaryIcon`, `showGlossaryCount`, `placeholderText` |
@@ -1899,13 +2239,50 @@ connections: Annotated[list[ConnectionRef], MaxItems(1000)] = Field(default_fact
 | Class | Widget | Python Type | Notes |
 |---|---|---|---|
 | `NestedInput` | `nested` | `dict[str, Any]` | `inputs` — sub-element map |
-| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. |
+| `Sage` / `SageV2` | `sage` / `sageV2` | `str` | `checks` — preflight definitions. `connectorConfig` + `selectedCredentialGuid` route per-dialect checks to a selected connection's configmap. `SageV2` only: `warmup` (default `false`), see [SageV2 warmup](#sagev2-warmup). |
 | `FileUploader` | `fileUpload` | `FileReference \| None` | `fileTypes`, optional `removeBeforeUpload` |
 | `AgentSelector` | `agent` | `dict[str, Any]` | `agentConfigEntries` — use `Listing<Any>` with `Mapping` for nested objects needing `"default"` keys |
 | `InfoBanner` | `infoBanner` | omitted by default | Static markdown banner with `bannerType`, `content`, optional `iconName`, `hideBannerIcon`, and `linkConfig`. Defaults to `includeInManifest=false` and `includeInInput=false`. Use `widgetName = "InfoBanner"` for credential banners that need that casing. |
 | `Switcher` | `switcher` | `bool` | Boolean switch with `switchTitle`, `defaultSelection`, optional `begin`, and `toastConfig`. Can be used in credential configs through `NamedWidget`. |
 | `ConditionalInput` | configurable | `str` or `dict` | `baseWidgetType` (default `"radio"`), `conditions`, sqltree/connection/credential-specific properties, generic InfoBanner props, and `outputValueType` for object-returning branches |
 | `CustomWidget` | `<widgetName>` | `str` | Escape hatch for bespoke frontend components. `widgetName` picks the component; `props` pass through verbatim into the `ui` object. Use sparingly — prefer typed widgets. |
+
+##### SageV2 warmup
+
+`warmup: Boolean = false` on `SageV2` (both `Widgets.SageV2` and the legacy
+`Config.SageV2`) tells the setup UI, before it calls anything, that the app
+has a warmup:
+
+- `warmup = true`: the UI runs the warmup flow. It polls
+  `POST /workflows/v1/warmup` until it answers `ready`, then calls `/check`
+  with `tiers=["warmup"]`.
+- `warmup = false` (default): the UI calls `/check` as before.
+
+```pkl
+["preflight-check"] = new SageV2 {
+  title = ""
+  warmup = true
+}
+```
+
+Generated output: `true` adds `"warmup": true` to the widget's `ui` block in
+the workflow config (`app/generated/{name}.json`). The default renders
+nothing, so contracts that do not set it generate byte-identical output. The
+generated `_input.py`, `manifest.json` and credential config do not change.
+
+Set it if and only if the app's handler overrides `Handler.warmup`. The flag
+is a declaration for the UI; the preflight gate decides from the handler
+itself. When the two disagree:
+
+- Flag set, no override: `/warmup` always answers `ready`, so the UI makes one
+  wasted round trip.
+- Override, flag not set: setup never runs the warmup-tier checks, so missing
+  grants on those checks are not caught at setup. The gate still runs them on
+  a real run.
+
+The flag lives in the contract, not in the handler service, because the
+served form must match the committed contract. The v1 `Sage` widget does not
+take the flag: the warmup flow is built on the `sageV2` component only.
 
 #### Computed
 
@@ -2996,7 +3373,7 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"connection"`, `"radio"`, etc.) |
+| `baseWidgetType` | String | `"radio"` | Base widget type (`"sqltree"`, `"apitree"`, `"connection"`, `"radio"`, etc.) |
 | `baseEnum` | Listing<String>? | null | Base enum values (for radio/select base widgets) |
 | `baseEnumNames` | Listing<String>? | null | Base enum display names |
 | `default` | Any? | null | Default value |
@@ -3006,14 +3383,18 @@ Renders a `type: "conditional"` property whose base widget can be any type (not 
 | `uiType` / `content` / `iconName` / `hideWidgetIcon` / `linkConfig` | mixed | null | Generic base UI props used by widgets such as `InfoBanner`. |
 | `widgetConfig` | Any? | null | Generic base UI config object used by widgets such as `dsnTreeMap`. |
 | `sqlQuery` | String? | null | SQL query (when `baseWidgetType = "sqltree"`) |
-| `credentialRef` | String? | null | Credential variable name (when sqltree) |
-| `connectorConfig` | String? | null | Connector config name (when sqltree) |
+| `credentialRef` | String? | null | Credential variable name; emits `credential` (when sqltree or apitree) |
+| `connectorConfig` | String? | null | Connector config name; emits `connectorConfigName` (when sqltree or apitree) |
 | `schemaExcludePatterns` | List<String>? | null | Schema exclude patterns (when sqltree) |
 | `databaseExcludePatterns` | List<String>? | null | Database exclude patterns (when sqltree) |
 | `desc` | String? | null | Description text (when sqltree) |
-| `multiSelect` | Boolean? | null | Multi-select (when sqltree) |
+| `multiSelect` | Boolean? | null | Multi-select. Emits `isMultiple` when `baseWidgetType = "apitree"`, `multiple` otherwise |
 | `dependsOn` | String? | null | Sibling form field whose value scopes the sqltree branch; emits `dependentConnectionField` |
 | `databasesUnselectable` | Boolean? | null | Lock database-level selection in sqltree branch; emits `areDatabasesUnselectable` |
+| `metadataTemplateKey` | String? | null | Routing key sent with the apitree's metadata request, e.g. `"folders"` — a short name, not a template body. Native SDK apps receive it as `MetadataInput.metadata_template_key` and the metadata handler picks what to list from it. Legacy REST connectors use it to select an entry in the credential configmap's `restMetadataTemplate`. Emitted as `metadataTemplateKey` (when apitree). |
+| `metadataTransformerTemplateKey` | String? | null | Routing key for the output transformer. Only legacy REST connectors use it (selects an entry in `restMetadataOutputTransformerTemplate`); native SDK apps ignore it. Emitted as `metadataTransformerTemplateKey` (when apitree). |
+| `flatten` | Boolean? | null | Flatten values retrieved via API; emits `flattenValue` (when apitree) |
+| `strict` | Boolean? | null | Strictly check the tree returned via API; emits `treeCheckStrictly` (when apitree) |
 | `connOptions` | Boolean? | null | Show connection options (when `baseWidgetType = "connection"`) |
 
 ### Condition
@@ -3062,6 +3443,56 @@ Each `Config.Condition` in a `conditions` listing (used by `ConditionalInput` an
 ```
 
 Generates `type: "conditional"` with `ui.widget: "sqltree"` as the base, and a condition that switches to a plain text input when `extraction-method = "agent"`.
+
+### Example: APITree with Agent Mode Fallback
+
+In agent (SDR) mode the Atlan UI cannot reach the source credentials, so an
+API-backed tree cannot load. Wrap the apitree in a `ConditionalInput` and swap in
+a text input when `extraction-method = "agent"`:
+
+```pkl
+["include-folders"] = new ConditionalInput {
+  title = "Include Folders"
+  helpText = "Only selected folders will be crawled."
+  baseWidgetType = "apitree"
+  connectorConfig = "atlan-connectors-example"
+  credentialRef = "credential-guid"
+  metadataTemplateKey = "folders"
+  width = 4
+  default = new Mapping {}
+  additionalProperties = new Dynamic { type = "array" }
+  conditions {
+    new Condition {
+      property = "extraction-method"
+      value = "agent"
+      overrideUi = new Mapping<String, Any> {
+        ["widget"] = "input"
+        ["label"] = "Include Folders"
+        ["placeholder"] = #"{"^folder1$": [], "^folder2$": []}"#
+        ["grid"] = 4
+      }
+    }
+  }
+}
+```
+
+The base (direct-mode) `ui` carries the same keys a plain `APITree` emits:
+`widget: "apitree"`, `connectorConfigName`, `credential`, and
+`metadataTemplateKey`. `metadataTransformerTemplateKey`, `flatten`,
+`strict`, and `multiSelect` emit `metadataTransformerTemplateKey`,
+`flattenValue`, `treeCheckStrictly`, and `isMultiple` only when set.
+
+`metadataTemplateKey` is a routing key, not a template. The frontend sends it
+with the tree's metadata request. A native SDK app receives it as
+`MetadataInput.metadata_template_key` (also mirrored onto `object_filter`), and
+its metadata handler decides what to list, e.g. folders vs. projects. The key
+names here match the emitted `ui` keys; `APITree` keeps its older
+`metadataTemplate` / `metadataTransformer` names. Unlike `APITree`,
+`ConditionalInput` does not default `credentialRef`, `default`, or
+`additionalProperties`; set them as shown. Other base widget types are
+unchanged: a sqltree `multiSelect` still emits `multiple`. Both
+`Widgets.ConditionalInput` (App.pkl) and `Config.ConditionalInput`
+(NativeApp.pkl) support these properties.
 
 ---
 
@@ -3493,6 +3924,32 @@ multi-entrypoint app each entrypoint's copy lands at
 
 See [Artifact Schemas (data hand-off declarations)](#artifact-schemas-data-hand-off-declarations)
 for the type vocabulary and the per-format mapping.
+
+---
+
+## Payload-safe tree selections (`treeSelection`)
+
+`treeSelection: Boolean = false` on `APITree`, and on a `ConditionalInput` with `baseWidgetType = "apitree"`.
+
+**Why.** Tree widgets render their Python field as `Annotated[dict[str, Any], MaxItems(1000)]`. The SDK refuses `Any` even inside a bound (`PayloadSafetyError [AAF-CTR-002]`), so a contract with such a field does not import. `treeSelection = true` types the field as the SDK's `TreeSelection` instead: bounded at every level (`MaxItems(1000)` children per node), every leaf a dict.
+
+**What changes.** Only the field line in `_input.py`, plus its import:
+
+```python
+from application_sdk.contracts.types import TreeSelection
+...
+    component_include_filter: TreeSelection = Field(default_factory=dict)
+```
+
+**What does not change.** The value: it is the same plain nested dict the widget emits (`{"SAP": {"MM": {"MM-SRV": {}}}}`), in the app and on the wire, so stored configs validate unchanged and app code reading the dict needs no change. The JSON-string coercion the toolkit already generates for tree widgets still applies. The workflow config, credential config, manifest and widget UI are byte-identical.
+
+**Caveats.**
+
+- Default `false` keeps `dict[str, Any]`, so existing apps are unaffected until they opt in.
+- A value with a non-dict leaf (`{"SAP": true}`, `{"SAP": ["MM"]}`) is a validation error. Tree widgets emit dict leaves; check any hand-written test payloads.
+- On a `ConditionalInput`, evaluation fails unless `baseWidgetType = "apitree"`.
+- **Minimum SDK: the first release after 3.43.0.** The generated `_input.py` imports `application_sdk.contracts.types.TreeSelection`, which 3.43.0 and earlier do not have, so an app pinned to `atlan-application-sdk<=3.43.0` generates the file and then fails to import it. Raise the app's SDK floor (e.g. `atlan-application-sdk>3.43.0`) in the same change that sets `treeSelection = true`. The toolkit's own SDK-import check runs against SDK HEAD, so it does not catch an older pin.
+- For flat database/schema filters use the SDK's `FilterMap`, which `ExtractionInput`'s `include_filter` already uses.
 
 ---
 

@@ -9,14 +9,12 @@ into a manifest list — this is the join.
 ``docker buildx imagetools create`` copies the source manifests (and any blobs
 the target registry is missing) and writes an index referencing them. The index
 bytes are a function of the child digests alone, so pushing the same sources to
-two registries yields the SAME index digest in both — the cross-registry digest
-parity that ``docs/standards/build-security.md`` promises for
-``app-runtime-base``, and that ``resolve_base_redirect.py`` fails closed on.
+several repositories yields the SAME index digest in each.
 
 Targets are grouped by repository and one ``create`` is issued per repository
 with every tag of that repository attached. Grouping matters: a single call
 mixing repositories would re-copy the blobs once per name, and on a
-cross-registry ladder that is the whole image re-uploaded several times over.
+multi-repository ladder that is the whole image re-uploaded several times over.
 
 Exits non-zero if any ``docker`` invocation fails. The push is NOT transactional
 across repositories — see the recovery note in build-security.md.

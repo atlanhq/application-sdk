@@ -20,6 +20,7 @@ from conformance.bootstrap.render import (
     MANAGED_ACTION_FILES,
     MANAGED_WORKFLOWS,
     RETIRED_WORKFLOWS,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 from conformance.cli import _cmd_bootstrap
@@ -92,10 +93,10 @@ def test_discover_returns_all_managed_paths(tmp_path: pathlib.Path) -> None:
 def test_discover_returns_paths_even_when_absent(tmp_path: pathlib.Path) -> None:
     """discover() must not filter out non-existent files."""
     paths = discover(tmp_path)
-    # managed shims + retired shims + managed action files + tests.yaml and
-    # renovate.json scaffolds.
+    # managed shims + retired shims + the opt-in SARIF upload shim + managed
+    # action files + tests.yaml and renovate.json scaffolds.
     assert len(paths) == (
-        len(MANAGED_WORKFLOWS) + len(RETIRED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 2
+        len(MANAGED_WORKFLOWS) + len(RETIRED_WORKFLOWS) + len(MANAGED_ACTION_FILES) + 3
     )
     # None of them exist yet.
     assert all(not p.exists() for p in paths)
@@ -332,7 +333,7 @@ def test_vulnerability_scan_hand_added_lfs_opt_in_not_flagged(
     wf = wf_dir / "vulnerability-scan.yml"
     wf.write_text(
         render("vulnerability-scan.yml").replace(
-            "    secrets: inherit", "    with:\n      lfs: true\n    secrets: inherit"
+            "    secrets: inherit", "      lfs: true\n    secrets: inherit"
         )
     )
     assert scan_path(wf, tmp_path) == []
@@ -1020,3 +1021,55 @@ def test_build_publish_lfs_opt_in_with_structural_drift_flagged(
     findings = scan_path(wf, tmp_path)
     assert len(findings) == 1
     assert findings[0].rule_id == "C002"
+
+
+# ---------------------------------------------------------------------------
+# Opt-in SARIF upload shim (FND-3336)
+# ---------------------------------------------------------------------------
+
+
+def _sarif_findings(root: pathlib.Path) -> list:
+    return scan_path(root / ".github" / "workflows" / SARIF_UPLOAD_WORKFLOW, root)
+
+
+def test_sarif_upload_absent_is_clean(tmp_path: pathlib.Path) -> None:
+    """A private repo is not expected to carry it, so absence is no finding."""
+    _bootstrap(tmp_path)
+    assert _sarif_findings(tmp_path) == []
+
+
+def test_sarif_upload_opted_in_is_clean(tmp_path: pathlib.Path) -> None:
+    _bootstrap(tmp_path, "--sarif-upload", "true")
+    assert _sarif_findings(tmp_path) == []
+
+
+def test_sarif_upload_unmarked_copy_is_reported_for_removal(
+    tmp_path: pathlib.Path,
+) -> None:
+    """The copy every repo held before the opt-in: reported, and the finding
+    names both the removal and the public-repo opt-in."""
+    dest = tmp_path / ".github" / "workflows" / SARIF_UPLOAD_WORKFLOW
+    dest.parent.mkdir(parents=True)
+    dest.write_text(
+        "\n".join(
+            line
+            for line in render(SARIF_UPLOAD_WORKFLOW).splitlines()
+            if line != extract_mod.SARIF_UPLOAD_OPT_IN_MARKER
+        )
+    )
+    findings = _sarif_findings(tmp_path)
+    assert len(findings) == 1
+    assert "--sarif-upload true" in findings[0].message
+    assert "remove it" in findings[0].message
+    _bootstrap(tmp_path)
+    assert not dest.exists()
+    assert _sarif_findings(tmp_path) == []
+
+
+def test_sarif_upload_opted_in_but_drifted_is_reported(tmp_path: pathlib.Path) -> None:
+    _bootstrap(tmp_path, "--sarif-upload", "true")
+    dest = tmp_path / ".github" / "workflows" / SARIF_UPLOAD_WORKFLOW
+    dest.write_text(dest.read_text() + "# hand edit\n")
+    findings = _sarif_findings(tmp_path)
+    assert len(findings) == 1
+    assert "drifted" in findings[0].message

@@ -29,6 +29,22 @@ def check(
     return [f.rule_id for f in scan(build_registry([path], tmp_path))]
 
 
+def f007_messages(tmp_path: Path, body: str, extra: str = "") -> list[str]:
+    path = tmp_path / "handler.py"
+    path.write_text(
+        IMPORTS
+        + extra
+        + "\nclass H(Handler):\n    async def preflight_check("
+        + "self, input: PreflightInput) -> PreflightOutput"
+        + ":\n"
+        + "\n".join("        " + line for line in body.splitlines())
+        + "\n"
+    )
+    return [
+        f.message for f in scan(build_registry([path], tmp_path)) if f.rule_id == "F007"
+    ]
+
+
 @pytest.mark.parametrize("signature", ["self, input)", "self, input: dict) -> dict"])
 def test_handler_contract_rejects_untyped(tmp_path: Path, signature: str) -> None:
     assert "F006" in check(tmp_path, "return None", signature=signature)
@@ -194,6 +210,81 @@ def test_unrelated_exception_catch_does_not_hide_raise(tmp_path: Path):
     )
 
 
+_PREP_ERROR = "from application_sdk.errors import InternalError\nclass PrepError(InternalError):\n    pass\n"
+
+
+@pytest.mark.parametrize(
+    "extra, raised, caught",
+    [
+        (
+            _PREP_ERROR + "from application_sdk.errors import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            _PREP_ERROR + "from application_sdk.errors.base import AppError\n",
+            "PrepError",
+            "AppError",
+        ),
+        (
+            "from application_sdk.errors import AppTimeoutError, TaskStalledError\n",
+            "TaskStalledError",
+            "AppTimeoutError",
+        ),
+        (
+            "from application_sdk.errors import InvalidInputValueError\n",
+            "InvalidInputValueError",
+            "ValueError",
+        ),
+    ],
+    ids=["app-leaf-AppError", "submodule-AppError", "sdk-category", "builtin-base"],
+)
+def test_sdk_ancestor_catch_converts_raise(tmp_path, extra, raised, caught):
+    assert "F008" not in check(
+        tmp_path,
+        f'try:\n    raise {raised}(message="Failure")\nexcept {caught} as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])',
+        extra,
+    )
+
+
+def test_sdk_ancestor_catch_converts_helper_raise(tmp_path):
+    assert "F008" not in check(
+        tmp_path,
+        "try:\n    return probe()\nexcept AppError as exc:\n    return PreflightOutput(checks=[PreflightCheck(passed=False, error=exc.to_failure_details())])",
+        _PREP_ERROR
+        + "from application_sdk.errors import AppError\n"
+        + 'def probe():\n    raise PrepError(message="Failure")\n',
+    )
+
+
+@pytest.mark.parametrize("caught", ["AuthError", "InvalidInputError"])
+def test_sdk_sibling_catch_does_not_hide_raise(tmp_path, caught):
+    assert "F008" in check(
+        tmp_path,
+        f'try:\n    raise PrepError(message="Failure")\nexcept {caught}:\n    return PreflightOutput(status="ready")',
+        _PREP_ERROR + "from application_sdk.errors import InvalidInputError\n",
+    )
+
+
+def test_sdk_error_ancestry_matches_runtime_mro():
+    from conformance.suite.checks.preflight._contracts import sdk_error_ancestry
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, BaseException)):
+            continue
+        expected = {
+            f"application_sdk.errors.{base.__name__}"
+            if base.__module__.startswith("application_sdk.errors")
+            else base.__name__
+            for base in cls.__mro__
+            if base is not object
+        }
+        assert sdk_error_ancestry(f"application_sdk.errors.{name}") == expected, name
+
+
 @pytest.mark.parametrize(
     "catch, raised", [("Exception", ""), ("AuthError as exc", "exc")]
 )
@@ -344,3 +435,241 @@ def test_rebound_row_is_unresolved(tmp_path: Path) -> None:
         "row = reconcile(row)\n"
         "return PreflightOutput(checks=[row])",
     ) == ["F019"]
+
+
+def test_f007_message_names_the_sdk_error_and_its_audience(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "RateLimitedError" in message
+    assert "audience USER" in message
+    assert "customer-facing" in message
+    assert "Unresolved factory values" not in message
+
+
+def test_f007_message_resolves_an_app_subclass_audience(tmp_path):
+    extra = (
+        "from application_sdk.errors import InternalError\n"
+        'class ProbeError(InternalError):\n    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "ProbeError" in message
+    assert "audience APP_OWNER" in message
+    assert "engineer-facing" in message
+
+
+def test_f007_message_honours_an_audience_override(tmp_path):
+    extra = (
+        "from typing import ClassVar\n"
+        "from application_sdk.errors import Audience, InternalError\n"
+        "class ProbeError(InternalError):\n"
+        "    audience: ClassVar[Audience] = Audience.PLATFORM\n"
+        '    message: str = "Probe failed"\n'
+    )
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=ProbeError().to_failure_details())])",
+        extra,
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_message_keeps_internals_out(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        'return PreflightOutput(checks=[PreflightCheck(passed=False, error=RateLimitedError(message="Throttled").to_failure_details())])',
+        "from application_sdk.errors import RateLimitedError\n",
+    )
+    assert "exception text" in message
+
+
+def test_sdk_error_audience_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_audience
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert (
+            sdk_error_audience(f"application_sdk.errors.{name}") == cls.audience.value
+        ), name
+
+
+def test_f007_full_description_names_each_audience_voice():
+    from conformance.suite.rules.preflight import RULES
+
+    (f007,) = [r for r in RULES if r.id == "F007"]
+    for audience in ("USER", "APP_OWNER", "PLATFORM"):
+        assert audience in f007.full_description
+    assert "exception text" in f007.full_description
+
+
+def test_f007_message_lists_every_missing_field(tmp_path):
+    (message,) = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails())])",
+    )
+    assert "message and suggested_action" in message
+    assert "explanation" in message
+    assert "engineer-facing" in message
+
+
+@pytest.mark.parametrize(
+    "audience",
+    [
+        pytest.param("audience=Audience.PLATFORM", id="enum-member"),
+        pytest.param('audience="PLATFORM"', id="string-value"),
+    ],
+)
+def test_f007_message_honours_a_failure_details_audience(tmp_path, audience):
+    """FailureDetails coerces the enum's string value, so both spellings route alike."""
+    (message,) = f007_messages(
+        tmp_path,
+        f"return PreflightOutput(checks=[PreflightCheck(passed=False, error=FailureDetails({audience}))])",
+        "from application_sdk.errors import Audience\n",
+    )
+    assert "audience PLATFORM" in message
+    assert "operator" in message
+
+
+def test_f007_reports_each_failed_error_on_one_line(tmp_path):
+    """Dedup keys on the error occurrence, so a single-line checks list loses no F007."""
+    messages = f007_messages(
+        tmp_path,
+        "return PreflightOutput(checks=["
+        "PreflightCheck(passed=False, error=RateLimitedError().to_failure_details()), "
+        "PreflightCheck(passed=False, error=InternalError().to_failure_details())])",
+        "from application_sdk.errors import InternalError, RateLimitedError\n",
+    )
+    assert len(messages) == 2
+    assert any("RateLimitedError" in m for m in messages)
+    assert any("InternalError" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
+# F008: a retryable, non-deprecated transient may be raised
+# ---------------------------------------------------------------------------
+
+# The gate's no-verdict path records a raise as an unverifiable source and never
+# blocks on SOURCE_UNAVAILABLE or TIMEOUT, so the run proceeds. A retryable leaf
+# in one of those is "could not ask this time", not an expected failure escaping. The fail-open categories
+# the gate deprecated (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED,
+# CANCELLED) stay flagged, as does any raise whose category or retryability the
+# detector cannot read.
+_TRANSIENT_IMPORTS = (
+    "from typing import ClassVar\n"
+    "from application_sdk.errors import (\n"
+    "    AppError, AppTimeoutError, CancelledError, DependencyUnavailableError,\n"
+    "    FailureCategory, RateLimitedError, ResourceExhaustedError,\n"
+    "    SourceUnavailableError,\n"
+    ")\n"
+)
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Server restarting")'),
+        ("", 'AppTimeoutError(message="Probe outran its budget")'),
+        (
+            "class SourceRestartingError(SourceUnavailableError):\n"
+            '    code: ClassVar[str] = "SOURCE_UNAVAILABLE_EXAMPLE_RESTART"\n',
+            "SourceRestartingError()",
+        ),
+        ("", 'SourceUnavailableError(message="Server restarting", retryable=True)'),
+    ],
+    ids=["sdk-source-unavailable", "sdk-timeout", "app-leaf", "explicit-retryable"],
+)
+def test_retryable_transient_raise_is_not_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" not in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+@pytest.mark.parametrize(
+    "leaf",
+    [
+        "DependencyUnavailableError",
+        "RateLimitedError",
+        "ResourceExhaustedError",
+        "CancelledError",
+    ],
+)
+def test_deprecated_fail_open_category_raise_is_f008(tmp_path: Path, leaf: str) -> None:
+    assert "F008" in check(
+        tmp_path, f'raise {leaf}(message="Blip")', _TRANSIENT_IMPORTS
+    )
+
+
+@pytest.mark.parametrize(
+    "extra, raised",
+    [
+        ("", 'SourceUnavailableError(message="Down", retryable=False)'),
+        (
+            "class DefinitiveOutageError(SourceUnavailableError):\n"
+            "    default_retryable: ClassVar[bool] = False\n",
+            "DefinitiveOutageError()",
+        ),
+        (
+            "class StoreBlipError(SourceUnavailableError):\n"
+            "    category: ClassVar[FailureCategory] = FailureCategory.DEPENDENCY_UNAVAILABLE\n",
+            "StoreBlipError()",
+        ),
+        (
+            "class UnknownCategoryError(AppError):\n"
+            "    category: ClassVar[FailureCategory] = pick_category()\n",
+            "UnknownCategoryError()",
+        ),
+        ("", 'SourceUnavailableError(message="Down", retryable=flag)'),
+    ],
+    ids=[
+        "explicit-not-retryable",
+        "class-not-retryable",
+        "category-overridden-to-deprecated",
+        "unknown-category",
+        "unknown-retryable",
+    ],
+)
+def test_transient_raise_the_detector_cannot_clear_is_f008(
+    tmp_path: Path, extra: str, raised: str
+) -> None:
+    assert "F008" in check(tmp_path, f"raise {raised}", _TRANSIENT_IMPORTS + extra)
+
+
+def test_sdk_error_category_matches_runtime():
+    from conformance.suite.checks.preflight._contracts import sdk_error_category
+
+    import application_sdk.errors as sdk_errors
+
+    for name in sdk_errors.__all__:
+        cls = getattr(sdk_errors, name)
+        if not (isinstance(cls, type) and issubclass(cls, sdk_errors.AppError)):
+            continue
+        assert sdk_error_category(f"application_sdk.errors.{name}") == (
+            cls.category.name,
+            cls.default_retryable,
+        ), name
+
+
+def test_raisable_transient_categories_match_the_gate():
+    from conformance.suite.checks.preflight._contracts import (
+        RAISABLE_TRANSIENT_CATEGORIES,
+    )
+
+    from application_sdk.execution._temporal.preflight_gate import (
+        DEPRECATED_FAIL_OPEN_CATEGORIES,
+        GATE_NEVER_BLOCKING_CATEGORIES,
+    )
+
+    assert RAISABLE_TRANSIENT_CATEGORIES == {
+        c.name for c in GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES
+    }

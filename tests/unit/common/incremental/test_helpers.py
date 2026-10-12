@@ -90,6 +90,17 @@ class TestExtractEpochId:
         with pytest.raises(ConnectionQualifiedNameFormatError):
             extract_epoch_id_from_qualified_name(qualified_name)
 
+    @pytest.mark.parametrize(
+        "qualified_name",
+        ["default//123", "/oracle/123", "default/oracle/ 123", "default/ oracle/123"],
+    )
+    def test_empty_or_padded_segment_raises(self, qualified_name):
+        """The contract's rule, not a local one: an empty or padded segment
+        anywhere composes asset QNs no ref resolves, and the preflight gate
+        already blocks such a run, so the marker path must not accept it."""
+        with pytest.raises(ConnectionQualifiedNameFormatError):
+            extract_epoch_id_from_qualified_name(qualified_name)
+
     def test_named_last_segment_still_accepted(self):
         """A non-epoch *name* is still accepted — only an empty segment is not.
 
@@ -225,6 +236,32 @@ class TestCountJsonFilesRecursive:
     def test_nonexistent_directory(self):
         """Nonexistent directory returns 0 (not an error)."""
         assert count_json_files_recursive(Path("/nonexistent/path")) == 0
+
+    def test_walk_error_part_way_through_raises(self, tmp_path):
+        """An OSError on a subdirectory surfaces instead of under-counting.
+
+        ``Path.rglob`` swallows it (cpython#146646) and returns the files it
+        reached, which reads as a smaller-but-valid state.
+        """
+        import os
+
+        (tmp_path / "a.json").write_text("{}")
+        unreadable = tmp_path / "subdir"
+        unreadable.mkdir()
+        (unreadable / "b.json").write_text("{}")
+
+        real_scandir = os.scandir
+
+        def _scandir(path):
+            if Path(path) == unreadable:
+                raise PermissionError(13, "Permission denied", str(path))
+            return real_scandir(path)
+
+        with (
+            patch("application_sdk.common._listing.os.scandir", _scandir),
+            pytest.raises(PermissionError),
+        ):
+            count_json_files_recursive(tmp_path)
 
 
 # ---------------------------------------------------------------------------

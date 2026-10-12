@@ -471,7 +471,10 @@ def create_activity_from_task(
             ProgressTracker(
                 on_hold_closed=closed_hold_observer(
                     context.task_name, budget_seconds=resolved_no_progress_seconds
-                )
+                ),
+                # Read by drain_offloads, which bounds a storage fan-out's
+                # unwind by the same allowance the watchdog applies.
+                max_no_progress_seconds=resolved_no_progress_seconds,
             )
         ) as tracker:
             try:

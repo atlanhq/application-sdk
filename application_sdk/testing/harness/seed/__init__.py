@@ -310,9 +310,9 @@ async def seed_assets(
                     f"{report.total} record(s)"
                 ),
             )
-        # Unpacked rather than indexed: ``seed_object_keys`` is what teardown
-        # deletes, and a seed that started writing a second file would break
-        # here rather than silently leave the new one behind.
+        # Unpacked rather than indexed: ``seed_object_keys`` is the statement of
+        # what a seed writes, and a seed that started writing a second file
+        # would break here rather than silently drift from it.
         (key,) = seed_object_keys(root=prefixes.root)
         await upload_file(key, str(written.path), store)
 

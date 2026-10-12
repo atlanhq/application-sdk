@@ -22,6 +22,7 @@
     "RateLimitedError",
     "ResourceExhaustedError",
     "SourceUnavailableError",
+    "SourceWarmupExhaustedError",
     "TaskStalledError",
     "UnimplementedError"
   ]

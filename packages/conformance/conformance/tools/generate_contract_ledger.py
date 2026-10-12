@@ -14,6 +14,12 @@ In the SDK repo itself the suite is in-tree, so ``uv run`` is correct:
 
     uv run atlan-application-sdk-conformance gen-contract-ledger
 
+There, from any directory in the checkout, it scans the whole SDK and writes the
+repo-root ``contract_schema.lock.json`` — the SDK's only committed ledger, which
+the conformance wheel's build hook packages (FND-3108). The ledger records the
+template contracts' entrypoints and the SDK contract bases (``Input``,
+``Output``, ``PublishInputMixin``) that every app contract inherits from.
+
 Check whether the committed ledger is up-to-date (CI gate / drift test):
 
     uv run atlan-application-sdk-conformance gen-contract-ledger --check
@@ -33,9 +39,19 @@ like fields declared directly on the contract.
 
 **Append-only invariant**: the generator can add new entries and update the
 ``status`` of existing entries (active → deprecated → sunset), but it NEVER
-deletes an entry or changes a recorded ``type``.  This means regenerating after
+deletes an entry, changes a recorded ``type``, or moves an entry straight from
+``active`` to ``sunset`` (it keeps ``active`` and B005 reports the skip).  This means regenerating after
 a removal does NOT launder the removal — B005 will still fire against the
 persisted ledger entry.
+
+**Requiredness** (``required``: callers must send the field) is recorded the
+same way.  It may relax from ``true`` to ``false`` but is never recorded moving
+back, and a field added to a contract the ledger already records is recorded
+``false`` whatever the source says.  A source that requires either field then
+disagrees with the ledger, and B005 reports it: a caller that predates the field
+does not send it.  A contract new to the ledger records its fields as declared.
+An entry written before ``required`` existed has it unknown, and the first
+regeneration records the source's current requiredness as its baseline.
 """
 
 from __future__ import annotations
@@ -43,6 +59,7 @@ from __future__ import annotations
 import argparse
 import ast
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import (
@@ -54,8 +71,10 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.checks._entrypoint_contract_fields import (
     collect_entrypoint_contract_names,
     resolve_contract_fields,
+    sdk_base_contract_names,
 )
 from conformance.suite.checks.deprecation._ledger_schema import (
+    LEDGER_VERSION,
     ContractField,
     ContractLedger,
     load_ledger_baseline,
@@ -67,13 +86,17 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     collect_classes,
     collect_import_aliases,
 )
+from conformance.suite.schema.disposition import RuleScope
+
+LEDGER_NAME = "contract_schema.lock.json"
 
 
 def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     """Scan *repo_root* and build an updated ledger.
 
     Append-only: new fields are added; ``status`` is refreshed from source;
-    ``type`` is NEVER changed; entries are NEVER deleted.
+    ``type`` is NEVER changed; entries are NEVER deleted; ``required`` never
+    moves from ``False`` to ``True``.
     """
     # Collect all Python files under the repo root
     paths = list(discover(repo_root))
@@ -113,7 +136,9 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     # which contracts exist.
     register_alias_records(by_name, alias_targets)
 
-    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(
+        file_trees, by_name
+    ) | sdk_base_contract_names(by_name)
 
     # Index existing ledger entries for fast lookup
     existing_by_key: dict[tuple[str, str], ContractField] = {
@@ -136,6 +161,7 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
                     field=fi.name,
                     type=fi.canonical_type,
                     status=fi.status,
+                    required=fi.required,
                 )
 
     # Merge: append-only with status refresh
@@ -145,24 +171,49 @@ def build_ledger(repo_root: Path, existing: ContractLedger) -> ContractLedger:
     for key, existing_field in existing_by_key.items():
         live = live_entries.get(key)
         if live is not None:
-            # Refresh status from source; type is frozen on first record
+            # Refresh status from source; type is frozen on first record.
+            # 'active' never moves straight to 'sunset': the ledger keeps
+            # 'active' so B005 reports the skipped deprecation instead of the
+            # regeneration recording it.
+            status = live.status
+            if existing_field.status == "active" and status == "sunset":
+                status = existing_field.status
             merged[key] = ContractField(
                 contract=existing_field.contract,
                 field=existing_field.field,
                 type=existing_field.type,  # NEVER change the recorded type
-                status=live.status,
+                status=status,
+                required=_merged_required(existing_field.required, live.required),
             )
         else:
             # Field removed from source — keep in ledger (B005 will flag it)
             merged[key] = existing_field
 
-    # Add new live fields not yet in the ledger
+    # Add new live fields not yet in the ledger. On a contract the ledger
+    # already records, a new field is recorded not-required whatever the
+    # source says: callers that predate it cannot send it, so B005 reports a
+    # source that requires it instead of the regeneration recording it.
+    recorded_contracts = {contract for contract, _ in existing_by_key}
     for key, live_field in live_entries.items():
         if key not in merged:
+            if live_field.required and live_field.contract in recorded_contracts:
+                live_field = replace(live_field, required=False)
             merged[key] = live_field
 
     fields = sorted(merged.values(), key=lambda f: (f.contract, f.field))
-    return ContractLedger(version=existing.version, fields=fields)
+    return ContractLedger(version=max(existing.version, LEDGER_VERSION), fields=fields)
+
+
+def _merged_required(recorded: bool | None, live: bool | None) -> bool | None:
+    """The ``required`` to record over *recorded*, given the source's *live*.
+
+    Unknown takes the source's value (the backfill); ``True`` follows the
+    source, so a field may relax; ``False`` stays ``False``, so B005 reports a
+    source that now requires it.  An unknown source keeps what is recorded.
+    """
+    if recorded is False or live is None:
+        return recorded
+    return live
 
 
 def _find_repo_root() -> Path | None:
@@ -176,6 +227,16 @@ def _find_repo_root() -> Path | None:
         for parent in [start, *start.parents]:
             if (parent / "pyproject.toml").is_file():
                 return parent
+    return None
+
+
+def _sdk_checkout_root(start: Path) -> Path | None:
+    """The SDK checkout containing *start*: the dir holding ``application_sdk/`` and ``packages/conformance/``."""
+    for parent in [start, *start.parents]:
+        if (parent / "application_sdk").is_dir() and (
+            parent / "packages" / "conformance" / "pyproject.toml"
+        ).is_file():
+            return parent
     return None
 
 
@@ -194,8 +255,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--outfile",
         type=Path,
-        default=Path("contract_schema.lock.json"),
-        help="Ledger path to write (default: contract_schema.lock.json in cwd).",
+        default=None,
+        help=(
+            "Ledger path to write (default: contract_schema.lock.json in cwd; "
+            "in the SDK repo, the repo-root contract_schema.lock.json)."
+        ),
     )
     parser.add_argument(
         "--check",
@@ -216,7 +280,12 @@ def main(argv: list[str] | None = None) -> None:
         )
         sys.exit(2)
 
-    outfile: Path = args.outfile
+    scope = detect_scope(repo_root)
+    if scope is RuleScope.SDK and args.repo is None:
+        repo_root = _sdk_checkout_root(repo_root.resolve()) or repo_root
+    outfile: Path = args.outfile or (
+        repo_root / LEDGER_NAME if scope is RuleScope.SDK else Path(LEDGER_NAME)
+    )
     # A first ledger starts EMPTY — see load_ledger_baseline for why, and note
     # that bootstrap's write-if-absent scaffold shares the same helper so the
     # invariant cannot drift between the two writers.
@@ -229,8 +298,7 @@ def main(argv: list[str] | None = None) -> None:
             sys.exit(1)
         if outfile.read_text(encoding="utf-8") != content:
             print(
-                f"STALE: {outfile}\nRun `{regen_command(detect_scope(repo_root))}` "
-                "to update.",
+                f"STALE: {outfile}\nRun `{regen_command(scope)}` to update.",
                 file=sys.stderr,
             )
             sys.exit(1)

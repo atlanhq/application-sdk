@@ -15,6 +15,8 @@ from azure.identity import CertificateCredential
 from obstore.auth.azure import AzureCredentialProvider
 from obstore.auth.boto3 import StsCredentialProvider
 
+from application_sdk.common.aws_utils import _normalize_external_id
+
 if TYPE_CHECKING:
     from obstore.store import S3Credential
 
@@ -70,6 +72,10 @@ def make_s3_assume_role_provider(
     required when those base credentials are themselves temporary (STS-derived).
     When all three are omitted the boto3 session falls back to its default
     credential chain (instance profile, env vars, etc.) for the STS call.
+
+    *external_id* is sent as ``ExternalId`` after surrounding whitespace is
+    stripped; a ``None`` or blank value is omitted (see
+    ``_normalize_external_id``).
     """
     session_kwargs: dict[str, Any] = {}
     if region:
@@ -86,8 +92,9 @@ def make_s3_assume_role_provider(
         "RoleArn": role_arn,
         "RoleSessionName": session_name,
     }
-    if external_id:
-        sts_kwargs["ExternalId"] = external_id
+    resolved_external_id = _normalize_external_id(external_id)
+    if resolved_external_id:
+        sts_kwargs["ExternalId"] = resolved_external_id
 
     return _UtcExpiryStsCredentialProvider(session, **sts_kwargs)
 

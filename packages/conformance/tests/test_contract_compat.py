@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from conformance.suite.checks.deprecation._contract_compat import scan_contract_compat
 from conformance.suite.checks.deprecation._ledger_schema import (
     ContractField,
@@ -483,7 +484,7 @@ def test_classvar_on_base_class_excluded_from_resolution(tmp_path: Path) -> None
 _DIAMOND_A_FILE = """\
 class A:
     shared: str
-    unique_a: str
+    unique_a: str = ""
 """
 
 _DIAMOND_B_FILE = """\
@@ -560,7 +561,7 @@ class MyInput:
     url: str
 
 class MyOutput(PublishInputMixin):
-    custom: str
+    custom: str = ""
 
 class MyApp(App):
     @entrypoint
@@ -894,6 +895,178 @@ def test_b005_still_fires_when_the_name_is_unambiguous(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_RENAMED_BUNDLE_INPUT = """\
+from application_sdk.app import App
+
+class {cls}AppInputContract:
+    {field}: str = ""
+
+AppInputContract = {cls}AppInputContract
+
+class {cls}App(App):
+    async def run(self, input: {cls}AppInputContract) -> None:
+        pass
+"""
+
+
+def _renamed_bundle(crawler_field: str, miner_field: str) -> dict[str, str]:
+    return {
+        "crawler/_input.py": _RENAMED_BUNDLE_INPUT.format(
+            cls="Crawler", field=crawler_field
+        ),
+        "miner/_input.py": _RENAMED_BUNDLE_INPUT.format(cls="Miner", field=miner_field),
+    }
+
+
+@pytest.mark.parametrize(
+    ("status", "removed", "fires"),
+    [
+        ("active", "miner_only", True),
+        ("active", None, False),
+        ("sunset", "miner_only", False),
+    ],
+    ids=["removed-from-every-class", "kept-on-a-sibling", "sunset"],
+)
+def test_b005_reads_rows_recorded_under_the_pre_rename_bundle_name(
+    tmp_path: Path, status: str, removed: str | None, fires: bool
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "miner_only", "str", status),
+        ContractField("CrawlerAppInputContract", "crawler_only", "str", "active"),
+    )
+    miner_field = "other" if removed == "miner_only" else "miner_only"
+    findings = _scan(tmp_path, _renamed_bundle("crawler_only", miner_field), ledger)
+    legacy = [
+        f
+        for f in findings
+        if f.rule_id == "B005"
+        and not f.suppressed
+        and "'AppInputContract.miner_only'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
+@pytest.mark.parametrize(
+    ("status", "fires"),
+    [("active", True), ("deprecated", True), ("sunset", False)],
+)
+def test_b005_pre_rename_rows_check_the_source_lifecycle(
+    tmp_path: Path, status: str, fires: bool
+) -> None:
+    """A legacy row has no row under the renamed class for the main pass to read.
+
+    So a direct sunset on a renamed bundle class must be caught here, or it
+    passes B005 for this one bundle shape.
+    """
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "miner_only", "str", status),
+    )
+    files = _renamed_bundle("crawler_only", "miner_only")
+    files["miner/_input.py"] = files["miner/_input.py"].replace(
+        'miner_only: str = ""',
+        "miner_only: str = Field(default='', deprecated=True, "
+        'json_schema_extra={"x-lifecycle": "sunset"})',
+    )
+    findings = _scan(tmp_path, files, ledger)
+    legacy = [
+        f
+        for f in findings
+        if f.rule_id == "B005"
+        and "'AppInputContract.miner_only'" in f.message
+        and "is marked 'sunset'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
+def test_b005_pre_rename_rows_left_to_the_main_pass_when_the_class_exists(
+    tmp_path: Path,
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "crawler_only", "str", "active"),
+        ContractField("AppInputContract", "gone", "str", "active"),
+    )
+    files = {
+        **_renamed_bundle("crawler_only", "miner_only"),
+        "legacy/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A,
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [f.file for f in b005] == ["legacy/_input.py"]
+
+
+@pytest.mark.parametrize(
+    ("ledger_type", "live_type", "fires"),
+    [("str | None", "str", True), ("str", "str | None", False)],
+    ids=["narrowed", "widened"],
+)
+def test_b005_pre_rename_rows_are_type_checked(
+    tmp_path: Path, ledger_type: str, live_type: str, fires: bool
+) -> None:
+    ledger = _make_ledger(
+        ContractField("AppInputContract", "miner_only", ledger_type, "active")
+    )
+    files = _renamed_bundle("crawler_only", "miner_only")
+    files["miner/_input.py"] = files["miner/_input.py"].replace(
+        'miner_only: str = ""', f'miner_only: {live_type} = ""'
+    )
+    legacy = [
+        f
+        for f in _scan(tmp_path, files, ledger)
+        if f.rule_id == "B005" and "'AppInputContract.miner_only'" in f.message
+    ]
+    assert len(legacy) == (1 if fires else 0)
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [("miner_only", []), ("gone", ["legacy/_input.py"])],
+    ids=["field-on-a-renamed-class", "field-nowhere"],
+)
+def test_b005_pre_rename_rows_with_a_class_still_named_app_input_contract(
+    tmp_path: Path, field: str, expected: list[str]
+) -> None:
+    ledger = _make_ledger(ContractField("AppInputContract", field, "str", "active"))
+    files = {
+        **_renamed_bundle("crawler_only", "miner_only"),
+        "legacy/_input.py": _TWO_ENTRYPOINTS_SAME_NAME_A,
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [f.file for f in b005] == expected
+
+
+_GENERATED_RENAMED_INPUT = """\
+class CrawlerAppInputContract:
+    kept: str = ""
+
+AppInputContract = CrawlerAppInputContract
+"""
+
+_APP_BINDING_RENAMED_INPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Output
+from app.generated.crawler._input import CrawlerAppInputContract
+
+class MyApp(App):
+    @entrypoint
+    {directive}async def crawl(self, input: CrawlerAppInputContract) -> Output:
+        return Output()
+"""
+
+
+@pytest.mark.parametrize("suppressed", [False, True])
+def test_b005_pre_rename_row_finding_lands_outside_generated_code(
+    tmp_path: Path, suppressed: bool
+) -> None:
+    ledger = _make_ledger(ContractField("AppInputContract", "gone", "str", "active"))
+    directive = "# conformance: ignore[B005] no consumers\n    " if suppressed else ""
+    files = {
+        "app/generated/crawler/_input.py": _GENERATED_RENAMED_INPUT,
+        "app/app.py": _APP_BINDING_RENAMED_INPUT.format(directive=directive),
+    }
+    b005 = [f for f in _scan(tmp_path, files, ledger) if f.rule_id == "B005"]
+    assert [(f.file, f.suppressed) for f in b005] == [("app/app.py", suppressed)]
+
+
 # ── B005: the four changes that are not breaks ────────────────────────────────
 
 
@@ -941,6 +1114,55 @@ def test_b005_active_field_must_still_be_present(tmp_path: Path) -> None:
     ledger = _make_ledger(ContractField("MyInput", "name", "str", "active"))
     findings = _scan(tmp_path, {"app.py": _EP_WITHOUT_FIELD}, ledger)
     assert "B005" in _ids(findings)
+
+
+_EP_LIFECYCLE = """\
+from pydantic import BaseModel, Field
+from application_sdk.app import App
+
+class MyInput(BaseModel):
+    name: str = Field(default="", {kwargs})
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+_SUNSET_KWARGS = 'deprecated=True, json_schema_extra={"x-lifecycle": "sunset"}'
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "ledger_status", "remedy"),
+    [
+        (_SUNSET_KWARGS, "active", "Mark it 'deprecated'"),
+        (_SUNSET_KWARGS, "retired", "Mark it 'deprecated'"),
+        (_SUNSET_KWARGS, "deprecated", "Regenerate"),
+        (_SUNSET_KWARGS, "sunset", None),
+        ("deprecated=True", "active", None),
+    ],
+    ids=["active", "unknown-status", "deprecated-unregenerated", "sunset", "deprecate"],
+)
+def test_b005_sunset_requires_a_recorded_deprecation(
+    tmp_path: Path, kwargs: str, ledger_status: str, remedy: str | None
+) -> None:
+    """Source 'sunset' must sit over a ledger 'sunset'.
+
+    The generator records 'sunset' only over 'deprecated', so any other ledger
+    status under it is a skipped deprecation or a stale (or hand-edited)
+    ledger. A hand-edited 'deprecated' is reported too: it would otherwise
+    excuse a direct sunset without the generator or ledger-guard seeing it.
+    """
+    ledger = _make_ledger(ContractField("MyInput", "name", "str", ledger_status))
+    src = _EP_LIFECYCLE.format(kwargs=kwargs)
+    findings = [
+        f for f in _scan(tmp_path, {"app.py": src}, ledger) if f.rule_id == "B005"
+    ]
+    if remedy is None:
+        assert findings == []
+        return
+    assert len(findings) == 1
+    assert "MyInput.name" in findings[0].message
+    assert f"records it '{ledger_status}'" in findings[0].message
+    assert remedy in findings[0].message
 
 
 def test_b005_widening_is_not_a_break(tmp_path: Path) -> None:
@@ -1124,6 +1346,240 @@ def test_b005_mutually_recursive_type_aliases_terminate(tmp_path: Path) -> None:
     assert "B005" in _ids(findings)
 
 
+_EP_IMPORTED_ALIAS = """\
+from application_sdk.app import App
+{import_line}
+
+class MyInput:
+    field: {ann}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_imported(tmp_path: Path, import_line: str, ann: str, ledger_type: str):
+    ledger = _make_ledger(ContractField("MyInput", "field", ledger_type, "active"))
+    src = _EP_IMPORTED_ALIAS.format(import_line=import_line, ann=ann)
+    return _scan(tmp_path, {"app.py": src}, ledger)
+
+
+def test_b005_sdk_alias_imported_via_reexport_off_any_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_imported_from_defining_module_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts.sql_metadata import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_renamed_sdk_alias_import_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap as Tags",
+        "Tags",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap",
+        "FilterMap",
+        "list[str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_alias_imported_from_outside_the_sdk_is_not_expanded(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from somepkg.types import FilterMap",
+        "FilterMap",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_unresolvable_sdk_import_still_fires(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import NoSuchAlias",
+        "NoSuchAlias",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "rebinding",
+    [
+        "FilterMap = str",
+        "FilterMap: type = str",
+        "def FilterMap() -> None: ...",
+        "class FilterMap: ...",
+        "from somepkg.types import FilterMap",
+        "if True:\n    FilterMap = str",
+        "def helper():\n    global FilterMap\n    FilterMap = str",
+        "def helper(v=(FilterMap := str)): ...",
+        "class Other:\n    FilterMap = str",
+        # Can't shadow the annotation, but still disables expansion: the rule is
+        # deliberately flat, and B005 then fires exactly as it did before.
+        "def helper():\n    FilterMap = str",
+        "names = [FilterMap for FilterMap in ()]",
+    ],
+)
+def test_b005_any_other_binding_of_the_name_disables_expansion(
+    tmp_path: Path, rebinding: str
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        f"from application_sdk.templates.contracts import FilterMap\n{rebinding}",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" in _ids(findings)
+
+
+@pytest.mark.parametrize("position", ["before", "after"])
+def test_b005_any_star_import_disables_expansion(tmp_path: Path, position: str) -> None:
+    sdk = "from application_sdk.templates.contracts import FilterMap"
+    star = "from local_types import *"
+    lines = f"{star}\n{sdk}" if position == "before" else f"{sdk}\n{star}"
+    findings = _scan_imported(tmp_path, lines, "FilterMap", "dict[str, list[str]]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_class_body_rebinding_disables_expansion(tmp_path: Path) -> None:
+    ledger = _make_ledger(
+        ContractField("MyInput", "field", "dict[str, list[str]]", "active")
+    )
+    src = """\
+from application_sdk.app import App
+from application_sdk.templates.contracts import FilterMap
+
+class MyInput:
+    FilterMap = str
+    field: FilterMap
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+    assert "B005" in _ids(_scan(tmp_path, {"app.py": src}, ledger))
+
+
+def test_b005_sdk_alias_bound_once_matching_the_ledger_is_not_a_break(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.templates.contracts import FilterMap\n"
+        "helper = lambda value: value",
+        "FilterMap",
+        "dict[str, list[str]]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_rebound_local_alias_is_not_expanded(tmp_path: Path) -> None:
+    alias = "Filter = dict[str, str]\nFilter = str"
+    findings = _scan_aliased(tmp_path, alias, "Filter", "dict[str, str]")
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, Any]",
+        "dict[str, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_off_any_is_not_a_break(tmp_path: Path) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts.types import BoundedList",
+        "BoundedList[str]",
+        "list[Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_bare_generic_sdk_alias_defaults_its_parameters_to_any(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict",
+        "dict[Any, Any]",
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_different_outer_shape_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedList",
+        "BoundedList[str]",
+        "dict[str, Any]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_sdk_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    findings = _scan_imported(
+        tmp_path,
+        "from application_sdk.contracts import BoundedDict",
+        "BoundedDict[str, int]",
+        "dict[str, str]",
+    )
+    assert "B005" in _ids(findings)
+
+
+def test_b005_generic_local_alias_applies_its_type_arguments(tmp_path: Path) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, Any]")
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_generic_local_alias_with_a_changed_argument_still_fires(
+    tmp_path: Path,
+) -> None:
+    alias = 'from typing import TypeVar\nT = TypeVar("T")\nTagged = dict[str, T]'
+    findings = _scan_aliased(tmp_path, alias, "Tagged[int]", "dict[str, str]")
+    assert "B005" in _ids(findings)
+
+
 def test_split_union_does_not_tear_nested_brackets() -> None:
     """A naive split on '|' would break dict[str, int | None] apart."""
     from conformance.suite.checks.deprecation._contract_compat import _split_union
@@ -1166,7 +1622,7 @@ class Base:
     status: {ann}
 
 class MyInput(Base):
-    own: str
+    own: str = ""
 
 class MyApp(App):
     async def run(self, input: MyInput) -> None:
@@ -1198,7 +1654,7 @@ def test_b005_locally_declared_type_change_still_fires(tmp_path: Path) -> None:
 _GENERATED_CONTRACT = """\
 class AppInputContract:
     include_database_regex: str
-    exclude_database_regex: str | None
+    exclude_database_regex: str | None = None
 """
 
 _ALIAS_MODULE = """\
@@ -1410,3 +1866,640 @@ def test_b006_on_an_inherited_field_says_not_to_redeclare_it(tmp_path: Path) -> 
     ]
     assert inherited
     assert all("do not redeclare it" in f.message for f in inherited)
+
+
+# ── SDK-retired inherited fields (FND-3107) ───────────────────────────────────
+
+_SDK_RETIRED_BASE = """\
+from application_sdk.templates.contracts.sql_metadata import ExtractionInput
+
+class ConnectorBase(ExtractionInput):
+    pass
+"""
+
+_SDK_RETIRED_VIA_BASE = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+from base import ConnectorBase
+
+class DbtExtractInput(ConnectorBase):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: DbtExtractInput) -> ExtractionOutput:
+        pass
+"""
+
+_SDK_RETIRED_ON_PLAIN_INPUT = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Input
+from application_sdk.templates.contracts.sql_metadata import ExtractionOutput
+
+class DbtExtractInput(Input):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: DbtExtractInput) -> ExtractionOutput:
+        pass
+"""
+
+
+@pytest.fixture
+def _sdk_retired_credential_guid(monkeypatch: pytest.MonkeyPatch) -> ContractLedger:
+    """The SDK removed ExtractionInput.credential_guid after sunsetting it.
+
+    The conformance release that ships the removal no longer lists the field in
+    its template table, and its bundled SDK ledger records it 'sunset'.
+    """
+    from conformance.suite.checks._sdk_contract_mixins import (
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+    )
+
+    monkeypatch.setitem(
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        "ExtractionInput",
+        tuple(
+            f
+            for f in SDK_TEMPLATE_CONTRACT_FIELDS["ExtractionInput"]
+            if f.name != "credential_guid"
+        ),
+    )
+    return _make_ledger(
+        ContractField("ExtractionInput", "credential_guid", "str", "sunset")
+    )
+
+
+def _scan_with_sdk_ledger(
+    tmp_path: Path,
+    files: dict[str, str],
+    ledger: ContractLedger,
+    sdk_ledger: ContractLedger,
+) -> list:
+    paths: list[Path] = []
+    for name, src in files.items():
+        p = tmp_path / name
+        p.write_text(src, encoding="utf-8")
+        paths.append(p)
+    return scan_contract_compat(paths, tmp_path, ledger, sdk_ledger=sdk_ledger)
+
+
+def test_b005_sdk_retired_inherited_field_is_not_this_apps_break(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """The SDK deliberately retired a field the app only inherited.
+
+    The app's ledger still records it 'active' because the generator refreshes
+    status only while a field is live. The app did not remove it and cannot
+    restore it; the SDK's own B005 run guards the template field.
+    """
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "app_name", "str", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert "B005" not in _ids(findings)
+
+
+@pytest.mark.parametrize("sdk_retired", [True, False], ids=["sdk-sunset", "no-record"])
+def test_b005_inherited_sdk_sunset_is_not_this_apps_skipped_deprecation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sdk_retired: bool
+) -> None:
+    """An inherited field the SDK marks 'sunset' is the SDK's to order.
+
+    The app's ledger still says 'active' because the app's generator refuses the
+    move; the SDK's own B005 run enforced active → deprecated → sunset there.
+    Without the SDK ledger's 'sunset' record, the same state still fires.
+    """
+    from conformance.suite.checks._sdk_contract_mixins import (
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        SdkField,
+    )
+
+    monkeypatch.setitem(
+        SDK_TEMPLATE_CONTRACT_FIELDS,
+        "ExtractionInput",
+        tuple(
+            SdkField(f.name, f.canonical_type, "sunset")
+            if f.name == "credential_guid"
+            else f
+            for f in SDK_TEMPLATE_CONTRACT_FIELDS["ExtractionInput"]
+        ),
+    )
+    sdk_ledger = _make_ledger(
+        *(
+            [ContractField("ExtractionInput", "credential_guid", "str", "sunset")]
+            if sdk_retired
+            else []
+        )
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, sdk_ledger
+    )
+    assert ("B005" in _ids(findings)) is not sdk_retired
+
+
+_SDK_TASK_INPUT_APP = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts.base import Output
+from application_sdk.templates.contracts.sql_metadata import {base}
+
+class MyInput({base}):
+    mine: str = ""
+
+class MyApp(App):
+    @entrypoint
+    async def go(self, input: MyInput) -> Output:
+        return Output()
+"""
+
+
+@pytest.mark.parametrize(
+    ("base", "retired_on", "exempt"),
+    [
+        ("FetchTablesInput", "Input", True),
+        ("ExtractionTaskInput", "Input", True),
+        ("IncrementalExtractionInput", "ExtractionInput", True),
+        ("FetchTablesInput", "Output", False),
+    ],
+)
+def test_b005_sdk_retired_field_on_a_template_base_is_exempt(
+    tmp_path: Path, base: str, retired_on: str, exempt: bool
+) -> None:
+    ledger = _make_ledger(ContractField("MyInput", "gone", "str", "active"))
+    sdk_ledger = _make_ledger(ContractField(retired_on, "gone", "str", "sunset"))
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TASK_INPUT_APP.format(base=base)}, ledger, sdk_ledger
+    )
+    assert ("B005" not in _ids(findings)) is exempt
+
+
+def test_b005_sdk_retired_field_inherited_through_in_repo_base_is_exempt(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """An in-repo base between the contract and the SDK template changes nothing."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": _SDK_RETIRED_VIA_BASE},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_app_declared_field_removed_still_fires_after_sdk_retirement(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """The exemption covers only what the SDK retired, not the app's own fields."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "own_flag", "bool", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert _contract_fields_reported(findings, "B005") == {"DbtExtractInput.own_flag"}
+
+
+def test_b005_app_field_retyped_from_the_sdk_field_still_fires_after_retirement(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Same name as the field the SDK retired, but the app's own type: the app's removal."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "int", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, _sdk_retired_credential_guid
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+_NON_SDK_TEMPLATE_INPUT = _SDK_TEMPLATE_INPUT.replace(
+    "from application_sdk.templates.contracts.sql_metadata import (\n"
+    "    ExtractionInput,\n",
+    "from thirdparty.models import ExtractionInput\n"
+    "from application_sdk.templates.contracts.sql_metadata import (\n",
+)
+
+
+def test_b005_lookalike_base_from_a_non_sdk_module_is_not_exempt(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """A base named like an SDK contract but imported from elsewhere is not the SDK's."""
+    assert "from thirdparty.models import ExtractionInput" in _NON_SDK_TEMPLATE_INPUT
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"app.py": _NON_SDK_TEMPLATE_INPUT},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+def test_b005_third_party_base_is_not_resolved_through_a_same_named_repo_class(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """An in-repo ConnectorBase does not lend its SDK ancestry to a vendor's."""
+    app = _SDK_RETIRED_VIA_BASE.replace(
+        "from base import ConnectorBase", "from vendor.models import ConnectorBase"
+    )
+    assert "from vendor.models import ConnectorBase" in app
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": app},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+def test_b005_in_repo_base_field_removed_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """A field the app's own base declared is the app's change, SDK ancestor or not."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active"),
+        ContractField("DbtExtractInput", "tenant_hint", "str", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"base.py": _SDK_RETIRED_BASE, "app.py": _SDK_RETIRED_VIA_BASE},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.tenant_hint"
+    }
+
+
+def test_b005_dropping_the_sdk_base_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Leaving the retiring template is the app's own removal of its fields."""
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"app.py": _SDK_RETIRED_ON_PLAIN_INPUT},
+        ledger,
+        _sdk_retired_credential_guid,
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+def test_b005_sdk_field_gone_without_sdk_sunset_still_fires(
+    tmp_path: Path, _sdk_retired_credential_guid: ContractLedger
+) -> None:
+    """Only a retirement the SDK recorded as 'sunset' is excused."""
+    unmarked = _make_ledger(
+        ContractField("ExtractionInput", "credential_guid", "str", "active")
+    )
+    ledger = _make_ledger(
+        ContractField("DbtExtractInput", "credential_guid", "str", "active")
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _SDK_TEMPLATE_INPUT}, ledger, unmarked
+    )
+    assert _contract_fields_reported(findings, "B005") == {
+        "DbtExtractInput.credential_guid"
+    }
+
+
+_INPUT_BASED_APP = """\
+from application_sdk.app import App, entrypoint
+from application_sdk.contracts import Input, Output
+
+class ReportsInput(Input):
+    own_flag: bool = False
+
+class ReportsOutput(Output):
+    pass
+
+class MyApp(App):
+    @entrypoint
+    async def extract(self, input: ReportsInput) -> ReportsOutput:
+        pass
+"""
+
+
+@pytest.fixture
+def _sdk_retired_workflow_slug(monkeypatch: pytest.MonkeyPatch) -> ContractLedger:
+    """The SDK removed Input.workflow_slug after recording it 'sunset' (FND-3108)."""
+    from conformance.suite.checks._sdk_contract_mixins import SDK_CONTRACT_BASE_FIELDS
+
+    monkeypatch.setitem(
+        SDK_CONTRACT_BASE_FIELDS,
+        "Input",
+        tuple(
+            f for f in SDK_CONTRACT_BASE_FIELDS["Input"] if f.name != "workflow_slug"
+        ),
+    )
+    return _make_ledger(ContractField("Input", "workflow_slug", "str", "sunset"))
+
+
+def test_b005_sdk_retired_input_base_field_is_not_this_apps_break(
+    tmp_path: Path, _sdk_retired_workflow_slug: ContractLedger
+) -> None:
+    """A contract built straight on ``Input`` is covered once the SDK ledger records ``Input``."""
+    ledger = _make_ledger(
+        ContractField("ReportsInput", "workflow_slug", "str", "active"),
+        ContractField("ReportsInput", "own_flag", "bool", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _INPUT_BASED_APP}, ledger, _sdk_retired_workflow_slug
+    )
+    assert "B005" not in _ids(findings)
+
+
+def test_b005_app_field_removed_from_input_based_contract_still_fires(
+    tmp_path: Path, _sdk_retired_workflow_slug: ContractLedger
+) -> None:
+    """The ``Input`` exemption reaches only what the SDK retired on ``Input``."""
+    ledger = _make_ledger(
+        ContractField("ReportsInput", "workflow_slug", "str", "active"),
+        ContractField("ReportsInput", "dropped_flag", "bool", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path, {"app.py": _INPUT_BASED_APP}, ledger, _sdk_retired_workflow_slug
+    )
+    assert _contract_fields_reported(findings, "B005") == {"ReportsInput.dropped_flag"}
+
+
+def test_b005_input_field_gone_without_sdk_sunset_still_fires(
+    tmp_path: Path, _sdk_retired_workflow_slug: ContractLedger
+) -> None:
+    """Without the SDK's 'sunset' for ``Input``, the same removal is the app's break."""
+    ledger = _make_ledger(
+        ContractField("ReportsInput", "workflow_slug", "str", "active"),
+    )
+    findings = _scan_with_sdk_ledger(
+        tmp_path,
+        {"app.py": _INPUT_BASED_APP},
+        ledger,
+        _make_ledger(ContractField("Input", "workflow_slug", "str", "active")),
+    )
+    assert _contract_fields_reported(findings, "B005") == {"ReportsInput.workflow_slug"}
+
+
+_SDK_BASE_SOURCE = """\
+from pydantic import BaseModel
+
+class Input(BaseModel):
+    workflow_id: str = ""
+"""
+
+
+@pytest.mark.parametrize(
+    ("relpath", "expected"),
+    [
+        ("application_sdk/contracts/base.py", {"Input.workflow_id"}),
+        ("app/contracts.py", set()),
+    ],
+)
+def test_sdk_contract_bases_are_ledger_contracts_only_where_the_sdk_declares_them(
+    tmp_path: Path, relpath: str, expected: set[str]
+) -> None:
+    """The SDK's own scan guards ``Input`` like an entrypoint contract; a same-named app class is not one."""
+    src = tmp_path / relpath
+    src.parent.mkdir(parents=True)
+    src.write_text(_SDK_BASE_SOURCE, encoding="utf-8")
+    findings = scan_contract_compat(
+        [src], tmp_path, _make_ledger(), sdk_ledger=_make_ledger()
+    )
+    assert _contract_fields_reported(findings, "B006") == expected
+
+
+# ── Requiredness: no new required field, no optional becoming required ───────
+
+_EP_REQUIRED = """\
+from typing import Annotated
+from pydantic import BaseModel, Field
+from application_sdk.app import App
+
+class MyInput(BaseModel):
+    name: str = ""
+    extra: {decl}
+
+class MyApp(App):
+    async def run(self, input: MyInput) -> None:
+        pass
+"""
+
+
+def _scan_required(tmp_path: Path, decl: str, extra_row: ContractField | None) -> list:
+    rows = [ContractField("MyInput", "name", "str", "active", False)]
+    if extra_row is not None:
+        rows.append(extra_row)
+    return _scan(
+        tmp_path, {"app.py": _EP_REQUIRED.format(decl=decl)}, _make_ledger(*rows)
+    )
+
+
+def _required_findings(findings: list) -> list:
+    return [f for f in findings if f.rule_id == "B005" and "required" in f.message]
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        "str",
+        "str | None",
+        "str = Field()",
+        "str = Field(...)",
+        "str = Field(default=...)",
+        'Annotated[str, Field(description="d")]',
+    ],
+)
+def test_b005_new_required_field_on_existing_contract_fires(
+    tmp_path: Path, decl: str
+) -> None:
+    """A field with no default added to a recorded contract fails, naming it.
+
+    ``Optional`` does not help: Pydantic v2 requires any field without a
+    default.  It fires before regeneration too, beside B006, since the
+    generator records the field not-required and the finding would survive.
+    """
+    findings = _scan_required(tmp_path, decl, None)
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message
+    assert "Give it a default" in finding.message
+    assert "B006" in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        'str = ""',
+        "str | None = None",
+        'str = Field(default="")',
+        'str = Field("")',
+        "list[str] = Field(default_factory=list)",
+        'Annotated[str, Field(default="")]',
+    ],
+)
+def test_b005_new_field_with_default_on_existing_contract_passes(
+    tmp_path: Path, decl: str
+) -> None:
+    findings = _scan_required(tmp_path, decl, None)
+    assert "B005" not in _ids(findings)
+    assert "B006" in _ids(findings)
+
+
+def test_b005_optional_field_becoming_required_fires(tmp_path: Path) -> None:
+    """A ledger 'required: false' under a source with no default fails."""
+    findings = _scan_required(
+        tmp_path, "str", ContractField("MyInput", "extra", "str", "active", False)
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is required" in finding.message
+    assert "records it as not required" in finding.message
+    assert "B006" not in _ids(findings)
+
+
+@pytest.mark.parametrize(
+    ("decl", "recorded"),
+    [("str", True), ('str = ""', True), ('str = ""', False), ("str", None)],
+    ids=["still-required", "relaxed", "still-optional", "unknown-v1-ledger"],
+)
+def test_b005_requiredness_that_callers_already_meet_passes(
+    tmp_path: Path, decl: str, recorded: bool | None
+) -> None:
+    """Only not-required → required is a break; unknown is not checked."""
+    findings = _scan_required(
+        tmp_path, decl, ContractField("MyInput", "extra", "str", "active", recorded)
+    )
+    assert _ids(findings) == []
+
+
+def test_b005_new_contract_may_declare_required_fields(tmp_path: Path) -> None:
+    """A contract the ledger does not record yet has no callers to break."""
+    findings = _scan(
+        tmp_path,
+        {"app.py": _EP_REQUIRED.format(decl="str")},
+        _make_ledger(ContractField("OtherInput", "x", "str", "active", False)),
+    )
+    assert "B005" not in _ids(findings)
+    assert "B006" in _ids(findings)
+
+
+def test_b005_new_required_field_suppressible(tmp_path: Path) -> None:
+    findings = _scan_required(
+        tmp_path, "str  # conformance: ignore[B005] no deployed callers yet", None
+    )
+    assert [f.suppressed for f in _required_findings(findings)] == [True]
+
+
+_EP_REQUIRED_ALIASED = _EP_REQUIRED.replace(
+    "from pydantic import BaseModel, Field",
+    "from pydantic import BaseModel, Field as F",
+)
+
+
+@pytest.mark.parametrize(
+    ("decl", "required"),
+    [
+        ("str = F()", True),
+        ("str = F(...)", True),
+        ('Annotated[str, F(description="d")]', True),
+        ('str = F(default="")', False),
+        ('Annotated[str, F(default="")]', False),
+    ],
+)
+def test_b005_reads_field_imported_under_an_alias(
+    tmp_path: Path, decl: str, required: bool
+) -> None:
+    """``from pydantic import Field as F`` makes ``F(...)`` a ``Field`` call."""
+    findings = _scan(
+        tmp_path,
+        {"app.py": _EP_REQUIRED_ALIASED.format(decl=decl)},
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    assert len(_required_findings(findings)) == int(required)
+
+
+def test_b005_reads_field_alias_of_a_base_in_another_file(tmp_path: Path) -> None:
+    """An inherited field reads ``Field`` through its own file's alias."""
+    findings = _scan(
+        tmp_path,
+        {
+            "base.py": (
+                "from pydantic import BaseModel, Field as F\n\n"
+                "class Base(BaseModel):\n"
+                "    extra: str = F(...)\n"
+            ),
+            "app.py": (
+                "from base import Base\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Base):\n"
+                '    name: str = ""\n\n'
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            ),
+        },
+        _make_ledger(ContractField("MyInput", "name", "str", "active", False)),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message
+
+
+def test_b005_first_own_field_on_a_fieldless_input_contract_fires(
+    tmp_path: Path,
+) -> None:
+    """A contract with no fields of its own is still recorded, via ``Input``'s.
+
+    The SDK refuses an entrypoint input that does not subclass ``Input``, so a
+    recorded contract always has the inherited rows a regeneration wrote; its
+    first own field is a new field on an existing contract.
+    """
+    findings = _scan(
+        tmp_path,
+        {
+            "app.py": (
+                "from application_sdk.contracts import Input\n"
+                "from application_sdk.app import App\n\n"
+                "class MyInput(Input):\n"
+                "    extra: str\n\n"
+                "class MyApp(App):\n"
+                "    async def run(self, input: MyInput) -> None:\n"
+                "        pass\n"
+            )
+        },
+        _make_ledger(
+            *(
+                ContractField("MyInput", name, "str", "active", None)
+                for name in (
+                    "workflow_id",
+                    "correlation_id",
+                    "app_name",
+                    "workflow_slug",
+                )
+            )
+        ),
+    )
+    (finding,) = _required_findings(findings)
+    assert "'MyInput.extra' is new and required" in finding.message

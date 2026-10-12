@@ -1,80 +1,28 @@
 """Preflight scenario registration and assertions for app-owned source adapters.
 
-Load with ``pytest -p conformance.preflight_testing``. Mark real-handler tests
-with ``preflight_conformance(rule="F016", scenario="healthy", entrypoint="default")``.
-The runner checks execution coverage; these assertions check observed behavior.
-Registration alone cannot prove that a test uses the real handler.
+Load with ``pytest -p conformance.preflight_testing``, which registers the
+``preflight_conformance`` marker. Mark real-handler tests with
+``preflight_conformance(rule="F016", scenario="healthy", entrypoint="default")``
+and check the observed behaviour with ``assert_preflight_result`` (plus
+``assert_probe_lifetime`` for the lifetime scenarios).
+
+Conformance F016 reads those registrations statically: it checks the matrix
+is *defined*. Whether the tests *pass* is the test gate's measure; nothing in
+the conformance suite executes them.
 """
 
 from __future__ import annotations
 
-import json
 import math
-from contextvars import ContextVar
-from pathlib import Path
 from typing import Any
 
-import pytest
+from conformance.preflight_scenarios import SCENARIOS
 
-_ACTIVE: ContextVar[dict[str, Any] | None] = ContextVar(
-    "preflight_scenario", default=None
-)
-
-
-def _record(kind: str) -> None:
-    record = _ACTIVE.get()
-    if record is not None:
-        record.setdefault("assertions", []).append(kind)
-
-
-SCENARIOS = {
-    "F016": (
-        "healthy",
-        "mandatory_failure",
-        "advisory_failure",
-        "recoverable_transient",
-        "persistent_failure",
-        "mixed_resources",
-        "extraction_fallback",
-        "credential_entrypoint_shapes",
-        "no_probe",
-        "hung_probe",
-        "cancellation_cleanup",
-        "budget_retry",
-        "typed_safe_output",
-    ),
-    "F017": (
-        "ready_partial",
-        "not_ready",
-        "typed_handler_failures",
-        "handler_crash",
-        "awaitable_overrun",
-        "cancellation_resistant_probe",
-        "running_attempt_timeout",
-        "evidence_serialization",
-        "never_started",
-        "credential_absence_outage",
-        "credential_overrun",
-        "storage_exception_verdict",
-        "external_cancellation",
-        "old_history_replay",
-        "mode_attempt_agreement",
-    ),
-    "F018": (
-        "http_success_failure",
-        "sdr_dispatch",
-        "activity_result_block",
-        "retry_marker",
-        "plumbing_no_verdict",
-        "workflow_activity_death",
-        "message_precedence",
-        "legacy_compatibility",
-        "outcome_schema",
-        "advisory_codes_duration",
-        "log_handoff_contexts",
-        "attempt_selection",
-    ),
-}
+__all__ = [
+    "SCENARIOS",
+    "assert_preflight_result",
+    "assert_probe_lifetime",
+]
 
 
 def assert_preflight_result(
@@ -143,7 +91,6 @@ def assert_preflight_result(
         assert all(
             error.get(key) == value for key, value in fields.items()
         ), "Failure attribution differs from the source scenario"
-    _record("result")
 
 
 def assert_probe_lifetime(
@@ -155,219 +102,10 @@ def assert_probe_lifetime(
     )
     assert elapsed <= budget + tolerance, "Probe exceeded its remaining deadline"
     assert background_stopped, "Cancelled probe left background work running"
-    _record("lifetime")
-
-
-def assert_preflight_exit(
-    payload: dict[str, Any],
-    *,
-    status: str | None,
-    synthetic_secrets: tuple[str, ...] = (),
-) -> None:
-    """Validate a decoded gate exit containing status, checks, and typed error."""
-    from application_sdk.errors.wire import FailureDetails
-
-    assert payload.get("status", "missing") == status, "Exit lost its verdict state"
-    assert isinstance(payload.get("checks"), list), "Exit lost its check list"
-    if status in {None, "not_ready"}:
-        error = FailureDetails.model_validate(payload.get("error"))
-        assert error.code.strip() and error.message.strip()
-        assert (
-            error.suggested_action or ""
-        ).strip(), "Exit needs an audience-appropriate action"
-    wire = json.dumps(payload, default=str)
-    assert all(
-        secret not in wire for secret in synthetic_secrets if secret
-    ), "Synthetic secret exposed"
-    _record("exit")
-
-
-def assert_extraction_scheduled(
-    history: Any,
-    activity_name: str,
-    *,
-    expected: int,
-    gate_activity_name: str,
-    expected_terminal: str,
-    expected_failure_type: str | None = None,
-) -> None:
-    """Inspect a Temporal WorkflowHistory, not a mocked execute_activity call."""
-    from temporalio.client import WorkflowHistory
-
-    assert isinstance(
-        history, WorkflowHistory
-    ), "Provide fetched Temporal WorkflowHistory"
-    assert history.events, "Empty history is not workflow execution evidence"
-    count = sum(
-        event.HasField("activity_task_scheduled_event_attributes")
-        and event.activity_task_scheduled_event_attributes.activity_type.name
-        == activity_name
-        for event in history.events
-    )
-    assert count == expected, "Extraction scheduling count violates gate contract"
-    assert any(
-        event.HasField("activity_task_scheduled_event_attributes")
-        and event.activity_task_scheduled_event_attributes.activity_type.name
-        == gate_activity_name
-        for event in history.events
-    ), "History does not contain the preflight gate"
-    assert expected_terminal in {"failed", "completed", "canceled"}
-    field = f"workflow_execution_{expected_terminal}_event_attributes"
-    terminal = [event for event in history.events if event.HasField(field)]
-    assert len(terminal) == 1, "Workflow terminal outcome differs from the scenario"
-    if expected_terminal == "failed":
-        assert expected_failure_type, "Specify the expected typed workflow failure"
-        failure = terminal[0].workflow_execution_failed_event_attributes.failure
-        types = set()
-        while True:
-            if failure.HasField("application_failure_info"):
-                types.add(failure.application_failure_info.type)
-            if not failure.HasField("cause"):
-                break
-            failure = failure.cause
-        assert expected_failure_type in types, "Workflow failed for an unrelated reason"
-    _record("history")
-
-
-def pytest_addoption(parser: Any) -> None:
-    parser.addoption("--preflight-report")
-    # No default: "unset" and "scoped to these rules" are different requests,
-    # and a default string cannot express the first. Unset means "record every
-    # marked scenario and deselect nothing", which is what lets an ordinary
-    # test run produce a report as a by-product. The suite's own subprocess
-    # always passes this explicitly.
-    parser.addoption("--preflight-rules", default=None)
-
-
-#: Set by ``pytest_configure``. ``pytest_collectreport``'s hookspec passes
-#: only the report, which carries no route back to the config, and this is a
-#: module plugin with no instance to hang state on — so the config is stashed
-#: here. One session per process, so there is nothing to collide with.
-_CONFIG: Any = None
 
 
 def pytest_configure(config: Any) -> None:
-    global _CONFIG
     config.addinivalue_line(
         "markers",
-        "preflight_conformance(rule, scenario, entrypoint): executable preflight scenario",
+        "preflight_conformance(rule, scenario, entrypoint): registered F016 preflight scenario",
     )
-    config._preflight_evidence = {"tests": {}, "collection_errors": 0}
-    _CONFIG = config
-
-
-def pytest_collectreport(report: Any) -> None:
-    """Count collection failures, so the readers' guard on them is real.
-
-    ``collection_errors`` was initialised to 0 and never incremented, which
-    made it a field that reads like a safety check in both
-    ``_behavior._execute`` and ``_behavior._load`` while proving nothing.
-    ``_execute`` was covered anyway by its subprocess's return code, and
-    ``_load`` now checks ``exitstatus`` — but neither catches a run under
-    ``--continue-on-collection-errors``, where pytest reports the failed
-    collection and still exits 1. A module that failed to import is not a
-    matrix that ran.
-    """
-    if _CONFIG is None or report.outcome != "failed":
-        return
-    evidence = getattr(_CONFIG, "_preflight_evidence", None)
-    if isinstance(evidence, dict):
-        evidence["collection_errors"] = evidence.get("collection_errors", 0) + 1
-
-
-def _register(config: Any, item: Any, data: dict[str, Any]) -> None:
-    """Record one marked scenario so the report can grade it later."""
-    config._preflight_evidence["tests"][item.nodeid] = {
-        "rule": data.get("rule"),
-        "scenario": data.get("scenario"),
-        "entrypoint": data.get("entrypoint", "default"),
-        "unsupported": bool(data.get("unsupported")),
-        "reason": bool(str(data.get("reason", "")).strip()),
-        "file": item.location[0],
-        "line": item.location[1] + 1,
-        "phases": {},
-    }
-
-
-def pytest_collection_modifyitems(config: Any, items: list[Any]) -> None:
-    """Register the marked scenarios; deselect the rest only when scoped.
-
-    Two callers, two needs. The suite's bounded subprocess passes
-    ``--preflight-rules`` and wants nothing but those scenarios, so the
-    rest is deselected — running an app's whole test suite inside a
-    conformance check would be indefensible.
-
-    An ordinary test run passes no rule scoping. It wants every test it
-    collected to still run, and the report as a by-product, so the
-    scenarios execute exactly once and serve both the coverage run and
-    the conformance verdict. Deselecting there would silently gut the
-    caller's test job, which is why "unset" cannot be a default string.
-    """
-    if not config.getoption("--preflight-report"):
-        return
-    rules = config.getoption("--preflight-rules")
-    scoping = rules is not None
-    selected = set(rules.split(",")) if scoping else set(SCENARIOS)
-    kept: list[Any] = []
-    removed: list[Any] = []
-    for item in items:
-        marker = item.get_closest_marker("preflight_conformance")
-        if marker is not None and marker.kwargs.get("rule") in selected:
-            _register(config, item, dict(marker.kwargs))
-            kept.append(item)
-        elif scoping:
-            removed.append(item)
-        else:
-            kept.append(item)
-    if not scoping:
-        return
-    items[:] = kept
-    config.hook.pytest_deselected(items=removed)
-
-
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_call(item: Any):
-    record = item.config._preflight_evidence["tests"].get(item.nodeid)
-    token = _ACTIVE.set(record)
-    try:
-        return (yield)
-    finally:
-        _ACTIVE.reset(token)
-
-
-@pytest.hookimpl(wrapper=True)
-def pytest_runtest_makereport(item: Any, call: Any):
-    report = yield
-    record = item.config._preflight_evidence["tests"].get(item.nodeid)
-    if record is not None:
-        required = {
-            {"F016": "result", "F017": "history", "F018": "exit"}[record["rule"]]
-        }
-        if record["rule"] == "F016" and record["scenario"] in {
-            "hung_probe",
-            "cancellation_cleanup",
-            "budget_retry",
-        }:
-            required.add("lifetime")
-        if (
-            report.when == "call"
-            and report.outcome == "passed"
-            and not required <= set(record.get("assertions", []))
-        ):
-            report.outcome = "failed"
-            report.longrepr = (
-                "Scenario did not execute the required preflight contract assertion"
-            )
-        record["phases"][report.when] = report.outcome
-        record["xfail"] = bool(getattr(report, "wasxfail", False)) or record.get(
-            "xfail", False
-        )
-    return report
-
-
-def pytest_sessionfinish(session: Any, exitstatus: int) -> None:
-    path = session.config.getoption("--preflight-report")
-    if path:
-        data = session.config._preflight_evidence
-        data["exitstatus"] = int(exitstatus)
-        Path(path).write_text(json.dumps(data), encoding="utf-8")

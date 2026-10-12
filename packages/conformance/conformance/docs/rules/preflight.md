@@ -5,7 +5,7 @@
 
 # Preflight-Gate Rules (F-series)
 
-**21 rules** · Checker: `suite.checks.preflight` (F001–F015, F019–F020: cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests) and the opt-in `--with-tests` scenario runner (F016–F018: registered pytest scenarios executed in a bounded subprocess via `conformance.preflight_testing`)
+**19 rules** · Checker: `suite.checks.preflight` (cross-file AST over the preflight handler, its helpers and the entrypoint contracts; F015 also reads deployment manifests, and F016 reads the scenario registrations under `tests/unit/`). No rule executes tests: F016 checks the scenario matrix is defined, and the test gate checks it passes.
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -21,6 +21,7 @@ When a domain series takes over an area, the rule is retired in place (kept docu
 no longer firing) and the new rule gets a fresh id — the original id is never reused or
 reassigned. F001–F005 were published as P032–P035 and P047 and moved to this series in
 PR #3710 before any fleet suppression referenced them; the vacated P-ids are retired and
+never reused. F017–F018 were retired in 0.39.0 and deleted in 0.40.0; their ids are
 never reused.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
@@ -40,12 +41,10 @@ never reused.
 | [F013](#f013) | `PreflightCancellationCleanup` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F014](#f014) | `PreflightFailureExposure` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F015](#f015) | `PreflightRemovedGateContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F016](#f016) | `PreflightBehaviorContract` | `block` | `app` | `preflight-gate` | — | 0.27.0 |
-| [F017](#f017) | `PreflightWorkflowEnforcement` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
-| [F018](#f018) | `PreflightExitEvidence` | `block` | `sdk` | `preflight-gate` | — | 0.27.0 |
+| [F016](#f016) | `PreflightBehaviorContract` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F019](#f019) | `PreflightAnalysisCoverage` | `warn` | `app` | `preflight-gate` | — | 0.27.0 |
 | [F020](#f020) | `RetiredPreflightSuppression` | `warn` | `app` | `preflight-gate` | — | 0.32.0 |
-| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.39.0 |
+| [F021](#f021) | `PreflightFixedLeafInBroadExcept` | `warn` | `app` | `preflight-gate` | — | 0.47.0 |
 
 ---
 
@@ -69,6 +68,7 @@ a name collision no test exercises and no build gate sees.
   `preflight_check` method. No @task in the three reference apps registers the activity
   name 'preflight'; that name belongs to the SDK gate, and registering it shadows the
   gate itself.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 The SDK reserves the activity name `{app_name}:preflight` for the injected preflight
 gate and registers it unconditionally on the worker. An app `@task` whose effective
@@ -100,6 +100,7 @@ app-owned activity is redundant — the exact anti-pattern the SDK-native gate e
 - **Compliant example:** atlan-metabase-app app/handler.py — `preflight_check` is the single implementation and
   app/connector.py declares no preflight-named @task beside it. Two implementations
   drift, and only one of them is the one the gate actually runs.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 When an app declares a `Handler.preflight_check` and also registers its own
 preflight-named `@task` (any `@task` whose effective name contains `preflight` as a
@@ -134,6 +135,7 @@ impact: failed workflows lose actionable typed failure details.
   (app/failures.py) is an AuthError subclass that declares message and suggested_action
   as class defaults. A `passed=False` with no typed error gives the customer a red row
   and no reason for it.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 A `PreflightCheck` with proven or default `passed=False` and no typed `error=` (absent,
 or the literal `None`) is an untyped failure: the gate falls back to the generic
@@ -171,6 +173,7 @@ only guard.
   `cfg.get("spec_url")`), so there is no metadata read for the gate path to drop. A
   metadata key the entrypoint's Input contract does not carry is one the orchestrator
   has no way to send, so the check silently evaluates an absent value.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 The preflight gate does not forward the live UI form: it rebuilds
 `PreflightInput.metadata` from the extraction input's `model_dump()`
@@ -214,6 +217,7 @@ wrong level and a duplicate record.
   instead. The comment there states why: the gate levels the verdict row itself, and a
   handler-authored WARNING is both a duplicate and invisible under the customer's
   default ERROR filter.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 - **Interacts with:** Meets E004 on a broad catch inside the gate's reach. A best-effort cleanup helper called
   from preflight_check (close a client, release a session) that catches Exception cannot
   log at WARNING (this rule), and DEBUG does not clear E004 even through a redaction
@@ -255,6 +259,7 @@ both UI and workflow consumers.
   PreflightInput) -> PreflightOutput`, both types imported from
   application_sdk.handler.contracts. The gate and the setup UI both read the result
   through those types, so a legacy dict return drifts from both at once.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Declare SDK PreflightInput and PreflightOutput on every supported handler.
 
@@ -279,8 +284,19 @@ usable next step.
   suggested_action='Set spec_url to the OpenAPI spec's HTTPS URL
   ...').to_failure_details()`, so the blocked customer reads a next step, not only a
   reason.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
-Provide nonblank failure messages and audience-appropriate suggested actions.
+Every error that reaches a failed preflight check carries a nonblank `message` and
+`suggested_action`.  The SDK's generic leaves (for example `RateLimitedError`,
+`SourceUnavailableError`, `DependencyUnavailableError`, `InternalError`) ship no default
+action, so the app supplies it — as a class default on its own subclass or at the
+construction site.
+
+Write the action for the error's `audience` (ADR 0013): customer-facing text the
+customer can act on for `USER`; an engineer-facing remediation for the connector owners
+for `APP_OWNER`; an operator hint for platform on-call for `PLATFORM`.  The finding
+message names the resolved class and its audience.  Some surfaces forward the action
+without filtering by audience, so keep internal file paths and exception text out of it.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f007).
@@ -291,19 +307,34 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Return expected typed preflight failures rather than letting them escape.
+> Return verdicts for source states; raise only retryable, non-deprecated transients.
 
-**Rationale:** The target origin-based gate applies hard mode to handler raises; a raised transient is
-no longer a fail-open request.
+**Rationale:** The gate classifies by who raised: anything the handler raises is its statement about
+the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf is reported as an
+unverifiable source and never blocks; any other raised failure loses the check row a
+returned verdict carries, and a raised fail-open category is a deprecated request the
+gate no longer honours as plumbing.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-mysql-app app/handler.py — the advisory `connectivity` check catches the probe
-  failure and returns it on the failed row, a blip as the retryable leaf from
-  `transient_failure(e)`, so the verdict stays READY and nothing it expects escapes
-  preflight_check, where the origin-based gate would block on it.
+- **Compliant example:** atlan-mysql-app app/handler.py — the auth probe returns a NOT_READY verdict carrying the
+  typed error for a definitive source state, and raises only the retryable
+  SOURCE_UNAVAILABLE leaf `transient_failure` classifies for a server blip (`raise
+  transient from e`). Its tests/unit/test_preflight_conformance.py
+  `recoverable_transient` scenario asserts the raise, and a clean READY from a later run
+  against the recovered source.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
-Return expected typed preflight failures rather than letting them escape.
+An expected failure of the source — bad credentials, a missing grant, an absent object —
+is a verdict: return it as a failed PreflightCheck carrying the typed error. The one
+thing a handler may raise is a transient — the source could not be asked this time — as
+a retryable leaf whose category is SOURCE_UNAVAILABLE or TIMEOUT. The gate records that
+raise as an unverifiable source (a NOT_READY output and a would_block row classified
+source_unverifiable), never blocks a hard run on either category, and the run proceeds;
+it does not ask the handler again. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED,
+RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the gate deprecated
+that idiom. A raise whose category or retryability the checker cannot read from the
+error class (or a literal `retryable=`) stays flagged.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f008).
@@ -326,6 +357,7 @@ failed checks.
   (`checks=[auth_check]`), and READY carries the passed `auth` row plus the advisory
   connectivity row, which may fail without flipping the status. Status and rows are
   spelled together, so they cannot contradict each other.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep READY, PARTIAL and NOT_READY consistent with check outcomes.
 
@@ -350,6 +382,7 @@ while the gate sees different inputs.
   path the gate's input (the selected entrypoint plus resolved credentials) is the only
   PreflightInput the handler receives. None of the three reference apps builds a
   PreflightInput inside an @entrypoint.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Preserve the selected entrypoint and supply routable credentials before the gate.
 
@@ -373,6 +406,16 @@ activities.
   `OpenAPIApiClient(timeout=...)`, an async client constructed with a deadline sized
   from `input.timeout_seconds`; no synchronous driver call runs on the event loop and no
   executor wait is left without a deadline.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
+- **Interacts with:** Applied together with P031. P031 moves asyncio.to_thread / run_in_executor(None, ...)
+  onto the SDK's run_in_thread; on a preflight path that is the module-level
+  application_sdk.execution.heartbeat.run_in_thread, because Handler has no
+  run_in_thread and App.run_in_thread raises outside a @task. run_in_thread carries no
+  deadline of its own, so the swapped call is still an executor wait in F011's view. On
+  a preflight path, add the deadline when moving: wrap the run_in_thread await in
+  asyncio.wait_for(..., timeout=...) or async with asyncio.timeout(...) sized from the
+  remaining preflight budget. Swapping without the deadline leaves F011 firing on the
+  new line.
 
 Keep source probes awaitable and bounded across every connection phase.
 
@@ -398,6 +441,7 @@ timeout races.
   gate hands in (no deadline when the gate supplies none). No floor or margin is added
   on top of `input.timeout_seconds`, so the probe gives up before the gate cancels it;
   that timeout argument is the site F012 grades.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep probe and retry deadlines inside the remaining gate budget.
 
@@ -420,6 +464,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   under `asyncio.wait_for`) closes its SQLClient in a `finally: await client.close()`,
   so cleanup is awaited and runs on every exit path, including the typed-failure early
   return.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Release owned preflight resources without blocking the event loop.
 
@@ -443,6 +488,7 @@ can escape.
   `str(exc)` or a traceback, so the redacted and capped `cause_repr` is all that leaves
   the handler; tests/unit/test_handler.py pins that a presigned URL's signature does not
   reach the check row.
+- **Migrate with:** the `adopt-preflight-gate` skill (`skills-dir`)
 
 Keep raw exception and credential values out of preflight outputs and logs.
 
@@ -471,6 +517,7 @@ BLOCK.
   aliases that warn and are removed in v3.40.0, so an import of one is working code on a
   deadline rather than an incompatibility. Correct looks like the posture declared on
   App.preflight_gate_mode and the replacement each deprecation notice names.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Migrate the inert mode override and the renamed gate-classification helpers.
 
@@ -481,12 +528,13 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F016 — `PreflightBehaviorContract` {#f016}
 
-**Tier:** `block` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
 
-> Execute registered real-handler scenarios for each applicable entrypoint.
+> Define every required real-handler preflight scenario for each entrypoint.
 
 **Rationale:** Customer impact: Static shape checks cannot prove verdict semantics, probe coverage,
-recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.
+recovery, or resource lifetime, so each scenario must exist as a test the test gate
+runs. A missing scenario is a behaviour nothing verifies.
 
 ### What correct looks like
 
@@ -494,45 +542,27 @@ recovery, or resource lifetime. Missing and skipped scenarios are incomplete evi
   (healthy, mandatory_failure, recoverable_transient, hung_probe, cancellation_cleanup
   and the rest) is a test that drives the real `OpenAPIConnectorHandler.preflight_check`
   and is registered with `@pytest.mark.preflight_conformance(rule="F016",
-  scenario=...)`. The marker, not the file's presence, is what a `--with-tests` run
-  counts as coverage.
+  scenario=...)`. The marker, not the file's presence, is what counts as a defined
+  scenario. atlan-metabase-app registers the same matrix once per `@entrypoint` through
+  a module-level `entrypoint_matrix(scenario)` parametrize helper.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
-Execute registered real-handler scenarios for each applicable entrypoint.
+Every scenario in the F016 matrix must be defined, for each `@entrypoint` the app
+declares, as a pytest-collected test under `tests/unit/` (the tier the test gate always
+runs) marked `preflight_conformance(rule="F016", scenario=..., entrypoint=...)` that
+calls `assert_preflight_result` from `conformance.preflight_testing` (and
+`assert_probe_lifetime` for hung_probe, cancellation_cleanup and budget_retry) as a
+statement of the test body or of a top-level loop over a non-empty literal. The reader
+accepts the shapes the reference apps use and reports anything else rather than
+modelling it. A registration on a test that does not run (skip, a true skipif or xfail
+condition, no runnable parametrized case), a declared-unsupported one, a case whose
+entrypoint argument differs from its marker, and one outside the accepted shapes do not
+define the scenario. This rule checks the matrix is defined; whether the tests pass is
+the test gate's measure, and conformance never executes them. WARN while the fleet
+registers its scenarios; promoted to BLOCK once it has.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f016).
-
----
-
-## F017 — `PreflightWorkflowEnforcement` {#f017}
-
-**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
-
-> Verify gate enforcement through real Temporal workflow histories.
-
-**Rationale:** Customer impact: Only execution history can prove extraction was never scheduled after a
-hard gate failure, including activity death.
-
-Verify gate enforcement through real Temporal workflow histories.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f017).
-
----
-
-## F018 — `PreflightExitEvidence` {#f018}
-
-**Tier:** `block` · **Scope:** `sdk` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.27.0
-
-> Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
-
-**Rationale:** Customer impact: Activity and workflow failures must preserve cause and status, and
-logging must not silently discard the evidence.
-
-Verify typed verdicts, outcome fields and safe evidence handoff on every exit.
-
-[Investigation, remediation and verification
-guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f018).
 
 ---
 
@@ -551,17 +581,19 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
   (`_check_connectivity`), never an accumulator, so static analysis resolves every row
   and its mandatory/advisory role. The comment above the NOT_READY return cites F019 as
   the reason.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 Report unresolved preflight dispatch and contracts instead of a clean result. Two kinds
 of gap are reported, and only one of them is clearable by executing tests. A
 *value-level* gap — a computed aggregation or an unresolvable row inside one, an
 expanded failure constructor, an unresolved error expression, a dynamic `passed` — names
-a property F016 asserts on every executed scenario, so a `--with-tests` run whose F016
-matrix is complete and passing drops it. A *structural* gap — an unparsed file, a
-preflight_check the analysis never resolved, a dynamically bound callback, an input
-contract class that is not in the registry — stands regardless of how many scenarios
-pass, because execution does not tell the analysis what it failed to read; clear those
-by making the code statically resolvable.
+a property every F016 scenario asserts through `assert_preflight_result`, so it is
+dropped once the F016 matrix is fully defined; the test gate proves those assertions
+hold. A *structural* gap — an unparsed file, a preflight_check the analysis never
+resolved, a dynamically bound callback, an input contract class that is not in the
+registry — stands regardless of how many scenarios are defined, because a test does not
+tell the analysis what it failed to read; clear those by making the code statically
+resolvable.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f019).
@@ -572,7 +604,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.32.0
 
-> A conformance suppression cites a retired preflight id (P032-P035, P047).
+> A conformance suppression cites a retired preflight id (P032-P035, P047, F017, F018).
 
 **Rationale:** Customer impact: a reviewed, justified carve-out silently turns into an unexplained
 finding on the next conformance run, and the developer has no signal that the stale
@@ -583,12 +615,14 @@ directive is the cause.
 - **Compliant example:** atlan-metabase-app app/qualified_names.py — its inline conformance directives name a
   live rule id (P028) and carry a written justification. A directive that cited P034 now
   cites F003 the same way, justification kept; the id is the only part that changes.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 The preflight rules moved from the P-series to the F-series: P032-P035 became F001-F004
-and P047 became F005. The suppression parser matches ids as plain strings, so a `#
-conformance: ignore[...]` directive that still cites a retired id suppresses nothing and
-the renamed rule fires with no hint why. Cite the new id named in the message, keeping
-the justification, or delete the directive if the finding it covered is gone.
+and P047 became F005. F017 and F018 were retired with no replacement. The suppression
+parser matches ids as plain strings, so a `# conformance: ignore[...]` directive that
+still cites a retired id suppresses nothing and the renamed rule fires with no hint why.
+Cite the new id named in the message, keeping the justification, or delete the directive
+if the finding it covered is gone or its rule was retired.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f020).
@@ -597,7 +631,7 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 
 ## F021 — `PreflightFixedLeafInBroadExcept` {#f021}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.39.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `preflight-gate` · **Autofixable:** — · **Since:** 0.47.0
 
 > Classify a broadly caught preflight failure before naming it an auth or permission problem.
 
@@ -611,6 +645,7 @@ never the problem.
   `(InvalidInputError, AuthError)` first and returns that typed error, and only its
   trailing `except Exception` builds a leaf, `MetabaseSourceUnavailableError`, so a
   failure it cannot name is never reported as a credential or grant problem.
+- **Migrate with:** [`docs/preflight-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md)
 
 A broad `except` in `preflight_check` or a helper it calls directly raises, or puts in a
 `PreflightCheck` / `PreflightOutput` `error=`, an `AuthError` or

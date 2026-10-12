@@ -20,15 +20,20 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 
-from application_sdk.common.incremental.models import EntityType, TableScope
+from application_sdk.common.incremental.models import EntityType, TableScope, TableState
 from application_sdk.common.incremental.storage.duckdb_utils import (
     DuckDBConnection,
     escape_sql_string,
+    fetch_count,
+    fetch_str_set,
     get_parent_table_qn_expr,
     json_scan,
     managed_duckdb_connection,
 )
-from application_sdk.common.incremental.storage.rocksdb_utils import close_states_db
+from application_sdk.common.incremental.storage.rocksdb_utils import (
+    ProbeableStatesStore,
+    close_states_db,
+)
 from application_sdk.constants import INCREMENTAL_DEFAULT_STATE
 from application_sdk.observability.logger_adaptor import get_logger
 
@@ -40,13 +45,16 @@ logger = get_logger(__name__)
 # =============================================================================
 
 
-def add_table_to_scope(scope: TableScope, qualified_name: str, state: str) -> None:
+def add_table_to_scope(
+    scope: TableScope, qualified_name: str, state: TableState | str
+) -> None:
     """Add a table to the scope with its incremental state.
 
     Args:
         scope: TableScope instance to modify
         qualified_name: Table qualified name
-        state: Incremental state (CREATED, UPDATED, NO CHANGE)
+        state: Incremental state (a :class:`TableState`, or its wire string
+            as read from the transformed JSON)
     """
     scope.table_qualified_names.add(qualified_name)
     scope.table_states[qualified_name] = state
@@ -65,10 +73,12 @@ def get_table_state(scope: TableScope, qualified_name: str) -> str | None:
         Incremental state or None if not found
     """
     # Fast path for missing keys (if RocksDB supports it)
-    if hasattr(scope.table_states, "key_may_exist"):
-        if not scope.table_states.key_may_exist(qualified_name):
-            return None
-    return scope.table_states.get(qualified_name)
+    states = scope.table_states
+    if isinstance(states, ProbeableStatesStore) and not states.key_may_exist(
+        qualified_name
+    ):
+        return None
+    return states.get(qualified_name)
 
 
 def get_scope_length(scope: TableScope) -> int:
@@ -168,7 +178,10 @@ def get_current_table_scope(
             ).fetchall()
 
             for qn, state in result:
-                add_table_to_scope(scope, qn, state)
+                # Both columns are non-NULL here: NULL names were deleted
+                # above and the state is COALESCEd.
+                if isinstance(qn, str) and isinstance(state, str):
+                    add_table_to_scope(scope, qn, state)
 
             # ------------------------------------------------------------------
             # Step 3: Cache state counts for efficient access
@@ -179,15 +192,19 @@ def get_current_table_scope(
                 GROUP BY incremental_state
             """).fetchall()
 
-            state_map = {state: cnt for state, cnt in state_counts}
+            state_map = {
+                state: cnt
+                for state, cnt in state_counts
+                if isinstance(state, str) and isinstance(cnt, int)
+            }
             scope.state_counts = state_map
 
             logger.info(
                 "Table scope loaded: %d tables (CREATED=%d, UPDATED=%d, NO CHANGE=%d)",
                 get_scope_length(scope),
-                state_map.get("CREATED", 0),
-                state_map.get("UPDATED", 0),
-                state_map.get("NO CHANGE", 0),
+                state_map.get(TableState.CREATED, 0),
+                state_map.get(TableState.UPDATED, 0),
+                state_map.get(TableState.NO_CHANGE, 0),
             )
 
     # conformance: ignore[E004] cleanup-and-rethrow handler; exception preserved in TableScopeLoadError cause chain
@@ -230,22 +247,21 @@ def get_table_qns_from_columns(
             json_scan_sql = json_scan(json_files)
             table_qn_expr = get_parent_table_qn_expr()
 
-            result = active_conn.execute(f"""
+            tables = fetch_str_set(
+                active_conn.execute(f"""
                 SELECT DISTINCT {table_qn_expr} AS table_qn
                 FROM {json_scan_sql}
                 WHERE {table_qn_expr} IS NOT NULL
-            """).fetchall()
-
-            tables = {row[0] for row in result}
+            """)
+            )
 
             if tables:
                 logger.info("Found %d tables with columns", len(tables))
                 return tables
 
-            total_rows = active_conn.execute(
-                f"SELECT COUNT(*) FROM {json_scan_sql}"
-            ).fetchone()
-            row_count = total_rows[0] if total_rows else 0
+            row_count = fetch_count(
+                active_conn.execute(f"SELECT COUNT(*) FROM {json_scan_sql}")
+            )
             logger.warning(
                 "No valid tableQualifiedName/viewQualifiedName found. "
                 "Column dir: %s, files: %d, rows: %d",

@@ -183,6 +183,39 @@ class ExtractionInput(Input):
             ),
         }
 
+    # Declared *before* ``_normalize_ae_payload`` so it runs *after* it (same
+    # reverse-order rule as ``_normalize_agent_json`` above): the nested
+    # ``metadata["exclude-table-regex"]`` shape is lifted to the flat
+    # ``exclude_table_regex`` key by that validator first, so routing only ever
+    # has to read the flat key.
+    @model_validator(mode="before")
+    @classmethod
+    def _route_exclude_table_regex(cls, data: Any) -> Any:
+        """Route the connector form's ``exclude_table_regex`` into ``temp_table_regex``.
+
+        The contract toolkit emits the "Exclude regex for tables & views" form
+        field as ``exclude-table-regex`` → workflow arg ``exclude_table_regex``;
+        the SDK has always called the same filter ``temp_table_regex`` and only
+        ever reads that name when rendering the ``{temp_table_regex_sql}``
+        fragment. Copying the value across *before* field validation means it
+        goes through ``temp_table_regex``'s pattern, legacy-CSV and
+        SQL-injection validators exactly as a directly supplied value would.
+
+        An explicitly supplied, non-empty ``temp_table_regex`` wins. ``None``
+        (a null form value) is treated as unset rather than failing the
+        ``str`` field — before this field was declared, the key was dropped as
+        unknown and a null never reached validation.
+        """
+        if not isinstance(data, dict) or "exclude_table_regex" not in data:
+            return data
+        value = data["exclude_table_regex"]
+        if value is None:
+            data = {**data, "exclude_table_regex": ""}
+            return data
+        if value and not data.get("temp_table_regex"):
+            data = {**data, "temp_table_regex": value}
+        return data
+
     @model_validator(mode="before")
     @classmethod
     def _normalize_ae_payload(cls, data: Any) -> Any:
@@ -266,7 +299,21 @@ class ExtractionInput(Input):
     """
 
     temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
-    """Regex pattern identifying temporary tables."""
+    """Regex pattern for table/view names to exclude from extraction.
+
+    Substituted into the app's ``extract_temp_table_regex_table_sql`` fragment
+    (``{exclude_table_regex}``) and injected as ``{temp_table_regex_sql}``.
+    Also populated from :attr:`exclude_table_regex` when this is unset."""
+
+    exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)] = ""
+    """Form-key name of :attr:`temp_table_regex` (FND-2733).
+
+    The contract toolkit emits the "Exclude regex for tables & views" form
+    field as the workflow arg ``exclude_table_regex``. A non-empty value is
+    copied into ``temp_table_regex`` before validation (an explicit
+    ``temp_table_regex`` wins), so it passes the same pattern, legacy-CSV and
+    SQL-injection validators. Read ``temp_table_regex``, not this field, when
+    rendering SQL."""
 
     source_tag_prefix: str = ""
     """Tag prefix for source-level metadata."""
@@ -278,7 +325,7 @@ class ExtractionInput(Input):
             return v
         return _coerce_filter_value(v)
 
-    @field_validator("temp_table_regex", mode="before")
+    @field_validator("temp_table_regex", "exclude_table_regex", mode="before")
     @classmethod
     def _normalize_temp_table_legacy(cls, v: Any) -> Any:
         # Translate the pre-v3 quoted-CSV shape (``'"A","B"'``) to a
@@ -292,7 +339,11 @@ class ExtractionInput(Input):
     def _validate_no_sql_injection(cls, v: FilterMap | str) -> FilterMap | str:
         return _validate_filter_no_sql_injection(v)
 
-    @field_validator("temp_table_regex", mode="after")
+    # Also bound to ``exclude_table_regex`` so a connector subclass that
+    # redeclares it as a plain ``str`` (every toolkit-generated
+    # ``AppInputContract`` does today) still gets the injection check —
+    # Pydantic applies inherited field validators by field name.
+    @field_validator("temp_table_regex", "exclude_table_regex", mode="after")
     @classmethod
     def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
         validate_filter_no_sql_injection(v)

@@ -815,7 +815,7 @@ def test_a_fired_label_guard_does_not_resurrect_the_stripped_label(monkeypatch):
     """Bailing must happen before the label reconcile, not after it.
 
     `sdk-review-approved` is what every invalidator strips and what
-    sdk_review_reconcile.py's cron gates on. Re-adding it on the way to
+    review_approval_reconcile.py's cron gates on. Re-adding it on the way to
     declining the approval would leave the PR wearing a label with nothing
     behind it, and the next reconciler tick would read that as a lost stamp and
     approve a verdict a human had deliberately cleared.

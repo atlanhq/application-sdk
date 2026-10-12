@@ -24,6 +24,7 @@ from application_sdk.common.sql_filters import (
     normalize_legacy_filter_value,
     prepare_filters,
     prepare_query,
+    strip_sql_block_comments,
     validate_filter_no_sql_injection,
 )
 
@@ -307,3 +308,74 @@ class TestRawEntryPointLegacyNormalisation:
                 "SELECT name FROM information_schema.databases",
             )
         assert "SQL-unsafe sequence" not in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# FND-2733: the toolkit's ``exclude-table-regex`` form key on the raw-dict path,
+# and fragment comments that would nest inside a template's header comment.
+# ---------------------------------------------------------------------------
+
+_DOCUMENTED_FRAGMENT = (
+    "/*\n * Parameters:\n *   {exclude_table_regex} - pattern\n */\n"
+    "AND name !~ '{exclude_table_regex}'"
+)
+
+
+class TestExcludeTableRegexRawPath:
+    @pytest.mark.parametrize("key", ["exclude-table-regex", "exclude_table_regex"])
+    def test_prepare_query_reads_form_key(self, key: str) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {key: "^tmp_"}},
+            temp_table_regex_sql="AND name !~ '{exclude_table_regex}'",
+        )
+        assert result is not None
+        assert "AND name !~ '^tmp_'" in result
+
+    def test_prepare_query_temp_table_regex_wins(self) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {
+                "metadata": {
+                    "temp-table-regex": "^explicit$",
+                    "exclude-table-regex": "^form$",
+                }
+            },
+            temp_table_regex_sql="AND name !~ '{exclude_table_regex}'",
+        )
+        assert result is not None
+        assert "'^explicit$'" in result
+        assert "^form$" not in result
+
+    def test_prepare_query_form_key_injection_rejected(self) -> None:
+        with pytest.raises(ValueError, match="SQL-unsafe sequence"):
+            prepare_query(
+                "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+                {"metadata": {"exclude-table-regex": "x' OR '1'='1"}},
+                temp_table_regex_sql="AND name !~ '{exclude_table_regex}'",
+            )
+
+    def test_prepare_query_strips_fragment_comments(self) -> None:
+        result = prepare_query(
+            "SELECT 1 WHERE 1=1 {temp_table_regex_sql}",
+            {"metadata": {"exclude-table-regex": "^tmp_"}},
+            temp_table_regex_sql=_DOCUMENTED_FRAGMENT,
+        )
+        assert result is not None
+        assert "/*" not in result
+        assert "AND name !~ '^tmp_'" in result
+
+
+class TestStripSqlBlockComments:
+    def test_removes_header_block_and_trims(self) -> None:
+        assert (
+            strip_sql_block_comments(_DOCUMENTED_FRAGMENT)
+            == "AND name !~ '{exclude_table_regex}'"
+        )
+
+    def test_removes_every_block(self) -> None:
+        assert strip_sql_block_comments("/* a */ AND x /* b */ = 1") == "AND x  = 1"
+
+    def test_fragment_without_comments_unchanged(self) -> None:
+        fragment = "AND T.TABLE_NAME NOT REGEXP '{exclude_table_regex}'"
+        assert strip_sql_block_comments(fragment) == fragment

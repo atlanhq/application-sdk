@@ -331,6 +331,11 @@
           "minimum": 0.0,
           "title": "Durationsec",
           "type": "number"
+        },
+        "jobFailed": {
+          "default": false,
+          "title": "Jobfailed",
+          "type": "boolean"
         }
       },
       "title": "TierTestCounts",

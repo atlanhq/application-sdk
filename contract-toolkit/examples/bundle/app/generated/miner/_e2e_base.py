@@ -6,7 +6,7 @@ from application_sdk.testing.e2e import SQLAppE2ETest
 class MinerGeneratedE2EBase(SQLAppE2ETest):
     connector_short_name = "bundle"
     argo_package_name = "@atlan/miner"
-    argo_template_name = "atlan-miner"
+    argo_template_name = "atlan-query-miner"
     app_service_url = "http://bundle.bundle-app.svc.cluster.local"
     connection_type = "snowflake"
     connection_category = "database"

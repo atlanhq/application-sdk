@@ -634,3 +634,46 @@ def test_export_contract_at_accepts_a_multi_root_archive(tmp_path, monkeypatch):
         subprocess.run(["git", *args], cwd=src2, check=True, capture_output=True)
     monkeypatch.chdir(src2)
     assert mod.export_contract_at("HEAD", "contract", tmp_path / "dest2") is False
+
+
+@pytest.mark.parametrize(
+    ("on_path", "expected_prefix"),
+    [
+        pytest.param({"uvx", "ruff"}, ["uvx", "ruff"], id="uvx-preferred"),
+        pytest.param({"ruff"}, ["ruff"], id="ruff-only-fallback"),
+        pytest.param(set(), None, id="neither-skips"),
+    ],
+)
+def test_format_generated_python_resolves_ruff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    on_path: set[str],
+    expected_prefix: list[str] | None,
+) -> None:
+    """``format_generated_python`` prefers ``uvx ruff``, falls back to ``ruff``
+    on PATH, and skips only when neither exists. The ruff-only branch is what
+    keeps a Renovate sync formatting on a runner without uv; before the shared
+    helper that path called ``uvx`` unconditionally and crashed."""
+    gen = tmp_path / "app" / "generated"
+    gen.mkdir(parents=True)
+    (gen / "_input.py").write_text("import os\n")
+    monkeypatch.setattr(
+        mod.shutil,
+        "which",
+        lambda name: f"/usr/bin/{name}" if name in on_path else None,
+    )
+    calls: list[list[str]] = []
+
+    formatted = mod.format_generated_python(calls.append, tmp_path)
+
+    if expected_prefix is None:
+        assert formatted is False
+        assert calls == []
+        return
+    assert formatted is True
+    n = len(expected_prefix)
+    assert [cmd[:n] for cmd in calls] == [expected_prefix, expected_prefix]
+    assert [cmd[n] for cmd in calls] == ["check", "format"]
+    for cmd in calls:
+        assert "--force-exclude" in cmd
+        assert cmd[-1] == str(gen / "_input.py")

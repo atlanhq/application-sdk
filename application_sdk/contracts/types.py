@@ -8,6 +8,7 @@ Key types:
 - ConnectionRef: Typed replacement for connection: dict[str, Any]
 - MaxItems: Constraint marker for bounded collections
 - BoundedList/BoundedDict: Type aliases with size bounds
+- TreeSelection: Bounded, arbitrary-depth tree-widget selection (nested dicts)
 - Lazy: Marker for a FileReference field the interceptor must not auto-download
 - AssetArtifact: Marker for a FileReference field whose declaration is a typed model
 """
@@ -29,6 +30,7 @@ from pydantic import (
     model_serializer,
 )
 from pydantic.alias_generators import to_camel
+from typing_extensions import TypeAliasType
 
 from application_sdk.common._listing import safe_list_directory
 from application_sdk.contracts.types_errors import RunPrefixRequiredError
@@ -399,6 +401,30 @@ BoundedList = Annotated[list[T], MaxItems]
 BoundedDict = Annotated[dict[K, V], MaxItems]
 """Bounded dict type. Use: Annotated[dict[K, V], MaxItems(N)]"""
 
+TreeSelection = TypeAliasType(
+    "TreeSelection", Annotated[dict[str, "TreeSelection"], MaxItems(1000)]
+)
+"""A selection from a tree widget, in the nested shape the widget emits.
+
+Each key is a selected node and its value is the selection beneath it. An empty
+dict means the node with nothing chosen beneath it, which apps conventionally read
+as "this node and its whole subtree"::
+
+    {"SAP": {"MM": {"MM-SRV": {}}, "FI": {}}}
+
+The value stays a plain nested ``dict`` in the app and on the wire, so it is the
+same value an untyped ``dict[str, Any]`` field received, and configs stored in
+that shape validate unchanged. Unlike ``dict[str, Any]`` it is payload-safe: every
+level is bounded (1000 children per node) and every leaf must be a dict, so a
+non-tree value is a validation error instead of an arbitrary payload.
+
+Like every ``MaxItems`` bound, the limit is a design-time declaration that the
+payload-safety check reads; it is not enforced when a payload is validated.
+
+Use it for arbitrary-depth tree selections. For flat database/schema filters use
+``FilterMap`` (``application_sdk.templates.contracts``).
+"""
+
 
 class FileReference(BaseModel, frozen=True):
     """Reference to externally-stored data (for large payloads).
@@ -499,6 +525,47 @@ class GitReference(BaseModel, frozen=True):
     tag: str = ""
     commit: str = ""
     credential: CredentialRef | None = None
+
+
+CONNECTION_QN_MIN_SEGMENTS = 3
+"""Segments in the shortest addressable connection QN: ``default/<connector>/<id>``."""
+
+
+def connection_qualified_name_defect(qualified_name: str) -> str | None:
+    """Why *qualified_name* cannot address a Connection, or ``None`` when it can.
+
+    The one definition of a well-formed connection qualified name; every reader
+    that rejects one (the preflight gate, the incremental marker path, the seed
+    harness) routes through here so they cannot disagree. Well-formed means at
+    least :data:`CONNECTION_QN_MIN_SEGMENTS` ``/``-separated segments, each
+    non-empty and unpadded. pyatlan's ``get_connector_name`` and
+    atlan-publish-app both refuse anything shorter, and an empty or padded
+    segment composes asset QNs no ref will ever match.
+
+    The last segment is not required to be a numeric epoch: connections
+    provisioned programmatically carry names there and crawl normally.
+
+    Args:
+        qualified_name: The candidate connection qualified name.
+
+    Returns:
+        A short reason fit for an error message (it does not repeat the value),
+        or ``None`` when the name is well-formed.
+    """
+    if not qualified_name.strip():
+        return "it is empty"
+    segments = qualified_name.split("/")
+    if len(segments) < CONNECTION_QN_MIN_SEGMENTS:
+        return (
+            f"it has {len(segments)} segment(s), not the "
+            f"{CONNECTION_QN_MIN_SEGMENTS} of 'default/<connector>/<id>'"
+        )
+    for position, segment in enumerate(segments, start=1):
+        if not segment:
+            return f"segment {position} is empty"
+        if segment != segment.strip():
+            return f"segment {position} is padded with whitespace"
+    return None
 
 
 class ConnectionAttributes(BaseModel, frozen=True):
@@ -641,6 +708,27 @@ class ConnectionRef(BaseModel, frozen=True):
         populate_by_name=True,
         serialize_by_alias=True,
     )
+
+    @property
+    def is_unidentifiable(self) -> bool:
+        """Whether this names a Connection but its qualified name cannot address it.
+
+        The absent-key half of the identity rule on :class:`ConnectionAttributes`:
+        an explicit ``null`` is rejected at validation, but an absent key falls
+        through to ``""``. A present but malformed name is the same failure — see
+        :func:`connection_qualified_name_defect`. Empty ``attributes`` is not this
+        case — it is the default of an input with no connection widget, a
+        workflow naming no connection at all. Exposed as a predicate rather than
+        a validator because a raise while Temporal deserializes the workflow
+        input is a task failure that retries forever; the preflight gate turns
+        it into a terminal one.
+        """
+        attrs = self.attributes
+        populated = bool(attrs.model_fields_set or attrs.model_extra)
+        return (
+            populated
+            and connection_qualified_name_defect(attrs.qualified_name) is not None
+        )
 
     @staticmethod
     def from_connection(conn: Any) -> ConnectionRef:

@@ -5,7 +5,11 @@ from __future__ import annotations
 import ast
 from collections import deque
 
-from .._ast_common._sanitizers import call_uses_sanitizer
+from .._ast_common._sanitizers import (
+    call_logs_raw_exception,
+    call_uses_sanitizer,
+    is_sanitizer_call,
+)
 from ._base import _MixinBase
 from ._constants import LOG_METHODS_WITH_TRACEBACK
 from ._helpers import has_exc_info_true, is_logger_call
@@ -42,6 +46,368 @@ def _walk_no_scope(node: ast.AST):
             queue.extend(ast.iter_child_nodes(child))
 
 
+def _target_names(target: ast.expr) -> set[str]:
+    """Return simple local names bound by an assignment target."""
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, ast.Starred):
+        return _target_names(target.value)
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return {name for element in target.elts for name in _target_names(element)}
+    return set()
+
+
+def _simple_local_assignment(
+    statement: ast.stmt,
+) -> tuple[str, ast.expr | None] | None:
+    """Return a single local name/value assignment, if *statement* has one."""
+    if (
+        isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+    ):
+        return statement.targets[0].id, statement.value
+    if isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name):
+        return statement.target.id, statement.value
+    return None
+
+
+def _assigned_local_names(statement: ast.stmt) -> set[str]:
+    """Return local names rebound by a simple assignment statement."""
+    if isinstance(statement, ast.Assign):
+        targets = statement.targets
+    elif isinstance(statement, (ast.AnnAssign, ast.AugAssign)):
+        targets = [statement.target]
+    elif isinstance(statement, ast.Delete):
+        targets = statement.targets
+    else:
+        return set()
+    return {name for target in targets for name in _target_names(target)}
+
+
+def _walrus_targets(node: ast.AST) -> set[str]:
+    """Return names bound by ``:=`` anywhere in *node* (same scope only)."""
+    return {
+        name
+        for child in [node, *_walk_no_scope(node)]
+        if isinstance(child, ast.NamedExpr)
+        for name in _target_names(child.target)
+    }
+
+
+def _sanitized_locals_before(
+    handler: ast.ExceptHandler,
+    call: ast.Call,
+) -> set[str]:
+    """Find direct local values in *handler* known sanitized before *call*.
+
+    Only straight-line, single-name assignments whose value *is* a sanitizer
+    call (or an alias of a sanitized local) establish a fact.  Rebinding —
+    including a ``:=`` anywhere in a statement — invalidates it, and a compound statement or nested log position makes the
+    order/path ambiguous, so existing facts are dropped rather than guessed.
+    """
+    sanitized: set[str] = set()
+    for statement in handler.body:
+        if isinstance(statement, ast.Expr) and statement.value is call:
+            break
+        if any(child is call for child in _walk_no_scope(statement)):
+            # The call is nested in a branch/expression; its reaching assignment
+            # cannot be established by this straight-line analysis.
+            sanitized.clear()
+            break
+
+        # A walrus binds before the enclosing assignment's own target, so drop
+        # its targets first; the assignment below may then re-establish one.
+        sanitized.difference_update(_walrus_targets(statement))
+
+        assignment = _simple_local_assignment(statement)
+        if assignment is not None:
+            name, value = assignment
+            if (value is not None and is_sanitizer_call(value)) or (
+                isinstance(value, ast.Name) and value.id in sanitized
+            ):
+                sanitized.add(name)
+            else:
+                sanitized.discard(name)
+            continue
+
+        if isinstance(
+            statement, (ast.Assign, ast.AnnAssign, ast.AugAssign, ast.Delete)
+        ):
+            sanitized.difference_update(_assigned_local_names(statement))
+            continue
+
+        if isinstance(statement, ast.Import):
+            imported = {
+                alias.asname or alias.name.split(".")[0] for alias in statement.names
+            }
+            sanitized.difference_update(imported)
+        elif isinstance(statement, ast.ImportFrom):
+            imported = {alias.asname or alias.name for alias in statement.names}
+            sanitized.difference_update(imported)
+        elif isinstance(
+            statement,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.Try,
+                ast.With,
+                ast.AsyncWith,
+                ast.Match,
+            ),
+        ):
+            # Branches and loops can rebind locals conditionally; don't carry a
+            # sanitized fact across a shape this narrow analysis cannot prove.
+            sanitized.clear()
+        elif isinstance(
+            statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            sanitized.discard(statement.name)
+    return sanitized
+
+
+def _call_uses_sanitized_local(call: ast.Call, names: set[str]) -> bool:
+    """True if one of *call*'s arguments reads a tracked sanitized local.
+
+    Only loads count, and a name the call itself rebinds with ``:=`` is no
+    longer the sanitized value: ``logger.error("%s", (tb := raw))`` logs raw.
+    """
+    args = [*call.args, *[kw.value for kw in call.keywords]]
+    live = names - {name for arg in args for name in _walrus_targets(arg)}
+    if not live:
+        return False
+    return any(
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id in live
+        for arg in args
+        for node in ast.walk(arg)
+    )
+
+
+def _call_target_leaf(call: ast.Call) -> str | None:
+    """Return a simple call target's name or attribute leaf."""
+    if isinstance(call.func, ast.Name):
+        return call.func.id
+    if isinstance(call.func, ast.Attribute):
+        return call.func.attr
+    return None
+
+
+def _is_exception_name(node: ast.expr | None, name: str) -> bool:
+    return (
+        isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == name
+    )
+
+
+def _helper_traces_exception(helper: ast.Call, name: str) -> bool:
+    """Whether *helper*'s exception argument is the bare caught exception.
+
+    Only the argument that names the exception counts, so
+    ``safe_traceback(other, max_len=len(str(caught)))`` traces ``other``
+    even though it also reads ``caught``.  ``format_exception`` also accepts
+    the legacy ``(etype, value, tb)`` form and the ``value=`` keyword.
+    """
+    if helper.args and _is_exception_name(helper.args[0], name):
+        return True
+    if _call_target_leaf(helper) != "format_exception":
+        return False
+    if len(helper.args) >= 2 and _is_exception_name(helper.args[1], name):
+        return True
+    return any(
+        kw.arg == "value" and _is_exception_name(kw.value, name)
+        for kw in helper.keywords
+    )
+
+
+def _is_sanitized_traceback_call(node: ast.AST, exception_name: str) -> bool:
+    """True if *node* is a redaction helper producing this exception's trace."""
+    if not isinstance(node, ast.Call):
+        return False
+    target = _call_target_leaf(node)
+    if target is not None and "safe_traceback" in target.lower():
+        return _helper_traces_exception(node, exception_name)
+    if not is_sanitizer_call(node):
+        return False
+    helper_args = [*node.args, *[kw.value for kw in node.keywords]]
+    if any(
+        isinstance(inner, (ast.IfExp, ast.BoolOp, ast.NamedExpr))
+        for helper_arg in helper_args
+        for inner in ast.walk(helper_arg)
+    ):
+        return False
+    return any(
+        isinstance(formatted, ast.Call)
+        and _call_target_leaf(formatted) == "format_exception"
+        and _helper_traces_exception(formatted, exception_name)
+        for formatted in ast.walk(node)
+    )
+
+
+def _logs_sanitized_traceback(
+    call: ast.Call, exception_name: str, trace_locals: set[str]
+) -> bool:
+    """True if a log argument carries this exception's redacted stack trace.
+
+    The trace may be built inline (``safe_traceback(e)``) or read from a local
+    in *trace_locals* that was assigned such a trace earlier in the handler.
+    """
+    if any(
+        _is_sanitized_traceback_call(node, exception_name)
+        for arg in [*call.args, *[kw.value for kw in call.keywords]]
+        for node in ast.walk(arg)
+    ):
+        return True
+    return _call_uses_sanitized_local(call, trace_locals)
+
+
+def _statement_rebinds_name(statement: ast.stmt, name: str) -> bool:
+    """Whether *statement* may replace a handler's caught-exception local."""
+    for node in _walk_no_scope(statement):
+        if (
+            isinstance(node, ast.Name)
+            and node.id == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+        ):
+            return True
+        if isinstance(node, ast.ExceptHandler) and node.name == name:
+            return True
+        if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+            return True
+        if isinstance(node, ast.MatchMapping) and node.rest == name:
+            return True
+        if isinstance(node, ast.Import) and any(
+            (alias.asname or alias.name.split(".")[0]) == name for alias in node.names
+        ):
+            return True
+        if isinstance(node, ast.ImportFrom) and any(
+            (alias.asname or alias.name) == name for alias in node.names
+        ):
+            return True
+    return False
+
+
+def _source_position(node: ast.AST) -> tuple[int, int] | None:
+    line = getattr(node, "lineno", None)
+    column = getattr(node, "col_offset", None)
+    if isinstance(line, int) and isinstance(column, int):
+        return line, column
+    return None
+
+
+# Python's level order; a later call may only rely on a prior trace that is
+# emitted whenever the later call is (an ERROR outlives a WARNING filter).
+_LOG_METHOD_LEVELS: dict[str, int] = {"warning": 30, "error": 40}
+
+
+def _sanitized_trace_assignment(
+    statement: ast.stmt, exception_name: str, trace_locals: set[str]
+) -> str | None:
+    """Return the local a straight-line statement binds to this handler's trace."""
+    assignment = _simple_local_assignment(statement)
+    if assignment is None:
+        return None
+    name, value = assignment
+    if isinstance(value, ast.Await):
+        value = value.value
+    if value is None or _walrus_targets(statement):
+        return None
+    if _is_sanitized_traceback_call(value, exception_name):
+        return name
+    if isinstance(value, ast.Name) and value.id in trace_locals:
+        return name
+    return None
+
+
+def _handler_logged_sanitized_traceback_before(
+    handler: ast.ExceptHandler,
+    call: ast.Call,
+    logging_module_names: set[str],
+) -> bool:
+    """Whether an earlier top-level log at this call's level or above logged the trace.
+
+    Only a straight-line log of the same caught exception's sanitized traceback
+    establishes the fact, either inline or through a local assigned from it
+    earlier in the handler.  A cause-only sanitizer, another exception, a
+    branch, a nested handler, or a lower-level prior log (a WARNING filtered
+    out beneath an emitted ERROR) cannot prove that this traceback was recorded.
+    """
+    exception_name = handler.name
+    call_position = _source_position(call)
+    if (
+        exception_name is None
+        or call_position is None
+        or not isinstance(call.func, ast.Attribute)
+    ):
+        return False
+    call_level = _LOG_METHOD_LEVELS.get(call.func.attr)
+    if call_level is None:
+        return False
+
+    trace_locals: set[str] = set()
+    for statement in handler.body:
+        statement_position = _source_position(statement)
+        if statement_position is None:
+            continue
+        if statement_position >= call_position:
+            break
+
+        if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Call):
+            prior_call = statement.value
+            if (
+                is_logger_call(prior_call, logging_module_names)
+                and isinstance(prior_call.func, ast.Attribute)
+                and _LOG_METHOD_LEVELS.get(prior_call.func.attr, 0) >= call_level
+                and not call_logs_raw_exception(prior_call, handler)
+                and _logs_sanitized_traceback(prior_call, exception_name, trace_locals)
+            ):
+                return True
+
+        if _statement_rebinds_name(statement, exception_name):
+            # Later logs may no longer refer to the caught exception.
+            return False
+
+        trace_name = _sanitized_trace_assignment(
+            statement, exception_name, trace_locals
+        )
+        if trace_name is not None:
+            trace_locals.add(trace_name)
+            continue
+        if isinstance(
+            statement,
+            (
+                ast.If,
+                ast.For,
+                ast.AsyncFor,
+                ast.While,
+                ast.Try,
+                ast.With,
+                ast.AsyncWith,
+                ast.Match,
+            ),
+        ):
+            # Conditional rebinding cannot be ruled out; drop tracked traces.
+            trace_locals.clear()
+            continue
+        trace_locals.difference_update(
+            node.id
+            for node in _walk_no_scope(statement)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del))
+        )
+        trace_locals.difference_update(_walrus_targets(statement))
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            trace_locals.discard(statement.name)
+        if isinstance(statement, (ast.Import, ast.ImportFrom)):
+            trace_locals.difference_update(
+                alias.asname or alias.name.split(".")[0] for alias in statement.names
+            )
+    return False
+
+
 class TracebackMixin(_MixinBase):
     """Rule method for L004 (missing-traceback category)."""
 
@@ -55,9 +421,12 @@ class TracebackMixin(_MixinBase):
         ``logger.exception()`` (which implicitly sets exc_info), any call
         that already carries ``exc_info=True``, and calls whose arguments flow
         through a recognised redaction helper (``redact*``/``sanitiz*``/
-        ``safe_traceback``/…) — those mark a deliberate no-traceback boundary
-        where ``exc_info`` would bypass the redaction and can leak credentials
-        (see _ast_common/_sanitizers.py).
+        ``safe_traceback``/…), including a local value assigned from such a
+        helper earlier in the handler.  Those mark a deliberate no-traceback
+        boundary where ``exc_info`` would bypass the redaction and can leak
+        credentials (see _ast_common/_sanitizers.py).  Once a warning/error call
+        has logged this same handler's sanitized traceback, later calls that do
+        not expose the raw exception do not need to repeat the trace.
         """
         for node in _walk_no_scope(handler):
             if not isinstance(node, ast.Call):
@@ -74,9 +443,22 @@ class TracebackMixin(_MixinBase):
                 continue
             if has_exc_info_true(node, handler.name):
                 continue
-            if call_uses_sanitizer(node):
+            if call_uses_sanitizer(node, handler=handler) or (
+                not call_logs_raw_exception(node, handler)
+                and _call_uses_sanitized_local(
+                    node, _sanitized_locals_before(handler, node)
+                )
+            ):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
+                continue
+            if not call_logs_raw_exception(
+                node, handler
+            ) and _handler_logged_sanitized_traceback_before(
+                handler, node, self._logging_module_names
+            ):
+                # The same redacted traceback is already in the stream; don't
+                # repeat it on a later status log in this handler.
                 continue
             self._add(
                 "L004",

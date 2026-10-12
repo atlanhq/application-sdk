@@ -47,11 +47,14 @@ Design constraints worth preserving if you edit this file:
 
 from __future__ import annotations
 
+import ast
+import collections
 import functools
+import re
 import typing
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Final, Iterator
+from typing import Final, Iterator, Sequence
 
 import msgspec
 import orjson
@@ -61,8 +64,13 @@ from pyatlan_v9.model.transform import from_atlas_json
 
 from application_sdk.common.spillable_dict import SpillableDict
 from application_sdk.constants import ASSET_VALIDATION_MAX_ITEMS_PER_AXIS
+from application_sdk.contracts.types import (
+    CONNECTION_QN_MIN_SEGMENTS,
+    connection_qualified_name_defect,
+)
 from application_sdk.observability.logger_adaptor import (
     ASSET_VALIDATION_MATRIX_KEY,
+    ASSET_VALIDATION_SUMMARY_KEY,
     get_logger,
 )
 from application_sdk.validation.artifacts import (
@@ -98,6 +106,10 @@ class AssetValidationFailure:
     deserialize_error: bool = False
     """True when the record could not be decoded at all (counted in
     ``undeserializable``), as opposed to a decoded asset that failed ``.validate()``."""
+    decode_reason: str = ""
+    """Value-free class of a decode failure — ``malformed_json``,
+    ``schema_mismatch:<path>`` or the exception class name. Empty unless
+    ``deserialize_error``."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +139,13 @@ class ReferentialFailure:
     """The relationship attribute the reference came through (e.g. ``table``)."""
 
 
+REFERENTIAL_CHECK_RAN: Final = "ran"
+REFERENTIAL_CHECK_NOT_REQUESTED: Final = "not_requested"
+REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE: Final = "skipped_unavailable"
+#: A report not produced by the walk (e.g. built by hand) cannot say.
+REFERENTIAL_CHECK_UNKNOWN: Final = "unknown"
+
+
 @dataclass
 class AssetValidationReport:
     """Aggregate outcome of validating a batch of transformed assets."""
@@ -141,6 +160,10 @@ class AssetValidationReport:
     """Per-asset validation failures (includes deserialize failures)."""
     orphans: list[ReferentialFailure] = field(default_factory=list)
     """Referential-integrity failures from the second pass."""
+    referential_check: str = REFERENTIAL_CHECK_UNKNOWN
+    """Whether the orphan pass ran: ``ran``, ``not_requested`` (the caller turned
+    it off, e.g. an incomplete fan-in batch) or ``skipped_unavailable`` (no spill
+    store). Zero orphans means "none found" only when this is ``ran``."""
 
     @property
     def ok(self) -> bool:
@@ -294,6 +317,113 @@ def _iter_relationship_refs(asset: Asset) -> Iterator[tuple[str, str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# Connection scoping of qualifiedNames (FND-3523)
+# ---------------------------------------------------------------------------
+#
+# Every connection-scoped Atlas qualifiedName starts ``default/<connector>/<id>``.
+# A connector that builds one without that prefix — or points at a same-connection
+# parent it never emits — gets ``ATLAS-404-00-00A`` from publish, on every run, until
+# the connector is fixed. pyatlan's per-type patterns catch neither: most types have
+# no pattern, and the ones that do check segment counts, not the prefix.
+
+
+def _is_connection_scoped(qualified_name: str) -> bool:
+    """True when ``qualified_name`` is a connection, or sits under one.
+
+    Its first three segments must form a well-formed connection qualifiedName by
+    :func:`~application_sdk.contracts.types.connection_qualified_name_defect` — the
+    one definition every reader shares. That rule accepts a non-numeric ``<id>``
+    (programmatically provisioned connections carry names there), so this must too:
+    a stricter local pattern would fail references those connections publish fine.
+    """
+    head = qualified_name.split("/", CONNECTION_QN_MIN_SEGMENTS)
+    connection = "/".join(head[:CONNECTION_QN_MIN_SEGMENTS])
+    return connection_qualified_name_defect(connection) is None
+
+
+_UNSCOPED_TYPE_NAMES: Final = frozenset(
+    {
+        "AtlasGlossary",
+        "AtlasGlossaryCategory",
+        "AtlasGlossaryTerm",
+        "AuthPolicy",
+        "Badge",
+        "DataDomain",
+        "DataProduct",
+        "Link",
+        "Persona",
+        "Purpose",
+        "Readme",
+        "Stakeholder",
+        "StakeholderTitle",
+    }
+)
+"""Types whose qualifiedName is not under a connection, so a reference to one is
+exempt from the prefix check. An allowlist on purpose: a new exception is added
+here when it turns up, rather than inferred from the type model."""
+
+_CONNECTION_PREFIX_EXAMPLE: Final = "default/<connector>/<id>/"
+
+
+def _connection_prefix_errors(
+    qualified_name: str,
+    connection_qualified_name: str,
+    type_name: str,
+    refs: Sequence[tuple[str, str, str]],
+) -> list[str]:
+    """Messages for qualifiedNames that do not carry their connection prefix.
+
+    * The asset's own ``qualifiedName`` must start ``connectionQualifiedName + "/"``.
+      Only checked when the record states its connection — a record without one
+      (a relationship-only update, a glossary term) has nothing to compare against.
+    * Every reference qualifiedName must be well-formed and connection-scoped. It
+      may point at another connection (cross-connection lineage); only the shape is
+      checked here. References carrying no qualifiedName (guid- or ARS-identity
+      references) never reach this — :func:`_iter_relationship_refs` skips them.
+
+    Reference failures are reported once per relationship field, with a count, so an
+    asset carrying thousands of malformed list entries yields one message per field.
+    """
+    errors: list[str] = []
+    if (
+        connection_qualified_name
+        and qualified_name
+        and type_name != "Connection"
+        and not qualified_name.startswith(connection_qualified_name + "/")
+    ):
+        errors.append(
+            f"qualified_name '{qualified_name}' lacks its connection prefix "
+            f"'{connection_qualified_name}/'"
+        )
+    bad_refs: dict[str, list[str]] = {}
+    for rel_name, target_tn, target_qn in refs:
+        if target_tn in _UNSCOPED_TYPE_NAMES or _is_connection_scoped(target_qn):
+            continue
+        bad_refs.setdefault(rel_name, []).append(target_qn)
+    for rel_name, target_qns in bad_refs.items():
+        more = f" (and {len(target_qns) - 1} more)" if len(target_qns) > 1 else ""
+        errors.append(
+            f"{rel_name} reference '{target_qns[0]}' lacks its connection prefix "
+            f"'{_CONNECTION_PREFIX_EXAMPLE}'{more}"
+        )
+    return errors
+
+
+def _is_same_connection(target_qn: str, connection_qualified_name: str) -> bool:
+    """True when the referential pass must find ``target_qn`` in the batch.
+
+    A reference under the referrer's own connection points at something this run
+    should have emitted. Anything else — cross-connection lineage, the connection
+    itself, an unscoped type such as a glossary term — exists outside this output,
+    so its absence here is not an orphan. A referrer that states no connection keeps
+    the original behaviour: every reference is checked.
+    """
+    if not connection_qualified_name:
+        return True
+    return target_qn.startswith(connection_qualified_name + "/")
+
+
+# ---------------------------------------------------------------------------
 # Deserialization
 # ---------------------------------------------------------------------------
 
@@ -331,6 +461,44 @@ def _deserialize(raw: bytes) -> Asset:
     return from_atlas_json(raw)
 
 
+class _TypeNameProbe(msgspec.Struct):
+    """Reads only ``typeName`` — every other key is skipped, not decoded."""
+
+    typeName: str = ""
+
+
+_TYPE_NAME_PROBE = msgspec.json.Decoder(_TypeNameProbe)
+_VALIDATION_ERROR_PATH = re.compile(r" - at `\$([^`]*)`\Z")
+_PATH_INDEX = re.compile(r"\[\d+\]")
+
+
+def _probe_type_name(raw: bytes) -> str:
+    """Best-effort ``typeName`` of a record the full decode rejected, so a decode
+    failure still attributes to an asset type. ``""`` when even that is unreadable."""
+    try:
+        return _TYPE_NAME_PROBE.decode(raw).typeName
+    except (msgspec.DecodeError, msgspec.ValidationError):
+        return ""  # conformance: ignore[E007] the full decode failure is already recorded; "" is the documented "type unknown" value
+
+
+def _decode_reason(exc: BaseException) -> str:
+    """Classify a decode failure without its record values.
+
+    msgspec's ``ValidationError`` names the offending path (``... - at
+    `$.columnCount```); list indexes collapse to ``[]`` so the key is per field,
+    not per element.
+    """
+    if isinstance(exc, msgspec.ValidationError):
+        match = _VALIDATION_ERROR_PATH.search(str(exc))
+        if match is None:
+            return "schema_mismatch"
+        path = _PATH_INDEX.sub("[]", match.group(1)).lstrip(".")
+        return f"schema_mismatch:{path}" if path else "schema_mismatch"
+    if isinstance(exc, msgspec.DecodeError):
+        return "malformed_json"
+    return type(exc).__name__
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -357,7 +525,7 @@ def validate_asset(asset: Asset, *, for_creation: bool = True) -> list[str]:
 
 
 def validate_transformed_dir(
-    path: str | Path,
+    path: str | Path | Sequence[str | Path],
     *,
     for_creation: bool = True,
     check_referential_integrity: bool = True,
@@ -374,8 +542,26 @@ def validate_transformed_dir(
     from the data, not a hard-coded list. **Every line is always scanned** — the
     report reflects the full batch, not a sample.
 
+    Two connection-scoping checks ride the same walk (FND-3523), because a miss on
+    either fails publish with ``ATLAS-404-00-00A``:
+
+    * **Prefix** (per-asset, always on): an asset's own ``qualifiedName`` must start
+      with its ``connectionQualifiedName + "/"``, and every reference qualifiedName
+      must be well-formed ``default/<connector>/<id>/...`` — it may name another
+      connection. A miss is an ``invalid`` failure with a ``connection_prefix:<field>``
+      rule key.
+    * **Same-connection references exist**: the orphan pass only checks references
+      under the referrer's own connection. Cross-connection lineage and unscoped
+      targets (glossary terms, the connection itself) live outside this output and
+      are not orphans. Run it on a full extract: an incremental run that skips
+      unchanged parents will report them.
+
     Args:
-        path: A transformed-output directory (e.g. ``.../transformed``) or file.
+        path: A transformed-output directory (e.g. ``.../transformed``) or file,
+            or a sequence of them read as one batch — the declared parts of a
+            fanned-in hand-off. The referential pass spans the whole batch, so
+            a parent emitted by one part satisfies a child in another
+            (FND-3414).
         for_creation: Passed through to each asset's ``.validate()``.
         check_referential_integrity: Run the referential second pass.
 
@@ -391,9 +577,9 @@ def validate_transformed_dir(
             present = SpillableDict()
             referenced = SpillableDict()
         except ImportError:
-            # rocksdict is an optional (``[storage]``) dependency and its absence
-            # is benign — no traceback needed. We fall back to per-asset
-            # validation only; the warning below (outside the except so the
+            # rocksdict is a core dependency (FND-3414), so this is reachable
+            # only in an environment that removed it by hand. Fall back to
+            # per-asset validation; the warning below (outside the except so the
             # ImportError stack isn't logged) tells the caller the orphan pass
             # was skipped.
             referential = False
@@ -411,6 +597,12 @@ def validate_transformed_dir(
                 referenced.close()
                 referenced = None
             raise
+    if referential:
+        report.referential_check = REFERENTIAL_CHECK_RAN
+    elif check_referential_integrity:
+        report.referential_check = REFERENTIAL_CHECK_SKIPPED_UNAVAILABLE
+    else:
+        report.referential_check = REFERENTIAL_CHECK_NOT_REQUESTED
     if check_referential_integrity and not referential:
         logger.warning(
             "rocksdict unavailable — skipping referential-integrity (orphan) "
@@ -428,18 +620,26 @@ def validate_transformed_dir(
                     AssetValidationFailure(
                         file=file_path,
                         line=line_no,
-                        type_name="",
+                        type_name=_probe_type_name(raw),
                         qualified_name="",
                         errors=[f"could not deserialize as an Atlan asset: {exc}"],
                         deserialize_error=True,
+                        decode_reason=_decode_reason(exc),
                     )
                 )
                 continue
 
             type_name = _usable_str(getattr(asset, "type_name", None)) or ""
             qualified_name = _usable_str(getattr(asset, "qualified_name", None)) or ""
+            connection_qn = (
+                _usable_str(getattr(asset, "connection_qualified_name", None)) or ""
+            )
+            refs = tuple(_iter_relationship_refs(asset))
 
             errors = validate_asset(asset, for_creation=for_creation)
+            errors += _connection_prefix_errors(
+                qualified_name, connection_qn, type_name, refs
+            )
             if errors:
                 report.failures.append(
                     AssetValidationFailure(
@@ -459,7 +659,9 @@ def validate_transformed_dir(
                 # Record every relationship target, deduped by target key: keep a
                 # representative referencing asset and count the references so a
                 # single missing parent is reported once, not once per child.
-                for rel_name, target_tn, target_qn in _iter_relationship_refs(asset):
+                for rel_name, target_tn, target_qn in refs:
+                    if not _is_same_connection(target_qn, connection_qn):
+                        continue
                     target_key = _compound_key(target_tn, target_qn)
                     existing = referenced.get(target_key)
                     if existing is None:
@@ -624,7 +826,7 @@ def _as_reference_failure(orphan: ReferentialFailure) -> ArtifactValidationFailu
 
 
 def validate_assets_as_artifact(
-    path: str | Path,
+    path: str | Path | Sequence[str | Path],
     declaration: ModelDeclaration | None = None,
     *,
     for_creation: bool = True,
@@ -640,7 +842,9 @@ def validate_assets_as_artifact(
     without standing up the wrapper.
 
     Args:
-        path: A transformed-output directory (e.g. ``.../transformed``) or file.
+        path: A transformed-output directory (e.g. ``.../transformed``) or file,
+            or a sequence of them read as one batch (see
+            :func:`validate_transformed_dir`).
         declaration: The resolved model declaration. Accepted for the
             :class:`~application_sdk.validation.protocols.FormatValidator` shape and
             for the model check; ``None`` skips that check, for a direct caller with
@@ -705,6 +909,9 @@ def validate_assets_as_artifact(
 # the matrix, same caps. ``tests/unit/validation/test_asset_event.py`` pins all of
 # it against a golden payload precisely so a later refactor cannot quietly reword a
 # string a dashboard matches on.
+#
+# FND-3495 added one attribute, ``asset_validation_summary`` — additive only; every
+# pre-existing key and value is untouched.
 
 ASSET_VALIDATION_MATRIX_ERROR_MAXLEN: Final = 300
 """Per-row error message cap (chars). pyatlan_v9 ``.validate()`` messages can be
@@ -758,11 +965,174 @@ def asset_validation_matrix_json(
     return orjson.dumps(rows).decode()
 
 
+ASSET_VALIDATION_SUMMARY_MAX_ROWS: Final = 100
+"""Row cap for the ``asset_validation_summary`` attribute. Rows are distinct
+``(kind, type_name, detail)`` keys, which the schema bounds (types x checks), so a
+real batch sits far below this; the cap only guards a pathological one. Dropped
+rows fold into one trailing ``kind="truncated"`` row so the counts still add up."""
+
+# pyatlan_v9's generated ``.validate()`` collects every message and raises one
+# ``ValueError(f"{Type} validation failed: {errors}")`` — so ``str(exc)`` is the
+# repr of a list. Every generated validator uses exactly four message shapes:
+# "<field> is required", "<field> is required for creation",
+# "one of <a>, <b> is required for creation" and
+# "<field> '<value>' does not match expected pattern: <regex>". The rule key keeps
+# only the check and the field name, never ``<value>``, so the summary carries no
+# record data and stays low-cardinality.
+_VALIDATE_BUNDLE = re.compile(r"^\w+ validation failed: (\[.*\])\Z", re.DOTALL)
+_REQUIRED = re.compile(r"^(\w+) is required( for creation)?\Z")
+_ONE_OF_REQUIRED = re.compile(r"^one of ((?:\w+, )*\w+) is required( for creation)?\Z")
+_PATTERN_MISMATCH = re.compile(
+    r"^(\w+) '.*' does not match expected pattern: ", re.DOTALL
+)
+_CONNECTION_PREFIX = re.compile(
+    r"^(\w+)(?: reference)? '.*' lacks its connection prefix ", re.DOTALL
+)
+"""The SDK's own connection-prefix messages (see :func:`_connection_prefix_errors`)."""
+_RULE_OTHER: Final = "other"
+
+
+def _validation_rule(message: str) -> str:
+    """Map one ``.validate()`` message to a stable, value-free rule key."""
+    if match := _REQUIRED.match(message):
+        check = "required_for_creation" if match.group(2) else "required"
+        return f"{check}:{match.group(1)}"
+    if match := _ONE_OF_REQUIRED.match(message):
+        check = "one_of_required_for_creation" if match.group(2) else "one_of_required"
+        return f"{check}:{match.group(1).replace(', ', '|')}"
+    if match := _PATTERN_MISMATCH.match(message):
+        return f"pattern:{match.group(1)}"
+    if match := _CONNECTION_PREFIX.match(message):
+        return f"connection_prefix:{match.group(1)}"
+    return _RULE_OTHER
+
+
+@functools.lru_cache(maxsize=4096)
+def _validation_rules(error: str) -> tuple[str, ...]:
+    """Split one ``AssetValidationFailure.errors`` entry into its rule keys.
+
+    Cached: bundles of "is required" messages carry no record values, so the same
+    string repeats for every asset of a type that misses the same fields. The list
+    is read back with ``ast.literal_eval`` — a literal parser, not evaluation — and
+    anything that is not the expected bundle is classified as one message.
+    """
+    messages: list[object] = [error]
+    if match := _VALIDATE_BUNDLE.match(error):
+        try:
+            parsed = ast.literal_eval(match.group(1))
+        except (  # conformance: ignore[E009] per-record fallback; surfaces as the "other" summary row, and a log here would fire once per failing asset
+            ValueError,
+            SyntaxError,
+            MemoryError,
+            RecursionError,
+        ):
+            parsed = None
+        if isinstance(parsed, list):
+            messages = parsed
+    rules = (
+        _validation_rule(message) if isinstance(message, str) else _RULE_OTHER
+        for message in messages
+    )
+    return tuple(dict.fromkeys(rules))
+
+
+def asset_validation_summary_json(
+    report: AssetValidationReport,
+    *,
+    max_rows: int = ASSET_VALIDATION_SUMMARY_MAX_ROWS,
+) -> str:
+    """Complete per-(kind, type, detail) failure counts for the outcome event.
+
+    The matrix is a bounded sample of individual failures; this is the aggregate
+    over **every** failure in the batch, so a fleet query can answer "which asset
+    types fail which checks, how often" without the sample cap. One JSON array, each
+    row ``{"kind", "type_name", "detail", "count"}``:
+
+    * ``kind="invalid"`` — ``detail`` is a rule key such as
+      ``required_for_creation:schema_qualified_name`` or ``pattern:qualified_name``
+      (``other`` for a message outside pyatlan_v9's known shapes); ``count`` is the
+      number of assets that broke that rule. An asset breaking several rules counts
+      once in each, so these counts can sum past ``assets_invalid``.
+    * ``kind="undeserializable"`` — ``detail`` is ``decode:<reason>`` (see
+      :attr:`AssetValidationFailure.decode_reason`); ``count`` is records.
+    * ``kind="orphan"`` — ``type_name`` is the *missing* target's type and
+      ``detail`` the relationship it was referenced through; ``count`` is distinct
+      missing targets and ``references`` the references to them.
+
+    Rows are ordered by ``count`` descending (ties by key, so output is stable).
+    Past ``max_rows`` the rest fold into one ``kind="truncated"`` row carrying their
+    summed ``count`` and the summed ``references`` of any orphan groups among them,
+    so both totals survive the cap. Like the matrix, this is not internally guarded; the emitting
+    hook's ``try/except`` owns that.
+    """
+    counts: collections.Counter[tuple[str, str, str]] = collections.Counter()
+    references: collections.Counter[tuple[str, str, str]] = collections.Counter()
+    for failure in report.failures:
+        if failure.deserialize_error:
+            reason = failure.decode_reason or "unknown"
+            counts["undeserializable", failure.type_name, f"decode:{reason}"] += 1
+            continue
+        rules = {rule for error in failure.errors for rule in _validation_rules(error)}
+        for rule in rules or (_RULE_OTHER,):
+            counts["invalid", failure.type_name, rule] += 1
+    for orphan in report.orphans:
+        key = ("orphan", orphan.missing_type_name, orphan.relationship)
+        counts[key] += 1
+        references[key] += orphan.reference_count
+
+    ordered = sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    rows: list[dict[str, object]] = []
+    for (kind, type_name, detail), count in ordered[:max_rows]:
+        row: dict[str, object] = {
+            "kind": kind,
+            "type_name": type_name,
+            "detail": detail,
+            "count": count,
+        }
+        if kind == "orphan":
+            row["references"] = references[kind, type_name, detail]
+        rows.append(row)
+    if dropped := ordered[max_rows:]:
+        rows.append(
+            {
+                "kind": "truncated",
+                "type_name": "",
+                "detail": "",
+                "count": sum(count for _, count in dropped),
+                # Orphan groups past the cap still carry references; without this
+                # the batch's reference total would be under-reported.
+                "references": sum(
+                    references[key] for key, _ in dropped if key[0] == "orphan"
+                ),
+            }
+        )
+    return orjson.dumps(rows).decode()
+
+
+@dataclass(frozen=True)
+class AssetBatchScope:
+    """How one validated hand-off was assembled — context the report cannot know.
+
+    Without it an orphan count cannot be read: the same number means something
+    different for one ``upload`` of a single file, and for an ``upload_refs`` fan-in
+    whose parts were validated together.
+    """
+
+    upload_kind: typing.Literal["upload", "upload_refs"]
+    """Which framework task delivered the batch."""
+    parts_validated: int
+    """Local paths validated together as one batch."""
+    parts_not_local: int
+    """Declared transformed parts absent from this pod (streamed from the store),
+    which turn the orphan pass off — see ``assets_referential_check``."""
+
+
 def asset_validation_event_fields(
     report: AssetValidationReport,
     *,
     app_name: str,
     max_items: int = ASSET_VALIDATION_MAX_ITEMS_PER_AXIS,
+    scope: AssetBatchScope | None = None,
 ) -> dict[str, str | int]:
     """Build ``ASSET_VALIDATION_EVENT``'s attribute map from an asset report.
 
@@ -794,6 +1164,9 @@ def asset_validation_event_fields(
             :attr:`AssetArtifactReport.assets`.
         app_name: Emitting app, carried as the already-allowlisted ``app_name``.
         max_items: Row cap per axis for the matrix; shared with ``format_report``.
+        scope: How the batch was assembled. The upload hook always passes it;
+            without it the three ``assets_upload_kind`` / ``assets_parts_*`` keys
+            are omitted rather than guessed.
 
     Returns:
         Keyword arguments for the ``ASSET_VALIDATION_EVENT`` log call.
@@ -808,5 +1181,16 @@ def asset_validation_event_fields(
         "assets_undeserializable": report.undeserializable,
         ASSET_VALIDATION_MATRIX_KEY: asset_validation_matrix_json(
             report, max_items=max_items
+        ),
+        ASSET_VALIDATION_SUMMARY_KEY: asset_validation_summary_json(report),
+        "assets_referential_check": report.referential_check,
+        **(
+            {}
+            if scope is None
+            else {
+                "assets_upload_kind": scope.upload_kind,
+                "assets_parts_validated": scope.parts_validated,
+                "assets_parts_not_local": scope.parts_not_local,
+            }
         ),
     }

@@ -1,5 +1,107 @@
 # Changelog
 
+## v3.45.0 (October 09, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.44.0...v3.45.0
+
+### Features
+
+- flag qualifiedNames missing their connection prefix and same-connection orphans [FND-3523] (#4277) (by @cmgrote in [0015cbd](https://github.com/atlanhq/application-sdk/commit/0015cbd))
+- integration kit runs on_complete() cleanup by default (#4281) (by @cmgrote in [836fbd3](https://github.com/atlanhq/application-sdk/commit/836fbd3))
+- in-tenant object-store assertions for system-app suites (FND-3571) (#4271) (by @cmgrote in [9efcc92](https://github.com/atlanhq/application-sdk/commit/9efcc92))
+
+### Bug Fixes
+
+- reject empty or malformed connection_qualified_name before extraction [CONNECT-1738] (#3869) (by @SwarnadeepChatterjee in [8cd86d4](https://github.com/atlanhq/application-sdk/commit/8cd86d4))
+- cleanup_storage never deletes a key a durable ref points at (#4280) (by @cmgrote in [ce779dc](https://github.com/atlanhq/application-sdk/commit/ce779dc))
+
+
+## v3.44.0 (October 08, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.43.0...v3.44.0
+
+### Features
+
+- FND-3521 add TreeSelection, a payload-safe type for tree-widget selections (#4241) (by @cmgrote in [01cd774](https://github.com/atlanhq/application-sdk/commit/01cd774))
+- SystemAppE2ETest submits straight to AE on an isolated system-app tenant pool (FND-3542) (#4249) (by @cmgrote in [3c3cf93](https://github.com/atlanhq/application-sdk/commit/3c3cf93))
+
+
+## v3.43.0 (October 07, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.1...v3.43.0
+
+### Features
+
+- fleet-wide signals on warn-mode asset validation telemetry (FND-3495) (#4226) (by @cmgrote in [8b712ee](https://github.com/atlanhq/application-sdk/commit/8b712ee))
+
+### Bug Fixes
+
+- pin daprd internal gRPC port so it cannot take the API port (#4181) (by @mitshah-atlan in [1e0d547](https://github.com/atlanhq/application-sdk/commit/1e0d547))
+- skip local sidecars when uploading a directory (#4222) (by @Dexters-Hub in [f444725](https://github.com/atlanhq/application-sdk/commit/f444725))
+
+
+## v3.42.1 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.42.0...v3.42.1
+
+### Bug Fixes
+
+- skip duplicate and never-created connection QNs in teardown (FND-3405) (#4197) (by @cmgrote in [1c4c0d4](https://github.com/atlanhq/application-sdk/commit/1c4c0d4))
+- run the orphan pass over the whole upload_refs declaration (FND-3414) (#4198) (by @cmgrote in [5901772](https://github.com/atlanhq/application-sdk/commit/5901772))
+
+
+## v3.42.0 (October 06, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.41.0...v3.42.0
+
+### Features
+
+- add a preflight gate warmup tier with a stateless warmup probe, PENDING verdicts and category-gated hard mode, plus driver-level read cancellation and a worker-free handler (FND-3237) (#4130) (by @cmgrote in [f6a0eaa](https://github.com/atlanhq/application-sdk/commit/f6a0eaa))
+
+### Bug Fixes
+
+- write local sidecars when persisting a directory FileReference (#4127) (by @cmgrote in [907728a](https://github.com/atlanhq/application-sdk/commit/907728a))
+- FND-3272 classify a full volume during download as DiskFullError (#4145) (by @SwarnadeepChatterjee in [e0764aa](https://github.com/atlanhq/application-sdk/commit/e0764aa))
+- keep run_query connect and close off the event loop, add conformance rule P054 (#4167) (by @fyzanshaik-atlan in [28e24be](https://github.com/atlanhq/application-sdk/commit/28e24be))
+- raise FastAPI to 0.142.2 with native telemetry off and OTel 1.45 (#4131) (by @cmgrote in [46e1633](https://github.com/atlanhq/application-sdk/commit/46e1633))
+
+
+## v3.41.0 (October 02, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.40.0...v3.41.0
+
+### Features
+
+- read memory limit from cgroup, repeat pressure warning (#4061) (by @SwarnadeepChatterjee in [1d43fb7](https://github.com/atlanhq/application-sdk/commit/1d43fb7))
+- introduce CurrentStateStore with run-scoped state, and type the incremental contracts (#4074) (by @cmgrote in [20db225](https://github.com/atlanhq/application-sdk/commit/20db225))
+
+### Bug Fixes
+
+- exit when the worker teardown after a fatal error never finishes (#4057) (by @Lalit3716-atlan in [2093ddd](https://github.com/atlanhq/application-sdk/commit/2093ddd))
+- harden storage primitives and fix incremental state correctness (#4070) (by @cmgrote in [e738386](https://github.com/atlanhq/application-sdk/commit/e738386))
+- forward aws_external_id to STS AssumeRole in CloudStore S3 (#4108) (by @ashish-atlan in [9b3366a](https://github.com/atlanhq/application-sdk/commit/9b3366a))
+
+
+## v3.40.0 (September 29, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.1...v3.40.0
+
+### Features
+
+- route workflow-input credentials centrally with route_credentials (#4029) (by @cmgrote in [5ef14b8](https://github.com/atlanhq/application-sdk/commit/5ef14b8))
+- correct UI clickthrough and workflow-id uniqueness guidance (#4033) (by @cmgrote in [b784ee8](https://github.com/atlanhq/application-sdk/commit/b784ee8))
+
+
+## v3.39.1 (September 27, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.39.0...v3.39.1
+
+### Bug Fixes
+
+- honour exclude_table_regex from the connector form in SqlApp (FND-2733) (#3955) (by @vaibhavatlan in [c6d47bd](https://github.com/atlanhq/application-sdk/commit/c6d47bd))
+- FND-2570 bind activity log context instead of passing it to loguru format (#3987) (by @sachi-atlan in [b677246](https://github.com/atlanhq/application-sdk/commit/b677246))
+
+
 ## v3.39.0 (September 23, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.38.0...v3.39.0

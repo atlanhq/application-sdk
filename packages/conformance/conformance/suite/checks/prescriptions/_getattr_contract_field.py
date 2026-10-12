@@ -94,7 +94,9 @@ def check_p026(
                             f"typed contract field with a fallback — a renamed/removed "
                             f"field silently yields the default instead of raising "
                             f"AttributeError, defeating the typed boundary. Use "
-                            f"attribute access ({node.args[0].id}.{field})."
+                            f"attribute access ({node.args[0].id}.{field}) when "
+                            f"{field!r} is declared on the contract and the param "
+                            f"is not Optional; otherwise fix the contract first."
                         ),
                         directives=directives,
                     )

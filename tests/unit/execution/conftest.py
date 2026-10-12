@@ -9,6 +9,10 @@ import pytest
 from application_sdk.app.registry import AppRegistry, TaskRegistry
 from application_sdk.contracts.base import Input, Output
 
+# The shared gate-outcome capture, in scope for the whole directory the way a
+# consumer adopts it (docs/agents/testing.md).
+from application_sdk.testing import capture_preflight_outcomes  # noqa: F401
+
 
 @dataclass
 class SimpleExecInput(Input, allow_unbounded_fields=True):

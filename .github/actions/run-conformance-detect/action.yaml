@@ -39,14 +39,6 @@ inputs:
       installed package metadata).
     required: false
     default: "false"
-  with-tests:
-    description: >
-      When true, pass --with-tests so the registered preflight scenarios execute in a
-      bounded pytest subprocess instead of the TEST rules reporting as not evaluated.
-      Requires an importable app environment, so only set it on a leg that also sets
-      needs-env: true.
-    required: false
-    default: "false"
 
 runs:
   using: "composite"
@@ -82,7 +74,6 @@ runs:
         SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
-        WITH_TESTS: ${{ inputs.with-tests }}
       run: |
         set -euo pipefail
         raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
@@ -98,7 +89,6 @@ runs:
         SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
-        WITH_TESTS: ${{ inputs.with-tests }}
       run: |
         set -euo pipefail
         raw=$(python "$GITHUB_ACTION_PATH/../../scripts/build_conformance_args.py" \
@@ -116,7 +106,6 @@ runs:
         SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
-        WITH_TESTS: ${{ inputs.with-tests }}
         CONFORMANCE_REF: ${{ inputs.conformance-ref }}
       run: |
         set -euo pipefail
@@ -135,7 +124,6 @@ runs:
         SLUG: ${{ inputs.slug }}
         EXCLUDE_PATHS: ${{ inputs.exclude-paths }}
         EXIT_ZERO: ${{ inputs.exit-zero }}
-        WITH_TESTS: ${{ inputs.with-tests }}
         CONFORMANCE_REF: ${{ inputs.conformance-ref }}
       run: |
         set -euo pipefail

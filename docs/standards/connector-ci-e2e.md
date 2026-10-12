@@ -28,12 +28,93 @@ New suites use `application_sdk.testing.e2e`. Nothing new should be written agai
 |---|---|
 | SQL | `application_sdk.testing.e2e.SQLAppE2ETest` |
 | Anything else (BI, API, object-store, agent apps) | the generated `app/generated/_e2e_base.py`, which subclasses `application_sdk.testing.e2e.BaseE2ETest` |
+| A system app (connection-delete, popularity, publish, …) | `application_sdk.testing.e2e.SystemAppE2ETest` — see [System apps](#system-apps) |
 
 `BaseE2ETest` is connector-agnostic and is already the base for every scaffolded app. The SQL-shaped parameter rows (`include-filter` / `exclude-filter`) come from `SQLAppE2ETest`, not from the base — so "my connector is not SQL, so I need the old harness" does not follow. If a non-SQL connector genuinely cannot express its manifest tokens through `BaseE2ETest`, that is an SDK gap worth filing, not a reason to start a `full_dag` suite.
 
-`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (domo, looker, saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
+`application_sdk.testing.full_dag` is deprecated and removed in v4.0. It emits a `DeprecationWarning` on import and on subclassing `BaseFullDAGE2ETest` / `SQLAppE2EFullTest`, and its `client` / `_errors` modules are already thin re-exports of the `testing/e2e` ones. Suites still on it (saperp at time of writing) are pinned to released SDKs where it still works; they need migrating before a v4 repin, not preserving as a second supported path.
 
-The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating the three remaining suites instead.
+The `full_dag` package is **frozen** (FND-245): it gets no backports from `application_sdk/testing/harness/` and no drift repair. Its duplicate mustache substitution and its unconditional sleep stay as they are and die with the package at v4.0. Effort that would have gone into collapsing it into re-export shims goes into migrating those suites instead.
+
+### System apps
+
+A system app runs only inside a tenant, never in SDR mode, and its production
+DAG is usually declared by the connector that calls it rather than served by the
+app. `BaseE2ETest` submits through Heracles, which rebuilds the graph from the
+named app's served manifest, so it cannot run such a suite. `SystemAppE2ETest`
+submits the harness's own published DAG straight to AE instead; seeding, node
+routing, polling, grading and teardown are unchanged.
+
+- Declare `connector_short_name`, `manifest_path` (the app's generated manifest,
+  or a fixture whose top-level `dag` is the graph to run) and
+  `required_dag_nodes`. `argo_package_name` / `argo_template_name` are optional.
+- Nothing substitutes placeholders on this path except the harness, so give the
+  substitutions model an aliased field for every `{{...}}` the DAG carries and
+  return it from `_mustache_substitutions()`, as connector suites already do.
+- System apps test on their own tenants. A `SystemAppE2ETest` suite runs only
+  when `E2E_TENANT_POOL=system`, and every other suite refuses that pool. CI sets
+  the variable when it places a leg; for a local run against a system-app
+  tenant, export it yourself.
+- To prove what the app left in the tenant's object store, override
+  `store_expectations()` to return `StoreAbsent(prefix)`,
+  `StorePresent(prefix)` or `StoreCount(prefix, count)` claims, all from
+  `application_sdk.testing.e2e`. The runner can't see the store,
+  so the harness appends an `sdk-store-assert` node after every other node. It
+  runs on the app's own task queue, which means the same pod and store binding
+  the app used. The harness then reads that node's verdict back from AE and
+  grades it. If the verdict can't be read, the test fails as unreadable, never
+  as a pass.
+  - Prefixes must sit strictly below `artifacts/apps/`, `persistent-artifacts/`
+    or `connection-cache/`.
+  - A suite can declare at most 20 claims.
+  - `ABSENT` is strict: it also counts zero-byte folder markers, including one
+    at the prefix itself.
+  - `PRESENT` and `COUNT` use the `list_keys` view the app sees.
+  - `StoreRecords(prefix, format, where, count | at_least)` counts rows in the
+    parquet or JSONL files under the prefix. `where` is up to 10
+    `FieldCondition`s, all of which must hold: `EQ`, `IN`, `PRESENT` (not
+    missing, null or empty) or `MISSING`. A field is a dotted path such as
+    `entity.attributes.qualifiedName`. The first segment is a column or JSONL
+    key, or a Hive partition directory (`type_name=Table/`) when the file has
+    no such column. Later segments walk structs, JSON objects and string
+    columns holding JSON. Comparisons are type-aware: `true` never equals `1`.
+    To check that every row has field X, use `where=[X MISSING]` with
+    `count=0`.
+  - Every SDK worker serves the `sdk:store-assert` workflow behind the node. It
+    only LISTs, plus one HEAD for `ABSENT`, and returns counts, never keys or
+    contents.
+  - The node reads nothing unless the app's pod has
+    `ATLAN_STORE_ASSERT_ENABLED=true`. `e2e_tenant_app.py install` sets it for
+    the leased tenant through `deploy.env_overrides`, so it applies only when
+    the run installs the app itself (`install-app-to-tenant`, the default) or
+    you use the E2E Tenant Install workflow. Otherwise the test fails with
+    `StoreAssertDisabledError`, never as a pass.
+  - If the DAG spans several task queues, override `store_assert_task_queue()`.
+
+Which base an app's suites use follows from the top-level `type` it declares in
+`atlan.yaml` (generated from `contract/app.pkl`). Conformance rule
+[T026](../../packages/conformance/conformance/docs/rules/tests.md#t026) checks
+every e2e test class against it, case-insensitively:
+
+| Declared `type` | e2e test classes | Why |
+|---|---|---|
+| `system` | must inherit `SystemAppE2ETest` | A system app runs only in a tenant. On any other base the suite never opts into the system pool and runs on the connector tenants instead. |
+| `utility` | either base | Some system apps (connection-delete, model-caster) keep `utility` because they have a marketplace tile and can be run directly, but only ever in a tenant. For them, inheriting `SystemAppE2ETest` *is* the declaration, and the runtime pool gate keeps the suite on the system pool from then on. |
+| `connector` | must not inherit `SystemAppE2ETest` | The system pool is for system apps only. |
+| anything else | not checked | |
+
+To move a system app onto the system pool, do these in order:
+
+1. Make `SystemAppE2ETest` the first base. For a contract typed `system`, the
+   generated `_e2e_base.py` already extends it, so regenerating the contract is
+   usually all this takes.
+2. Get the repo added to the selected repositories of the
+   `E2E_SYSTEM_TENANT_MATRIX_JSON` secret. Until that happens, CI can't place the
+   suite on the system pool, and the harness refuses to run it anywhere else.
+
+A `utility` app that ought to be on the system pool but has never adopted
+`SystemAppE2ETest` looks the same as every other utility, so T026 can't flag it.
+Onboarding one is a human decision.
 
 ### The SDR base class
 
@@ -79,9 +160,29 @@ Neither leg is the place credential resolution is proven. That is `tests/unit/cr
 
 ### What the `e2e` label actually gates
 
-Adding the `e2e` label starts the suite; a subsequent push (`synchronize`) on a
-PR still carrying it re-runs the suite. What does **not** re-run it is an
-unrelated label add — `size/`, `area/`, dependency and review-state labels churn
+Adding the `e2e` label starts the suite. The label is a **one-shot request**:
+when the run finishes, the `Tests Gate` job removes it (FND-3411), whatever the
+verdict. To run e2e again — after a push, or to retry a failure — add the label
+again. Before this, a label left on a PR re-ran the live-tenant suite on every
+later push, usually days after anyone wanted it.
+
+Two details of the removal matter:
+
+- It uses the run's own `github.token`, so the `unlabeled` event starts no
+  workflow run — nothing re-fires on it.
+- Before removing the label, the gate records the verdict as an `e2e` commit
+  status on the PR head: `success` or `failure`, or `error` when the run acted
+  on the label but produced no verdict (cancelled, tenant busy, install
+  failed). The consumer's
+  [Release Gate](release-flow.md) reads that status once the label is gone. The
+  status is bound to the commit, so a push re-blocks a release PR until the
+  label is re-added.
+
+application-sdk's own `PR Checks` does the same in its `consume-e2e-label` job,
+after `Connector Tests Gate` and the other label-gated jobs finish.
+
+While the label is on the PR, a push (`synchronize`) re-runs the suite. What does
+**not** re-run it is an unrelated label add — `size/`, `area/`, dependency and review-state labels churn
 constantly on an open PR, and every one of those used to re-fire the whole
 matrix (FND-48).
 
@@ -104,6 +205,38 @@ Note that a genuine re-trigger still **queues** behind an in-flight run rather
 than cancelling it (`cancel-in-progress: false`). That is deliberate —
 cancelling mid-run abandons a live Automation Engine run and leaves tenant state
 behind — and it is a separate decision from the gating above.
+
+### Every run on a commit honours its e2e verdict
+
+A run started by an unrelated label skips e2e, but it is still a `Tests` run on
+the same commit. GitHub reads the required `tests / Tests Gate` from the newest
+check suite on the commit, so before FND-3650 that run's green gate overrode the
+run that was actually running e2e. A PR could merge mid-suite, or over a failed
+suite.
+
+The `e2e` commit status now carries the verdict across runs:
+
+1. The run that acts on the label posts `e2e = pending` from `Discover e2e
+   suites`, and its gate always replaces it with `success`, `failure` or `error`.
+2. Any other PR run whose own gate passed holds it on that status
+   (`e2e_commit_verdict.py`). `success` passes. `failure` and `error` fail, even
+   after the label is consumed. `pending` is waited on for up to 10 minutes.
+   No status passes, because e2e is not required on a normal PR, unless the PR
+   carries `e2e` and the run skipped only because of the unrelated-label
+   filter. Then a missing status fails after a short wait.
+3. If the wait runs out, that gate fails. When the acting run records its
+   verdict, it re-runs that gate (`rerun_deferred_gate.py`, needs
+   `ORG_PAT_GITHUB`), which then reads the final status. Without the PAT,
+   re-run the failed job by hand.
+
+If the label starts two attempts on one commit, the newest attempt decides
+(each status links the run that posted it), and an older attempt that finishes
+later does not write its verdict. Each recorder re-checks after writing: if an
+older attempt's row has become the newest `e2e` status, it re-posts the newest
+attempt's latest row, so the combined status the Release Gate reads matches.
+
+A failed e2e is cleared by pushing a fix or by adding the label again. Removing
+the label does not clear it, because the verdict belongs to the commit.
 
 ### One dispatch per commit, however many events GitHub sends
 
@@ -360,6 +493,7 @@ Threaded secrets the reusable workflow expects on the caller side:
 | Secret | Required | Used by |
 |---|---|---|
 | `E2E_TENANT_MATRIX_JSON` | for the cross-CSP matrix | Per-leg tenant + credentials. See [Cross-CSP matrix](#cross-csp-matrix). Org-level; shared with `application-sdk` and every `atlan-*-app`. |
+| `E2E_SYSTEM_TENANT_MATRIX_JSON` | system apps | Same shape, for the system-app tenants. Org-level; shared only with system-app repos. Where present it replaces `E2E_TENANT_MATRIX_JSON` and the fallback below, and legs get `E2E_TENANT_POOL=system`. See [System apps](#system-apps). |
 | `SDR_TEST_TENANT` | fallback only | configurator |
 | `SDR_CLIENT_ID` / `SDR_CLIENT_SECRET` | fallback only | configurator OAuth |
 | `ATLAN_API_KEY` | fallback only | full-DAG AE-management (`/automation/api/v1/*`). Service account must carry `realm-admin` which the OAuth client does not. |
@@ -577,7 +711,7 @@ Actions log, and nothing fails either way — so at any point of *central*
 visibility a repo running degraded looks identical to a fully covered one. The
 `scorecard` job closes that (FND-33, FND-34): it feeds the e2e tier's evidence
 and records cross-CSP coverage into `results/test-readiness.json`, which
-`update-dashboard.yaml` publishes and connector-pulse ingests as the
+`update-fleet-dashboards.yaml` publishes and connector-pulse ingests as the
 `test_readiness` metric.
 
 **Two facts, kept apart.** `raw.crossCloud.configured` is what this repo is
@@ -611,7 +745,7 @@ regression. Record first; score once a low value is actionable.
 push/merge_group; e2e runs on `workflow_dispatch + run_e2e=true` or an
 `e2e`-labelled PR. Only a dispatched run on the default branch carries both, so
 `observed` appears on those runs and not the rest. It cannot be fixed by also
-running the scorecard on the PR path: `update-dashboard.yaml` only ingests
+running the scorecard on the PR path: `update-fleet-dashboards.yaml` only ingests
 default-branch runs, and on a PR the integration job is skipped, so such a
 scorecard would publish a zeroed integration tier — a fabricated regression.
 This is precisely why `configured`, which needs no e2e run, is the field that
@@ -1656,12 +1790,11 @@ run's own before the seeded ones) even when the seed half-fails — see
   config-pinnable must precompute them from its source fixture, never invent
   them. Segments that cannot compose cleanly (empty, padded, or carrying a `/`)
   are rejected at declaration.
-- **The pre-submit check needs the `[storage]` extra.** `seed_assets` runs
+- **The pre-submit check is always on.** `seed_assets` runs
   `validate_transformed_dir(..., check_referential_integrity=True)` offline
   before it uploads anything, which is what turns "every parent is present" from
-  hoped-for into asserted. The referential pass is backed by `rocksdict`; without
-  it the walk degrades to per-asset validation and logs a warning. A leg that
-  relies on this check should install the extra.
+  hoped-for into asserted. The referential pass is backed by `rocksdict`, a core
+  SDK dependency, so no extra is needed.
 - **Cross-batch parity is still on you.** The check validates integrity *within*
   the seed. It cannot tell you the seed covers every ref the connector will
   emit — the coalesce pilot published 82 ColumnProcesses against a golden of
@@ -1719,6 +1852,17 @@ never got that far.
 the cache. Teardown follows the same rule for the same reason: `teardown_method`
 submits one `connection-delete` DAG node per connection the run touched, through
 the same `AEClient`, in the same one-node shape, with `delete_type: PURGE`.
+
+**Which connections it targets.** The run's own QN first, then every seeded
+one, each **once**: a suite that seeds under its own QN gets one delete, not
+two. The run's own QN is skipped when nothing could have created it: no
+`seed_connection` create was attempted, and no DAG was submitted against it.
+A submit counts as "against some other connection" only when the run declares
+`expect_connection = False` **and** its `{{connection-qualified-name}}`
+substitution (the `ConnectionSelector` input) names other QNs, the
+connection-delete suite's shape. A crawler, or a miner with no selector,
+keeps its teardown. Skipped slots keep their ordinal, so `-teardown-<n>`
+workflow names stay stable. FND-1873, FND-3405.
 
 **Why the harness cannot do this itself.** A connection leaves four kinds of
 artifact behind, and only one of them is reachable from a CI runner:

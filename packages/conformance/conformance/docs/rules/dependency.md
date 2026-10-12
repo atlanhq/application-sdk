@@ -53,6 +53,7 @@ that explains them — the hardest kind of regression to attribute during an inc
   naming the SDK behaviour each floor constraint buys. Bounded at both ends: a floor for
   the features the app uses, a ceiling at the next major so a breaking release cannot
   arrive through a lockfile refresh.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every app must declare `atlan-application-sdk` in `[project.dependencies]` with a
 version specifier that has both a lower bound (`>=` or `==`) and an upper bound (`<` or
@@ -79,6 +80,7 @@ duplicate when the SDK pin changes.
 - **Compliant example:** atlan-openapi-app pyproject.toml — [project.dependencies] holds exactly one entry, the
   SDK. orjson and the pyatlan models are imported under app/ without being redeclared
   there or in any dependency group, so there is one place a version can move.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` (its core `[project.dependencies]`) must not
 be redeclared in the app's `[project.dependencies]` or any
@@ -96,27 +98,45 @@ the runtime environment, this rule is skipped silently.
 
 > A package declared in [project.dependencies] is never imported in source
 
-**Rationale:** A package declared in core dependencies but never imported is either dead weight that
-slows resolution and widens the supply-chain/CVE surface, or it was meant to live
-elsewhere (a test/dev group). Surfacing it turns the recurring manual question during a
-version bump — 'is this even used?' — into a deterministic, reviewable signal. It stays
-advisory (WARN, no mechanical fix) because a dependency can be loaded dynamically, via
-an entry point/plugin, or run as a server (e.g. uvicorn) without an explicit import.
+**Rationale:** A package declared in core dependencies but never imported may be dead weight that slows
+resolution and widens the supply-chain/CVE surface, or it may belong in a test/dev
+group. A documented app-specific minimum version for an SDK-managed transitive package
+is another legitimate reason to keep an otherwise unimported dependency when the SDK's
+declared range does not guarantee that minimum. Surfacing the finding turns the
+recurring manual question during a version bump — 'is this even used?' — into a
+deterministic, reviewable signal. It stays advisory (WARN, no mechanical fix) because a
+dependency can be loaded dynamically, via an entry point/plugin, or run as a server
+(e.g. uvicorn) without an explicit import.
 
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app pyproject.toml — aiomysql is declared in [project.dependencies] with no
   Python import anywhere in the repo, and carries no suppression. SQLAlchemy loads the
   driver from the "mysql+aiomysql" dialect string in app/client.py, which the checker
-  reads via _collect_dialect_drivers, so the dependency is counted as used. A
-  dynamically-loaded dependency the checker can see is not a finding at all.
+  reads via _collect_dialect_drivers, so the dependency is counted as used. The checker
+  also matches a URL scheme (`crate://`, `foo+bar://`) against the `sqlalchemy.dialects`
+  entry points each dependency registers, so a third-party dialect package loaded only
+  through that entry point is counted as used too, whether the repo imports SQLAlchemy
+  directly or builds its engine through the SDK's `BaseSQLClient`
+  (`application_sdk.clients.sql`). A dynamically-loaded dependency the checker can see
+  is not a finding at all.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 - **Already correct when:** A justified inline `# conformance: ignore[D003] <reason>` IS the correct end state for a
   dependency that is genuinely loaded without a static import — a driver resolved from a
   dialect/plugin string, an entry-point registration, a CLI invoked as a subprocess. The
   reason must name the mechanism that loads it — and only where the checker cannot
-  already see that mechanism itself, as it does for atlan-mysql-app's aiomysql. A
-  directive that only asserts the dependency is needed is unremediated: if nothing loads
-  it dynamically, remove the dependency rather than suppressing the finding.
+  already see that mechanism itself, as it does for atlan-mysql-app's aiomysql or a
+  dialect entry point a URL scheme in source selects. A generic transitive floor is not
+  an exception: remove the app-local direct requirement or constraint and move any
+  generally required floor to the SDK. A separate justified exception is a dependency
+  retained to enforce a documented app-specific minimum version for an SDK-managed
+  transitive package when the SDK's declared range does not guarantee that minimum. Keep
+  the app requirement until the SDK range guarantees the floor, and make the D003 reason
+  name the app requirement and the SDK range gap; a currently resolved lockfile version
+  does not guarantee a future minimum. Outside these cases, a directive that only
+  asserts the dependency is needed is unremediated: if nothing loads it dynamically and
+  there is no documented app-specific floor, remove the dependency rather than
+  suppressing the finding.
 
 Every package in the repo's core `[project.dependencies]` should be imported somewhere
 in the shipped source.  This rule maps each declared distribution to the import name(s)
@@ -126,20 +146,30 @@ runtime dependency used *only* under `tests/` is itself a finding, because it be
 a test group, not core dependencies).  The finding is advisory: before removing, confirm
 the dependency is not imported dynamically (via `importlib`), pulled in by an entry
 point or plugin, or required by a framework/server it is never directly imported by.
-Only core `[project.dependencies]` is analysed — optional-dependency extras and
-dependency groups routinely carry tools and plugins that are legitimately never
-imported.  A dependency that cannot be resolved in the analysis environment is skipped
-(and reported), never flagged.  **Operating note:** resolution maps a distribution to
-its import name(s) via installed package metadata, so the analysed repo's dependencies
-must be importable in the running interpreter — run `uv sync` first.  In an isolated
-runner (e.g. `uvx atlan-application-sdk-conformance detect --series D`) no dependency is
-installed, so every one is skipped to stderr and the rule reports nothing; that is an
-unresolved environment, not a clean repo.  The conformance CI runs the D-series leg in a
-synced environment for this reason.  See BLDX-1462.  **Constraint floors:** in an app
-repo, every `[tool.uv] constraint-dependencies` entry is also a D003 finding — a
-security floor on a transitive package is the SDK's to set, not the app's, and an
-app-local copy goes stale when the SDK's range moves.  Remove it; a needed CVE fix
-reaches the app by upgrading the SDK.  The SDK's own pyproject is exempt.
+Also check whether the dependency is intentionally declared to enforce a documented
+app-specific minimum version for an SDK-managed transitive package. Such a dependency
+remains a D003 finding, but may be retained with a reasoned D003 exception when the
+SDK's declared range does not guarantee the required minimum. Remove the app requirement
+only after the SDK range guarantees that floor; a currently resolved lockfile version is
+not a future guarantee. Only core `[project.dependencies]` is analysed —
+optional-dependency extras and dependency groups routinely carry tools and plugins that
+are legitimately never imported.  A dependency that cannot be resolved in the analysis
+environment is skipped (and reported), never flagged.  **Operating note:** resolution
+maps a distribution to its import name(s) via installed package metadata, so the
+analysed repo's dependencies must be importable in the running interpreter — run `uv
+sync` first.  In an isolated runner (e.g. `uvx atlan-application-sdk-conformance detect
+--series D`) no dependency is installed, so every one is skipped to stderr and the rule
+reports nothing; that is an unresolved environment, not a clean repo.  The conformance
+CI runs the D-series leg in a synced environment for this reason.  See BLDX-1462.
+**Constraint floors:** in an app repo, every `[tool.uv] constraint-dependencies` entry
+is still a D003 finding. Generic transitive floors belong in the SDK, not in an app's
+direct dependencies or constraints; remove the app-local floor and move any generally
+required transitive floor upstream, since an app-local copy can go stale when the SDK's
+range moves. By contrast, do not remove a documented app-specific security floor merely
+to clear D003 when the SDK's declared range does not guarantee the required minimum.
+Retain that app-specific requirement with a reasoned D003 exception naming the app
+requirement and SDK range gap until the SDK range guarantees the floor; a currently
+resolved lockfile version alone is not enough. The SDK's own pyproject is exempt.
 
 ---
 
@@ -161,6 +191,7 @@ validated dev environment and must be touched on every SDK bump.
   not pin as core (pytest-asyncio, pytest-timeout, respx, pre-commit, coverage, scalene,
   poethepoet, the conformance suite). Nothing the SDK already pins is repeated there, so
   an SDK bump never has to touch the group.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Packages pinned by `atlan-application-sdk` must not be redeclared in the app's PEP 735
 `[dependency-groups.*]` tables (dev/test groups).  This is the coverage gap left by
@@ -191,6 +222,7 @@ typo is invisible to the resolver that silently dropped it.
 - **Compliant example:** atlan-mysql-app pyproject.toml — `atlan-application-sdk[iam-auth,pandas,sql,workflows]`
   in [project.dependencies]. All four are extras the SDK publishes; a typo here resolves
   to nothing and fails at import, not at install.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every `atlan-application-sdk[extra]` reference must name an extra the SDK actually
 publishes (its `Provides-Extra` metadata).  An unknown extra is silently dropped by uv,
@@ -217,6 +249,7 @@ environment — exactly where it is hardest to catch in review.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `requires-python = ">=3.11"`, the SDK's own floor. A
   lower bound than the SDK's promises an interpreter the dependency tree cannot actually
   satisfy.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The app's `[project].requires-python` lower bound must be at least the SDK's minimum
 supported Python (`>=3.11`). A lower floor lets the app be installed on a Python the SDK
@@ -242,6 +275,7 @@ build changes per-app instead of uniform.
 
 - **Compliant example:** atlan-openapi-app pyproject.toml — `build-backend = "hatchling.build"`, which is what
   the app-runtime base image and the publish pipeline expect.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[build-system].build-backend` must be `hatchling.build`.  Atlan's app fleet
 standardises on Hatchling so the managed build-and-publish workflow and wheel layout are
@@ -265,6 +299,7 @@ APIs pass app CI unnoticed, defeating the point of the typed surface.
 - **Compliant example:** atlan-openapi-app pyproject.toml — `typeCheckingMode = "standard"` under [tool.pyright],
   the SDK baseline. Weakening it locally hides exactly the boundary errors the typed
   contracts exist to catch.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[tool.pyright].typeCheckingMode` must not be weaker than the SDK baseline `standard` —
 `off` and `basic` are flagged; `standard` and `strict` pass.  A weakened mode lets type
@@ -298,6 +333,7 @@ once deployed in the tenant.
   "components"` and calls `shutil.copytree(src, "components", dirs_exist_ok=True)`, with
   a comment saying components/ is gitignored so each environment copies the set matching
   the SDK in uv.lock. No poe task names raw.githubusercontent.com.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 No `[tool.poe.tasks.*]` entry (in either the shorthand `task.shell = "..."` form or the
 full `[tool.poe.tasks.task]` table form) may reference `raw.githubusercontent.com` or
@@ -306,8 +342,11 @@ the `atlan-application-sdk` wheel at `application_sdk/components/` — copy them
 there instead, e.g. `shutil.copytree(pathlib.Path(application_sdk.__file__).parent /
 'components', 'components', dirs_exist_ok=True)`. This requires application-sdk to
 already be installed into the venv before the task runs (true both locally and in the
-Docker build, where `uv sync` precedes `poe download-components`). Inline suppression:
-`# conformance: ignore[D009] <reason>` on the line above the offending entry.
+Docker build, where `uv sync` precedes `poe download-components`). Copy the whole folder
+and name no files: the set the wheel ships changes between versions (an early
+`secretstore.yaml` ships as `secretstore.yaml.example` later), so a copy of named files
+fails against the SDK the app locks. Inline suppression: `# conformance: ignore[D009]
+<reason>` on the line above the offending entry.
 
 ---
 
@@ -338,6 +377,7 @@ tests pass, the first thing that reveals it is the customer's own failed run.
 - **Compliant example:** atlan-mysql-app pyproject.toml — the SDK is installed with the `sql` extra, which is
   what resolves duckdb. An app importing the SDK query transformer without one of
   [sql]/[incremental], or a direct duckdb pin, imports a module whose engine is absent.
+- **Migrate with:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 An app whose source imports the SDK query transformer
 (`application_sdk.transformers.query` — the `transform_metadata` /
@@ -356,8 +396,9 @@ unit tests that mock the transformer pass.
 `[daft]` extra resolved to nothing, so apps that were following the SDK's own
 deprecation note were broken by an automated upgrade crossing the 3.22 line.  That is
 fixed at the root: from 3.28.0 `[daft]` aliases `[sql]` again, and a version bump alone
-resolves `duckdb` for every such app with no repo-side change.  If this rule fires on an
-app pinned to `[daft]`, upgrade the SDK rather than editing the app's extras.
+resolves `duckdb` for every such app with no repo-side change.  If this rule fires on a
+live import in an app pinned to `[daft]`, upgrade the SDK rather than editing the app's
+extras.
 
 Resolution order of the check:
 
@@ -372,7 +413,26 @@ usable lock, the app's `pyproject.toml` must declare   `duckdb` directly or refe
 dependencies`   specifically.  Dependency groups and optional-dependency arrays do   not
 count: they are not installed by default.
 
-**Remediation:** change the SDK reference to `atlan-application-sdk[sql]` (or
+**Remediation:** first confirm the import site the finding names is live — that a
+production code path imports that module.  The check matches the import anywhere in the
+source and does not test reachability, so it also fires on dead code: a superseded
+transformer module nothing imports any more, or frozen reference code kept during a
+port.  Adding `[sql]` there ships an unused `duckdb` to production for no runtime
+benefit.
+
+*Dead code* (nothing imports the module): delete it.  The finding clears because its
+cause is gone, with no dependency change.
+
+*Code the repo keeps on purpose* (e.g. reference code for an in-progress port): suppress
+D010 with a trailing `# conformance: ignore[D010] <reason>` on the finding's anchor line
+in `pyproject.toml`: the SDK dependency line in `[project] dependencies`, or line 1 of
+the file when no SDK dependency is declared there (the finding names the line).  Only
+that file's suppressions are read, so a directive on the Python import line has no
+effect.  Name the dead import path in the reason, and remove the suppression when that
+code is deleted.  This applies on a `[daft]` pin too: the SDK bump below is for live
+imports only, and would ship an unused `duckdb` here.
+
+*A live import*: change the SDK reference to `atlan-application-sdk[sql]` (or
 `[incremental]` for the incremental analytics stack) in `[project.dependencies]` and
 relock (`uv lock`).  That is the fix.
 
@@ -388,7 +448,9 @@ It landed as `WARN` under the new-rule tier policy with the note "treat it as an
 Note for the `[daft]`-pinned population above: with a parseable `uv.lock` the check
 walks what the app's own extras actually resolve, so once the SDK bump to >= 3.28.0 is
 locked (where `[daft]` aliases `[sql]`) `duckdb` is reachable and the finding clears
-with no app-side edit.  Bump the SDK; do not reach for a suppression.
+with no app-side edit.  For a live import, bump the SDK; do not reach for a suppression.
+Retained code that nothing imports is the exception: suppress it as above, since the
+bump would activate `[sql]` and ship an unused `duckdb`.
 
 ---
 
@@ -431,6 +493,7 @@ once it is found.
   D-series CI leg that reads the suite from this repo's lock grades it with a current
   ruleset. A hard pin freezes that one leg while every other leg runs the latest; a
   declaration in [project.dependencies] ships the linter to production.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 - **Already correct when:** The specifier must be able to float. Pinning is what freezes one repo's D-series leg to
   a single suite version while every other leg runs the latest.
 
@@ -500,6 +563,7 @@ version moved, no hash moved, only the URLs.
   a project-level uv.toml, because a uv.toml suppresses [tool.uv] in pyproject.toml
   entirely and would silently drop any constraint-dependencies added later — and pinned
   as the default, a machine-wide index cannot rewrite uv.lock on whoever resolves next.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The repo's root `pyproject.toml` must declare PyPI as the resolver's default index:
 
@@ -556,6 +620,7 @@ code.
   and none carries userinfo, so CI installs from the same host the lock was resolved
   against. A lock that has already picked up a proxy host is repaired by restoring the
   committed one, not by re-locking on the machine that rewrote it.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 Every download URL in the repo's `uv.lock` must name a PyPI host —
 `files.pythonhosted.org` or `pypi.org`.  Two branches:
@@ -615,6 +680,7 @@ cleanup, which is why this is a rule and not another sweep.
   resolves itself, and the lock-refresh driver bounds its own re-resolve — leaving a
   human's `uv lock` and the CVE-fix workflow unfenced, which a date in pyproject.toml
   would not.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 The repo's root `pyproject.toml` must not fence uv's resolver to an absolute date.  Both
 places one can be declared are checked, and each yields its own finding:
@@ -699,6 +765,7 @@ the scope is 'both' and not 'app'.
   does need an exclude restates the defaults beside its own entries, as atlan-mysql-app
   pyproject.toml does: `.github/**` followed by `"**/.*"`, `"**/node_modules"` and
   `"**/__pycache__"`, with a comment saying why they are there.
+- **Fix by:** [`programs/areas/dependency.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/dependency.prose.md)
 
 `[tool.pyright].exclude` **replaces** pyright's built-in defaults -- `**/node_modules`,
 `**/__pycache__` and `**/.*` -- rather than appending to them.  Losing the first two

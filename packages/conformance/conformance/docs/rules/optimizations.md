@@ -49,6 +49,21 @@ before migrating.
   `orjson.dumps` / `orjson.loads`, and the stdlib json module is imported nowhere under
   app/. orjson is a core SDK dependency, so there is no install cost to paying for the
   speed.
+- **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
+- **Already correct when:** A justified inline `# conformance: ignore[O001] <reason>` IS the correct end state for a
+  `json.dumps` only when all three hold. (1) orjson cannot reproduce the call's output:
+  the call does not already pass both `separators=(",", ":")` and `ensure_ascii=False`,
+  or its input can hold an integer above 64 bits. A call that passes both on 64-bit-safe
+  input is byte-identical to `orjson.dumps(...).decode()` and makes the swap. (2) The
+  encoded string is stored as one attribute or field value, and a consumer outside the
+  app hashes or byte-compares that value as text. (3) The reason names the attribute key
+  or field and the location (repo and file:line) where that consumer hashes or compares
+  it as text. A `dumps` that serializes a whole entity or document does not qualify,
+  even when the document is later hashed: the publish app parses the document before it
+  diffs it, and there is no single attribute key to cite, so that site makes the swap. A
+  directive whose reason names no attribute key or no comparison location, or names a
+  consumer that only parses the JSON or sits inside the app, is unremediated: make the
+  swap.
 
 `orjson` is already a core dependency of the application SDK, so it is available to
 every app, and it is generally *at least* 10x faster than the stdlib `json` module.
@@ -71,16 +86,24 @@ always writes non-ASCII as UTF-8, with no option for either.  The parsed value i
 identical, so tests that compare parsed JSON pass; a consumer that hashes, commits or
 byte-compares the output sees the difference.
 
+No orjson call reproduces stdlib's default bytes: there is no separators option, no
+`ensure_ascii` option, `orjson.dumps` cannot serialize an integer above 64 bits, and
+rewriting orjson's text corrupts string values that contain `", "`. So a `json.dumps`
+whose output orjson cannot reproduce, and whose string is stored as one attribute or
+field value and hashed or byte-compared as text outside the app, stays on stdlib `json`
+behind a directive naming that attribute and where it is compared; see *Already correct
+when*.  A `dumps` that serializes a whole entity or document does not qualify.
+
 ---
 
 ## O002 — `LegacyAssetSerialization` {#o002}
 
 **Tier:** `warn` · **Scope:** `app` · **Category:** `asset-mapper` · **Autofixable:** — · **Since:** 0.8.0
 
-> Asset serialised with .dict() — prefer the v9 asset.to_nested_bytes() API
+> Asset serialised with .dict() — serialize through the SDK's entity_bytes
 
-**Rationale:** The asset-mapper pattern serialises pyatlan assets to JSONL with the v9 API —
-asset.to_nested_bytes() — which emits the nested-entity wire shape the platform expects.
+**Rationale:** The asset-mapper pattern serialises pyatlan assets to JSONL through the SDK's
+entity_bytes seam, which emits the nested-entity wire shape the platform expects.
 Serialising an asset with the pydantic .dict() method produces a flat dict that still
 needs hand-conversion and drifts from the SDK's recommended pipeline (BLDX-1492;
 docs/upgrade-guide-v3.md). WARN/recommendation because .dict() is name-anchored — it can
@@ -89,13 +112,22 @@ also belong to a non-asset pydantic model — so the call needs a human glance.
 ### What correct looks like
 
 - **Compliant example:** atlan-metabase-app app/asset_mapper.py — `serialize_entity` encodes each asset through
-  `asset.to_nested_bytes()`, the v9 wire shape, rather than through `.dict()`, then
-  decodes that output to build the publish-layer shape and merge in extra attributes.
+  `entity_bytes` under the app's `ENTITY_ENVELOPE`, rather than through `.dict()`, then
+  decodes that output to merge in the custom attributes pyatlan_v9 does not model.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags a `.dict()` method call in a module that imports pyatlan asset models.  The
-asset-mapper pattern writes assets with the v9 serialisation API —
-`asset.to_nested_bytes()` — not the pydantic `.dict()` form (`docs/upgrade-guide-v3.md`
-explicitly says 'use the v9 serialisation API instead of .dict()').
+asset-mapper pattern writes assets through
+`application_sdk.common.asset_serialization.entity_bytes` — not the pydantic `.dict()`
+form (`docs/upgrade-guide-v3.md` explicitly says 'use the v9 serialisation API instead
+of .dict()').  Do not swap in `asset.to_nested_bytes()`: that bypasses the seam and
+trips P052.
+
+Legacy `pyatlan.model.assets` models: migrate the model to `pyatlan_v9.model.assets`
+first (O004), then switch serialization. A v1 model handed to `entity_bytes` falls
+through to `model_dump()`, whose snake_case field names are not the Atlas wire shape, so
+the serialization switch alone emits malformed entities. The finding message says which
+case applies.
 
 Coverage limits (biased to low false-positives at WARN): only `.dict()` is matched (not
 `.json()`, which is overwhelmingly `response.json()` on HTTP clients), and only in files
@@ -122,6 +154,7 @@ WARN/recommendation because adding the annotation is a safe, mechanical nudge.
   MetabaseCollection`, the pyatlan_v9 type it constructs and returns (`map_dashboard`
   and `map_bi_process` likewise), so a wrong asset type is a type error rather than a
   runtime surprise in the payload.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags a function that constructs a pyatlan asset (instantiates a class imported from
 `pyatlan_v9.model.assets` / `pyatlan.model.assets`) and **returns that asset**, but
@@ -148,14 +181,15 @@ legacy pyatlan.model.assets classes are the memory-heavy DataFrame/transformer-e
 serialization path, kept only for connectors still on the built-in AtlasTransformer
 (which B001 steers off). pyatlan_v9 ships inside the existing pyatlan>=9 dependency, so
 the switch adds nothing to resolve. A below-the-bar recommendation (O-series, WARN): the
-v9 models differ in attributes and serialization (to_nested_bytes vs .dict()), so each
-site needs human judgement — never a blind name swap.
+v9 models differ in attributes and serialization (entity_bytes vs .dict()), so each site
+needs human judgement — never a blind name swap.
 
 ### What correct looks like
 
 - **Compliant example:** atlan-mysql-app app/mysql.py — `from pyatlan_v9.model.assets import Column, Database,
   Procedure, Schema, Table, View`. The non-v9 pyatlan.model.assets path appears nowhere
   under the three reference apps' app/ directories.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 
 Flags app code that imports asset model classes from the legacy `pyatlan.model.assets`
 package, in any of the three import forms: `from pyatlan.model.assets import X`, `import
@@ -171,8 +205,8 @@ Scope is deliberately narrow — only `pyatlan.model.assets` is matched, never t
 pyatlan.model.enums import AtlanConnectorType`) are out of scope.
 
 Not a mechanical rewrite: the v9 models are not a drop-in rename — attribute names and
-the serialization API differ (use `asset.to_nested_bytes()` rather than `.dict()`), so
-each construction site needs review. Suppress with `# conformance: ignore[O004]
+the serialization API differ (serialize through `entity_bytes` rather than `.dict()`),
+so each construction site needs review. Suppress with `# conformance: ignore[O004]
 <reason>` when a connector is intentionally pinned to the legacy `AtlasTransformer`
 surface.
 
@@ -204,6 +238,7 @@ automatic fail.
   atlan.yaml carries `name: metabase`; even the upload prefix built in
   `extract_metadata` spells the name out. The name is resolved once, at declaration; a
   `{app_name}` left in a plain string is a substitution nothing will ever perform.
+- **Fix by:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
 
 Flags a string `ast.Constant` containing the literal substring `{app_name}` when the
 token can actually **reach a value** — including the pieces of an escaped-brace
@@ -268,6 +303,7 @@ outside str/int/float/bool/bytes) that needs a human glance before migrating.
 - **Compliant example:** No reference app imports rocksdict. The SDK seam is
   application_sdk/common/spillable_dict.py — `SpillableDict`, which pickles values so a
   caller needs no hand-rolled serialize/deserialize step around the store.
+- **Migrate with:** [`programs/areas/optimizations.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/optimizations.prose.md)
 
 Flags app code that imports the `rocksdict` package directly, in either import form:
 `from rocksdict import Rdict` or `import rocksdict`.  Detection is import-anchored (a

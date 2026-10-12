@@ -52,13 +52,27 @@ the SDK's nested-to-flat lift) neither exempts an app nor implicates one.
 from (2) is the whole point: that SDK class kwarg only suppresses the unknown-key
 *error*, it does not set Pydantic ``extra="allow"``, so the keys are still
 dropped before ``model_dump()``.
+
+**Args wired to a non-value widget are not checked.** The ``Sage`` / ``SageV2``
+preflight runner (and the presentational ``InfoBanner``) carries nothing the
+workflow consumes: preflight checks execute in the UI through
+``Handler.preflight_check``, and no SDK runtime path reads a ``preflight_check``
+arg. Dropping such a key is harmless, so reporting it is an unactionable finding
+whose only "fix" is widening the entrypoint's Input for no behaviour. This is the
+same :data:`._form_keys._NON_VALUE_WIDGETS` classification K019 applies. The
+widget is read from the generated config JSON beside each manifest
+(``config.properties.<form-key>.ui.widget``, every branch of a ``conditional``),
+so the exemption keys on the *form key* an arg is wired to, never on the arg's
+name; with no config JSON present, nothing is exempted.
 """
 
 from __future__ import annotations
 
 import ast
 import dataclasses
+import json
 from pathlib import Path
+from typing import Any, cast
 
 from conformance.suite.checks._ast_common import (
     _IgnoreDirective,
@@ -74,10 +88,12 @@ from conformance.suite.checks._entrypoint_contract_fields import resolve_contrac
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_TEMPLATE_CONTRACT_FIELDS,
+    SDK_TEMPLATE_RUN_CONTRACTS,
 )
 from conformance.suite.checks.entrypoint_alignment._contract_entrypoints import (
     scan_contract as scan_contract_entrypoints,
 )
+from conformance.suite.checks.prescriptions._boundary_methods import inherited_run_base
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     collect_import_provenance,
 )
@@ -88,6 +104,7 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 )
 from conformance.suite.schema.findings import Finding
 
+from ._form_keys import _NON_VALUE_WIDGETS
 from ._manifest_args import ManifestArgs, collect_arg_keys
 from ._manifest_refs import manifest_paths_for_contract
 
@@ -104,6 +121,80 @@ _EXTRACTION_INPUT_BASE = "ExtractionInput"
 # credential_ref instead. Reporting these would put an unactionable finding on
 # every app and bury the real ones.
 _PLATFORM_INJECTED_ARGS = frozenset({"credential"})
+
+# The generated config JSON spells widget names camelCase (``sageV2``) while the
+# pkl ``Config.<Widget>`` classes K019 matches are PascalCase (``SageV2``).
+_NON_VALUE_WIDGETS_LOWER = frozenset(w.lower() for w in _NON_VALUE_WIDGETS)
+
+
+def _json_object(value: object) -> dict[str, Any] | None:
+    """*value* as a JSON object, or ``None`` when it is any other JSON type."""
+    return cast("dict[str, Any]", value) if isinstance(value, dict) else None
+
+
+def _is_non_value_ui(ui: object) -> bool:
+    obj = _json_object(ui)
+    widget = obj.get("widget") if obj is not None else None
+    return isinstance(widget, str) and widget.lower() in _NON_VALUE_WIDGETS_LOWER
+
+
+def _property_is_non_value(prop: object) -> bool:
+    """True when a config property renders only as a non-value widget.
+
+    A ``conditional`` input swaps its widget per branch, so it counts only when
+    the base widget AND every branch's widget are non-value — one value-bearing
+    branch means the arg can carry real config on that path.
+    """
+    obj = _json_object(prop)
+    if obj is None or not _is_non_value_ui(obj.get("ui")):
+        return False
+    conditions = obj.get("conditions")
+    if conditions is None:
+        return True
+    if not isinstance(conditions, list):
+        return False
+    branches = cast("list[object]", conditions)
+    return all(
+        (branch := _json_object(c)) is not None and _is_non_value_ui(branch.get("ui"))
+        for c in branches
+    )
+
+
+def _non_value_form_keys(manifest_dir: Path) -> set[str]:
+    """Form keys that are non-value widgets in the config JSON beside a manifest.
+
+    The toolkit writes each entrypoint's config JSON into the same directory as
+    its ``manifest.json`` (``app/generated/`` for a single-entrypoint app,
+    ``app/generated/<ep>/`` for a bundle), so a manifest is judged only against
+    its own entrypoint's form. Config JSONs are recognised by shape — a
+    top-level ``config.properties`` object — rather than by file name. A key
+    that is value-bearing in any of them is not exempted.
+    """
+    non_value: set[str] = set()
+    value: set[str] = set()
+    for path in sorted(manifest_dir.glob("*.json")):
+        try:
+            data: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            continue
+        doc = _json_object(data)
+        config = _json_object(doc.get("config")) if doc is not None else None
+        props = _json_object(config.get("properties")) if config is not None else None
+        if props is None:
+            continue
+        for key, prop in props.items():
+            (non_value if _property_is_non_value(prop) else value).add(key)
+    return non_value - value
+
+
+def _non_value_arg_keys(manifest: ManifestArgs, root: Path) -> set[str]:
+    """Flat arg keys wired to a non-value widget's ``{{form-key}}``."""
+    form_keys = _non_value_form_keys((root / manifest.manifest_path).parent)
+    return {
+        a.key
+        for a in manifest.args
+        if not a.nested and a.form_key is not None and a.form_key in form_keys
+    }
 
 
 def _target_entrypoint(
@@ -305,11 +396,13 @@ def _sole_extraction_input(
 ) -> ClassRecord | None:
     """The app's one live ``ExtractionInput`` descendant, or ``None`` if ambiguous.
 
-    Most SQL connectors never write ``@entrypoint`` in their own source: the app
-    class extends an SDK template (``BaseMetadataExtractor``) and inherits the
-    entrypoint from it, so the decorator-based resolution finds nothing. That is
-    the shape of the app in the motivating incident, so without this fallback
-    K018 would be silent on exactly the family it exists to protect.
+    Reached only when no entrypoint is visible at all: the app class extends
+    ``BaseMetadataExtractor``, which defines no ``run()``, and writes neither
+    ``@entrypoint`` nor ``run`` in its own source. (An app that inherits a
+    template's ``run()`` is paired with that template's input instead, see
+    :func:`_inherited_template_run`.) That is the shape of the app in the
+    motivating incident, so without this fallback K018 would be silent on
+    exactly the family it exists to protect.
 
     Anchoring on ``ExtractionInput`` rather than ``Input`` keeps the answer
     narrow — an app's ``TaskInput`` / ``CatalogTaskInput`` helpers descend from
@@ -382,39 +475,136 @@ def _resolved_field_names(
     return names
 
 
+@dataclasses.dataclass(frozen=True)
+class _Pairing:
+    """A manifest and the Input contract its ``extract`` node is validated against.
+
+    *input_rec* is the in-repo contract, or ``None`` when the contract is an SDK
+    template's ``run()`` input (*template* names the template); the finding
+    then lands on *anchor*, the app class that inherits that ``run()``.
+    """
+
+    manifest: ManifestArgs
+    anchor: ClassRecord
+    input_name: str
+    input_rec: ClassRecord | None = None
+    template: str | None = None
+
+
+def _inherited_template_run(
+    by_name: dict[str, ClassRecord],
+) -> tuple[ClassRecord, str] | None:
+    """The app class that inherits ``run()`` from an SDK template, and that template.
+
+    Only leaf classes (no in-repo subclass) are considered, since the leaf is
+    what registers. Every leaf that inherits ``run`` from an SDK ``App``-family
+    base must agree on one template that defines ``run()``; anything else
+    (``BaseMetadataExtractor``, ``App``, two templates) returns ``None``.
+    """
+    used_as_base = {b for rec in by_name.values() for b in rec.bases}
+    hits = [
+        (rec, base)
+        for rec in by_name.values()
+        if rec.name not in used_as_base
+        and (base := inherited_run_base(rec.name, by_name)) is not None
+    ]
+    templates = {base for _, base in hits}
+    if len(templates) != 1:
+        return None
+    (template,) = templates
+    if template not in SDK_TEMPLATE_RUN_CONTRACTS:
+        return None
+    anchor = min((rec for rec, _ in hits), key=lambda r: (r.file, r.node.lineno))
+    return anchor, template
+
+
+def _entrypoint_owner(
+    target: EntrypointContract, by_name: dict[str, ClassRecord]
+) -> ClassRecord | None:
+    """The in-repo class whose body defines *target*'s entrypoint method.
+
+    Matched by node identity, not by which methods take the Input type: a
+    helper class earlier in the file with a method annotated with the same
+    Input is not the entrypoint's owner.
+    """
+    if target.owner is None:
+        return None
+    return next((rec for rec in by_name.values() if rec.node is target.owner), None)
+
+
 def _pair_manifests_with_contracts(
     manifests: list[ManifestArgs],
     mode: str,
     code: CodeContractScan,
     by_name: dict[str, ClassRecord],
     trees: dict[str, ast.AST],
-) -> list[tuple[ManifestArgs, ClassRecord]]:
+) -> list[_Pairing]:
     """Map each manifest to the Input contract its ``extract`` node binds.
 
-    Two resolution paths, in order of confidence:
+    Three resolution paths, in order of confidence:
 
-    1. an explicit ``@entrypoint`` in the app's own source names the contract
-       (the same resolution K006 uses); or
-    2. the app inherits its entrypoint from an SDK template, so there is no
-       decorator to read — fall back to the app's sole ``ExtractionInput``
-       descendant. Restricted to single-entrypoint apps: in multi-entrypoint
-       mode there is no way to map one contract onto N manifests.
+    1. an explicit ``@entrypoint``, or an ``async def run`` override on an SDK
+       App-family base, in the app's own source names the contract (the same
+       resolution K006 uses);
+    2. the app inherits ``run()`` unchanged from an SDK template that defines
+       one — the runtime then validates against that template's ``run()``
+       input (:data:`SDK_TEMPLATE_RUN_CONTRACTS`), whatever contracts the app
+       declares beside it; or
+    3. no entrypoint is visible at all (``BaseMetadataExtractor`` defines no
+       ``run()``) — fall back to the app's sole ``ExtractionInput``
+       descendant.
+
+    Paths 2 and 3 are restricted to single-entrypoint apps: in
+    multi-entrypoint mode there is no way to map one contract onto N manifests.
     """
     if code.entrypoints:
-        pairs: list[tuple[ManifestArgs, ClassRecord]] = []
+        pairs: list[_Pairing] = []
         for manifest in manifests:
             target = _target_entrypoint(manifest.manifest_path, mode, code.entrypoints)
             if target is None or target.input_class_name is None:
                 continue
             rec = by_name.get(target.input_class_name)
             if rec is not None:
-                pairs.append((manifest, rec))
+                pairs.append(_Pairing(manifest, rec, rec.name, input_rec=rec))
+            elif target.input_class_name in SDK_TEMPLATE_CONTRACT_FIELDS and (
+                anchor := _entrypoint_owner(target, by_name)
+            ):
+                pairs.append(_Pairing(manifest, anchor, target.input_class_name))
         return pairs
 
     if mode != "single" or len(manifests) != 1:
         return []
+    inherited = _inherited_template_run(by_name)
+    if inherited is not None:
+        anchor, template = inherited
+        return [
+            _Pairing(
+                manifests[0],
+                anchor,
+                SDK_TEMPLATE_RUN_CONTRACTS[template].input,
+                template=template,
+            )
+        ]
     rec = _sole_extraction_input(by_name, trees)
-    return [(manifests[0], rec)] if rec is not None else []
+    return [_Pairing(manifests[0], rec, rec.name, input_rec=rec)] if rec else []
+
+
+def _unwired_declarers(
+    input_name: str,
+    by_name: dict[str, ClassRecord],
+    file_aliases: dict[str, dict[str, str]],
+    by_name_all: dict[str, list[ClassRecord]],
+) -> dict[str, set[str]]:
+    """In-repo template-Input descendants and the fields each declares.
+
+    Used only on the inherited-``run()`` path, where none of them is bound.
+    """
+    anchors = {_EXTRACTION_INPUT_BASE, input_name}
+    return {
+        rec.name: _resolved_field_names(rec, file_aliases, by_name, by_name_all)
+        for rec in by_name.values()
+        if any(_chain_reaches(rec, by_name, a) for a in anchors)
+    }
 
 
 def scan_all(paths: list[Path], root: Path) -> list[Finding]:
@@ -490,20 +680,39 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
     findings: list[Finding] = []
 
-    for manifest, input_rec in pairs:
-        chain_nodes, fully_resolved = _walk_chain(input_rec, by_name, by_name_all)
-        if not fully_resolved:
-            continue  # incomplete picture — stay silent rather than guess.
-        if any(_class_allows_extra(node) for node in chain_nodes):
-            continue  # real Pydantic extra="allow" keeps undeclared keys.
-
-        declared = _resolved_field_names(input_rec, file_aliases, by_name, by_name_all)
-        directives = file_directives.get(input_rec.file, {})
+    for pairing in pairs:
+        input_rec = pairing.input_rec
+        unwired: dict[str, set[str]] = {}
+        if input_rec is None:
+            declared = {
+                f.name for f in SDK_TEMPLATE_CONTRACT_FIELDS[pairing.input_name]
+            }
+            unwired = _unwired_declarers(
+                pairing.input_name, by_name, file_aliases, by_name_all
+            )
+        else:
+            chain_nodes, fully_resolved = _walk_chain(input_rec, by_name, by_name_all)
+            if not fully_resolved:
+                continue  # incomplete picture — stay silent rather than guess.
+            if any(_class_allows_extra(node) for node in chain_nodes):
+                continue  # real Pydantic extra="allow" keeps undeclared keys.
+            declared = _resolved_field_names(
+                input_rec, file_aliases, by_name, by_name_all
+            )
+        directives = file_directives.get(pairing.anchor.file, {})
 
         findings.extend(
-            _make_finding(manifest, arg_key, input_rec, directives)
+            _make_finding(
+                pairing,
+                arg_key,
+                directives,
+                sorted(name for name, fields in unwired.items() if arg_key in fields),
+            )
             for arg_key in sorted(
-                manifest.flat_keys() - declared - _PLATFORM_INJECTED_ARGS
+                pairing.manifest.flat_keys()
+                - declared
+                - _PLATFORM_INJECTED_ARGS
+                - _non_value_arg_keys(pairing.manifest, root)
             )
         )
 
@@ -511,38 +720,62 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
 
 def _make_finding(
-    manifest: ManifestArgs,
+    pairing: _Pairing,
     arg_key: str,
-    input_rec: ClassRecord,
     directives: dict[int, _IgnoreDirective],
+    unwired: list[str],
 ) -> Finding:
+    manifest = pairing.manifest
+    anchor = pairing.anchor
+    input_name = pairing.input_name
     depth = next(
         ("args.metadata" if a.nested else "args")
         for a in manifest.args
         if a.key == arg_key
     )
+    if pairing.template is None:
+        subject = (
+            f"'{input_name}' (the entrypoint's Input contract) does not declare a "
+            f"'{arg_key}' field — directly or via an inherited base/mixin"
+        )
+        fix = (
+            f"Declare '{arg_key}' on '{input_name}' as a typed field, or mix in the "
+            "SDK base that supplies it ('ExtractionInput' carries include_filter, "
+            "exclude_filter, temp_table_regex and extraction_method). "
+        )
+    else:
+        subject = (
+            f"'{anchor.name}' inherits run() from the SDK template "
+            f"'{pairing.template}', so the runtime validates the payload against "
+            f"'{input_name}', which does not declare a '{arg_key}' field"
+        )
+        if unwired:
+            names = ", ".join(f"'{n}'" for n in unwired)
+            subject += (
+                f" ({names} declares it, but no entrypoint binds that contract, "
+                "so the runtime never uses it)"
+            )
+        fix = (
+            f"Override run() on '{anchor.name}' with an Input contract that "
+            f"subclasses '{input_name}' and declares '{arg_key}' as a typed field. "
+        )
     # discriminator = the arg key, so several findings anchored on the same
-    # Input class stay distinct fingerprints. Note there is no per-key
+    # class stay distinct fingerprints. Note there is no per-key
     # suppression: the ':subject' grammar lives in _toml_suppress (T025) only,
     # and _parse_directives keeps the whole bracket token, so
     # 'ignore[K018:include_filter]' matches no rule and suppresses nothing.
     # '# conformance: ignore[K018]' suppresses every key on the class.
     return dataclasses.replace(
         make_finding(
-            filename=input_rec.file,
+            filename=anchor.file,
             rule_id=_RULE_ID,
-            node=input_rec.node,
+            node=anchor.node,
             message=(
                 f"'{manifest.manifest_path}' sends '{depth}.{arg_key}' to the extract "
-                f"node, but '{input_rec.name}' (the entrypoint's Input contract) does "
-                f"not declare a '{arg_key}' field — directly or via an inherited "
-                "base/mixin. Pydantic "
+                f"node, but {subject}. Pydantic "
                 "drops the key before model_dump(), so the entrypoint runs on the "
                 f"field's default. For a filter that default is empty, and an empty "
-                "include-filter means crawl everything. Declare "
-                f"'{arg_key}' on '{input_rec.name}' as a typed field, or mix in the SDK "
-                "base that supplies it ('ExtractionInput' carries include_filter, "
-                "exclude_filter, temp_table_regex and extraction_method). "
+                f"include-filter means crawl everything. {fix}"
                 "Do NOT add a @model_validator(mode='before') that folds flat keys "
                 "into a 'metadata' dict: that rebuilds the nested envelope the "
                 "platform moved away from, leaves the contract still not describing "
@@ -553,7 +786,8 @@ def _make_finding(
                 "extra='allow'. "
                 "Never hand-edit the generated manifest.json to work around this — it "
                 "is a pkl eval output. Suppress with "
-                "'# conformance: ignore[K018] <reason>' on the Input class definition."
+                "'# conformance: ignore[K018] <reason>' on the "
+                f"'{anchor.name}' class definition."
             ),
             directives=directives,
         ),

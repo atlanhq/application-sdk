@@ -1,8 +1,8 @@
 r"""Build the `detect` argument list for atlan-application-sdk-conformance.
 
-Reads EXCLUDE_PATHS, EXIT_ZERO and WITH_TESTS from the environment (set
-by GitHub Actions ``env:`` blocks) and prints one argument per line to
-stdout. Callers do::
+Reads EXCLUDE_PATHS and EXIT_ZERO from the environment (set by GitHub
+Actions ``env:`` blocks) and prints one argument per line to stdout.
+Callers do::
 
     mapfile -t detect_args < <(python \
       .github/scripts/build_conformance_args.py --series C --slug ci)
@@ -40,21 +40,12 @@ def build_args(
     *,
     exclude: str = "",
     exit_zero: bool = False,
-    with_tests: bool = False,
 ) -> list[str]:
     """Return the ``detect`` arguments for one conformance series.
 
     ``exclude`` renders as ``--exclude`` when non-empty, and
     ``exit_zero`` appends ``--exit-zero`` for soft-enforcement runs
     where violations are reported but do not fail the job.
-
-    ``with_tests`` appends ``--with-tests``, which executes the
-    registered preflight scenarios in a bounded pytest subprocess
-    instead of reporting the TEST rules as not evaluated. It needs an
-    importable app environment, so only pass it on a leg that also
-    syncs one. The runner rejects ``--with-tests`` together with
-    ``--static``, and ``--static`` is its default rather than an
-    argument this script emits, so the two cannot collide here.
     """
     result = [
         "--repo",
@@ -68,8 +59,6 @@ def build_args(
         result += ["--exclude", exclude]
     if exit_zero:
         result.append("--exit-zero")
-    if with_tests:
-        result.append("--with-tests")
     return result
 
 
@@ -90,14 +79,12 @@ def main(argv: list[str] | None = None) -> int:
 
     exclude = os.environ.get("EXCLUDE_PATHS", "")
     exit_zero = os.environ.get("EXIT_ZERO", "").lower() == "true"
-    with_tests = os.environ.get("WITH_TESTS", "").lower() == "true"
 
     detect_args = build_args(
         args.series,
         args.slug,
         exclude=exclude,
         exit_zero=exit_zero,
-        with_tests=with_tests,
     )
     # This print is the script's actual output mechanism — the calling
     # composite action reads stdout via `mapfile`, not application

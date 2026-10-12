@@ -119,6 +119,90 @@ def test_t005_silent_on_scenario_helper() -> None:
     assert findings == []
 
 
+def test_t005_silent_on_inherited_full_dag_test_scenario() -> None:
+    """The SDK's same-name base scenario grades the full DAG outcome."""
+    findings = scan_text(
+        "from app.generated._e2e_base import ScenarioBase\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert findings == []
+
+
+def test_t005_silent_on_full_dag_delegation_from_sdk_base_alias() -> None:
+    """An aliased import straight from the SDK harness is resolved too."""
+    findings = scan_text(
+        "from application_sdk.testing.e2e import SQLAppE2ETest as Base\n"
+        "class TestWorkflow(Base):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_on_full_dag_delegation_to_app_local_base() -> None:
+    """An app-local base may override the scenario with no assertions."""
+    findings = scan_text(
+        "from tests.e2e.helpers import ScenarioBase\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_full_dag_delegation_to_same_file_base() -> None:
+    """A base defined in the test file is not the SDK scenario."""
+    findings = scan_text(
+        "class ScenarioBase:\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        run()\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [f.rule_id for f in findings] == ["T005"]
+    assert "TestWorkflow" in findings[0].message
+
+
+def test_t005_fires_on_different_test_delegating_to_full_dag_scenario() -> None:
+    """A scenario call from a different test is not inherited test delegation."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_collects_inventory(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_unrecognized_same_name_super_delegation() -> None:
+    """A same-name parent call is not enough without the SDK scenario contract."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_collects_inventory(self):\n"
+        "        super().test_collects_inventory()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_self_call_to_full_dag_test_name() -> None:
+    """The SDK scenario only counts when delegated through the base class."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        self.test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
 def test_t005_silent_on_underscore_assert_helper() -> None:
     """A test whose only check is a project-local ``_assert_*`` helper is
     recognised — this vocabulary is documented in the module docstring and the

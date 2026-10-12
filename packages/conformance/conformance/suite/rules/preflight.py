@@ -27,7 +27,11 @@ retired and never reused. From here on the rule-id stability policy in
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -83,6 +87,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``@task(name=<expr>)`` is not statically resolvable and is not flagged."
         ),
         help_uri=f"{_HELP_BASE}#f001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F002",
@@ -121,6 +129,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "``Handler.preflight_check`` implementation the gate calls."
         ),
         help_uri=f"{_HELP_BASE}#f002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F003",
@@ -164,6 +176,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "A locally-defined non-SDK class named ``PreflightCheck`` is not flagged."
         ),
         help_uri=f"{_HELP_BASE}#f003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F004",
@@ -216,6 +232,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             '``ConfigDict(extra="allow")`` or ``{"extra": "allow"}``.'
         ),
         help_uri=f"{_HELP_BASE}#f004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F005",
@@ -272,6 +292,10 @@ _EXISTING_RULES: tuple[RuleDefinition, ...] = (
             "E004 with no log at all (FND-2628). Found in FND-2569."
         ),
         help_uri=f"{_HELP_BASE}#f005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
 )
 
@@ -296,6 +320,10 @@ _CONTRACT_RULES = (
         full_description="Declare SDK PreflightInput and PreflightOutput on every supported handler.",
         rationale="Customer impact: Missing types and legacy output dictionaries hide contract drift from both UI and workflow consumers.",
         help_uri=f"{_HELP_BASE}#f006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F007",
@@ -314,17 +342,37 @@ _CONTRACT_RULES = (
         orthogonal_gate="tests",
         since="0.27.0",
         short_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
-        full_description="Provide nonblank failure messages and audience-appropriate suggested actions.",
+        full_description=(
+            "Every error that reaches a failed preflight check carries a nonblank "
+            "``message`` and ``suggested_action``.  The SDK's generic leaves (for "
+            "example ``RateLimitedError``, ``SourceUnavailableError``, "
+            "``DependencyUnavailableError``, ``InternalError``) ship no default "
+            "action, so the app supplies it — as a class default on its own "
+            "subclass or at the construction site.\n"
+            "\n"
+            "Write the action for the error's ``audience`` (ADR 0013): customer-facing "
+            "text the customer can act on for ``USER``; an engineer-facing remediation "
+            "for the connector owners for ``APP_OWNER``; an operator hint for platform "
+            "on-call for ``PLATFORM``.  The finding message names the resolved class "
+            "and its audience.  Some surfaces forward the action without filtering by "
+            "audience, so keep internal file paths and exception text out of it."
+        ),
         rationale="Customer impact: A typed error with no action still leaves a blocked workflow without a usable next step.",
         help_uri=f"{_HELP_BASE}#f007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F008",
         canonical_reference=(
-            "atlan-mysql-app app/handler.py — the advisory `connectivity` check catches the "
-            "probe failure and returns it on the failed row, a blip as the retryable leaf "
-            "from `transient_failure(e)`, so the verdict stays READY and nothing it expects "
-            "escapes preflight_check, where the origin-based gate would block on it."
+            "atlan-mysql-app app/handler.py — the auth probe returns a NOT_READY verdict "
+            "carrying the typed error for a definitive source state, and raises only the "
+            "retryable SOURCE_UNAVAILABLE leaf `transient_failure` classifies for a server "
+            "blip (`raise transient from e`). Its tests/unit/test_preflight_conformance.py "
+            "`recoverable_transient` scenario asserts the raise, and a clean READY from a "
+            "later run against the recovered source."
         ),
         name="PreflightExpectedFailureRaised",
         scope=RuleScope.APP,
@@ -333,10 +381,35 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Return expected typed preflight failures rather than letting them escape.",
-        full_description="Return expected typed preflight failures rather than letting them escape.",
-        rationale="The target origin-based gate applies hard mode to handler raises; a raised transient is no longer a fail-open request.",
+        short_description=(
+            "Return verdicts for source states; raise only retryable, non-deprecated transients."
+        ),
+        full_description=(
+            "An expected failure of the source — bad credentials, a missing grant, an "
+            "absent object — is a verdict: return it as a failed PreflightCheck carrying "
+            "the typed error. The one thing a handler may raise is a transient — the "
+            "source could not be asked this time — as a retryable leaf whose category is "
+            "SOURCE_UNAVAILABLE or TIMEOUT. The gate records that raise as an unverifiable "
+            "source (a NOT_READY output and a would_block row classified "
+            "source_unverifiable), never blocks a hard run on either category, and the "
+            "run proceeds; it does not ask the handler again. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED, "
+            "RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the gate "
+            "deprecated that idiom. A raise whose category or retryability the checker "
+            "cannot read from the error class (or a literal ``retryable=``) stays flagged."
+        ),
+        rationale=(
+            "The gate classifies by who raised: anything the handler raises is its "
+            "statement about the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf "
+            "is reported as an unverifiable source and never blocks; any other raised "
+            "failure loses the check "
+            "row a returned verdict carries, and a raised fail-open category is a "
+            "deprecated request the gate no longer honours as plumbing."
+        ),
         help_uri=f"{_HELP_BASE}#f008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F009",
@@ -358,6 +431,10 @@ _CONTRACT_RULES = (
         full_description="Keep READY, PARTIAL and NOT_READY consistent with check outcomes.",
         rationale="Advisory failures must not become mandatory blocks and a successful status must not hide failed checks.",
         help_uri=f"{_HELP_BASE}#f009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F010",
@@ -380,6 +457,10 @@ _CONTRACT_RULES = (
         full_description="Preserve the selected entrypoint and supply routable credentials before the gate.",
         rationale="The injected gate runs before workflow-body normalization, so a UI check can succeed while the gate sees different inputs.",
         help_uri=f"{_HELP_BASE}#f010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F011",
@@ -399,7 +480,25 @@ _CONTRACT_RULES = (
         short_description="Keep source probes awaitable and bounded across every connection phase.",
         full_description="Keep source probes awaitable and bounded across every connection phase.",
         rationale="Blocking I/O or unbounded executor waits can outlive the gate and stall worker activities.",
+        rule_interactions=(
+            "Applied together with P031. P031 moves asyncio.to_thread / "
+            "run_in_executor(None, ...) onto the SDK's run_in_thread; on a preflight "
+            "path that is the module-level "
+            "application_sdk.execution.heartbeat.run_in_thread, because Handler has "
+            "no run_in_thread and App.run_in_thread raises outside a @task. "
+            "run_in_thread "
+            "carries no deadline of its own, so the swapped call is still an "
+            "executor wait in F011's view. On a preflight path, add the deadline "
+            "when moving: wrap the run_in_thread await in asyncio.wait_for(..., "
+            "timeout=...) or async with asyncio.timeout(...) sized from the "
+            "remaining preflight budget. Swapping without the deadline leaves F011 "
+            "firing on the new line."
+        ),
         help_uri=f"{_HELP_BASE}#f011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F012",
@@ -423,6 +522,10 @@ _CONTRACT_RULES = (
         full_description="Keep probe and retry deadlines inside the remaining gate budget.",
         rationale="Floors, extra margins and equal nested timeout boundaries turn healthy probes into timeout races.",
         help_uri=f"{_HELP_BASE}#f012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F013",
@@ -443,6 +546,10 @@ _CONTRACT_RULES = (
         full_description="Release owned preflight resources without blocking the event loop.",
         rationale="Cancellation of an await does not terminate a driver thread or release its resources.",
         help_uri=f"{_HELP_BASE}#f013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F014",
@@ -463,6 +570,10 @@ _CONTRACT_RULES = (
         full_description="Keep raw exception and credential values out of preflight outputs and logs.",
         rationale="Typed wire fields and traceback locals are independent channels through which secrets can escape.",
         help_uri=f"{_HELP_BASE}#f014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="adopt-preflight-gate",
+        ),
     ),
     RuleDefinition(
         id="F015",
@@ -487,6 +598,10 @@ _CONTRACT_RULES = (
         full_description="Migrate the inert mode override and the renamed gate-classification helpers.",
         rationale="SDK PR #3685 renamed the old gate contract. The nine affected symbols are served as deprecated aliases until v3.40.0 and ATLAN_PREFLIGHT_GATE_MODE no longer does anything, so a hit is a migration window rather than proof of current incompatibility — WARN, not BLOCK.",
         help_uri=f"{_HELP_BASE}#f015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F016",
@@ -496,47 +611,43 @@ _CONTRACT_RULES = (
             "cancellation_cleanup and the rest) is a test that drives the real "
             "`OpenAPIConnectorHandler.preflight_check` and is registered with "
             '`@pytest.mark.preflight_conformance(rule="F016", scenario=...)`. The marker, '
-            "not the file's presence, is what a `--with-tests` run counts as coverage."
+            "not the file's presence, is what counts as a defined scenario. "
+            "atlan-metabase-app registers the same matrix once per `@entrypoint` "
+            "through a module-level `entrypoint_matrix(scenario)` parametrize helper."
         ),
         name="PreflightBehaviorContract",
         scope=RuleScope.APP,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.27.0",
-        short_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        full_description="Execute registered real-handler scenarios for each applicable entrypoint.",
-        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime. Missing and skipped scenarios are incomplete evidence.",
+        short_description="Define every required real-handler preflight scenario for each entrypoint.",
+        full_description=(
+            "Every scenario in the F016 matrix must be defined, for each "
+            "``@entrypoint`` the app declares, as a pytest-collected test under "
+            "``tests/unit/`` (the tier the test gate always runs) marked "
+            '``preflight_conformance(rule="F016", scenario=..., entrypoint=...)`` '
+            "that calls ``assert_preflight_result`` from "
+            "``conformance.preflight_testing`` (and ``assert_probe_lifetime`` for "
+            "hung_probe, cancellation_cleanup and budget_retry) as a statement of "
+            "the test body or of a top-level loop over a non-empty literal. The "
+            "reader accepts the shapes the reference apps use and reports anything "
+            "else rather than modelling it. A registration on a test that does not "
+            "run (skip, a true skipif or xfail condition, no runnable parametrized "
+            "case), a declared-unsupported one, a case whose entrypoint argument "
+            "differs from its marker, and one outside the accepted shapes do not "
+            "define the scenario. This rule checks the matrix is defined; whether the tests "
+            "pass is the test gate's measure, and conformance never executes them. "
+            "WARN while the fleet registers its scenarios; promoted to BLOCK once "
+            "it has."
+        ),
+        rationale="Customer impact: Static shape checks cannot prove verdict semantics, probe coverage, recovery, or resource lifetime, so each scenario must exist as a test the test gate runs. A missing scenario is a behaviour nothing verifies.",
         help_uri=f"{_HELP_BASE}#f016",
-    ),
-    RuleDefinition(
-        id="F017",
-        name="PreflightWorkflowEnforcement",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        short_description="Verify gate enforcement through real Temporal workflow histories.",
-        full_description="Verify gate enforcement through real Temporal workflow histories.",
-        rationale="Customer impact: Only execution history can prove extraction was never scheduled after a hard gate failure, including activity death.",
-        help_uri=f"{_HELP_BASE}#f017",
-    ),
-    RuleDefinition(
-        id="F018",
-        name="PreflightExitEvidence",
-        scope=RuleScope.SDK,
-        tier=EnforcementTier.BLOCK,
-        mechanism=RuleMechanism.TEST,
-        category="preflight-gate",
-        orthogonal_gate="tests",
-        since="0.27.0",
-        short_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        full_description="Verify typed verdicts, outcome fields and safe evidence handoff on every exit.",
-        rationale="Customer impact: Activity and workflow failures must preserve cause and status, and logging must not silently discard the evidence.",
-        help_uri=f"{_HELP_BASE}#f018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F019",
@@ -561,17 +672,22 @@ _CONTRACT_RULES = (
             "clearable by executing tests. A *value-level* gap — a computed "
             "aggregation or an unresolvable row inside one, an expanded failure "
             "constructor, an unresolved error expression, a dynamic ``passed`` — "
-            "names a property F016 asserts on "
-            "every executed scenario, so a ``--with-tests`` run whose F016 matrix "
-            "is complete and passing drops it. A *structural* gap — an unparsed "
+            "names a property every F016 scenario asserts through "
+            "``assert_preflight_result``, so it is dropped once the F016 matrix is "
+            "fully defined; the test gate proves those assertions hold. A "
+            "*structural* gap — an unparsed "
             "file, a preflight_check the analysis never resolved, a dynamically "
             "bound callback, an input contract class that is not in the registry — "
-            "stands regardless of how many scenarios pass, because execution does "
-            "not tell the analysis what it failed to read; clear those by making "
+            "stands regardless of how many scenarios are defined, because a test "
+            "does not tell the analysis what it failed to read; clear those by making "
             "the code statically resolvable."
         ),
         rationale="An undiscovered handler or unresolved contract must not be mistaken for conforming code.",
         help_uri=f"{_HELP_BASE}#f019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F020",
@@ -588,14 +704,16 @@ _CONTRACT_RULES = (
         category="preflight-gate",
         orthogonal_gate="tests",
         since="0.32.0",
-        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047).",
+        short_description="A conformance suppression cites a retired preflight id (P032-P035, P047, F017, F018).",
         full_description=(
             "The preflight rules moved from the P-series to the F-series: P032-P035 "
-            "became F001-F004 and P047 became F005. The suppression parser matches "
+            "became F001-F004 and P047 became F005. F017 and F018 were retired "
+            "with no replacement. The suppression parser matches "
             "ids as plain strings, so a ``# conformance: ignore[...]`` directive that "
             "still cites a retired id suppresses nothing and the renamed rule fires "
             "with no hint why. Cite the new id named in the message, keeping the "
-            "justification, or delete the directive if the finding it covered is gone."
+            "justification, or delete the directive if the finding it covered is "
+            "gone or its rule was retired."
         ),
         rationale=(
             "Customer impact: a reviewed, justified carve-out silently turns into an "
@@ -603,6 +721,10 @@ _CONTRACT_RULES = (
             "no signal that the stale directive is the cause."
         ),
         help_uri=f"{_HELP_BASE}#f020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
     RuleDefinition(
         id="F021",
@@ -619,7 +741,7 @@ _CONTRACT_RULES = (
         mechanism=RuleMechanism.STATIC,
         category="preflight-gate",
         orthogonal_gate="tests",
-        since="0.39.0",
+        since="0.47.0",
         short_description="Classify a broadly caught preflight failure before naming it an auth or permission problem.",
         full_description=(
             "A broad ``except`` in ``preflight_check`` or a helper it calls "
@@ -641,6 +763,10 @@ _CONTRACT_RULES = (
             "source-side permissions that were never the problem."
         ),
         help_uri=f"{_HELP_BASE}#f021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/preflight-guide.md",
+        ),
     ),
 )
 

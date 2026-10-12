@@ -148,9 +148,9 @@ class SpillableDict(MutableMapping):  # type: ignore[type-arg]
             # rocksdict ships Rdict/Options/BlockBasedOptions as a unit;
             # checking one is sufficient.
             raise ImportError(
-                "rocksdict is required for SpillableDict — install with "
-                "`pip install atlan-application-sdk[storage]` or add "
-                "`rocksdict>=0.3.0` to your project deps."
+                "rocksdict is required for SpillableDict. It is a core "
+                "dependency of atlan-application-sdk, so this environment "
+                "has had it removed — reinstall the SDK."
             )
 
         self._temp_dir = tempfile.mkdtemp(prefix="atlan_spillable_dict_")

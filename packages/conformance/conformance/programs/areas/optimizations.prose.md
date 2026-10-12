@@ -99,11 +99,44 @@ two auto-fixable rules:
     non-ASCII as `\uXXXX` while orjson always writes UTF-8.  So only a call
     already passing `separators=(",", ":")` **and** `ensure_ascii=False`
     round-trips byte-identically.  For every other `dumps`, find what consumes
-    the string.  If anything hashes it, commits it, diffs it, signs it or
-    compares it byte-for-byte, prove the change on real input (for a
+    the string.  If the string is stored as one attribute value and a consumer
+    outside the app compares it as text, the next bullet applies instead: do
+    not swap.  If a consumer
+    inside the app hashes it, commits it, diffs it, signs it or compares it
+    byte-for-byte, prove the change on real input (for a
     committed file, dump its current content both ways and compare) and say
     in residue what will change.  Do not rewrite a committed file to match;
     the edit touches the call site only.
+  - **When the bytes leave the app, leave the site on stdlib `json`.**  No
+    orjson call reproduces stdlib's default output (no separators option, no
+    `ensure_ascii` option, and `orjson.dumps` cannot serialize integers above
+    64 bits), and rewriting orjson's
+    text corrupts values that contain `", "`.  So if the encoded string is
+    stored as one attribute or field value and a consumer outside the app
+    hashes or byte-compares that value as text, do not swap: any swap changes
+    every stored value once on every tenant, and moves any length limit
+    measured on the string.  This applies only where orjson cannot reproduce
+    the output: a call already passing `separators=(",", ":")` and
+    `ensure_ascii=False` on input with no integer above 64 bits is
+    byte-identical to `orjson.dumps(...).decode()` and makes the swap.
+    Prove the consumer before you stop: trace the string from the call to
+    the attribute key or field it is stored in, then to the code outside the
+    app that hashes or compares that value as text.  Then add
+    `# conformance: ignore[O001] <reason>` where the reason names the
+    attribute key or field and that location (repo and file:line), e.g.
+    `ignore[O001] rawDataTypeDefinition, hashed as text at <repo>/<path>:<line>`.
+    A reason that names neither, a consumer that only parses the JSON, or one
+    inside the app, is not a reason: make the swap.  A `dumps` that
+    serializes a whole entity or document never qualifies, even when that
+    document is hashed later: it has no single attribute key to cite, and
+    the publish app parses the whole document of an entity file before it
+    diffs it.  So the dumps that writes the file makes the swap, while a JSON
+    string stored as one attribute value inside that entity is hashed as text
+    and stays.  O001 is WARN-tier, so only a strict-mode run hands the lane
+    this finding: return `outcome = "suppress"` with
+    `suppression_reason = "site-exception"` and residue it.  A directive
+    already in place is the terminal state in any mode: do not strip it on a
+    later run.
   - **A `default=` callable survives the swap but STOPS BEING CALLED for the
     types orjson serializes natively** — `datetime`, `date`, `time`, `uuid.UUID`,
     and dataclasses.  NumPy is **not** native unless `orjson.OPT_SERIALIZE_NUMPY`
@@ -164,13 +197,27 @@ two auto-fixable rules:
 
 - **O002 LegacyAssetSerialization** (asset-mapper, BLDX-1492) — an asset is
   serialized with the pydantic `.dict()` method in a module that imports pyatlan
-  asset models.  The asset-mapper transform task writes assets with the v9
-  serialization API — `out_f.write(asset.to_nested_bytes() + b"\n")` — which emits
-  the nested-entity wire shape the platform ingests; `.dict()` produces a flat
-  dict that still needs hand-conversion.  Draft the switch to
-  `asset.to_nested_bytes()` (note it returns `bytes`, so the sink must be a
-  bytes/JSONL writer).  If the flagged `.dict()` is on a **non-asset** pydantic
-  model, propose an inline `# conformance: ignore[O002] <reason>` instead.
+  asset models.  The asset-mapper transform task writes assets through the SDK's
+  serialization seam — `out_f.write(entity_bytes(asset, envelope=...) + b"\n")`
+  (`from application_sdk.common.asset_serialization import entity_bytes`) — which
+  emits the nested-entity wire shape the platform ingests; `.dict()` produces a
+  flat dict that still needs hand-conversion.  For a `pyatlan_v9` asset, draft
+  the switch to `entity_bytes(asset, ...)` (note it returns `bytes`, so the sink
+  must be a bytes/JSONL writer).  Never draft `asset.to_nested_bytes()`: it
+  bypasses the seam and trips P052.
+
+  If the asset is a legacy `pyatlan.model.assets` model (O004 fires in the same
+  file, and the O002 message says so), **do not** draft the `entity_bytes`
+  switch on its own: a v1 model falls through to `model_dump()`, whose
+  snake_case field names are not the Atlas wire shape, so the rewrite would
+  emit malformed entities while looking finished.  The fix is the O004
+  migration first — move the model to `pyatlan_v9.model.assets` and confirm
+  every field the mapper sets exists on the v9 class — and only then the
+  serialization switch.  Draft both together as one proposal, or route the
+  site to residue if the model migration is not in reach.
+
+  If the flagged `.dict()` is on a **non-asset** pydantic model, propose an
+  inline `# conformance: ignore[O002] <reason>` instead.
 
 - **O003 UntypedAssetMapperReturn** (asset-mapper, BLDX-1492) — a function builds
   a pyatlan asset and returns it but declares no return annotation.  Draft the
@@ -193,9 +240,9 @@ two auto-fixable rules:
 
   2. **Adapt every construction site** — the v9 models are not a drop-in rename:
      attribute names and the serialization API differ.  In particular, switch
-     asset serialization from the pydantic `asset.dict()` form to the v9
-     `asset.to_nested_bytes()` API used by the transform task (this also clears
-     any O002 finding).  Read each `Table(...)`/`Column(...)` call and confirm the
+     asset serialization from the pydantic `asset.dict()` form to the SDK's
+     `entity_bytes(asset, ...)` seam used by the transform task (this also clears
+     any O002 finding without tripping P052).  Read each `Table(...)`/`Column(...)` call and confirm the
      kwargs exist on the v9 model; note any that don't in residue rather than
      dropping them.
 
@@ -292,4 +339,7 @@ When `mode == "strict"` and the site legitimately needs stdlib `json` (e.g.
 interop with a library that requires a `str` and the bytes-decode round-trip
 is wasteful, or a `json.JSONEncoder` subclass), the model may propose an
 inline `# conformance: ignore[O001] <justification>` instead of a fix.  Route
-every suppression to residue for human audit.
+every suppression to residue for human audit.  The byte-changing-defaults
+carve-out above is one such `site-exception`: like every O001 suppression the
+lane writes it only in strict mode, and once it is in place no mode strips
+it.

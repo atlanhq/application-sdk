@@ -26,13 +26,13 @@ class Finding:
     finding without suppressing its siblings. ``None`` (the default) keeps the
     pre-discriminator fingerprint and directive behaviour.
 
-    ``cleared_by`` names the behavioural rules whose *complete, passing*
-    scenario matrix closes the gap this finding reports.  A static checker
-    sets it when the property it could not resolve is one those rules assert
-    on every executed scenario, and the runner then drops the finding from a
-    ``--with-tests`` run in which every named rule came back complete.  The
-    empty default means no amount of execution can close the gap — the
-    analysis never found the code to begin with — so the finding stands.
+    ``cleared_by`` names the rules whose *fully defined* scenario matrix
+    closes the gap this finding reports.  A static checker sets it when the
+    property it could not resolve is one every scenario of those rules
+    asserts, and the preflight pass drops the finding when each named rule's
+    matrix is defined.  Nothing is executed: the test gate is what proves the
+    scenarios pass.  The empty default means no scenario can close the gap —
+    the analysis never found the code to begin with — so the finding stands.
     """
 
     rule_id: str

@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     _SDK_CONTRACT_MODULE_PREFIXES,
     ImportProvenance,
@@ -24,7 +29,6 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     collect_classes,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -35,16 +39,16 @@ from conformance.suite.checks.prescriptions._typed_boundaries import (
 _PREFLIGHT_INPUT = "PreflightInput"
 _PREFLIGHT_CHECK = "PreflightCheck"
 
-#: Behavioural rules whose complete, passing matrix closes a *value-level*
-#: F019 gap.  ``conformance.preflight_testing.assert_preflight_result``
-#: asserts, on every executed F016 scenario, exactly the properties those
+#: Rules whose fully defined scenario matrix closes a *value-level* F019
+#: gap.  ``conformance.preflight_testing.assert_preflight_result`` asserts,
+#: in every F016 scenario, exactly the properties those
 #: findings say the static pass could not resolve: every failed check carries
 #: a typed ``FailureDetails`` with a nonblank message and suggested action, no
 #: passed check carries one, and the verdict agrees with the
 #: mandatory/advisory roles and the short-circuit order.  A *structural* gap —
 #: an unparsed file, an undiscovered handler, an unresolved contract class —
-#: never gets this set: executing scenarios does not tell the analysis what it
-#: failed to read.
+#: never gets this set: a test does not tell the analysis what it failed to
+#: read.  Conformance only checks the matrix is defined; the test gate runs it.
 SCENARIO_COVERAGE = frozenset({"F016"})
 
 
@@ -238,6 +242,33 @@ def _first_param_annotation_name(
     return aliases.get(name, name) if name else None
 
 
+def _is_callable_annotation(annotation: ast.expr) -> bool:
+    """``Callable``, ``Callable[...]``, ``typing.Callable`` and the like."""
+    if isinstance(annotation, ast.Subscript):
+        annotation = annotation.value
+    if isinstance(annotation, ast.Name):
+        return annotation.id == "Callable"
+    return isinstance(annotation, ast.Attribute) and annotation.attr == "Callable"
+
+
+def binding_targets(node: ast.stmt) -> list[ast.expr]:
+    """The targets a plain, chained or ``Callable``-annotated assignment binds.
+
+    An annotated assignment binds a callback only when it says so. A
+    ``preflight_check: str = ""`` field on a generated input contract is data,
+    not the hook, and must not read as an unresolved callback binding.
+    """
+    if isinstance(node, ast.Assign):
+        return list(node.targets)
+    if (
+        isinstance(node, ast.AnnAssign)
+        and node.value is not None
+        and _is_callable_annotation(node.annotation)
+    ):
+        return [node.target]
+    return []
+
+
 def find_preflight_check_sites(
     reg: Registry,
 ) -> list[tuple[Source, ast.AsyncFunctionDef]]:
@@ -300,10 +331,12 @@ def find_preflight_check_sites(
                     == _PREFLIGHT_INPUT
                 ):
                     sites.append((src, node))
-            elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Name):
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)) and isinstance(
+                node.value, ast.Name
+            ):
                 target = functions.get(node.value.id)
                 if target is not None:
-                    for binding in node.targets:
+                    for binding in binding_targets(node):
                         if isinstance(binding, ast.Name):
                             functions[binding.id] = target
                             if (
@@ -348,42 +381,26 @@ def is_preflightcheck_call(
 def collect_entrypoint_input_contract_names(reg: Registry) -> frozenset[str]:
     """Class names of every entrypoint *input* contract (outputs excluded).
 
-    Fork of ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` with
-    the ``func.returns`` (output) branch dropped, so the gate-path metadata parity
-    check compares only against what the extraction input actually carries.
+    Same boundary detection as
+    ``_entrypoint_contract_fields.collect_entrypoint_contract_names``
+    (``classify_boundary_method``) with the output side dropped, so the gate-path
+    metadata parity check compares only against what the extraction input
+    actually carries.
     """
     contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
     for src in reg.sources:
+        scope = BoundaryScope.for_module(
+            src.tree,
+            prov=src.prov,
+            aliases=src.aliases,
+            by_name=reg.by_name,
+            app_cache=app_cache,
+        )
         for cls in _class_defs(src.tree):
             for func in _iter_class_body_methods(cls):
-                is_ep = False
-                if any(
-                    is_entrypoint_decorator(d, src.prov) for d in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(d, src.prov) for d in func.decorator_list):
-                    continue
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in cls.bases:
-                        bname = (
-                            base.id
-                            if isinstance(base, ast.Name)
-                            else getattr(base, "attr", None)
-                        )
-                        if bname is None:
-                            continue
-                        bname = src.aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(
-                                bname, "App", reg.by_name, app_cache, set()
-                            )
-                            is True
-                        ):
-                            is_ep = True
-                            break
-                if not is_ep:
+                boundary = classify_boundary_method(cls, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
                 non_self = _get_non_self_params(func)
                 if non_self and non_self[0].annotation is not None:
@@ -519,10 +536,10 @@ def coverage_findings(reg: Registry):
                     )
                 )
             elif (
-                isinstance(node, ast.Assign)
+                isinstance(node, (ast.Assign, ast.AnnAssign))
                 and any(
                     isinstance(t, ast.Name) and t.id == "preflight_check"
-                    for t in node.targets
+                    for t in binding_targets(node)
                 )
                 and not any(s is src for s, _ in sites)
             ):
@@ -537,7 +554,10 @@ def coverage_findings(reg: Registry):
                 )
     for src, func in sites:
         contracts = contracts_for_site(reg, src)
-        if contracts and any(name not in reg.by_name for name in contracts):
+        if contracts and any(
+            name not in reg.by_name and name not in SDK_TEMPLATE_CONTRACT_FIELDS
+            for name in contracts
+        ):
             findings.append(
                 make_finding(
                     filename=src.rel,

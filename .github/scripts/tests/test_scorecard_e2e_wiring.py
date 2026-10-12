@@ -151,6 +151,9 @@ def test_the_generate_step_passes_the_job_results_the_script_needs(
 ) -> None:
     env = _generate_step(scorecard)["env"]
     assert env["E2E_RESULT"] == "${{ needs.e2e.result }}"
+    # A crashed integration job must reach the script, or its empty junit reads
+    # as "no integration tier" (FND-3299).
+    assert env["INTEGRATION_RESULT"] == "${{ needs.integration.result }}"
     assert env["OBSERVED_CLOUDS"] == "${{ needs.discover-e2e.outputs.clouds }}"
     assert env["CONFIGURED_KNOWN"] == (
         "${{ steps.configured-clouds.outcome == 'success' }}"

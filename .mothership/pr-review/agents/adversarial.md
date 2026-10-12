@@ -28,6 +28,12 @@ Do your own independent review of the diff. Focus on:
 - SDK-specific: Temporal determinism violations, contract safety, blocking in async
 - Patterns that will break under production load
 
+Adversarial means *realistic* failure, not any input you can construct. Judge
+from the code, not the PR's description of itself. If a string of edge cases
+all trace back to the approach, attack the approach (Task 3) instead of listing
+them; do not re-file a narrower sub-case of a class already raised and
+addressed (ORCHESTRATION §2e″).
+
 For each new finding, use the same JSON format as the Wave 1 agents.
 
 ## Task 3: Holistic Assessment

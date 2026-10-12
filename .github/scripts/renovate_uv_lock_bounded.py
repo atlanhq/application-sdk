@@ -126,9 +126,9 @@ except ImportError:  # pragma: no cover - packaging is effectively universal
 # can tell them apart — and only one of them heals on its own. `WINDOW_EMPTY`
 # means the bound admitted nothing on this pass while Renovate's unbounded
 # resolve moved; the next pass that sees a package cross the window resolves
-# green with no intervention. The other four are standing faults (a broken
-# interpreter, an unsatisfiable floor, a yanked pin) that no amount of waiting
-# fixes.
+# green with no intervention. The other five are standing faults (a broken
+# interpreter, an unsatisfiable floor, a yanked pin, a held first-party package
+# the ceiling could not keep in place) that no amount of waiting fixes.
 #
 # The distinction is what lets the fleet reap the self-healing case on sight
 # while leaving a real wedge red for a human. Reaping on a clock instead —
@@ -145,6 +145,7 @@ REFUSAL_NO_PACKAGING = "no-packaging"
 REFUSAL_UNSATISFIABLE_FLOOR = "unsatisfiable-floor"
 REFUSAL_FLOOR_ADMITTED_STILL_FAILED = "floor-admitted-still-failed"
 REFUSAL_ROLLBACK = "rollback"
+REFUSAL_HOLD_MOVED = "hold-moved"
 
 # The one reason a machine may clear without a human. Kept as a set of one
 # rather than an equality check so adding a second self-healing path is a
@@ -290,9 +291,14 @@ def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> boo
     The one lever the driver does hold over a *required* check is the lock's own
     validity. So a refusal writes the baseline's versions — never the rejected
     resolve, never an unbounded one — and adds an ``[options]`` table the repo's
-    ``pyproject.toml`` does not declare. That is exactly what ``uv sync --locked``
-    rejects in the image build, and ``scan / Build Image`` is required in every
-    lock-lane repo, so the branch cannot merge until a human looks at it.
+    ``pyproject.toml`` does not declare. That is exactly what ``uv lock --check``
+    rejects in ``check_uv_lock.py``, run by the Conformance Gate job of
+    ``conformance-reusable.yaml``, and ``suite / Conformance Gate`` is required
+    in every repo, so the branch cannot merge until a human looks at it. (The
+    Pre-commit job of ``checks-reusable.yaml`` runs it too, but not every repo
+    requires ``pre-commit / Pre-commit``. Until FND-3328 the
+    image build's ``uv sync --locked`` behind ``scan / Build Image`` caught it;
+    that job now skips on every PR but the bump-version PR.)
 
     Deliberate, documented, and meant to be temporary: the durable fix is a
     required age check that fails on its own evidence rather than on a lock the
@@ -320,6 +326,35 @@ def withhold(lock_path: Path, baseline: str, window: str, *, reason: str) -> boo
         base[:anchor] + tripwire + base[anchor:] if anchor != -1 else base + tripwire
     )
     return True
+
+
+def refusal_exit_code(*, reason: str, wrote: bool, caller_owns_commit: bool) -> int:
+    """Exit code for a refusal. Whether Renovate opens a PR depends on it (FND-3517).
+
+    The preset's lock lane sets ``prCreation: status-success``, so Renovate opens
+    a PR only once the branch status is green. Before a PR exists, the only
+    status on the branch is ``renovate/artifacts``, and this exit code is what
+    sets it. A non-zero exit therefore means "no PR", and exit 0 means "PR".
+
+    * A self-healing refusal (``window-empty``) exits 1. Nothing is wrong, the
+      bound admitted nothing on this pass, so no PR should open. The reaper
+      deletes the branch and a later pass rebuilds it.
+    * A standing refusal exits 0, so the PR opens and a human sees it. It still
+      cannot merge: ``withhold`` wrote the tripwire into ``uv.lock``, and
+      ``check_uv_lock.py`` rejects it in the required ``suite / Conformance
+      Gate`` (no ``exit-zero`` there). Exiting 1 would hide the fault, because
+      ``dependencyDashboard`` is off fleet-wide and nothing else would report a
+      branch that has no PR.
+
+    Two cases always exit 1 and fail closed. Under ``--caller-owns-commit``
+    (``bound_lock_branch.py``), a non-zero exit is how the caller knows to
+    commit nothing. And when ``withhold`` wrote nothing, there is no tripwire
+    to hold the branch: leaving the tree matching HEAD would let Renovate commit
+    its own unbounded lock.
+    """
+    if caller_owns_commit or not wrote or reason in SELF_HEALING_REFUSALS:
+        return 1
+    return 0
 
 
 def strip_options(lock_text: str) -> str:
@@ -483,6 +518,47 @@ def _version_key(version: str) -> "Version | None":
         return None
 
 
+def hold_ceilings(
+    upload_times: dict[str, dt.datetime], holds: list[str]
+) -> dict[str, str]:
+    """Upload-time ceilings that hold each package where the baseline has it.
+
+    Unlike a retention ceiling this applies whatever the locked version's age:
+    a held package is not delayed by the window, it is owned by another lane and
+    must not move here at all (FND-3481). A held name the baseline does not lock
+    gets no flag — there is nothing to hold, and a package the repo does not
+    resolve cannot appear in this lane's diff.
+
+    A ceiling is not a pin, and uv has no flag that pins one package while
+    upgrading the rest. It admits every release uploaded at or before the locked
+    version's newest file, so a higher version uploaded earlier (the locked one
+    being a later backport) can still be chosen. ``moved_holds`` below checks
+    the resolve's result for exactly that, and ``main`` refuses on it.
+    """
+    ceilings: dict[str, str] = {}
+    for name in holds:
+        uploaded = upload_times.get(normalise(name))
+        if uploaded is not None:
+            admit = (uploaded + dt.timedelta(seconds=1)).astimezone(dt.timezone.utc)
+            ceilings[normalise(name)] = admit.strftime("%Y-%m-%dT%H:%M:%SZ")
+    return ceilings
+
+
+def moved_holds(
+    holds: list[str], before: dict[str, str], after: dict[str, str]
+) -> dict[str, tuple[str, str]]:
+    """Held packages the bounded resolve moved anyway — the gap a ceiling
+    leaves (see ``hold_ceilings``). The hold is a contract, so it is checked
+    rather than assumed."""
+    found: dict[str, tuple[str, str]] = {}
+    for name in holds:
+        key = normalise(name)
+        old, new = before.get(key), after.get(key)
+        if old is not None and old != new:
+            found[key] = (old, new or "removed")
+    return found
+
+
 def rollbacks(
     before: dict[str, str], after: dict[str, str], packages: list[str] | None = None
 ) -> dict[str, tuple[str, str]]:
@@ -514,26 +590,87 @@ def rollbacks(
 
 
 def build_uv_command(
-    window: str, exempt: list[str], ceilings: dict[str, str] | None = None
+    window: str,
+    exempt: list[str],
+    ceilings: dict[str, str] | None = None,
+    holds: dict[str, str] | None = None,
 ) -> list[str]:
     """The bounded resolve, plus one ceiling flag per package that needs one.
 
-    Exemptions come last so they win over a retention ceiling for the same
-    package: a first-party package must be free to move forward, not merely be
-    held where it is.
+    Exemptions win over a retention ceiling for the same package: an exempt
+    package must be free to move forward, not merely be held where it is. Holds
+    win over both — a held package belongs to another lane, so neither the
+    window nor an exemption may move it here. Each package gets exactly one
+    flag, so precedence never rests on how uv treats a repeated name.
     """
+    holds = holds or {}
     command = ["uv", "lock", "--upgrade", "--exclude-newer", window]
     exempt_normalised = {normalise(name) for name in exempt}
     for name, admit in sorted((ceilings or {}).items()):
-        if name not in exempt_normalised:
+        if name not in exempt_normalised and name not in holds:
             command += ["--exclude-newer-package", f"{name}={admit}"]
     for name in exempt:
-        command += ["--exclude-newer-package", f"{name}=P0D"]
+        if normalise(name) not in holds:
+            command += ["--exclude-newer-package", f"{name}=P0D"]
+    for name, admit in sorted(holds.items()):
+        command += ["--exclude-newer-package", f"{name}={admit}"]
     return command
 
 
 def run_uv_lock(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(command, cwd=cwd, capture_output=True, text=True)
+
+
+def framework_lane_moves(
+    lock_path: Path, baseline: str, holds: list[str]
+) -> set[str] | None:
+    """Every baseline package the framework lane's own resolve would move.
+
+    Holding the first-party packages alone is not enough (FND-3481): an SDK
+    release routinely raises floors on its own dependencies, so the framework
+    PR moves those transitives too, and if this lane moves the same package to
+    a different version the two PRs still conflict on that block of uv.lock.
+    Measured on the 3.42.0 release: every framework PR in the fleet also moved
+    17 opentelemetry packages, fastapi and uvloop.
+
+    So replay what that lane does — ``uv lock --upgrade-package`` for each held
+    package, starting from the base branch's lock — and report what changed.
+    Holding that set too makes the two lanes' diffs disjoint. A package the
+    replay REMOVES counts as moved: the framework PR deletes its block, so this
+    lane must not edit it. Packages the replay ADDS need no hold: this lane has
+    no reason to add them.
+
+    Returns None when the replay cannot run. That costs only the disjointness,
+    never the bound — the caller holds the named packages alone and says so —
+    and a conflict it lets through is repaired by the conflicted-PR rebase
+    backstop, so failing the whole lane on it would trade a minor fault for a
+    major one. The working tree is restored before returning either way.
+    """
+    renovate_text = lock_path.read_text()
+    command = ["uv", "lock"]
+    for name in holds:
+        command += ["--upgrade-package", name]
+    try:
+        lock_path.write_text(baseline)
+        result = run_uv_lock(command, lock_path.parent)
+        replayed = lock_path.read_text()
+    finally:
+        lock_path.write_text(renovate_text)
+    if result.returncode != 0:
+        print(
+            "Could not replay the framework lane's resolve, so only the named "
+            "packages are held and this PR may still overlap it on transitive "
+            "dependencies:\n" + result.stderr,
+            file=sys.stderr,
+        )
+        return None
+    before, after = lock_versions(baseline), lock_versions(replayed)
+    held = {normalise(name) for name in holds}
+    return {
+        name
+        for name, version in before.items()
+        if name not in held and after.get(name) != version
+    }
 
 
 def baseline_lock_text(cwd: Path, ref: str = "HEAD") -> str | None:
@@ -643,6 +780,16 @@ def main(argv: list[str] | None = None) -> int:
         help="Package admitted regardless of age. Repeatable. First-party packages "
         "plus anything in their dependency closure that must move with them.",
     )
+    parser.add_argument(
+        "--hold",
+        action="append",
+        default=[],
+        help="Package kept at exactly the version the baseline locks, whatever "
+        "its age. Repeatable. Wins over --exempt. For packages another Renovate "
+        "lane owns (the first-party framework dependencies, FND-3481), so this "
+        "lane's diff never overlaps that lane's and the two PRs cannot conflict "
+        "on uv.lock whichever merges first.",
+    )
     parser.add_argument("--project-dir", default=".")
     parser.add_argument(
         "--caller-owns-commit",
@@ -699,6 +846,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     exempt = list(args.exempt)
+    held = {normalise(name) for name in args.hold}
 
     # Baseline = the lock as COMMITTED at --baseline-ref, never the working tree.
     # See baseline_lock_text for why that distinction is load-bearing, and why
@@ -724,7 +872,7 @@ def main(argv: list[str] | None = None) -> int:
         # accuses every ordinary upgrade of moving backwards — a wedged lane whose
         # message blames the dependency data. Say the true cause instead, and say
         # it before uv spends a minute resolving.
-        withhold(lock_path, baseline, args.window, reason=REFUSAL_NO_PACKAGING)
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_NO_PACKAGING)
         print(
             "`packaging` is not importable, so no version can be compared and the "
             "rollback gate cannot do its job. Refusing rather than bounding "
@@ -732,18 +880,32 @@ def main(argv: list[str] | None = None) -> int:
             "(the workflow pins it) and re-run.",
             file=sys.stderr,
         )
-        return 1
+        return refusal_exit_code(
+            reason=REFUSAL_NO_PACKAGING,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
 
     before = lock_versions(baseline)
     cutoff = dt.datetime.now(dt.timezone.utc) - window
-    ceilings = retention_ceilings(lock_upload_times(baseline), cutoff)
+    upload_times = lock_upload_times(baseline)
+    ceilings = retention_ceilings(upload_times, cutoff)
 
     # What Renovate resolved unbounded, and has already captured as the artifact
     # it will commit if this command leaves the tree looking untouched. Read it
     # now: the bounded resolve below overwrites it.
     renovate_versions = lock_versions(lock_path.read_text())
 
-    result = run_uv_lock(build_uv_command(args.window, exempt, ceilings), project_dir)
+    transitive: set[str] = set()
+    if args.hold and baseline:
+        replay = framework_lane_moves(lock_path, baseline, list(args.hold))
+        transitive = replay or set()
+    held |= transitive
+    holds = hold_ceilings(upload_times, [*args.hold, *sorted(transitive)])
+
+    result = run_uv_lock(
+        build_uv_command(args.window, exempt, ceilings, holds), project_dir
+    )
     admitted_early: list[str] = []
 
     if result.returncode != 0:
@@ -754,7 +916,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         admitted_early = blocked_by_floor(result.stderr, floors)
         if not admitted_early:
-            withhold(
+            wrote = withhold(
                 lock_path,
                 baseline,
                 args.window,
@@ -769,13 +931,17 @@ def main(argv: list[str] | None = None) -> int:
                 + result.stderr,
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_UNSATISFIABLE_FLOOR,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
         result = run_uv_lock(
-            build_uv_command(args.window, exempt + admitted_early, ceilings),
+            build_uv_command(args.window, exempt + admitted_early, ceilings, holds),
             project_dir,
         )
         if result.returncode != 0:
-            withhold(
+            wrote = withhold(
                 lock_path,
                 baseline,
                 args.window,
@@ -788,16 +954,45 @@ def main(argv: list[str] | None = None) -> int:
                 "table — so a required check holds the branch.\n" + result.stderr,
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_FLOOR_ADMITTED_STILL_FAILED,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
 
     after = lock_versions(lock_path.read_text())
+
+    # A named hold that moved would ship a first-party bump from this lane —
+    # without the framework lane's ledger and contract regeneration — so it is
+    # refused. A transitive hold that moved only costs disjointness, which the
+    # conflicted-PR rebase backstop repairs, so it is reported, not refused.
+    escaped = moved_holds(list(args.hold), before, after)
+    if escaped:
+        detail = ", ".join(
+            f"{n} {old} -> {new}" for n, (old, new) in sorted(escaped.items())
+        )
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_HOLD_MOVED)
+        print(
+            f"Held first-party package(s) moved despite the hold: {detail}. The "
+            "hold is a release-time ceiling, and another release of the same "
+            "package sits under it — typically a backport uploaded after a newer "
+            "line. The atlan framework dependencies lane owns this package, so "
+            "this lane refuses rather than ship the move.",
+            file=sys.stderr,
+        )
+        return refusal_exit_code(
+            reason=REFUSAL_HOLD_MOVED,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
+    leaked = moved_holds(sorted(transitive), before, after)
 
     regressed = rollbacks(before, after)
     if regressed:
         detail = ", ".join(
             f"{n} {old} -> {new}" for n, (old, new) in sorted(regressed.items())
         )
-        withhold(lock_path, baseline, args.window, reason=REFUSAL_ROLLBACK)
+        wrote = withhold(lock_path, baseline, args.window, reason=REFUSAL_ROLLBACK)
         print(
             f"Bounded resolve moved {len(regressed)} package(s) BACKWARDS from the "
             f"last committed lock: {detail}. Retention ceilings make an age-driven "
@@ -814,11 +1009,16 @@ def main(argv: list[str] | None = None) -> int:
             "table — for a required check to hold the branch on.",
             file=sys.stderr,
         )
-        return 1
+        return refusal_exit_code(
+            reason=REFUSAL_ROLLBACK,
+            wrote=wrote,
+            caller_owns_commit=args.caller_owns_commit,
+        )
 
     if after == before and renovate_versions != before:
         moved = ", ".join(
             f"{name} {before.get(name, 'absent')} -> {version}"
+            + (" (held: arrives via its own lane)" if name in held else "")
             for name, version in sorted(renovate_versions.items())
             if before.get(name) != version
         )
@@ -833,7 +1033,9 @@ def main(argv: list[str] | None = None) -> int:
                 file=sys.stderr,
             )
         else:
-            withhold(lock_path, baseline, args.window, reason=REFUSAL_WINDOW_EMPTY)
+            wrote = withhold(
+                lock_path, baseline, args.window, reason=REFUSAL_WINDOW_EMPTY
+            )
             print(
                 f"The bound admits nothing today, but Renovate's own unbounded "
                 f"resolve moved: {moved}. Leaving the tree matching HEAD would "
@@ -841,10 +1043,16 @@ def main(argv: list[str] | None = None) -> int:
                 "that passes every check while carrying releases minutes old — "
                 "so the lock is left deliberately un-installable instead and "
                 "this run fails. Nothing needs fixing in the repo: the window "
-                f"will admit these versions once they are `{args.window}` old.",
+                f"will admit these versions once they are `{args.window}` old, "
+                "and a held package stops showing up here once its own lane's "
+                "PR merges and the base branch locks it.",
                 file=sys.stderr,
             )
-            return 1
+            return refusal_exit_code(
+                reason=REFUSAL_WINDOW_EMPTY,
+                wrote=wrote,
+                caller_owns_commit=args.caller_owns_commit,
+            )
 
     lock_path.write_text(strip_options(lock_path.read_text()))
 
@@ -854,8 +1062,12 @@ def main(argv: list[str] | None = None) -> int:
     added = sorted(name for name in after if name not in before)
     lines = [
         f"**Release-age bound applied:** `{args.window}` "
-        f"(exempt: {', '.join(exempt) or 'none'})",
+        f"(exempt: {', '.join(exempt) or 'none'}; "
+        f"held: {', '.join(args.hold) or 'none'})",
         "",
+        f"- {len(transitive)} transitive package(s) held at the base branch's "
+        "version because the framework lane moves them"
+        + (f": {', '.join(sorted(transitive))}" if transitive else ""),
         f"- {len(ceilings)} package(s) pinned at their current version: the release "
         "they are on is itself inside the window, and the bound must never roll a "
         "dependency backwards",
@@ -863,6 +1075,14 @@ def main(argv: list[str] | None = None) -> int:
         f"them published at least `{args.window}` ago",
         "- `[options]` stripped from `uv.lock` so `uv sync --locked` still validates",
     ]
+    if leaked:
+        lines.append(
+            "- **Transitive hold did not keep** (this PR may overlap the framework "
+            "lane's; the conflicted-PR backstop rebases it): "
+            + ", ".join(
+                f"{n} {old} -> {new}" for n, (old, new) in sorted(leaked.items())
+            )
+        )
     if admitted_early:
         lines.append(
             f"- **Admitted inside the window** because the repo floors them: "

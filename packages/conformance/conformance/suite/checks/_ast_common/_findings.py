@@ -27,7 +27,7 @@ def make_finding(
     E-series ``Checker._add`` semantics exactly.
 
     ``cleared_by`` is carried through to the :class:`Finding` unchanged; see
-    its docstring for what naming a behavioural rule there commits a checker
+    its docstring for what naming a scenario rule there commits a checker
     to.
     """
     line: int = getattr(node, "lineno", 1)

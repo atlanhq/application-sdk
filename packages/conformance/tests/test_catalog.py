@@ -363,7 +363,11 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # defines get/set_app_state but apps are the ones that (mis)use it as a
     # conduit (BLDX-1500). P028: hand-built qualifiedName f-strings — connectors
     # mint asset qualifiedNames; the SDK is the framework, not an asset author
-    # (BLDX-1499).
+    # (BLDX-1499). P052: asset serialization that bypasses entity_bytes —
+    # only apps map and write assets; the SDK owns the seam (FND-2725).
+    # P053: local credential routing — only apps route their own inputs'
+    # credential channels; the SDK is the router (route_credentials) and defines
+    # CredentialValue by definition (FND-2949).
     # P025: app-name alignment — only apps have an atlan.yaml and .env.example;
     # the SDK has neither, so this check is meaningless there (BLDX-1491).
     # P029/P030 + P037/P038/P039/P042: SDR-readiness — only apps declare
@@ -422,6 +426,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # envelope (K020), and a filter field typed as a strict dict that rejects the
     # AE's flat JSON string (K021, CONNECT-1333 / CONNECT-1389). All four need an
     # app's contract/ + app/generated/ tree, which the SDK does not have.
+    # K027: entrypoint contract classes sharing one bare class name — the SDK
+    # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -482,6 +488,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P048",
         "P049",
         "P051",
+        "P052",
+        "P053",
+        "P055",
         "C002",
         "D001",
         "D002",
@@ -514,6 +523,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
         "P004",
         "P005",
         "P008",
@@ -557,6 +567,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T023",
         "T024",
         "T025",
+        "T026",
         "O002",
         "O003",
         "O004",
@@ -598,8 +609,6 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P007",
         "P046",
         "P050",
-        "F017",
-        "F018",
     }, sdk_scoped
     both = {r.id for r in rules if r.scope == RuleScope.BOTH}
     assert both == {r.id for r in rules} - app_scoped - sdk_scoped
@@ -759,6 +768,16 @@ def test_catalog_p_series_present() -> None:
     application-sdk below 3.30.0, the floor at which the interactive setup
     surfaces (test auth / preflight / metadata browsing) become available; a WARN
     readiness nudge, not a data-loss bug (DISTR-752).
+    P052 is EntitySerializationBypass — app code serializing a pyatlan asset
+    itself (to_nested_bytes / to_nested_dict / pyatlan_v9 to_atlas_format)
+    instead of through the SDK's entity_bytes seam (FND-2725).
+    P053 is LocalCredentialRouting — app code routing a workflow input's
+    credential channels itself (CredentialRef.resolve / resolve_or_none,
+    CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
+    declaring its own CredentialValue alias, instead of the SDK's
+    route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
+    P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
+    whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -810,6 +829,10 @@ def test_catalog_p_series_present() -> None:
         "P049",
         "P050",
         "P051",
+        "P052",
+        "P053",
+        "P054",
+        "P055",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -818,14 +841,15 @@ def test_catalog_p_series_present() -> None:
 
 
 def test_catalog_f_series_present() -> None:
-    """The F-series preflight-gate rules are exactly F001–F021.
+    """The F-series preflight-gate rules are exactly F001–F021 less F017–F018.
 
     F001–F005 were published as P032–P035 and P047 and moved to their own
     series in PR #3710 before any fleet suppression referenced them; the vacated
     P-ids are retired and never reused.  F006–F019 are the CONNECT-812 contract,
-    lifetime and behavioral rules; F016–F018 are the opt-in TEST rules.  F020
-    flags a suppression that still cites one of the five retired P-ids.  F021
-    flags a fixed auth or permission leaf built in a broad except.
+    lifetime and behavioral rules; F016 checks the scenario matrix is defined.
+    F017–F018 were retired in 0.39.0 and deleted in 0.40.0; their ids are never
+    reused.  F020 flags a suppression that still cites a retired id.  F021 flags a
+    fixed auth or permission leaf built in a broad except.
 
     There is deliberately no rule for a ``PreflightStatus.PARTIAL`` verdict: it
     is a read of a deprecated SDK enum member, which B001 already reports
@@ -833,7 +857,7 @@ def test_catalog_f_series_present() -> None:
     line is worse than one.
     """
     f_ids = {r.id for r in load_catalog() if r.id.startswith("F")}
-    expected = {f"F{n:03}" for n in range(1, 22)}
+    expected = {f"F{n:03}" for n in range(1, 22)} - {"F017", "F018"}
     assert f_ids == expected, f"F-series drift: {sorted(f_ids ^ expected)}"
 
 
@@ -855,11 +879,12 @@ def test_catalog_t_series_present() -> None:
     unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
     must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
     suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
-    harness scaffold generated from contract/app.pkl; RunMode declared), and T025
-    (every bundle entrypoint has an e2e suite, not just the default one)."""
+    harness scaffold generated from contract/app.pkl; RunMode declared), T025
+    (every bundle entrypoint has an e2e suite, not just the default one), and T026
+    (the e2e harness base matches the app's declared marketplace type)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 26)}
+    expected = {f"T{n:03d}" for n in range(1, 27)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
@@ -897,7 +922,8 @@ def test_catalog_k_series_present() -> None:
     and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
-    writer contradicts) (ADR-0020)."""
+    writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
+    contract classes under one bare class name) (FND-3140)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -922,6 +948,7 @@ def test_catalog_k_series_present() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
@@ -1535,11 +1562,6 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
     "E008": (
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
-    ),
-    "T025": (
-        "no reference app is in bundle mode (each emits a single generated "
-        "manifest), so T025 inspects none of them; the positive shape is the "
-        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
     ),
 }
 

@@ -18,6 +18,14 @@ permissions:
   contents: read
   pull-requests: write
 
+# A new commit retires the previous commit's run; see conformance.yaml for why
+# only `synchronize` cancels. The reusable carries its own workflow-level group
+# (`generated-freshness-<PR number>`, queue-only); this name must never equal
+# it, or GitHub cancels the call as a concurrency deadlock.
+concurrency:
+  group: generated-freshness-caller-${{ github.event_name == 'pull_request' && contains(fromJSON('["opened", "synchronize"]'), github.event.action) && github.ref || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action == 'synchronize' }}
+
 jobs:
   freshness:
     uses: atlanhq/application-sdk/.github/workflows/generated-freshness.yaml@main

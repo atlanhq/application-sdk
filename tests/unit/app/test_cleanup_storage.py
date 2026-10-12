@@ -426,3 +426,134 @@ class TestCleanupStorage:
         assert "file_refs/dir123/part-0.parquet" in deleted_keys
         assert "file_refs/dir123/part-1.parquet" in deleted_keys
         assert result.deleted_count == 2
+
+
+async def _run_cleanup_capturing_deletes(
+    refs: list[FileReference],
+    listing: list[list[dict[str, str]]] | None = None,
+    input: StorageCleanupInput | None = None,
+) -> tuple[StorageCleanupOutput, list[str]]:
+    """Run ``cleanup_storage`` over *refs*; return its output and every key deleted."""
+    from unittest.mock import MagicMock
+
+    from application_sdk.app.context import AppContext
+
+    store = MagicMock()
+    app = _make_app()
+    ctx = AppContext(app_name="test", app_version="0.1.0", run_id="r1")
+    ctx._storage = store
+    app._context = ctx
+    _seed_tracked_refs(refs)
+
+    deleted_keys: list[str] = []
+
+    async def _mock_delete(key: str, store: Any, normalize: bool = True) -> bool:
+        deleted_keys.append(key)
+        return True
+
+    with (
+        mock.patch(
+            "application_sdk.app.base._get_execution_id_from_task",
+            return_value="wf-test",
+        ),
+        mock.patch("application_sdk.storage.ops._resolve_store", return_value=store),
+        mock.patch("application_sdk.storage.ops.delete", side_effect=_mock_delete),
+        mock.patch("obstore.list", side_effect=lambda *a, **k: iter(listing or [])),
+        mock.patch(
+            "application_sdk.execution.build_output_path",
+            return_value="artifacts/apps/test/workflows/wf-test/r1",
+        ),
+    ):
+        result = await app.cleanup_storage(input or StorageCleanupInput())
+    return result, deleted_keys
+
+
+class TestCleanupStorageNeverDeletesDurableAlias:
+    """A TRANSIENT ref aliasing a key that a RETAINED/PERSISTENT ref in the same
+    run tracks must not delete that key.
+
+    Regression for a connector that hand-built TRANSIENT refs on the keys
+    ``upload_refs`` had delivered as RETAINED: cleanup skipped the RETAINED refs,
+    then deleted the same keys through their TRANSIENT twins.
+    """
+
+    _KEY = "artifacts/apps/test/workflows/wf-test/r1/transformed/table/entities.json"
+
+    def setup_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+
+    def teardown_method(self) -> None:
+        AppRegistry.reset()
+        TaskRegistry.reset()
+        _clear_app_state()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tier", [StorageTier.RETAINED, StorageTier.PERSISTENT])
+    async def test_transient_twin_of_durable_file_is_not_deleted(
+        self, tier: StorageTier
+    ) -> None:
+        refs = [
+            FileReference(storage_path=self._KEY, tier=tier),
+            FileReference(storage_path=self._KEY, tier=StorageTier.TRANSIENT),
+        ]
+        result, deleted = await _run_cleanup_capturing_deletes(refs)
+
+        assert self._KEY not in deleted
+        assert self._KEY + ".sha256" not in deleted
+        assert result.deleted_count == 0
+        # One skip for the durable ref, two for the twin's key and its sidecar.
+        assert result.skipped_count == 3
+
+    @pytest.mark.asyncio
+    async def test_unrelated_transient_ref_is_still_deleted(self) -> None:
+        other = "file_refs/abc123.parquet"
+        refs = [
+            FileReference(storage_path=self._KEY, tier=StorageTier.RETAINED),
+            FileReference(storage_path=self._KEY, tier=StorageTier.TRANSIENT),
+            FileReference(storage_path=other, tier=StorageTier.TRANSIENT),
+        ]
+        _, deleted = await _run_cleanup_capturing_deletes(refs)
+
+        assert sorted(deleted) == [other, other + ".sha256"]
+
+    @pytest.mark.asyncio
+    async def test_transient_file_under_durable_directory_is_not_deleted(
+        self,
+    ) -> None:
+        durable_dir = "artifacts/apps/test/workflows/wf-test/r1/transformed/"
+        refs = [
+            FileReference(storage_path=durable_dir, tier=StorageTier.RETAINED),
+            FileReference(storage_path=self._KEY, tier=StorageTier.TRANSIENT),
+        ]
+        _, deleted = await _run_cleanup_capturing_deletes(refs)
+
+        assert deleted == []
+
+    @pytest.mark.asyncio
+    async def test_transient_directory_skips_only_durable_subkeys(self) -> None:
+        transient_dir = "artifacts/apps/test/workflows/wf-test/r1/transformed/"
+        other = transient_dir + "column/entities.json"
+        refs = [
+            FileReference(storage_path=self._KEY, tier=StorageTier.RETAINED),
+            FileReference(storage_path=transient_dir, tier=StorageTier.TRANSIENT),
+        ]
+        listing = [
+            [{"path": self._KEY}, {"path": self._KEY + ".sha256"}, {"path": other}]
+        ]
+        result, deleted = await _run_cleanup_capturing_deletes(refs, listing)
+
+        assert deleted == [other]
+        assert result.deleted_count == 1
+
+    @pytest.mark.asyncio
+    async def test_prefix_cleanup_still_removes_retained_keys(self) -> None:
+        # Opt-in prefix cleanup is the documented way to drop RETAINED refs;
+        # the alias guard must not turn it into a no-op.
+        refs = [FileReference(storage_path=self._KEY, tier=StorageTier.RETAINED)]
+        listing = [[{"path": self._KEY}]]
+        _, deleted = await _run_cleanup_capturing_deletes(
+            refs, listing, StorageCleanupInput(include_prefix_cleanup=True)
+        )
+
+        assert deleted == [self._KEY]

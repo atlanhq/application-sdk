@@ -15,6 +15,10 @@ module com.atlan.app.contract.Widgets
 /// Visual style variants supported by the workflows v2 InfoBanner component.
 typealias InfoBannerType = "info"|"warning"|"error"|"prerequisites"|"side-note"
 
+/// A whole number greater than zero, for count and length limits where zero or
+/// a negative value has no meaning (e.g. `TagsInput.maxTagCount`).
+typealias PositiveInt = Int(this > 0)
+
 /// Escape a string for embedding in a double-quoted JSON literal.
 const local function escapeJsonStr(s: String): String =
   s.replaceAll("\\", "\\\\").replaceAll("\"", "\\\"").replaceAll("\n", "\\n").replaceAll("\r", "\\r").replaceAll("\t", "\\t")
@@ -332,6 +336,19 @@ class Widget {
   /// Mode of the widget.
   mode: String?
 
+  /// Strings that split typed or pasted text into separate tags (`TagsInput`).
+  tokenSeparators: List<String(!isEmpty)>?
+
+  /// Whether a select shows a button that clears every value (`TagsInput`).
+  allowClear: Boolean?
+
+  /// How many tags a select shows before it collapses the rest into `+N`
+  /// (`TagsInput`). `"responsive"` fits as many as the width allows.
+  maxTagCount: (PositiveInt|"responsive")?
+
+  /// Longest tag text a select shows before it truncates it (`TagsInput`).
+  maxTagTextLength: PositiveInt?
+
   /// TBC
   start: Int?
 
@@ -475,6 +492,10 @@ class Widget {
 
   /// For connectionSelector or sage — path to the form field that receives the credential GUID.
   selectedConnectionCredentialGuidProperty: String?
+
+  /// For sageV2 — the app declares a warmup, so the setup UI runs the warmup
+  /// flow before the warmup-tier checks. Set from `SageV2.warmup`.
+  warmup: Boolean?
 
   /// For connectionSelector — when true, store full connection objects.
   shouldIncludeConnectionInfo: Boolean?
@@ -908,10 +929,56 @@ class TagsInput extends UIElement {
 
   hidden openByDefault: Boolean = false
 
+  /// Example value shown in the field while no tags are entered. Renders as
+  /// `ui.placeholder`; unset (the default) emits no `placeholder` key, so
+  /// existing output does not change. It is display text only and is never
+  /// submitted as a tag.
+  hidden placeholderText: String?
+
+  /// Strings that split typed or pasted text into separate tags, so pasting
+  /// `A, B, C` gives three tags. Renders as `ui.tokenSeparators`; unset (the
+  /// default) emits no key, so existing output does not change.
+  ///
+  /// The frontend does not trim the parts: with `{ "," }` that paste gives
+  /// `A`, ` B`, ` C`. Use `{ ", "; "," }` to split on a comma with or without a
+  /// following space. An empty separator is rejected, as it would split every
+  /// character into its own tag.
+  hidden tokenSeparators: Listing<String(!isEmpty)>?
+
+  /// Set to `false` to disable the field (`ui.disabled = true`).
+  /// Unset (the default) emits no `disabled` key.
+  hidden enabled: Boolean?
+
+  /// Set to `true` to disable the field only in BYOC mode
+  /// (`ui.BYOCdisabled`). Unset (the default) emits no key.
+  hidden byocDisabled: Boolean?
+
+  /// Shows a button that clears every tag; clearing submits `[]`. Renders as
+  /// `ui.allowClear`; unset (the default) emits no key.
+  hidden allowClear: Boolean?
+
+  /// Collapses tags past this count into a `+N` chip so a long list does not
+  /// fill the form. `"responsive"` fits as many tags as the width allows. Display
+  /// only: every tag is still submitted. A number must be at least 1. Renders as
+  /// `ui.maxTagCount`; unset (the default) shows every tag.
+  hidden maxTagCount: (PositiveInt|"responsive")?
+
+  /// Truncates the text of each tag chip past this many characters. Display
+  /// only: the full value is still submitted. Must be at least 1. Renders as
+  /// `ui.maxTagTextLength`; unset (the default) shows the full text.
+  hidden maxTagTextLength: PositiveInt?
+
   fixed ui {
     widget = "select"
     mode = "tags"
     `open` = openByDefault
+    placeholder = placeholderText
+    tokenSeparators = outer.tokenSeparators?.toList()
+    disabled = if (enabled != null) !enabled else null
+    BYOCdisabled = byocDisabled
+    allowClear = outer.allowClear
+    maxTagCount = outer.maxTagCount
+    maxTagTextLength = outer.maxTagTextLength
   }
 }
 
@@ -1100,6 +1167,22 @@ class APITree extends UIElement {
 
   hidden cred: String = "credential-guid"
 
+  /// Types the generated `_input.py` field as the SDK's payload-safe
+  /// `TreeSelection` instead of `Annotated[dict[str, Any], MaxItems(1000)]`.
+  ///
+  /// Default `false` keeps the existing `dict[str, Any]` type, which the SDK's
+  /// payload-safety check refuses at import, so a contract with an `APITree`
+  /// field needs this to import at all. Set it to `true` for a tree selection
+  /// such as `{"SAP": {"MM": {}}}`. The value stays the same plain nested dict
+  /// (same wire format, same in-app value, stored configs validate unchanged);
+  /// only the declared type changes, to one that is bounded at every level and
+  /// rejects non-dict leaves. The workflow config, manifest and widget UI are
+  /// unchanged. Requires the first SDK release after 3.43.0: the generated
+  /// module imports `application_sdk.contracts.types.TreeSelection`, which
+  /// 3.43.0 and earlier do not have, so raise the app's SDK floor in the same
+  /// change.
+  hidden treeSelection: Boolean = false
+
   fixed ui {
     widget = "apitree"
     flattenValue = flatten
@@ -1274,11 +1357,28 @@ class SageV2 extends UIElement {
 
   hidden selectedCredentialGuid: String?
 
+  /// Declares that the app's handler overrides `Handler.warmup`, so the setup
+  /// UI runs the warmup flow: poll `POST /workflows/v1/warmup` until it answers
+  /// `ready`, then call `/check` with `tiers=["warmup"]`. Without it the UI
+  /// calls `/check` as before.
+  ///
+  /// Default `false` renders nothing: the widget's `ui` block is unchanged.
+  /// `true` adds `"warmup": true` to the `ui` block of the generated workflow
+  /// config. Nothing else changes: the flag is a declaration for the UI, and
+  /// the preflight gate still decides from the handler itself.
+  ///
+  /// Keep it in step with the handler. Set but no override: `/warmup` always
+  /// answers `ready`, so the UI makes one wasted round trip. Override but not
+  /// set: setup never runs the warmup-tier checks, so missing grants on them
+  /// surface only when the gate runs them on a real run.
+  hidden warmup: Boolean = false
+
   fixed ui {
     widget = "sageV2"
     config = checks
     connectorConfigName = connectorConfig
     selectedConnectionCredentialGuidProperty = selectedCredentialGuid
+    warmup = if (outer.warmup) true else null
   }
 }
 
@@ -1398,6 +1498,13 @@ class ConditionalInput extends UIElement {
 
   hidden outputValueType: String = if (baseWidgetType == "sqltree" || baseWidgetType == "apitree" || baseWidgetType == "apiTreeSelect" || baseWidgetType == "dsnTreeMap") "object" else "string"
 
+  /// For `baseWidgetType = "apitree"`: types the generated `_input.py` field as
+  /// the SDK's payload-safe `TreeSelection` instead of
+  /// `Annotated[dict[str, Any], MaxItems(1000)]`. Same behaviour and caveats as
+  /// `APITree.treeSelection`; evaluation fails if it is set with any other base
+  /// widget. Default `false` keeps the existing type.
+  hidden treeSelection: Boolean = false
+
   hidden uiType: String?
 
   hidden content: String?
@@ -1429,6 +1536,14 @@ class ConditionalInput extends UIElement {
   hidden dependsOn: String?
 
   hidden databasesUnselectable: Boolean?
+
+  hidden metadataTemplateKey: String?
+
+  hidden metadataTransformerTemplateKey: String?
+
+  hidden flatten: Boolean?
+
+  hidden strict: Boolean?
 
   hidden connOptions: Boolean?
 
@@ -1462,9 +1577,14 @@ class ConditionalInput extends UIElement {
     schemaExcludePattern = schemaExcludePatterns
     databaseExcludePattern = databaseExcludePatterns
     description = desc
-    multiple = multiSelect
+    multiple = if (baseWidgetType == "apitree") null else multiSelect
+    isMultiple = if (baseWidgetType == "apitree") multiSelect else null
     dependentConnectionField = dependsOn
     areDatabasesUnselectable = databasesUnselectable
+    metadataTemplateKey = outer.metadataTemplateKey
+    metadataTransformerTemplateKey = outer.metadataTransformerTemplateKey
+    flattenValue = flatten
+    treeCheckStrictly = strict
     connectionOptions = connOptions
     credentialType = outer.credentialType
     isTestAuthenticationDisabled = if (allowTestAuthentication != null) !allowTestAuthentication else null

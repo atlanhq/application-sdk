@@ -1,0 +1,68 @@
+// Tests for the TagsInput settings emitted into the widget's `ui`.
+
+amends "pkl:test"
+
+import "pkl:json"
+import "../examples/full/app.pkl" as fullApp
+import "../src/App.pkl" as App
+
+local fullConfig = new json.Parser { useMapping = true }.parse(
+  fullApp.output.files["app/generated/full-featured.json"].text
+)["config"]["properties"]
+
+local tagsUi = fullConfig["tag_keys"]["ui"]
+
+local plainUi = new App.TagsInput { title = "x" }.ui
+
+facts {
+  ["TagsInput settings render into the generated configmap ui block"] {
+    tagsUi["widget"] == "select"
+    tagsUi["mode"] == "tags"
+    tagsUi["placeholder"] == "OwningTeam"
+    tagsUi["tokenSeparators"].toList() == List(", ", ",")
+    tagsUi["allowClear"] == true
+    tagsUi["maxTagCount"] == "responsive"
+  }
+
+  ["TagsInput leaves every optional setting unset by default"] {
+    plainUi.placeholder == null
+    plainUi.tokenSeparators == null
+    plainUi.disabled == null
+    plainUi.BYOCdisabled == null
+    plainUi.allowClear == null
+    plainUi.maxTagCount == null
+    plainUi.maxTagTextLength == null
+  }
+
+  ["TagsInput enabled = false renders ui.disabled"] {
+    new App.TagsInput { title = "x"; enabled = false }.ui.disabled == true
+  }
+
+  ["TagsInput byocDisabled renders ui.BYOCdisabled"] {
+    new App.TagsInput { title = "x"; byocDisabled = true }.ui.BYOCdisabled == true
+  }
+
+  ["TagsInput maxTagCount takes a number and maxTagTextLength truncates chips"] {
+    local ui = new App.TagsInput { title = "x"; maxTagCount = 3; maxTagTextLength = 20 }.ui
+    ui.maxTagCount == 3
+    ui.maxTagTextLength == 20
+  }
+
+  // An empty separator would split every character into its own chip.
+  ["TagsInput rejects an empty token separator"] {
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; tokenSeparators { "" } }.ui.tokenSeparators) != null
+  }
+
+  ["TagsInput rejects a zero or negative maxTagCount and maxTagTextLength"] {
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagCount = 0 }.ui.maxTagCount) != null
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagCount = -1 }.ui.maxTagCount) != null
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagTextLength = 0 }.ui.maxTagTextLength) != null
+    module.catchOrNull(() -> new App.TagsInput { title = "x"; maxTagTextLength = -1 }.ui.maxTagTextLength) != null
+  }
+
+  ["Widget rejects a zero maxTagCount or maxTagTextLength and an empty token separator"] {
+    module.catchOrNull(() -> new App.Widget { widget = "select"; maxTagCount = 0 }.maxTagCount) != null
+    module.catchOrNull(() -> new App.Widget { widget = "select"; maxTagTextLength = 0 }.maxTagTextLength) != null
+    module.catchOrNull(() -> new App.Widget { widget = "select"; tokenSeparators = List("") }.tokenSeparators) != null
+  }
+}

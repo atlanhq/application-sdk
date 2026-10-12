@@ -2,8 +2,8 @@
 """Auto-approve + auto-merge gate for vuln-triage PRs.
 
 This is the **deterministic safety boundary** for the zero-human-touch CVE
-flow. The vuln-triage rover opens two — and only two — shapes of PR, each
-labelled ``vuln-auto-merge``:
+flow. The vuln triage (vuln-triage.yml, .github/scripts/vuln_triage) opens
+two — and only two — shapes of PR, each labelled ``vuln-auto-merge``:
 
   * **allowlist PR** — touches ONLY ``.security/base-allowlist.json``
   * **bump PR**      — touches ONLY a subset of ``pyproject.toml``,
@@ -13,7 +13,7 @@ A PR is approved (as ``atlan-ci``, satisfying code-owner review) and put on
 GitHub auto-merge (``gh pr merge --auto`` — no method flag; the merge queue on
 ``main`` owns the merge strategy) iff ALL hold:
 
-  1. author is one of the trusted rover identities,
+  1. author is one of the trusted vuln-automation identities,
   2. PR is open and not a draft,
   3. its HEAD SHA still matches the SHA whose checks just completed (race guard),
   4. it carries the ``vuln-auto-merge`` label, and
@@ -23,7 +23,7 @@ GitHub itself enforces "merge only when required checks pass" via auto-merge,
 so this gate never merges a red PR. A bump PR that ALSO touches source files
 (e.g. changelog-mandated code edits) fails the path-allowlist (5) and is
 therefore NOT auto-merged — it falls back to human / @sdk-review review. That
-is intended, not a bug: the rover's prose is never trusted to bound what it
+is intended, not a bug: the triage code is never trusted to bound what it
 touches; this file is.
 
 Loop / conditional logic lives here (a tested script) rather than inlined in
@@ -39,7 +39,7 @@ Environment:
 Optional:
     VULN_AUTOMERGE_LABEL     default 'vuln-auto-merge'.
     VULN_AUTOMERGE_AUTHORS   comma-separated trusted PR authors;
-                             default 'atlan-ci,mothership-ai[bot]'.
+                             default 'atlan-ci,atlan-app-fleet[bot]'.
 """
 
 from __future__ import annotations
@@ -61,8 +61,11 @@ DEFAULT_LABEL = "vuln-auto-merge"
 # Trusted PR authors. None of them is a code owner, so each needs an atlan-ci
 # approval to satisfy require_code_owner_review (and, for `.security/` PRs, the
 # Authorized Approver Check — atlan-ci is listed in .security/approvers.json):
-#   - mothership-ai[bot]    — the rover's allowlist + bump PRs.
-#   - atlan-app-fleet[bot]  — the reconcile removal PR (vuln-reconcile-on-release.yml).
+#   - atlan-app-fleet[bot]  — the triage's allowlist + bump PRs (vuln-triage.yml) and
+#     the reconcile removal PR (vuln-reconcile-on-release.yml).
+#   mothership-ai[bot] was trusted while the mothership rover opened these PRs. The
+#   rover is retired and that App still acts for the sdk-review lanes, so it is no
+#   longer trusted here.
 #   - atlan-ci              — LEGACY. The reconcile PR used to be opened via
 #     ORG_PAT_GITHUB on the theory that atlan-ci, being a `main`-ruleset bypass
 #     actor, needed no approval at all. That theory is wrong: bypass lets atlan-ci
@@ -72,7 +75,7 @@ DEFAULT_LABEL = "vuln-auto-merge"
 #     fleet App instead. Kept trusted only so any in-flight atlan-ci branch is
 #     still handled; such a PR cannot be self-approved and so cannot be queued
 #     hands-off — it needs a human approval. New PRs should never use it.
-DEFAULT_AUTHORS = "atlan-ci,atlan-app-fleet[bot],mothership-ai[bot]"
+DEFAULT_AUTHORS = "atlan-ci,atlan-app-fleet[bot]"
 # The login the gate's GH_TOKEN (ORG_PAT_GITHUB) acts as. GitHub rejects
 # self-approval, so a PR authored by this identity is skipped for approval.
 DEFAULT_APPROVER = "atlan-ci"
@@ -201,7 +204,7 @@ def already_approved(repo: str, pr: str, runner: Runner) -> bool:
 
 def approve(repo: str, pr: str, shape: str, runner: Runner) -> None:
     body = (
-        f"{APPROVAL_SIGNATURE} {shape} PR from the vuln-triage rover.\n\n"
+        f"{APPROVAL_SIGNATURE} {shape} PR from the vuln triage.\n\n"
         "Automated code-owner approval by `atlan-ci`. The PR is on GitHub "
         "auto-merge and enters the `main` merge queue only once all required "
         "checks pass; the queue sets the merge strategy. "

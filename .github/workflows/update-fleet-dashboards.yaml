@@ -1,0 +1,125 @@
+# Update Fleet Dashboards — standalone scheduled workflow.
+#
+# Publishes the test-readiness dashboard on Kryptonite
+# (k.atlan.dev/test-readiness-dashboard/) for the whole connector fleet from
+# one central job. connector-pulse mirrors it.
+#
+# The security and conformance dashboards are no longer published (FND-3462).
+# connector-pulse takes vulnerabilities from Endor and reads conformance from
+# the agent-sdk fleet scan ledger, and nothing else is known to read either.
+# k.atlan.dev/{security,conformance}-dashboard/ stay frozen at their last
+# publish; nothing here deletes them.
+#
+# CENTRAL PULL, NOT PER-REPO PUSH (FND-3337). These dashboards used to be
+# written by update-dashboard.yaml, called from a shim bootstrap installed in
+# every connector. The shim fired on workflow_run completion of Vulnerability
+# Scan, Build & Publish and Conformance, so every merge to main triggered it up
+# to three times, with up to three jobs each: eight billed jobs per merge per
+# repo for a view nobody reads per-merge. This job reads each repo's newest
+# live artifacts on its default branch instead. That is one job per interval
+# for the whole fleet, and freshness is the interval. The shim is retired
+# through bootstrap's RETIRED_FILES, so a resync deletes it from each repo.
+#
+# Every 3 hours, not hourly. The reads run against the atlan-app-fleet
+# installation's hourly REST budget, which the Renovate sweep and dashboard
+# also spend. Collecting one repo costs a handful of calls (the default branch,
+# the scorecard artifact lookups and one download), so ~80 repos is a few
+# hundred calls a run, well under the budget.
+# :40 past keeps clear of the 0 */4 Renovate sweep and the :20 Renovate
+# dashboard.
+#
+# Schedule only, no workflow_dispatch: a scheduled run always executes the
+# default branch, and this job holds fleet-wide credentials. Freshness is the
+# interval; there is no manual refresh.
+#
+# A repo with no live artifact keeps its last published row (artifacts expire
+# after 7 days). The row's own history date is the age of the data,
+# not the time of collection, so a stale row shows its age. See
+# fleet_dashboards_collect.py.
+#
+# A run does not retire repos from the manifest (--partial-scan): a repo
+# absent from this run's output was quiet, not removed. Departed repos are
+# cleared with prune-dashboard-repo.yaml.
+name: Update Fleet Dashboards
+
+on:
+  schedule:
+    - cron: "40 */3 * * *"
+
+permissions:
+  contents: read
+  id-token: write # OIDC for aws-actions/configure-aws-credentials
+
+# Queue rather than cancel: two runs racing the per-repo history
+# download → merge → upload would drop a line. With one trigger and a 3-hour
+# interval, a run still going when the next tick fires is the only overlap;
+# that tick waits, and a newer tick replacing it loses nothing, since each run
+# collects the whole fleet.
+concurrency:
+  group: fleet-dashboards
+  cancel-in-progress: false
+
+jobs:
+  fleet-dashboards:
+    name: Update Fleet Dashboards
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout application-sdk
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      # Org-wide, no `repositories:` list. The job reads every fleet repo's
+      # Actions artifacts, which the per-repo shim did with each repo's own
+      # GITHUB_TOKEN.
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      # The same deterministic discovery the Renovate runner and the minutes
+      # report use: atlan-*-app repos extending the shared preset, which is
+      # the set bootstrap installed the retired shim into. --fail-on-empty
+      # because the whole collection scope comes from this output.
+      - name: Discover the fleet
+        id: discover_fleet
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/discover_org_consumers.py \
+            --owner atlanhq \
+            --fail-on-empty
+
+      - name: Collect dashboard data
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REPOS: ${{ steps.discover_fleet.outputs.repos }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/fleet_dashboards_collect.py \
+            --repos "$REPOS" \
+            --out-dir dashboards-out
+
+      - name: Setup AWS Credentials
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6
+        with:
+          aws-region: ap-south-1
+          role-to-assume: arn:aws:iam::733936409301:role/kryptonite-store_FullAccess
+
+      # Gated on having something to publish. publish_fleet_dashboard.py
+      # refuses an empty directory, and no live artifact anywhere is routine
+      # on a quiet day.
+      - name: Deploy to Kryptonite (test-readiness)
+        if: hashFiles('dashboards-out/test-readiness-dashboard/repos/*.json') != ''
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/publish_fleet_dashboard.py \
+            --dir dashboards-out/test-readiness-dashboard \
+            --prefix test-readiness-dashboard \
+            --partial-scan

@@ -218,6 +218,12 @@ on:
           Unset = the four single-tenant secrets below are used and the cloud
           fan-out is skipped, which is exactly the pre-FND-6 behaviour.
         required: false
+      E2E_SYSTEM_TENANT_MATRIX_JSON:
+        description: |
+          System-app tenant map (FND-3542), same shape. When set it replaces
+          E2E_TENANT_MATRIX_JSON and the single-tenant fallback. See
+          tests-reusable.yaml's secrets block.
+        required: false
       # The four below were `required: true` before FND-6, when they were the
       # only way to name a tenant. They are now the fallback for a caller that
       # has not been granted the tenant map, so they cannot be mandatory —
@@ -257,7 +263,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       count: ${{ steps.plan.outputs.count }}
     env:
-      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+      HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -285,10 +291,12 @@ jobs:
         if: env.HAS_TENANT_MATRIX != ''
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
       - name: Plan clouds
         id: plan
@@ -303,7 +311,7 @@ jobs:
           # tenant, so N legs would masquerade as N clouds of coverage. Written
           # negated for the same reason as in tests-reusable.yaml: "" is falsy in
           # GitHub expressions, and it is the default here.
-          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.clouds }}
+          clouds: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.clouds }}
 
       - name: Warn that the cross-CSP matrix is unavailable
         if: inputs.clouds != 'none' && env.HAS_TENANT_MATRIX == ''
@@ -358,6 +366,7 @@ jobs:
       # the equivalent block in tests-reusable.yaml for why there is exactly one
       # writer of the tenant env.
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ matrix.cloud }}
       FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
       FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
@@ -399,6 +408,7 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -407,6 +417,7 @@ jobs:
             --mask-only
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \

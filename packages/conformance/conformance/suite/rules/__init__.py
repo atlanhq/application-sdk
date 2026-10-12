@@ -16,6 +16,7 @@ from conformance.suite.rules.atomic_publish import RULES as _ATOMIC_PUBLISH_RULE
 from conformance.suite.rules.ci import RULES as _CI_RULES
 from conformance.suite.rules.client_seam import RULES as _CLIENT_SEAM_RULES
 from conformance.suite.rules.contract_toolkit import RULES as _CONTRACT_TOOLKIT_RULES
+from conformance.suite.rules.credential_seam import RULES as _CREDENTIAL_SEAM_RULES
 from conformance.suite.rules.dependency import RULES as _D_RULES
 from conformance.suite.rules.deprecation import RULES as _B_RULES
 from conformance.suite.rules.determinism import RULES as _DETERMINISM_RULES
@@ -68,6 +69,7 @@ _ALL_SERIES: tuple[tuple[RuleDefinition, ...], ...] = (
     _STORAGE_RULES,
     _CLIENT_SEAM_RULES,
     _PERSISTENCE_SEAM_RULES,
+    _CREDENTIAL_SEAM_RULES,
     _EP_ALIGNMENT_RULES,
     _APP_NAME_ALIGNMENT_RULES,
     _SDR_RULES,

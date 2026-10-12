@@ -29,11 +29,15 @@ from application_sdk.common import incremental
 # from ``incremental._EXPORTS`` so the test fails when the mapping drifts,
 # instead of agreeing with whatever the mapping happens to say.
 _EXPECTED_ORIGINS = {
+    "MarkerPair": "marker",
+    "MarkerPersistResult": "marker",
     "create_next_marker": "marker",
     "extract_epoch_id_from_qualified_name": "helpers",
+    "fetch_marker": "marker",
     "fetch_marker_from_storage": "marker",
     "get_persistent_artifacts_path": "helpers",
     "get_persistent_s3_prefix": "helpers",
+    "persist_marker": "marker",
     "persist_marker_to_storage": "marker",
     "process_marker_timestamp": "marker",
 }

@@ -10,7 +10,17 @@ exactly the branching docs/standards/ci.md keeps out of YAML.  Callers do::
 Everything is read from the environment (set by a GitHub Actions ``env:``
 block), so the workflow stays straight-line.
 
-The three conditional rules, and why each is a rule rather than a default:
+The four conditional rules, and why each is a rule rather than a default:
+
+``--integration-result failure``
+    Passed only when the integration job FAILED (``INTEGRATION_RESULT``).  The
+    job runs only after a suite was detected, so a failure that left no junit
+    is a crashed tier — e.g. a toolchain download dying in setup — and the CLI
+    records it as present and failing rather than absent (FND-3299).  Not
+    passed on success: a junit already says everything, and keeping the flag
+    off the routine path means a conformance release predating it only loses
+    the scorecard on runs that would otherwise have published a false "no
+    integration tier".
 
 ``--e2e-junit``
     Passed only when the e2e job actually RAN (``E2E_RESULT`` is neither empty
@@ -57,6 +67,15 @@ def e2e_ran(e2e_result: str) -> bool:
     return e2e_result.strip().lower() not in _DID_NOT_RUN
 
 
+def integration_failed(integration_result: str) -> bool:
+    """Whether the integration job ran and failed.
+
+    ``cancelled`` is deliberately excluded: a superseded run is not evidence the
+    tier is broken, and the newer run publishes its own scorecard.
+    """
+    return integration_result.strip().lower() == "failure"
+
+
 def build_args(
     *,
     repo: str,
@@ -66,6 +85,7 @@ def build_args(
     unit_coverage: str,
     integration_junit: str,
     integration_coverage: str,
+    integration_result: str,
     e2e_junit_glob: str,
     e2e_result: str,
     configured_clouds: str,
@@ -84,6 +104,8 @@ def build_args(
         "--integration-coverage",
         integration_coverage,
     ]
+    if integration_failed(integration_result):
+        args += ["--integration-result", "failure"]
 
     ran = e2e_ran(e2e_result)
     if ran and e2e_junit_glob:
@@ -118,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         unit_coverage=env("UNIT_COVERAGE", ""),
         integration_junit=env("INTEGRATION_JUNIT", ""),
         integration_coverage=env("INTEGRATION_COVERAGE", ""),
+        integration_result=env("INTEGRATION_RESULT", ""),
         e2e_junit_glob=env("E2E_JUNIT_GLOB", ""),
         e2e_result=env("E2E_RESULT", ""),
         configured_clouds=env("CONFIGURED_CLOUDS", ""),

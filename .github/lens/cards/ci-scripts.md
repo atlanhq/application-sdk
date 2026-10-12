@@ -1,0 +1,11 @@
+# ci-scripts: Python drivers under .github/scripts
+- Flag: a new script, or a new branch in one, with no case in `.github/scripts/tests/` (success, failure/fallback, no-change paths).
+- Flag: side effects (`git`, `gh`, `pkl`, `uvx`, network) called ad hoc instead of through one thin wrapper tests can stub; ref CAS/lease logic copied instead of reusing `.github/scripts/_gh_refs.py`.
+- Flag: `subprocess` with `shell=True` or commands built from PR/branch/label text; tokens on argv; unchecked return codes that let a failure exit 0.
+- Flag: a gate that exits 0 or fails open when its input is missing, empty or unparseable.
+- Flag: secret values in stdout, errors or files; `::add-mask::` emitted on a stdout that is redirected into `$GITHUB_ENV` (use a `--mask-only` mode); masking only "sensitive-looking" keys instead of every scalar.
+- Flag: network calls without timeout; GitHub API reads that ignore pagination; a rate-limit 403 treated like a permission 403.
+- Flag: scripts run from a reusable workflow reading SDK files from the caller's workspace instead of the `.sdk-scripts` checkout (`ref: main`, never from `github.job_workflow_sha`) or `github.action_path`.
+- Flag: `yaml.load` (use `safe_load`); regex/text checks where a parse is needed and could false-pass.
+- Don't flag (tests enforce): restated tool versions.
+- Severity: critical if a script can leak a secret or run injected input; high if a gate can silently pass or CI breaks; medium for missing tests; low otherwise.

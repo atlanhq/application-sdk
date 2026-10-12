@@ -13,9 +13,9 @@ annotated as ``OpenAPIConnectorInput`` where ``OpenAPIConnectorInput =
 AppInputContract`` resolves to the generated class it names, and a contract
 inheriting from an aliased base resolves that base's fields.
 
-The check uses the same cross-file class-registry machinery as P013/P014:
-``collect_classes`` + ``resolve_ancestor`` for App-subclass detection, and
-``is_entrypoint_decorator`` / ``is_task_decorator`` for decorator provenance.
+Entrypoint detection is ``prescriptions._boundary_methods.classify_boundary_method``,
+the one detector P013/P014, the K-series and the preflight checks share, over the
+cross-file ``collect_classes`` registry.
 
 Field extraction resolves the full inheritance hierarchy (``resolve_contract_fields``):
 in-repo base classes are resolved from their own AST body via ``by_name``; SDK-provided
@@ -34,26 +34,29 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Mapping
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, TypeGuard
 
 from conformance.suite.checks._sdk_contract_mixins import (
     SDK_CONTRACT_BASE_FIELDS,
     SDK_MODEL_BACKED_ARTIFACT_FIELDS,
+    SDK_TEMPLATE_CONTRACT_BASES,
     SDK_TEMPLATE_CONTRACT_FIELDS,
+)
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
 )
 from conformance.suite.checks.prescriptions._contract_common import _unwrap_annotated
 from conformance.suite.checks.prescriptions._decorator_provenance import (
-    ImportProvenance,
     collect_import_provenance,
-    is_entrypoint_decorator,
-    is_task_decorator,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     _is_classvar_annotation,
     collect_import_aliases,
-    resolve_ancestor,
+    field_call_names,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -231,6 +234,74 @@ class _FieldInfo(NamedTuple):
     #: Trailing with a default so every existing positional construction of this
     #: tuple keeps working.
     model_declared: bool = False
+    #: Whether a payload must carry this field: Pydantic v2 requires a field
+    #: with no default, ``Optional`` or not. ``None`` means unknown — a field
+    #: mirrored from an SDK registry, whose defaults are not recorded there.
+    required: bool | None = None
+
+
+#: The names that call ``Field`` when a file imports it under no alias.
+_FIELD_CALL_NAMES = frozenset({"Field"})
+
+
+def _is_field_call(
+    node: ast.expr | None, field_names: frozenset[str]
+) -> TypeGuard[ast.Call]:
+    """Whether *node* calls ``Field`` — by any of *field_names*, or ``x.Field``."""
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast.Name) and func.id in field_names) or (
+        isinstance(func, ast.Attribute) and func.attr == "Field"
+    )
+
+
+def _field_call_has_default(call: ast.Call) -> bool:
+    """Whether a ``Field(...)`` call supplies a default.
+
+    ``Field()`` and ``Field(...)`` (an Ellipsis default) leave the field
+    required; any other positional default, ``default=`` (other than
+    Ellipsis) or ``default_factory=`` supplies one.
+    """
+    if call.args:
+        first = call.args[0]
+        return not (isinstance(first, ast.Constant) and first.value is Ellipsis)
+    for kw in call.keywords:
+        if kw.arg == "default_factory":
+            return True
+        if kw.arg == "default":
+            return not (
+                isinstance(kw.value, ast.Constant) and kw.value.value is Ellipsis
+            )
+    return False
+
+
+def _field_required(ann_node: ast.AnnAssign, field_names: frozenset[str]) -> bool:
+    """Whether Pydantic v2 requires this field in every payload.
+
+    A field is required when nothing supplies a default: no value, a
+    ``Field(...)`` value without one, or no value with an ``Annotated``
+    ``Field(...)`` that supplies none. ``Optional[X]`` does not make a field
+    optional in Pydantic v2 — only a default does. *field_names* are the local
+    names the defining file binds to ``Field``, so ``F(...)`` after
+    ``from pydantic import Field as F`` reads as the call it is.
+    """
+    value = ann_node.value
+    if value is None:
+        annotation = ann_node.annotation
+        if isinstance(annotation, ast.Subscript) and _is_named(
+            annotation.value, "Annotated"
+        ):
+            sl = annotation.slice
+            metadata = sl.elts[1:] if isinstance(sl, ast.Tuple) else []
+            return not any(
+                _is_field_call(m, field_names) and _field_call_has_default(m)
+                for m in metadata
+            )
+        return True
+    if _is_field_call(value, field_names):
+        return not _field_call_has_default(value)
+    return False
 
 
 def _field_status(ann_node: ast.AnnAssign) -> str:
@@ -280,11 +351,14 @@ def _field_status(ann_node: ast.AnnAssign) -> str:
     return "active"
 
 
-def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
+def _iter_fields(
+    classdef: ast.ClassDef, field_names: frozenset[str] = _FIELD_CALL_NAMES
+) -> list[_FieldInfo]:
     """Return annotated field info declared directly on *classdef*'s own body.
 
     Does not resolve fields inherited from a base class or mixin — use
-    :func:`resolve_contract_fields` for that.
+    :func:`resolve_contract_fields` for that. *field_names* are the local names
+    *classdef*'s file binds to ``Field``.
     """
     result = []
     for stmt in classdef.body:
@@ -304,6 +378,7 @@ def _iter_fields(classdef: ast.ClassDef) -> list[_FieldInfo]:
                 status=_field_status(stmt),
                 node=stmt,
                 model_declared=_annotation_declares_model(stmt.annotation),
+                required=_field_required(stmt, field_names),
             )
         )
     return result
@@ -407,7 +482,7 @@ def resolve_contract_fields(
                 # overwrite below.
                 for base_name in reversed(rec.bases):
                     merge_ancestor(base_name, visiting)
-                for fi in _iter_fields(rec.node):
+                for fi in _iter_fields(rec.node, rec.field_call_names):
                     fields_by_name[fi.name] = _keep_model_declared(
                         fi._replace(node=None), fields_by_name.get(fi.name)
                     )
@@ -444,10 +519,74 @@ def resolve_contract_fields(
 
     # Fields declared directly on classdef always win over inherited ones —
     # except for the marker, which is sticky (see `_keep_model_declared`).
-    for fi in _iter_fields(classdef):
+    for fi in _iter_fields(classdef, field_call_names(aliases)):
         fields_by_name[fi.name] = _keep_model_declared(fi, fields_by_name.get(fi.name))
 
     return list(fields_by_name.values())
+
+
+def sdk_contract_ancestors(
+    classdef: ast.ClassDef,
+    aliases: dict[str, str],
+    by_name: dict[str, ClassRecord],
+    *,
+    by_name_all: dict[str, list[ClassRecord]] | None = None,
+) -> frozenset[str]:
+    """SDK contract names *classdef* inherits from, directly or via in-repo bases.
+
+    Walks the same base chain as :func:`resolve_contract_fields` and returns the
+    ancestors it resolves from the static SDK registries rather than from repo
+    source. A name declared in the scanned repo is never included, so an SDK
+    self-scan (where the templates are in-repo) yields an empty set, and
+    neither is a base its defining module imports from a non-SDK module.
+
+    A base imported from a third-party package (one whose top-level package no
+    scanned file lives under) is not resolved through a same-named in-repo
+    class either: the name match would be a coincidence, and following it
+    would credit the importing contract with an unrelated class's SDK
+    ancestors.
+    """
+    found: set[str] = set()
+    seen: set[str] = {classdef.name}
+    records = (
+        [r for recs in by_name_all.values() for r in recs]
+        if by_name_all
+        else list(by_name.values())
+    )
+    repo_packages = {
+        part for rec in records for part in Path(rec.file).with_suffix("").parts
+    }
+
+    def walk(name: str, foreign: Mapping[str, str | None]) -> None:
+        if name in seen:
+            return
+        seen.add(name)
+        if name in foreign and foreign[name] not in (None, *repo_packages):
+            return
+        recs = (by_name_all or {}).get(name)
+        if not recs:
+            rec_one = by_name.get(name)
+            recs = [rec_one] if rec_one is not None else []
+        if recs:
+            for rec in recs:
+                for base_name in rec.bases:
+                    walk(base_name, rec.non_sdk_bases)
+        elif name in foreign:
+            return
+        elif name in SDK_CONTRACT_BASE_FIELDS or name in SDK_TEMPLATE_CONTRACT_FIELDS:
+            found.add(name)
+            found.update(SDK_TEMPLATE_CONTRACT_BASES.get(name, ()))
+
+    candidates = (by_name_all or {}).get(classdef.name) or [by_name.get(classdef.name)]
+    own_foreign: Mapping[str, str | None] = next(
+        (r.non_sdk_bases for r in candidates if r is not None and r.node is classdef),
+        {},
+    )
+    for base in classdef.bases:
+        bname = _base_name(base)
+        if bname is not None:
+            walk(aliases.get(bname, bname), own_foreign)
+    return frozenset(found)
 
 
 # ── Entrypoint contract discovery ─────────────────────────────────────────────
@@ -487,8 +626,8 @@ def collect_entrypoint_contract_names(
 ) -> frozenset[str]:
     """Return the class names of all entrypoint Input/Output contracts.
 
-    Mirrors P013 boundary detection — collects contract class names instead of
-    emitting findings.  ``@task`` contract names are excluded.
+    Shares P013's boundary detection (``classify_boundary_method``) — collects
+    contract class names instead of emitting findings.  ``@task`` contract names are excluded.
 
     Names are reported as the class that *declares* the contract.  When the
     caller has seeded *by_name* with module-level rebindings (see
@@ -499,39 +638,23 @@ def collect_entrypoint_contract_names(
     entrypoint_contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
 
-    for path, tree in file_trees.items():
-        prov: ImportProvenance = collect_import_provenance(tree)
+    for tree in file_trees.values():
         aliases = collect_import_aliases(tree) if isinstance(tree, ast.Module) else {}
+        scope = BoundaryScope.for_module(
+            tree,
+            prov=collect_import_provenance(tree),
+            aliases=aliases,
+            by_name=by_name,
+            app_cache=app_cache,
+        )
 
         for class_node in ast.walk(tree):
             if not isinstance(class_node, ast.ClassDef):
                 continue
 
             for func in _iter_class_body_methods(class_node):
-                is_ep = False
-
-                if any(
-                    is_entrypoint_decorator(dec, prov) for dec in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(dec, prov) for dec in func.decorator_list):
-                    continue  # @task — skip entirely
-
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in class_node.bases:
-                        bname = _base_name(base)
-                        if bname is None:
-                            continue
-                        bname = aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(bname, "App", by_name, app_cache, set())
-                            is True
-                        ):
-                            is_ep = True
-                            break
-
-                if not is_ep:
+                boundary = classify_boundary_method(class_node, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
 
                 non_self = _get_non_self_params(func)
@@ -552,3 +675,25 @@ def collect_entrypoint_contract_names(
                         )
 
     return frozenset(entrypoint_contracts)
+
+
+#: Where the SDK declares :data:`SDK_CONTRACT_BASE_FIELDS`' classes.
+SDK_CONTRACT_BASE_MODULE = "application_sdk/contracts/base.py"
+
+
+def sdk_base_contract_names(by_name: dict[str, ClassRecord]) -> frozenset[str]:
+    """The SDK contract bases (``Input``, ``Output``, ``PublishInputMixin``) declared in this scan.
+
+    They are no entrypoint's contract, but every app contract inherits from
+    one, so the SDK records them in its own ledger alongside its template
+    contracts. A 'sunset' there is what lets B005 in a consumer app recognise
+    a base field the SDK retired (FND-3107/FND-3108). Only the SDK's own scan
+    declares them, in :data:`SDK_CONTRACT_BASE_MODULE`; anywhere else the set
+    is empty.
+    """
+    return frozenset(
+        name
+        for name in SDK_CONTRACT_BASE_FIELDS
+        if (rec := by_name.get(name)) is not None
+        and Path(rec.file).as_posix() == SDK_CONTRACT_BASE_MODULE
+    )
