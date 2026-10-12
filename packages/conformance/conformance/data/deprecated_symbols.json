@@ -327,7 +327,7 @@
     {
       "kind": "constant",
       "marker_via": "module-getattr",
-      "message": "_GATE_BROKEN_CATEGORIES is deprecated; use DEPRECATED_FAIL_OPEN_CATEGORIES \u2014 the identical frozenset under its honest name. Will be removed in v3.40.0.",
+      "message": "_GATE_BROKEN_CATEGORIES is deprecated; use DEPRECATED_FAIL_OPEN_CATEGORIES \u2014 the gate's fail-open set (RATE_LIMITED, which this alias still holds, left it in FND-3774). Will be removed in v3.40.0.",
       "migration_target": true,
       "module": "application_sdk.execution._temporal.preflight_gate",
       "removal_version": "3.40.0",

@@ -110,9 +110,11 @@ verdict was reached.
   `App.preflight_gate_timeout_seconds`, a killed attempt whose earlier attempt left typed
   evidence, or a provably absent credential. Subject to `preflight_gate_mode`: soft reports
   `would_block` and proceeds; hard aborts the run only when the attributed failure's category
-  is `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`, and otherwise
-  reports `would_block` and proceeds — it never blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or
-  the deprecated fail-open categories. A verdict is reached on the attempt it happens on.
+  is `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND` or (on the final
+  attempt only) `SOURCE_UNAVAILABLE` or `RATE_LIMITED`, and otherwise reports `would_block` and proceeds — it
+  never blocks on `TIMEOUT` or the deprecated fail-open categories. A verdict is reached on
+  the attempt it happens on, except that a hard gate retries `SOURCE_UNAVAILABLE` and
+  `RATE_LIMITED` until its final attempt.
 - **Frame lost** (`gate_classification="frame_lost"`) — Temporal ended a running attempt
   and nothing survived: a probe that stalled the loop past the gate's cancel, or a worker
   that died under it. The chain cannot tell them apart, so this is its own value. Its
@@ -122,7 +124,7 @@ verdict was reached.
   or no worker ever running the attempt. **Always** fails open, in both postures: a platform
   blip must never fail a healthy run.
 - **Deprecated fail-open** (`gate_classification="deprecated_fail_open"`) — a typed leaf in
-  `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` raised from
+  `DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED` or `CANCELLED` raised from
   `preflight_check`. The pre-3.35 gate treated these as plumbing, and every hard-mode app that
   predates the origin rule raises them on purpose, so they keep failing open in both postures
   until 3.40.0 with a `DeprecationWarning` naming the app and the leaf. From 3.40.0 they are

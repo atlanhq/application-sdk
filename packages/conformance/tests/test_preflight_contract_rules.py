@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -191,7 +194,7 @@ def test_imported_failure_inherits_missing_action(tmp_path: Path):
 def test_imported_classifier_raise_is_detected(tmp_path: Path):
     helper = tmp_path / "failures.py"
     helper.write_text(
-        'from application_sdk.errors import RateLimitedError\ndef classify():\n    raise RateLimitedError(message="Try later")\n'
+        'from application_sdk.errors import DependencyUnavailableError\ndef classify():\n    raise DependencyUnavailableError(message="Try later")\n'
     )
     handler = tmp_path / "handler.py"
     handler.write_text(
@@ -580,6 +583,7 @@ _TRANSIENT_IMPORTS = (
     [
         ("", 'SourceUnavailableError(message="Server restarting")'),
         ("", 'AppTimeoutError(message="Probe outran its budget")'),
+        ("", 'RateLimitedError(message="429 Too Many Requests")'),
         (
             "class SourceRestartingError(SourceUnavailableError):\n"
             '    code: ClassVar[str] = "SOURCE_UNAVAILABLE_EXAMPLE_RESTART"\n',
@@ -587,7 +591,13 @@ _TRANSIENT_IMPORTS = (
         ),
         ("", 'SourceUnavailableError(message="Server restarting", retryable=True)'),
     ],
-    ids=["sdk-source-unavailable", "sdk-timeout", "app-leaf", "explicit-retryable"],
+    ids=[
+        "sdk-source-unavailable",
+        "sdk-timeout",
+        "sdk-rate-limited",
+        "app-leaf",
+        "explicit-retryable",
+    ],
 )
 def test_retryable_transient_raise_is_not_f008(
     tmp_path: Path, extra: str, raised: str
@@ -599,7 +609,6 @@ def test_retryable_transient_raise_is_not_f008(
     "leaf",
     [
         "DependencyUnavailableError",
-        "RateLimitedError",
         "ResourceExhaustedError",
         "CancelledError",
     ],
@@ -660,16 +669,37 @@ def test_sdk_error_category_matches_runtime():
         ), name
 
 
+_MONOREPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Reads the gate policy from the monorepo's SDK source, not the installed
+# package: this venv pins a published SDK that can predate the policy the
+# mirror tracks, and the mirror must match the SDK it ships beside.
+_GATE_POLICY_PROBE = """
+from application_sdk.execution._temporal.preflight_gate import (
+    DEPRECATED_FAIL_OPEN_CATEGORIES,
+    GATE_NEVER_BLOCKING_CATEGORIES,
+    GATE_RETRIED_CATEGORIES,
+)
+print(",".join(sorted(
+    c.name
+    for c in GATE_RETRIED_CATEGORIES
+    | (GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES)
+)))
+"""
+
+
 def test_raisable_transient_categories_match_the_gate():
     from conformance.suite.checks.preflight._contracts import (
         RAISABLE_TRANSIENT_CATEGORIES,
     )
 
-    from application_sdk.execution._temporal.preflight_gate import (
-        DEPRECATED_FAIL_OPEN_CATEGORIES,
-        GATE_NEVER_BLOCKING_CATEGORIES,
+    env = {**os.environ, "PYTHONPATH": str(_MONOREPO_ROOT)}
+    probe = subprocess.run(
+        [sys.executable, "-c", _GATE_POLICY_PROBE],
+        cwd=_MONOREPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     )
-
-    assert RAISABLE_TRANSIENT_CATEGORIES == {
-        c.name for c in GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES
-    }
+    assert RAISABLE_TRANSIENT_CATEGORIES == set(probe.stdout.strip().split(","))

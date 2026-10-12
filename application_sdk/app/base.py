@@ -933,9 +933,12 @@ class App(ABC):
     the gate attributes to the source — a ``NOT_READY`` verdict, anything the
     handler raises, a frame Temporal ended — when the attributed failure is one
     the customer can act on (``GATE_BLOCKING_CATEGORIES``: auth, permission,
-    invalid input, precondition, not found). Anything else, including a probe
-    overrunning the budget or an unreachable source, is reported as
-    ``would_block`` and the run proceeds. Set it once the app's checks are
+    invalid input, precondition, not found, and a source still unavailable or
+    rate-limited on the gate's final attempt). Anything else, including a probe overrunning the
+    budget, is reported as ``would_block`` and the run proceeds. A source that
+    is cold rather than down says so through :meth:`Handler.warmup
+    <application_sdk.handler.base.Handler.warmup>`, never by raising
+    ``SOURCE_UNAVAILABLE``. Set it once the app's checks are
     trusted to gate real runs. The bare strings
     ``"hard"`` and ``"soft"`` are accepted and coerced once; any other value
     resolves to soft. This attribute is the only source of the posture: the
@@ -943,8 +946,8 @@ class App(ABC):
     adopt-preflight-gate skill.
 
     Note this posture applies to *every* outcome the gate can attribute to the
-    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``,
-    ``SOURCE_UNAVAILABLE`` or the deprecated fail-open categories: a probe that
+    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``
+    or the deprecated fail-open categories: a probe that
     overruns :attr:`preflight_gate_timeout_seconds` and an untyped handler crash
     (``INTERNAL``) are reported, a missing credential typed ``NOT_FOUND`` blocks.
     Failures of the gate's own plumbing (secret
@@ -974,11 +977,14 @@ class App(ABC):
     preflight_gate_max_attempts: ClassVar[int] = 2
     """Attempts the gate activity may take. Clamped to 1-3.
 
-    A retry never re-asks the handler: a source fault, a handler crash and a
-    budget overrun are each a verdict on the attempt they happen. What a retry
-    buys is the gate's own retryable plumbing — a store probe that failed, a
-    credential lookup the secret store refused — and it sizes the
-    ``schedule_to_close`` window. So an app declaring a large
+    In hard mode a ``SOURCE_UNAVAILABLE`` or ``RATE_LIMITED`` failure is
+    retried: it blocks only on the final attempt, so a source unreachable or
+    rate-limited for a moment gets the next attempt to answer. Every other source fault, handler crash and budget
+    overrun is a verdict on the attempt it happens. A retry also buys the
+    gate's own retryable plumbing — a store probe that failed, a credential
+    lookup the secret store refused — and this sizes the
+    ``schedule_to_close`` window. ``1`` means an unreachable source blocks on
+    its first answer. So an app declaring a large
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here: at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
@@ -1029,12 +1035,15 @@ class App(ABC):
     traced multi-hour extractions dying at the final upload to that
     condition). A failed probe — after the gate's retry attempts are exhausted
     — appends a typed platform-attributed check and downgrades a ``READY`` or
-    ``PARTIAL`` verdict to ``NOT_READY``, so :attr:`preflight_gate_mode`
-    decides whether it blocks; soft mode only reports it as ``would_block``.
+    ``PARTIAL`` verdict to ``NOT_READY``. In hard mode it blocks only when its
+    category is in ``GATE_BLOCKING_CATEGORIES``: in-cluster stores are
+    Atlan-side and map to ``DEPENDENCY_UNAVAILABLE``, which is reported as
+    ``would_block``; in SDR mode a missing binding, denied grant or rejected
+    credential on the customer's bucket blocks. Soft mode only reports it.
 
     Deliberately opt-in while the fleet's probe precision is measured: the probe
-    costs under a second per run against healthy storage, but a hard-mode app
-    turning this on is trusting a storage canary to abort real runs — and the
+    costs under a second per run against healthy storage, but a hard-mode SDR
+    app turning this on is trusting a storage canary to abort real runs — and the
     probe is stricter than a small-artifact-only workload's real writes, which
     never touch multipart at all.
 
@@ -3219,7 +3228,8 @@ async def _run_preflight_gate(
     # UNAVAILABLE, or still warming at the ceiling: the WARMUP checks cannot
     # run, and the reason is the source's compute. The warmup posture alone
     # decides here, not gate_blocks: both are SOURCE_UNAVAILABLE, which
-    # gate_blocks never blocks on (FND-3036).
+    # gate_blocks would block on, and waiting for compute is the warmup
+    # posture's call (FND-3036, FND-3774).
     blocks = warmup_posture.enforces
     if seen.state is WarmupState.UNAVAILABLE:
         evidence = warmup_unavailable_details(seen, app_name)

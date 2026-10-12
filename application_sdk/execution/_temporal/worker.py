@@ -754,9 +754,10 @@ def create_worker(
                 "Preflight gate is HARD for app %r — the run WILL abort before "
                 "extraction on a NOT_READY verdict or an unverifiable source "
                 "whose failure the customer can act on (auth, permission, "
-                "invalid input, precondition, not found). Anything else — a "
-                "probe overrunning the %ds budget, an unreachable source, a "
-                "handler crash — is reported and the run proceeds, as do gate "
+                "invalid input, precondition, not found, a source still "
+                "unavailable or rate-limited on the final attempt). Anything else — a probe "
+                "overrunning the %ds budget, a handler crash — is reported and "
+                "the run proceeds, as do gate "
                 "plumbing failures. This is the per-app opt-in; the default "
                 "posture is soft (report only, never block).",
                 name,

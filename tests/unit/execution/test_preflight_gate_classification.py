@@ -511,16 +511,19 @@ class TestHandlerRaisedBlockPassesThrough:
 
 # One leaf per category outside the deprecated fail-open train: each is a
 # typed handler-origin failure the mode must apply to. A hard gate blocks on the
-# first list (GATE_BLOCKING_CATEGORIES) and reports the second (FND-3040).
+# first list (GATE_BLOCKING_CATEGORIES; SOURCE_UNAVAILABLE and RATE_LIMITED on
+# the final attempt, which a call outside an activity context is) and reports the second (FND-3040,
+# FND-3774).
 _HARD_BLOCKING_TYPED_LEAVES: list[AppError] = [
     AuthError(message="bad"),
     AppPermissionDeniedError(message="no grant"),
     NotFoundError(message="no such database"),
     InvalidInputError(message="bad host"),
     PreconditionError(message="wrong state"),
+    SourceUnavailableError(message="no answer"),
+    RateLimitedError(message="429"),
 ]
 _HARD_REPORTED_TYPED_LEAVES: list[AppError] = [
-    SourceUnavailableError(message="no answer"),
     AlreadyExistsError(message="exists"),
     AppTimeoutError(message="source read timed out"),
     DataIntegrityError(message="corrupt catalog"),
@@ -615,7 +618,6 @@ _DEPRECATED_FAIL_OPEN_LEAVES = [
         DependencyUnavailableError(message="db paused", service="source"),
         Audience.PLATFORM,
     ),
-    (RateLimitedError(message="429"), Audience.USER),
     (ResourceExhaustedError(message="quota"), Audience.PLATFORM),
     (CancelledError(message="cancelled"), Audience.APP_OWNER),
 ]
@@ -681,7 +683,7 @@ class TestDeprecatedFailOpenTrain:
         self,
     ) -> None:
         gate = _gate(
-            _RaisingHandler(RateLimitedError(message="429")),
+            _RaisingHandler(ResourceExhaustedError(message="quota")),
             mode=PreflightGateMode.HARD,
         )
         with mock.patch(f"{_GATE}.logger") as mock_logger:
@@ -690,18 +692,17 @@ class TestDeprecatedFailOpenTrain:
         (warning,) = [w for w in caught if w.category is DeprecationWarning]
         text = str(warning.message)
         assert "myapp" in text
-        assert "RateLimitedError" in text
+        assert "ResourceExhaustedError" in text
         assert DEPRECATED_FAIL_OPEN_REMOVED_IN in text
         assert "raise a retryable SourceUnavailableError leaf" in text
-        assert "unverifiable source and never blocks" in text
-        assert "retries" not in text
+        assert "a hard gate retries, blocking only if it persists" in text
+        assert "never blocks on." not in text
         logged = [c.args[0] for c in mock_logger.warning.call_args_list]
         assert text in logged
 
     def test_the_set_is_exactly_the_old_plumbing_categories(self) -> None:
         assert DEPRECATED_FAIL_OPEN_CATEGORIES == {
             FailureCategory.DEPENDENCY_UNAVAILABLE,
-            FailureCategory.RATE_LIMITED,
             FailureCategory.RESOURCE_EXHAUSTED,
             FailureCategory.CANCELLED,
         }
@@ -1574,7 +1575,7 @@ class TestTheRowShapeIsOne:
                 "blocked",
             ),
             (
-                lambda: _RaisingHandler(RateLimitedError(message="429")),
+                lambda: _RaisingHandler(ResourceExhaustedError(message="quota")),
                 PreflightGateMode.HARD,
                 "no_verdict",
             ),

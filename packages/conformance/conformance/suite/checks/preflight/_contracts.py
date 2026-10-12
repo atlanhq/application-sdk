@@ -102,12 +102,15 @@ _SDK_CATEGORY: dict[str, tuple[str, bool]] = {
     "UnimplementedError": ("UNIMPLEMENTED", False),
 }
 #: Categories a handler may raise for a source it could not ask this time: the
-#: gate's no-verdict path records the raise as an unverifiable source and never
-#: blocks on these, so the run proceeds. They are
-#: the gate's never-blocking categories minus the fail-open ones it deprecated
-#: (DEPENDENCY_UNAVAILABLE, RATE_LIMITED, RESOURCE_EXHAUSTED, CANCELLED), whose
+#: gate's no-verdict path records the raise as an unverifiable source. A hard
+#: gate retries SOURCE_UNAVAILABLE and RATE_LIMITED and blocks only if they
+#: persist to its final attempt; it never blocks on TIMEOUT. They are the gate's
+#: retried categories plus its never-blocking ones minus the fail-open ones it
+#: deprecated (DEPENDENCY_UNAVAILABLE, RESOURCE_EXHAUSTED, CANCELLED), whose
 #: raise is the idiom F008 exists to retire. Pinned to the gate by a drift test.
-RAISABLE_TRANSIENT_CATEGORIES = frozenset({"SOURCE_UNAVAILABLE", "TIMEOUT"})
+RAISABLE_TRANSIENT_CATEGORIES = frozenset(
+    {"SOURCE_UNAVAILABLE", "RATE_LIMITED", "TIMEOUT"}
+)
 
 
 def _sdk_error_leaf(name: str) -> str | None:
