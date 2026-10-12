@@ -3113,6 +3113,100 @@ def fail():
     _single(src, "E018")
 
 
+def test_p018_no_finding_for_external_precondition_translated_to_domain_error() -> None:
+    src = """\
+from backend_store.exceptions import PreconditionError
+from application_sdk.errors import DependencyUnavailableError
+
+class CheckpointConflict(DependencyUnavailableError):
+    code = "DEPENDENCY_UNAVAILABLE_SYNTHETIC_CHECKPOINT_CONFLICT"
+
+def update_local():
+    raise PreconditionError("concurrent update")
+
+def write_checkpoint():
+    try:
+        update_local()
+    except PreconditionError:
+        raise CheckpointConflict(message="retry")
+"""
+    assert "E018" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised_type"),
+    [
+        (
+            "from application_sdk.errors import PreconditionError",
+            "PreconditionError",
+        ),
+        (
+            "import application_sdk.errors as sdk_errors",
+            "sdk_errors.PreconditionError",
+        ),
+    ],
+)
+def test_p018_sdk_precondition_leaf_still_flagged(
+    imports: str, raised_type: str
+) -> None:
+    _single(
+        f"""\\
+{imports}
+
+def fail():
+    raise {raised_type}(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_non_exception_module_import_still_flagged() -> None:
+    _single(
+        """
+from domain_errors import PreconditionError
+
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
+@pytest.mark.parametrize("local_first", [True, False])
+def test_p018_function_local_import_does_not_mask_module_sdk_leaf(
+    local_first: bool,
+) -> None:
+    local = """\
+def translate():
+    from backend_store.exceptions import PreconditionError
+    raise PreconditionError("concurrent update")
+"""
+    sdk = """\
+def fail():
+    raise PreconditionError(message="state conflict")
+"""
+    body = local + "\n" + sdk if local_first else sdk + "\n" + local
+    src = "from application_sdk.errors import PreconditionError\n\n" + body
+    # The module-level SDK leaf raise must still be flagged; the name's
+    # provenance is ambiguous, so the local raise is flagged conservatively too.
+    sdk_line = (
+        src.splitlines().index('    raise PreconditionError(message="state conflict")')
+        + 1
+    )
+    e018_lines = [f.line for f in scan_text(src, "fake.py") if f.rule_id == "E018"]
+    assert sdk_line in e018_lines
+
+
+def test_p018_unresolved_precondition_leaf_still_flagged() -> None:
+    _single(
+        """\\
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
 @pytest.mark.parametrize(
     ("imports", "cancelled_error"),
     [
