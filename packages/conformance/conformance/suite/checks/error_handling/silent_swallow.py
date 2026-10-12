@@ -129,18 +129,23 @@ class SilentSwallowMixin:
             return
 
         def _call_redacts_parameter(call: ast.Call, parameter: str) -> bool:
+            # `exc_info` is a traceback switch, not message text: any value not
+            # provably falsy — the parameter, `True`, a sanitized string —
+            # attaches the raw active traceback past the sanitizer, so the call
+            # is no redaction boundary.
+            if any(
+                keyword.arg == "exc_info"
+                and not (
+                    isinstance(keyword.value, ast.Constant) and not keyword.value.value
+                )
+                for keyword in call.keywords
+            ):
+                return False
             sanitized = False
             raw = False
-            # `exc_info` is a traceback switch, not message text: any truthy
-            # value — a sanitized string included — attaches the raw active
-            # traceback, so a sanitizer there proves no redaction.
             pending: list[ast.AST] = [
                 *call.args,
-                *[
-                    keyword.value
-                    for keyword in call.keywords
-                    if keyword.arg != "exc_info"
-                ],
+                *[keyword.value for keyword in call.keywords],
             ]
             while pending:
                 current = pending.pop()

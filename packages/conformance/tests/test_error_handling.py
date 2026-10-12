@@ -1137,6 +1137,24 @@ def probe():
     assert "E004" not in _findings(src)
 
 
+def test_p004_no_finding_when_helper_log_disables_exc_info() -> None:
+    # A provably falsy `exc_info` attaches no traceback; the sanitized message
+    # remains the only form the failure leaves in.
+    src = """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=False)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
 @pytest.mark.parametrize(
     "src",
     [
@@ -1219,6 +1237,32 @@ def probe():
         _report_failure(caught)
         return None
 """,
+        # A sanitized message does not redact the raw traceback that a
+        # truthy `exc_info` attaches alongside it.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=True)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
         # A walrus in an `if` test replaces the failure before the log.
         """\
 def _report_failure(problem):
@@ -1271,6 +1315,8 @@ def probe():
         "raw-exception",
         "sanitizes-other-value",
         "sanitizer-in-exc-info",
+        "sanitized-message-raw-exc-info",
+        "sanitized-message-exc-info-true",
         "walrus-in-if-test",
         "conditional-module-rebinding",
         "positional-only-by-keyword",
