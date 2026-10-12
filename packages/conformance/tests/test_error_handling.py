@@ -3906,3 +3906,128 @@ def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
     error = _cleanup_helper_in_gate("error")
     assert "E004" not in _findings(error)
     assert "F005" not in _preflight_ids(tmp_path / "error", error)
+
+
+# ---------------------------------------------------------------------------
+# Typed-failure exemption: helpers proven by their return annotation
+# ---------------------------------------------------------------------------
+
+# A classifier that walks the cause chain cannot be summarised as straight-line
+# code, but its signature still says what it hands back. ``-> AppError | None``
+# called with the caught exception, behind a guard that exits on ``None``, is the
+# failure carried out as typed data.
+_ANNOTATED_CLASSIFIER = """\
+def _classify(exc: BaseException) -> {annotation}:
+    current = exc
+    while current is not None:
+        if isinstance(current, DeniedError):
+            return AccessDeniedError(message="denied", cause=current)
+        current = current.__cause__
+    return None
+
+
+async def probe():
+    try:
+        await read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+{guard}        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+
+_EXITING_GUARD = """\
+        if failure is None:
+            return Check(
+                name="store",
+                passed=False,
+                error=StoreTransientError(message="unavailable", cause=exc).to_failure_details(),
+            )
+"""
+
+_CHAINED_RAISE_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from exc
+"""
+
+_SEVERED_RAISE_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+"""
+
+
+@pytest.mark.parametrize(
+    "annotation", ["AppError | None", "Optional[AppError]", "AccessDeniedError"]
+)
+@pytest.mark.parametrize("guard", [_EXITING_GUARD, _CHAINED_RAISE_GUARD])
+def test_typed_failure_no_finding_when_annotated_helper_classifies_the_caught_error(
+    annotation: str, guard: str
+) -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation=annotation, guard=guard)
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_typed_failure_severed_guard_raise_is_still_e004() -> None:
+    # The helper proof clears the return (E007), but ``from None`` on the other
+    # exit severs the chain, which E004 judges on its own.
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AppError | None", guard=_SEVERED_RAISE_GUARD
+    )
+    assert _findings(src) == ["E004"]
+
+
+@pytest.mark.parametrize("annotation", ["bool", "dict", "str", "Check | None"])
+def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
+    annotation: str,
+) -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation=annotation, guard=_EXITING_GUARD)
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_an_unannotated_branching_helper() -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation="AppError", guard=_EXITING_GUARD)
+    src = src.replace(" -> AppError:", ":")
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_without_a_none_guard() -> None:
+    # Without the guard the handler can hand back whatever ``None`` becomes.
+    src = """\
+def _classify(exc: BaseException) -> AppError | None:
+    for cause in walk(exc):
+        if isinstance(cause, DeniedError):
+            return AccessDeniedError(message="denied", cause=cause)
+    return None
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return failure
+"""
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_annotated_helper_not_given_the_caught_error() -> (
+    None
+):
+    src = """\
+def _classify(exc: BaseException) -> AppError | None:
+    for cause in walk(exc):
+        if isinstance(cause, DeniedError):
+            return AccessDeniedError(message="denied", cause=cause)
+    return None
+
+
+def probe(previous):
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(previous)
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    assert "E007" in _findings(src)

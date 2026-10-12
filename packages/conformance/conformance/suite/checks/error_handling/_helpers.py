@@ -620,6 +620,7 @@ class TypedFailureScope(NamedTuple):
     typed_binding: bool = False
     local_helpers: Mapping[str, ast.FunctionDef] | None = None
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None
+    guarded_calls: frozenset[int] = frozenset()
 
 
 # Calls that turn the caught exception into text.  A string is the failure
@@ -770,6 +771,115 @@ def _typed_helper_parameters(function: ast.FunctionDef) -> frozenset[str]:
     return frozenset(typed)
 
 
+def _is_error_class_name(name: str | None) -> bool:
+    """A class-like leaf named as an error: ``AppError``, ``exc.NotFoundError``."""
+    leaf = name.rsplit(".", 1)[-1] if name else None
+    return (
+        _class_like(leaf) and leaf is not None and leaf.endswith(("Error", "Exception"))
+    )
+
+
+def _is_none_constant(node: ast.expr) -> bool:
+    return isinstance(node, ast.Constant) and node.value is None
+
+
+def _annotated_error_return(function: ast.FunctionDef) -> bool | None:
+    """Whether *function*'s return annotation promises an error class.
+
+    ``None`` when it does not (no annotation, ``bool``, ``dict``, a result row,
+    a string annotation the checker does not parse). Otherwise whether ``None``
+    is a possible result too: ``False`` for ``-> AppError``, ``True`` for
+    ``-> AppError | None`` and ``-> Optional[AppError]``.
+    """
+    annotation = function.returns
+    if annotation is None:
+        return None
+    if isinstance(annotation, ast.Subscript) and _get_name(annotation.value) in {
+        "Optional",
+        "typing.Optional",
+    }:
+        return True if _is_error_class_name(_get_name(annotation.slice)) else None
+    members: list[ast.expr] = []
+    pending = [annotation]
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            pending.extend([node.left, node.right])
+        else:
+            members.append(node)
+    errors = [m for m in members if not _is_none_constant(m)]
+    if not errors or not all(_is_error_class_name(_get_name(m)) for m in errors):
+        return None
+    return len(errors) != len(members)
+
+
+def _annotated_error_parameters(function: ast.FunctionDef) -> frozenset[str]:
+    """Parameters annotated as an exception: what an error-returning helper classifies."""
+    return frozenset(
+        parameter.arg
+        for parameter in [
+            *function.args.posonlyargs,
+            *function.args.args,
+            *function.args.kwonlyargs,
+        ]
+        if parameter.annotation is not None
+        and _is_error_class_name(_get_name(parameter.annotation))
+    )
+
+
+def _helper_typed_parameters(
+    helper: ast.FunctionDef, call: ast.Call, guarded_calls: frozenset[int]
+) -> frozenset[str]:
+    """Parameters through which *helper* hands its argument back as typed data.
+
+    A straight-line helper is proven from its body (:func:`_typed_helper_parameters`).
+    One that branches or loops — a classifier walking the cause chain — is
+    proven from its signature instead: it returns an error class and takes the
+    failure as an exception-annotated parameter. When ``None`` is a possible
+    result, *call* must sit behind a guard that exits on ``None`` (see
+    :func:`_none_guarded_calls`); otherwise the handler may hand back nothing.
+    """
+    proven = _typed_helper_parameters(helper)
+    if proven:
+        return proven
+    optional = _annotated_error_return(helper)
+    if optional is None or (optional and id(call) not in guarded_calls):
+        return frozenset()
+    return _annotated_error_parameters(helper)
+
+
+def _none_guarded_calls(body: list[ast.stmt]) -> frozenset[int]:
+    """Calls assigned to a name the very next statement exits on when it is ``None``::
+
+    failure = _classify(exc)
+    if failure is None:
+        raise TransientError(message="…", cause=exc) from None
+    """
+    guarded: set[int] = set()
+    for stmt, following in zip(body, body[1:], strict=False):
+        if isinstance(stmt, ast.Assign) and len(stmt.targets) == 1:
+            target, value = stmt.targets[0], stmt.value
+        elif isinstance(stmt, ast.AnnAssign) and stmt.value is not None:
+            target, value = stmt.target, stmt.value
+        else:
+            continue
+        if not isinstance(target, ast.Name) or not isinstance(value, ast.Call):
+            continue
+        test = following.test if isinstance(following, ast.If) else None
+        if (
+            isinstance(test, ast.Compare)
+            and isinstance(test.left, ast.Name)
+            and test.left.id == target.id
+            and len(test.ops) == 1
+            and isinstance(test.ops[0], ast.Is)
+            and _is_none_constant(test.comparators[0])
+            and isinstance(following, ast.If)
+            and _body_always_exits(following.body)
+        ):
+            guarded.add(id(value))
+    return frozenset(guarded)
+
+
 def _function_binds_name(
     function: ast.FunctionDef | ast.AsyncFunctionDef | None, name: str
 ) -> bool:
@@ -898,6 +1008,7 @@ def _expression_uses_typed_helper(
     *,
     local_helpers: Mapping[str, ast.FunctionDef] | None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> bool:
     """True when a proven same-module helper, called with the failure, produces *value*.
 
@@ -915,7 +1026,7 @@ def _expression_uses_typed_helper(
         helper = local_helpers.get(helper_name)
         if helper is None or _function_binds_name(enclosing_function, helper_name):
             continue
-        for parameter in _typed_helper_parameters(helper):
+        for parameter in _helper_typed_parameters(helper, node, guarded_calls):
             argument = _call_argument_for_parameter(node, helper, parameter)
             if isinstance(argument, ast.Name) and argument.id in carrying_names:
                 return True
@@ -930,6 +1041,7 @@ def _derives_typed_failure(
     typed_binding: bool = False,
     local_helpers: Mapping[str, ast.FunctionDef] | None = None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> bool:
     """True when *value* carries the caught exception out as typed data."""
     return (
@@ -941,6 +1053,7 @@ def _derives_typed_failure(
             live,
             local_helpers=local_helpers,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         )
     )
 
@@ -950,6 +1063,7 @@ def _typed_failure_deriver(
     *,
     local_helpers: Mapping[str, ast.FunctionDef] | None = None,
     enclosing_function: ast.FunctionDef | ast.AsyncFunctionDef | None = None,
+    guarded_calls: frozenset[int] = frozenset(),
 ) -> Callable[[ast.expr, str, set[str]], bool]:
     """:func:`_derives_typed_failure` bound to a handler's local context."""
 
@@ -961,6 +1075,7 @@ def _typed_failure_deriver(
             typed_binding=typed_binding,
             local_helpers=local_helpers,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         )
 
     return derives
@@ -1017,6 +1132,7 @@ def typed_failure_scope(
         return None
     typed_binding = _handler_binds_typed_error(handler)
     helper_context = local_helpers if not _handler_rebinds_exception(handler) else None
+    guarded_calls = _none_guarded_calls(handler.body)
     carried_at: dict[int, frozenset[str]] = {}
     live_at_end = _track_carried(
         handler.body,
@@ -1027,6 +1143,7 @@ def typed_failure_scope(
             typed_binding,
             local_helpers=helper_context,
             enclosing_function=enclosing_function,
+            guarded_calls=guarded_calls,
         ),
     )
     return TypedFailureScope(
@@ -1036,6 +1153,7 @@ def typed_failure_scope(
         typed_binding,
         helper_context,
         enclosing_function,
+        guarded_calls,
     )
 
 
@@ -1050,6 +1168,7 @@ def _return_carries_typed_failure(stmt: ast.Return, scope: TypedFailureScope) ->
         typed_binding=scope.typed_binding,
         local_helpers=scope.local_helpers,
         enclosing_function=scope.enclosing_function,
+        guarded_calls=scope.guarded_calls,
     )
 
 
@@ -1302,6 +1421,7 @@ def _staged_row_is_returned(
             scope.typed_binding,
             local_helpers=scope.local_helpers,
             enclosing_function=scope.enclosing_function,
+            guarded_calls=scope.guarded_calls,
         ),
     )
     below = TypedFailureScope(
@@ -1311,6 +1431,7 @@ def _staged_row_is_returned(
         scope.typed_binding,
         scope.local_helpers,
         scope.enclosing_function,
+        scope.guarded_calls,
     )
     returns = [stmt for stmt in _iter_block(trailing) if isinstance(stmt, ast.Return)]
     if not returns:
