@@ -11,10 +11,11 @@ description: >
   overrunning the enforced budget, a running attempt Temporal had to kill, a
   provably absent credential — but blocks only when the attributed failure's
   category is AUTH, PERMISSION, INVALID_INPUT, PRECONDITION or NOT_FOUND, or
-  SOURCE_UNAVAILABLE still present on the gate's final attempt, and never on
+  SOURCE_UNAVAILABLE or RATE_LIMITED still present on the gate's final attempt, and never on
   TIMEOUT; failures of the gate's own plumbing (its credential resolution, no
   worker) always fail open; an unreachable source is raised as a retryable
-  SOURCE_UNAVAILABLE leaf, which a hard gate retries and then blocks on; compute
+  SOURCE_UNAVAILABLE leaf (a 429 as RATE_LIMITED), which a hard gate retries and
+  then blocks on; compute
   that is cold, warming or queued is reported from Handler.warmup, never raised;
   and the deprecated fail-open categories are never raised. Classifies the app's
   rollout bucket, sizes the check budget
@@ -103,11 +104,11 @@ status. Read its `app/handler.py` before proposing changes.
   (`INTERNAL`) is a reported failure that loses every other check, never a
   block. A transient — a server restarting, a probe that did not answer, a
   429 — means the source could not be asked this time, and is the one thing to
-  raise: a retryable leaf of `SourceUnavailableError` (or `AppTimeoutError` for
-  an overrun). The gate's no-verdict path records the raise as an unverifiable
+  raise: a retryable leaf of `SourceUnavailableError` (`RateLimitedError` for a
+  429, `AppTimeoutError` for an overrun). The gate's no-verdict path records the raise as an unverifiable
   source (`unverifiable_preflight_result`'s `NOT_READY` output, row classified
-  `source_unverifiable`). `TIMEOUT` never blocks. `SOURCE_UNAVAILABLE` in hard
-  mode is retried: a non-final attempt hands it to the next attempt
+  `source_unverifiable`). `TIMEOUT` never blocks. `SOURCE_UNAVAILABLE` and
+  `RATE_LIMITED` in hard mode are retried: a non-final attempt hands it to the next attempt
   (`preflight_gate_max_attempts`, default 2), and only the final attempt blocks,
   so a blip clears on the retry while a source that is really down stops the run
   before extraction fails on it. Soft mode reports `would_block` on the first
@@ -249,14 +250,15 @@ Rules the skill enforces during adoption:
   fail *closed* on a blip. Never return it as a failed row on `READY` either:
   a failed mandatory row on `READY` is a green light nothing verified, and
   `assert_preflight_result` rejects it. Raise a retryable `SourceUnavailableError`
-  leaf (an `AppTimeoutError` for an overrun): the gate reports an unverifiable
-  source; a hard gate retries the former and blocks if it persists to the final
-  attempt, and the latter proceeds. Never raise
-  a `DependencyUnavailableError`, `RateLimitedError`, `ResourceExhaustedError`
-  or `CancelledError` leaf for this: that is the deprecated fail-open idiom —
-  it logs a `DeprecationWarning` and a `deprecated_fail_open` row, and F008
-  flags it. Type a preflight rate limit as a `SourceUnavailableError` leaf; the
-  extraction path keeps its own typing. Wait for a `Retry-After` only when it
+  leaf when the source did not answer, a `RateLimitedError` when it answered 429,
+  and an `AppTimeoutError` for an overrun: the gate reports an unverifiable
+  source; a hard gate retries the first two and blocks if they persist to the
+  final attempt, each under its own reason (an outage sends the customer to the
+  source's operator, an exhausted limit to whoever is spending it), and the
+  overrun proceeds. Never raise a `DependencyUnavailableError`,
+  `ResourceExhaustedError` or `CancelledError` leaf for this: that is the
+  deprecated fail-open idiom — it logs a `DeprecationWarning` and a
+  `deprecated_fail_open` row, and F008 flags it. Wait for a `Retry-After` only when it
   fits inside `input.timeout_seconds` with margin.
 - Soft is the default landing state with two exit conditions, both required
   before adding `preflight_gate_mode = "hard"`:

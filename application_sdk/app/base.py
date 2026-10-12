@@ -933,8 +933,8 @@ class App(ABC):
     the gate attributes to the source — a ``NOT_READY`` verdict, anything the
     handler raises, a frame Temporal ended — when the attributed failure is one
     the customer can act on (``GATE_BLOCKING_CATEGORIES``: auth, permission,
-    invalid input, precondition, not found, and a source still unavailable on
-    the gate's final attempt). Anything else, including a probe overrunning the
+    invalid input, precondition, not found, and a source still unavailable or
+    rate-limited on the gate's final attempt). Anything else, including a probe overrunning the
     budget, is reported as ``would_block`` and the run proceeds. A source that
     is cold rather than down says so through :meth:`Handler.warmup
     <application_sdk.handler.base.Handler.warmup>`, never by raising
@@ -977,9 +977,9 @@ class App(ABC):
     preflight_gate_max_attempts: ClassVar[int] = 2
     """Attempts the gate activity may take. Clamped to 1-3.
 
-    In hard mode a ``SOURCE_UNAVAILABLE`` failure is retried: it blocks only
-    on the final attempt, so a source unreachable for a moment gets the next
-    attempt to answer. Every other source fault, handler crash and budget
+    In hard mode a ``SOURCE_UNAVAILABLE`` or ``RATE_LIMITED`` failure is
+    retried: it blocks only on the final attempt, so a source unreachable or
+    rate-limited for a moment gets the next attempt to answer. Every other source fault, handler crash and budget
     overrun is a verdict on the attempt it happens. A retry also buys the
     gate's own retryable plumbing — a store probe that failed, a credential
     lookup the secret store refused — and this sizes the

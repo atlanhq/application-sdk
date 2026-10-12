@@ -327,13 +327,15 @@ gate no longer honours as plumbing.
 An expected failure of the source — bad credentials, a missing grant, an absent object —
 is a verdict: return it as a failed PreflightCheck carrying the typed error. The one
 thing a handler may raise is a transient — the source could not be asked this time — as
-a retryable leaf whose category is SOURCE_UNAVAILABLE or TIMEOUT. The gate records that
-raise as an unverifiable source (a NOT_READY output and a would_block row classified
-source_unverifiable), never blocks a hard run on either category, and the run proceeds;
-it does not ask the handler again. Never raise DEPENDENCY_UNAVAILABLE, RATE_LIMITED,
-RESOURCE_EXHAUSTED or CANCELLED leaves to make the gate fail open: the gate deprecated
-that idiom. A raise whose category or retryability the checker cannot read from the
-error class (or a literal `retryable=`) stays flagged.
+a retryable leaf whose category is SOURCE_UNAVAILABLE (it did not answer), RATE_LIMITED
+(it answered 429) or TIMEOUT (the probe overran). The gate records that raise as an
+unverifiable source (a NOT_READY output, row classified source_unverifiable). A hard
+gate retries SOURCE_UNAVAILABLE and RATE_LIMITED and blocks only if they persist to its
+final attempt, each under its own reason; it never blocks on TIMEOUT. Compute that is
+cold, warming or queued is not a transient to raise: report it from Handler.warmup.
+Never raise DEPENDENCY_UNAVAILABLE, RESOURCE_EXHAUSTED or CANCELLED leaves to make the
+gate fail open: the gate deprecated that idiom. A raise whose category or retryability
+the checker cannot read from the error class (or a literal `retryable=`) stays flagged.
 
 [Investigation, remediation and verification
 guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/preflight-guide.md#f008).

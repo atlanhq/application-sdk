@@ -493,15 +493,18 @@ a platform blip must not fail a healthy run. The gate stamps which of the two ha
 
 Among source-attributed outcomes, hard mode blocks only on a failure the customer can act on: the
 attributed `FailureDetails.category` (`details[0]`, the failure the row's `reason` names) must be
-`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND` or `SOURCE_UNAVAILABLE`
-(`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run proceeds, as in
-soft mode. Hard mode **never** blocks on `TIMEOUT` or the four pre-3.35 fail-open categories
-(`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not the customer. An
+`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`, `SOURCE_UNAVAILABLE` or
+`RATE_LIMITED` (`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run
+proceeds, as in soft mode. Hard mode **never** blocks on `TIMEOUT` or the three remaining pre-3.35
+fail-open categories (`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not
+the customer. An
 untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
 
-`SOURCE_UNAVAILABLE` blocks only on the gate's **final attempt** (`GATE_RETRIED_CATEGORIES`). On an
-earlier attempt a hard gate raises the retryable `PreflightNoVerdict` marker instead and emits no
-row, so a source that was unreachable for a moment gets the next attempt
+`SOURCE_UNAVAILABLE` and `RATE_LIMITED` block only on the gate's **final attempt**
+(`GATE_RETRIED_CATEGORIES`), each under its own reason: an outage is for the source's operator to
+fix, an exhausted rate limit for whoever is spending it. On an earlier attempt a hard gate raises
+the retryable `PreflightNoVerdict` marker instead and emits no row, so a source that was
+unreachable or rate-limited for a moment gets the next attempt
 (`App.preflight_gate_max_attempts`, default 2) to answer `READY`. Soft mode never retries, because it
 never blocks. A source that is **cold** rather than down (a paused warehouse, a queued cluster)
 must not raise `SOURCE_UNAVAILABLE` for that: it reports `COLD`, `WARMING` or `QUEUED` from
@@ -520,7 +523,7 @@ always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 | Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only, earlier attempts retry), else `would_block` |
 | Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
 | Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only), else `would_block` (an untyped crash is `INTERNAL`) |
-| Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
+| Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
 | Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
@@ -534,18 +537,18 @@ The line is drawn by **who raised**, not by the error's category, with the one t
 exception in the `deprecated_fail_open` row. Anything that escapes
 `preflight_check` is the handler's statement about the source if typed, or an app fault if not,
 and the mode applies to both — a handler cannot declare its source to be plumbing by raising a
-`RateLimitedError` or a `DependencyUnavailableError`. A verdict is reached on the attempt the fault
-happens on; the gate's retry attempts exist for its own plumbing, not to give a source a second try.
+`DependencyUnavailableError`. A verdict is reached on the attempt the fault happens on, except that
+a hard gate gives `SOURCE_UNAVAILABLE` and `RATE_LIMITED` its remaining attempts first.
 
 One exception runs for a single release train. Before 3.35 the gate treated a raised leaf in the
 `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` categories as its own
-plumbing and failed open, and every hard-mode app that predates this rule documents and tests that
+plumbing and failed open (`RATE_LIMITED` left this train in FND-3774 and now retries, then blocks), and every hard-mode app that predates this rule documents and tests that
 idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING line (and a
 `DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
 removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
 still rely on it. The row and the log line are the observable signal. From 3.40.0 it is reported
-as `source_unverifiable` like any other raise, and it still never blocks: the four categories are
-in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
+as `source_unverifiable` like any other raise, and it still never blocks: the three remaining
+categories are in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
 row, as below, which keeps the other checks.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
@@ -640,7 +643,8 @@ policy alongside the hard-mode line at boot.
 
 **`SOURCE_UNAVAILABLE` blocks again (FND-3774).** v3.42.0 put `SOURCE_UNAVAILABLE` in the
 never-block set, so a hard-gated run proceeded past a source that was down and failed later on
-the same fault. It now blocks on the final attempt. A hard-mode app that raises or returns
+the same fault. It now blocks on the final attempt, and so does `RATE_LIMITED`, which used to fail
+open as a deprecated raise. A hard-mode app that raises or returns
 `SOURCE_UNAVAILABLE` to mean "the source is still warming up" must move that signal to
 `Handler.warmup`, or the run blocks.
 

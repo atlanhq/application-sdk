@@ -13,10 +13,12 @@ from unittest import mock
 
 import pytest
 
+from application_sdk.errors.base import AppError
 from application_sdk.errors.categories import FailureCategory
 from application_sdk.errors.leaves import (
     AppTimeoutError,
     AuthError,
+    RateLimitedError,
     SourceUnavailableError,
 )
 from application_sdk.errors.wire import FailureDetails
@@ -105,6 +107,7 @@ class TestThePolicy:
             FailureCategory.PRECONDITION,
             FailureCategory.NOT_FOUND,
             FailureCategory.SOURCE_UNAVAILABLE,
+            FailureCategory.RATE_LIMITED,
         }
 
     def test_the_never_blocking_set_is_the_fail_open_train_plus_timeout(
@@ -114,8 +117,11 @@ class TestThePolicy:
             FailureCategory.TIMEOUT,
         }
 
-    def test_only_an_unreachable_source_is_retried_before_it_blocks(self) -> None:
-        assert GATE_RETRIED_CATEGORIES == {FailureCategory.SOURCE_UNAVAILABLE}
+    def test_only_an_unreachable_or_rate_limited_source_is_retried(self) -> None:
+        assert GATE_RETRIED_CATEGORIES == {
+            FailureCategory.SOURCE_UNAVAILABLE,
+            FailureCategory.RATE_LIMITED,
+        }
         assert GATE_RETRIED_CATEGORIES <= GATE_BLOCKING_CATEGORIES
 
     def test_the_two_sets_never_overlap(self) -> None:
@@ -255,16 +261,22 @@ class TestAHardVerdictBlocksOnItsCategory:
         assert capture_preflight_outcomes.one["reason"] == self._UNREACHABLE.code
 
 
-_UNREACHABLE_VERDICT = PreflightOutput(
-    status=PreflightStatus.NOT_READY,
-    checks=[
-        PreflightCheck(
-            name="reach",
-            passed=False,
-            error=SourceUnavailableError(message="private link down"),
-        )
-    ],
-)
+def _unreachable() -> AppError:
+    return SourceUnavailableError(message="private link down")
+
+
+def _rate_limited() -> AppError:
+    return RateLimitedError(message="429 Too Many Requests")
+
+
+def _verdict_of(error: AppError) -> PreflightOutput:
+    return PreflightOutput(
+        status=PreflightStatus.NOT_READY,
+        checks=[PreflightCheck(name="reach", passed=False, error=error)],
+    )
+
+
+_UNREACHABLE_VERDICT = _verdict_of(_unreachable())
 
 
 def _gate_for(handler: DefaultHandler, mode: PreflightGateMode):
@@ -274,19 +286,31 @@ def _gate_for(handler: DefaultHandler, mode: PreflightGateMode):
 
 
 class TestAnUnreachableSourceBlocksOnlyOnTheFinalAttempt:
-    """SOURCE_UNAVAILABLE gets the gate's retry before it blocks (FND-3774).
+    """SOURCE_UNAVAILABLE and RATE_LIMITED get the gate's retry before they
+    block (FND-3774).
 
     A non-final attempt raises the retryable ``PreflightNoVerdict`` marker with
     the full payload and emits no row; the retried attempt's verdict is the one
-    that counts. Covers a returned verdict and a raised error alike.
+    that counts. Covers a returned verdict and a raised error alike, and each
+    category blocks under its own reason.
     """
 
     _HANDLERS = {
-        "returned": lambda: _ReturningHandler(_UNREACHABLE_VERDICT),
-        "raised": lambda: _RaisingHandler(
-            SourceUnavailableError(message="private link down")
+        "returned_unreachable": lambda: _ReturningHandler(_verdict_of(_unreachable())),
+        "raised_unreachable": lambda: _RaisingHandler(_unreachable()),
+        "returned_rate_limited": lambda: _ReturningHandler(
+            _verdict_of(_rate_limited())
         ),
+        "raised_rate_limited": lambda: _RaisingHandler(_rate_limited()),
     }
+    _CATEGORY = {
+        "unreachable": FailureCategory.SOURCE_UNAVAILABLE,
+        "rate_limited": FailureCategory.RATE_LIMITED,
+    }
+
+    @classmethod
+    def _expected_category(cls, shape: str) -> FailureCategory:
+        return cls._CATEGORY[shape.split("_", 1)[1]]
 
     @pytest.mark.parametrize("shape", sorted(_HANDLERS))
     async def test_hard_defers_a_non_final_attempt_to_the_retry(
@@ -298,7 +322,7 @@ class TestAnUnreachableSourceBlocksOnlyOnTheFinalAttempt:
         assert excinfo.value.type == PREFLIGHT_NO_VERDICT_ERROR_TYPE
         assert excinfo.value.non_retryable is False
         primary = excinfo.value.details[0]
-        assert primary.category is FailureCategory.SOURCE_UNAVAILABLE
+        assert primary.category is self._expected_category(shape)
         assert excinfo.value.details[1]["attempt"] == 1
         assert capture_preflight_outcomes.rows == []
 
@@ -310,9 +334,13 @@ class TestAnUnreachableSourceBlocksOnlyOnTheFinalAttempt:
         with _on_attempt(2), pytest.raises(ApplicationError) as excinfo:
             await gate(PreflightGateInput())
         assert excinfo.value.type == PREFLIGHT_FAILED_ERROR_TYPE
+        assert excinfo.value.details[0].category is self._expected_category(shape)
         row = capture_preflight_outcomes.one
         assert row["outcome"] == "blocked"
         assert row["gate_attempt"] == 2
+        # Same decision, distinct reason: an outage and an exhausted limit send
+        # the customer to different people.
+        assert row["reason"] == self._expected_category(shape).value
 
     async def test_a_blip_that_clears_on_the_retry_proceeds(
         self, capture_preflight_outcomes

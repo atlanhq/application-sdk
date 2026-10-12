@@ -755,7 +755,7 @@ def create_worker(
                 "extraction on a NOT_READY verdict or an unverifiable source "
                 "whose failure the customer can act on (auth, permission, "
                 "invalid input, precondition, not found, a source still "
-                "unavailable on the final attempt). Anything else — a probe "
+                "unavailable or rate-limited on the final attempt). Anything else — a probe "
                 "overrunning the %ds budget, a handler crash — is reported and "
                 "the run proceeds, as do gate "
                 "plumbing failures. This is the per-app opt-in; the default "

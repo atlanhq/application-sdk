@@ -934,19 +934,28 @@ GATE_LIVENESS_CLOCK_GRACE_SECONDS = 2
 # would carry. The set itself is policy, not a shim (FND-3040): every member is
 # in GATE_NEVER_BLOCKING_CATEGORIES, so after the removal version the raise is
 # reported as an unverifiable source and still never blocks a hard gate.
+# RATE_LIMITED left the set in FND-3774: a 429 is the source's answer, raised
+# like SOURCE_UNAVAILABLE and blocking like it on the final attempt.
 DEPRECATED_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = frozenset(
     {
         FailureCategory.DEPENDENCY_UNAVAILABLE,
-        FailureCategory.RATE_LIMITED,
         FailureCategory.RESOURCE_EXHAUSTED,
         FailureCategory.CANCELLED,
     }
 )
 DEPRECATED_FAIL_OPEN_REMOVED_IN = "3.40.0"
 
+# The set as 3.35 shipped it, for the deprecated aliases that promise to split
+# errors exactly where 3.35 did (``_GATE_BROKEN_CATEGORIES``,
+# :func:`_is_gate_broken`). Not policy: the gate itself reads only
+# DEPRECATED_FAIL_OPEN_CATEGORIES.
+_V3_35_FAIL_OPEN_CATEGORIES: frozenset[FailureCategory] = (
+    DEPRECATED_FAIL_OPEN_CATEGORIES | {FailureCategory.RATE_LIMITED}
+)
+
 # What a hard gate blocks on: GATE_BLOCKING_CATEGORIES, defined beside
 # _primary_failure (handler/_preflight_outcome.py) and re-exported above. Of
-# those, GATE_RETRIED_CATEGORIES (an unreachable source) block only on the
+# those, GATE_RETRIED_CATEGORIES (an unreachable source, a rate limit) block only on the
 # gate's final attempt; see _defers_to_retry.
 
 # What a hard gate never blocks on, whoever reports it: transient or Atlan-side
@@ -1625,8 +1634,8 @@ def _warn_deprecated_fail_open(app_name: str, leaf: str, code: str) -> None:
         f"{app_name}: preflight_check raised {leaf} ({code}). Raising this category "
         "is deprecated until application-sdk "
         f"{DEPRECATED_FAIL_OPEN_REMOVED_IN}; raise a retryable SourceUnavailableError "
-        "leaf instead, which the gate reports as an unverifiable source and never "
-        "blocks on. "
+        "leaf instead, which the gate reports as an unverifiable source and a "
+        "hard gate retries, blocking only if it persists to the final attempt. "
         f"From {DEPRECATED_FAIL_OPEN_REMOVED_IN} this raise "
         "is reported as an unverifiable source; it never blocks a hard gate."
     )
@@ -1686,7 +1695,8 @@ def _defers_to_retry(
     Hard mode only, on a failure in :data:`GATE_RETRIED_CATEGORIES`, on any
     attempt but the final one. The caller raises the retryable
     ``PreflightNoVerdict`` marker instead of the block, so a source that was
-    unreachable for a moment gets the next attempt to answer READY. Soft mode
+    unreachable, or rate-limited, for a moment gets the next attempt to answer
+    READY. Soft mode
     never defers: it never blocks, so a retry would only cost time.
     """
     return (
@@ -2925,10 +2935,11 @@ def _is_gate_broken(exc: BaseException) -> bool:
         :attr:`GateFailure.classification`. Will be removed in v3.40.0.
 
     Preserved exactly: the old predicate tested the raised leaf's
-    ``FailureCategory`` against the four-member set now published as
-    :data:`DEPRECATED_FAIL_OPEN_CATEGORIES`.
+    ``FailureCategory`` against the four-member set 3.35 shipped, kept as
+    ``_V3_35_FAIL_OPEN_CATEGORIES`` now that ``RATE_LIMITED`` has left
+    :data:`DEPRECATED_FAIL_OPEN_CATEGORIES` (FND-3774).
     """
-    return _deprecated_fail_open_leaf(exc) is not None
+    return isinstance(exc, AppError) and exc.category in _V3_35_FAIL_OPEN_CATEGORIES
 
 
 #: The log twin of the notice below, with the callable and the value the caller
@@ -3004,7 +3015,7 @@ def _mode_from_deprecated_enforce(
 _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
     "_GATE_BROKEN_CATEGORIES": (
         "DEPRECATED_FAIL_OPEN_CATEGORIES",
-        "the identical frozenset under its honest name",
+        "the gate's fail-open set (RATE_LIMITED, which this alias still holds, left it in FND-3774)",
     ),
     "CLASSIFICATION_VERDICT": (
         "PreflightClassification.VERDICT",
@@ -3032,7 +3043,7 @@ _DEPRECATED_CONSTANTS: dict[str, tuple[str, str]] = {
 def _deprecated_constant_value(name: str) -> object:
     """The live value behind a deprecated constant alias."""
     if name == "_GATE_BROKEN_CATEGORIES":
-        return DEPRECATED_FAIL_OPEN_CATEGORIES
+        return _V3_35_FAIL_OPEN_CATEGORIES
     if name == "CLASSIFICATION_VERDICT":
         return PreflightClassification.VERDICT.value
     if name == "CLASSIFICATION_GATE_BROKEN":

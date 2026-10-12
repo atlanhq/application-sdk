@@ -56,8 +56,9 @@ EMPTY_CHECK_MATRIX = "[]"
 
 # What a hard gate blocks on (FND-3040): failures that are deterministic, or that
 # outlasted the gate's retry, and that the customer can act on. Waiting will not
-# fix a wrong password or a missing grant, and a source still unreachable on the
-# gate's final attempt (FND-3774) would fail the run on that same fault later.
+# fix a wrong password or a missing grant, and a source still unreachable, or a
+# rate limit still exhausted, on the gate's final attempt (FND-3774) would fail
+# the run on that same fault later.
 # An allowlist, so a category added to FailureCategory later proceeds until
 # someone decides it should block. Defined here rather than in the gate because
 # :func:`_primary_failure` ranks by it on every surface; the gate re-exports it.
@@ -69,15 +70,19 @@ GATE_BLOCKING_CATEGORIES: frozenset[FailureCategory] = frozenset(
         FailureCategory.PRECONDITION,
         FailureCategory.NOT_FOUND,
         FailureCategory.SOURCE_UNAVAILABLE,
+        FailureCategory.RATE_LIMITED,
     }
 )
 
 # The blocking categories a hard gate retries before it blocks (FND-3774): an
-# unreachable source can be a blip, so only the final attempt's verdict counts.
-# A source that is cold rather than unreachable reports that through
-# ``Handler.warmup``, which the gate polls and which never reaches here.
+# unreachable source or a 429 can be a blip, so only the final attempt's verdict
+# counts. Both block then, under their own category, because they send the
+# customer to different people: an outage to the source's operator, an
+# exhausted limit to whoever is spending it. A source that is cold rather than
+# unreachable reports that through ``Handler.warmup``, which the gate polls and
+# which never reaches here.
 GATE_RETRIED_CATEGORIES: frozenset[FailureCategory] = frozenset(
-    {FailureCategory.SOURCE_UNAVAILABLE}
+    {FailureCategory.SOURCE_UNAVAILABLE, FailureCategory.RATE_LIMITED}
 )
 
 # The order :func:`_primary_failure` ranks failed checks' errors in when the
@@ -154,7 +159,8 @@ def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
     The handler's typed aggregate ``result.error`` when present. Otherwise the
     most decisive failed check's typed ``error``: the first in a blocking
     category the gate does not retry (AUTH, PERMISSION, ...), else the first in
-    :data:`GATE_RETRIED_CATEGORIES`, else the first at all. With nothing typed,
+    :data:`GATE_RETRIED_CATEGORIES` (SOURCE_UNAVAILABLE, RATE_LIMITED), else the
+    first at all. With nothing typed,
     the first failed check's message wrapped in ``PreconditionError`` and
     stamped with the ``PREFLIGHT_FALLBACK_CODE`` sentinel ``code`` (so the
     outcome event's ``reason`` marks an un-migrated block).
