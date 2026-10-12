@@ -10,22 +10,29 @@ indexed module — following re-exports such as ``from .client import Client`` i
 a package ``__init__`` — and closes the subclass relation to a fixed point,
 seeded only from the SDK's ``BaseClient``.
 
-``P056`` then walks each function on its own and tracks each constructor
-binding (``name = Subclass(...)``) from its line to the next rebinding of that
-name.  Within that range the client is *closed* if the function enters it with
-``async with <name>`` or calls ``await <name>.close()`` inside a ``finally``, on
-every path from the binding to the end of the function (:class:`_MustRun`; a
-guard inside the ``finally`` itself is the accepted ownership-guard shape); it
-has *escaped* — and is skipped — if it is returned, yielded, passed as an
-argument, stored on an attribute / in a container, or referenced from a nested
-scope.  A plain local alias (``alias = client``) neither closes nor moves it: the
-alias is tracked the same way.  Everything else fires.  Comparisons
-(``client is not None``) and attribute access (``client.fetch()``) neither close
-nor move the client.
+Both rules recognise the documented cleanup **shapes**; they do not analyse
+paths.  A shape that is recognised is exception-safe by construction; any other
+shape fires, even one that happens to close on every path, and is either
+rewritten into a recognised shape or suppressed with a reason.
+
+``P056`` walks each function on its own and tracks each constructor binding
+(``name = Subclass(...)``) from its line to the next rebinding of that name.
+The client is *closed* if an ``async with <name>`` statement, or a ``try``
+whose ``finally`` calls ``await <name>.close()`` (anywhere inside it, so the
+``if owns_client:`` ownership guard is accepted), follows the binding in its
+own block or an enclosing one, or if such a ``try`` encloses the binding (see
+:func:`_cleanup_follows`).  It has *escaped* — and is skipped — if it is
+returned, yielded, passed as an argument, stored on an attribute / in a
+container, or referenced from a nested scope.  A plain local alias
+(``alias = client``) neither closes nor moves it: the alias is tracked the
+same way.  Comparisons (``client is not None``) and attribute access
+(``client.fetch()``) neither close nor move the client.  Everything else
+fires.
 
 ``P057`` flags a ``close`` method defined directly on a registered subclass
-whose own body (not a nested helper) never *awaits* ``super().close()`` (or an
-explicit ``<Base>.close(self)`` on a strict ancestor) on every path through it.
+unless its body awaits ``super().close()`` (or an explicit
+``<Base>.close(self)`` on a strict ancestor) as a statement directly in the
+body, or directly in the ``finally`` of a ``try`` directly in the body.
 ``BaseClient.close()`` is a coroutine, so a bare call only builds a coroutine
 object and releases nothing.
 """
@@ -96,12 +103,6 @@ def _dotted(expr: ast.expr) -> str | None:
     return None
 
 
-#: Expression fields whose sub-expressions may not be evaluated.
-_CONDITIONAL_EXPR_FIELDS: dict[type[ast.AST], frozenset[str]] = {
-    ast.IfExp: frozenset({"body", "orelse"}),
-    ast.BoolOp: frozenset({"values"}),
-}
-
 _Links = dict[int, tuple[ast.AST, str]]
 
 
@@ -120,120 +121,39 @@ def _parent_links(root: ast.AST) -> _Links:
     return links
 
 
-class _MustRun:
-    """Does every path through a block reach one of a set of *sites*?
+_TRY_NODES = (ast.Try, ast.TryStar)
+_LOOP_NODES = (ast.For, ast.AsyncFor, ast.While)
 
-    A site is a statement or expression node (``async with client``, ``await
-    client.close()``, ``await super().close()``).  The analysis is structural,
-    over statement blocks: a block reaches a site if any of its statements
-    does; an ``if`` only if both arms do; a ``match`` only if every case does
-    and the last is a bare ``case _``; a loop never (it may run zero times); a
-    ``try`` if its ``finally`` does, or if its body or ``else`` does *and* every
-    ``except`` handler does or re-raises — a handler that swallows the
-    exception is a path on which the rest of the body never ran.  Sites inside a conditional expression (``a if c else b``, ``and`` /
-    ``or``) do not count.  Early ``return`` / ``raise`` are not modelled.
 
-    With *lenient_finally*, any site anywhere inside a ``finally`` counts, so
-    ``finally: if owns_client: await client.close()`` — a guard that decides
-    ownership, not whether cleanup runs — is accepted.
+def _cleanup_follows(binding: ast.stmt, sites: set[int], links: _Links) -> bool:
+    """True if a cleanup statement in *sites* structurally follows *binding*.
+
+    The recognised shapes only, no path analysis: a site statement later in the
+    binding's own block, or later in any enclosing block, or a ``try`` that
+    encloses the binding (its ``finally`` is the cleanup).  A site nested under
+    an ``if`` / ``match`` / ``except`` / loop that does not also hold the binding
+    is never reached here, because only sibling statements are inspected.  The
+    climb stops at a loop: cleanup after the loop closes only the last
+    iteration's client.
     """
-
-    def __init__(
-        self, sites: set[int], links: _Links, *, lenient_finally: bool
-    ) -> None:
-        self.sites = sites
-        self.links = links
-        self.lenient_finally = lenient_finally
-
-    def block(self, stmts: list[ast.stmt]) -> bool:
-        return any(self.stmt(s) for s in stmts)
-
-    def _finally(self, stmts: list[ast.stmt]) -> bool:
-        if not self.lenient_finally:
-            return self.block(stmts)
-        return any(
-            id(node) in self.sites
-            for stmt in stmts
-            for node in (stmt, *(child for child, _ in _walk_scope(stmt)))
-        )
-
-    def _handlers(self, node: ast.Try | ast.TryStar) -> bool:
-        """True if every ``except`` handler reaches a site or re-raises."""
-        return all(
-            self.block(h.body) or (bool(h.body) and isinstance(h.body[-1], ast.Raise))
-            for h in node.handlers
-        )
-
-    def stmt(self, stmt: ast.stmt) -> bool:
-        if id(stmt) in self.sites:
+    current: ast.AST = binding
+    while id(current) in links:
+        parent, name = links[id(current)]
+        if isinstance(current, ast.stmt):
+            block = getattr(parent, name)
+            index = next(i for i, s in enumerate(block) if s is current)
+            if any(id(s) in sites for s in block[index + 1 :]):
+                return True
+        if (
+            isinstance(parent, _TRY_NODES)
+            and name != "finalbody"
+            and id(parent) in sites
+        ):
             return True
-        if isinstance(stmt, ast.If):
-            return self._expr(stmt.test, stmt) or (
-                self.block(stmt.body) and self.block(stmt.orelse)
-            )
-        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+        if isinstance(parent, _LOOP_NODES):
             return False
-        if isinstance(stmt, (ast.Try, ast.TryStar)):
-            return self._finally(stmt.finalbody) or (
-                (self.block(stmt.body) or self.block(stmt.orelse))
-                and self._handlers(stmt)
-            )
-        if isinstance(stmt, (ast.With, ast.AsyncWith)):
-            return self.block(stmt.body)
-        if isinstance(stmt, ast.Match):
-            last = stmt.cases[-1].pattern if stmt.cases else None
-            exhaustive = isinstance(last, ast.MatchAs) and last.pattern is None
-            return exhaustive and all(self.block(c.body) for c in stmt.cases)
-        if isinstance(stmt, _SCOPE_NODES):
-            return False
-        return self._expr(stmt, stmt)
-
-    def _expr(self, root: ast.AST, stmt: ast.stmt) -> bool:
-        """True if a site under *root* is evaluated whenever *stmt* runs."""
-        for node, _ in _walk_scope(root):
-            if id(node) in self.sites and self._unconditional(node, stmt):
-                return True
-        return False
-
-    def _unconditional(self, node: ast.AST, stmt: ast.stmt) -> bool:
-        current = node
-        while current is not stmt and id(current) in self.links:
-            parent, name = self.links[id(current)]
-            if name in _CONDITIONAL_EXPR_FIELDS.get(type(parent), frozenset()):
-                return False
-            current = parent
-        return True
-
-    def after(self, stmt: ast.stmt, root: ast.AST) -> bool:
-        """True if every path from *stmt* to the end of *root* reaches a site.
-
-        Checks the statements after *stmt* in its own block, then each enclosing
-        ``finally``, then climbs to the enclosing statement and repeats.  Leaving
-        a ``try`` body early through a handler skips the rest of the body, so
-        there the rest (or the ``else``) only counts if every handler also
-        reaches a site or re-raises.
-        """
-        current: ast.AST = stmt
-        while current is not root and id(current) in self.links:
-            parent, name = self.links[id(current)]
-            if isinstance(current, ast.stmt):
-                block = getattr(parent, name)
-                index = next(i for i, s in enumerate(block) if s is current)
-                reached = self.block(block[index + 1 :])
-                if isinstance(parent, (ast.Try, ast.TryStar)) and name == "body":
-                    reached = (reached or self.block(parent.orelse)) and self._handlers(
-                        parent
-                    )
-                if reached:
-                    return True
-            if (
-                isinstance(parent, (ast.Try, ast.TryStar))
-                and name != "finalbody"
-                and self._finally(parent.finalbody)
-            ):
-                return True
-            current = parent
-        return False
+        current = parent
+    return False
 
 
 def module_name_for(rel: str) -> tuple[str, bool]:
@@ -426,38 +346,46 @@ class Registry:
 
 
 def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -> bool:
-    """True if *func*'s own scope awaits ``super().close()`` / ``<Base>.close(self)``.
+    """True if *func* awaits ``super().close()`` / ``<Base>.close(self)`` in a recognised shape.
 
-    The call must be the operand of an ``await`` — ``BaseClient.close()`` is a
-    coroutine function, so an un-awaited call releases nothing.  It must run on
-    every path through the override: under an ``if`` it needs a call in both
-    arms; under a loop or an ``except`` handler alone it does not count (see
-    :class:`_MustRun`).  Nested helper functions are not entered: defining a helper
-    that would close the base is not the same as closing it.  An explicit
+    The documented fix shapes only, no path analysis: an ``await`` of the base
+    close as a statement directly in the override's body, or directly in the
+    ``finally`` of a ``try`` that is itself directly in the body.  Anything else
+    — under an ``if``, a loop, an ``except`` handler, a ``try`` body or
+    ``else``, a nested helper, or not awaited (``BaseClient.close()`` is a
+    coroutine) — fires, even where every path happens to close.  An explicit
     ``<Base>.close(self)`` only counts when ``<Base>`` is a strict ancestor —
     ``Client.close(self)`` inside ``Client.close`` recurses and never reaches it.
     """
     ancestors = registry.ancestors(record.qualname)
-    sites: set[int] = set()
-    for node, _ in _walk_scope(func):
-        if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
-            continue
-        callee = node.value.func
+
+    def is_base_close(stmt: ast.stmt) -> bool:
+        if not (
+            isinstance(stmt, ast.Expr)
+            and isinstance(stmt.value, ast.Await)
+            and isinstance(stmt.value.value, ast.Call)
+        ):
+            return False
+        callee = stmt.value.value.func
         if not isinstance(callee, ast.Attribute) or callee.attr != "close":
-            continue
+            return False
         receiver = callee.value
         if (
             isinstance(receiver, ast.Call)
             and isinstance(receiver.func, ast.Name)
             and receiver.func.id == "super"
-        ) or registry.resolve(record.module, receiver) in (
-            SDK_BASE_CLIENTS | ancestors
         ):
-            sites.add(id(node))
-    if not sites:
-        return False
-    must = _MustRun(sites, _parent_links(func), lenient_finally=False)
-    return must.block(func.body)
+            return True
+        return registry.resolve(record.module, receiver) in (
+            SDK_BASE_CLIENTS | ancestors
+        )
+
+    body: list[ast.stmt] = getattr(func, "body", [])
+    return any(
+        is_base_close(stmt)
+        or (isinstance(stmt, _TRY_NODES) and any(map(is_base_close, stmt.finalbody)))
+        for stmt in body
+    )
 
 
 def check_p057(
@@ -520,7 +448,8 @@ class _Lifecycle:
     closed_outside_finally: bool = False
     closed_on_some_paths: bool = False
     escaped: bool = False
-    #: ``async with`` / ``close()``-in-``finally`` sites, and other ``close()`` sites.
+    #: Statements that close the client: ``async with`` statements and ``try``
+    #: statements whose ``finally`` closes it; and bare ``await close()`` ones.
     protected: set[int] = field(default_factory=set)
     unprotected: set[int] = field(default_factory=set)
 
@@ -546,14 +475,15 @@ class _FunctionScope:
         self.nodes = list(_walk_scope(func))
         self.links = _parent_links(func)
         self.local_bindings = module.import_bindings(node for node, _ in self.nodes)
-        self.in_finally: set[int] = set()
+        #: ``id(node)`` -> ids of every ``try`` whose ``finally`` contains it.
+        self.finally_of: dict[int, list[int]] = {}
         self.stores: dict[str, list[int]] = {}
         self.captured: set[str] = set()
         for node, _ in self.nodes:
-            if isinstance(node, (ast.Try, ast.TryStar)):
+            if isinstance(node, _TRY_NODES):
                 for stmt in node.finalbody:
-                    self.in_finally.add(id(stmt))
-                    self.in_finally.update(id(child) for child, _ in _walk_scope(stmt))
+                    for child in (stmt, *(c for c, _ in _walk_scope(stmt))):
+                        self.finally_of.setdefault(id(child), []).append(id(node))
             elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
                 self.stores.setdefault(node.id, []).append(node.lineno)
             elif isinstance(node, _SCOPE_NODES):
@@ -587,10 +517,12 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
 
     Follows the client through plain local aliases; each name is only
     considered between the line it takes the client and its next rebinding.
-    Cleanup only counts when every path from the binding to the end of the
-    function reaches it (:class:`_MustRun`) — sites in both arms of an ``if``
-    combine.  A condition *inside* a ``finally`` is allowed — that is the
-    ownership-guard shape (``finally: if owns_client: await client.close()``).
+    Cleanup only counts in a recognised shape (:func:`_cleanup_follows`): an
+    ``async with`` statement, or a ``try`` whose ``finally`` closes the client,
+    that follows the binding in its own or an enclosing block, or a ``try``
+    that encloses the binding.  Anywhere inside the ``finally`` counts — a
+    condition there is the ownership-guard shape (``finally: if owns_client:
+    await client.close()``).
     """
     state = _Lifecycle()
     pending = [first]
@@ -613,11 +545,13 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
                     for item in node.items
                 ):
                     state.protected.add(id(node))
+                    state.closed_on_some_paths = True
             elif _is_close_call_on(node, span.name):
-                if id(node) in scope.in_finally:
-                    state.protected.add(id(node))
-                else:
-                    state.unprotected.add(id(node))
+                owners = scope.finally_of.get(id(node), [])
+                state.protected.update(owners)
+                if not owners and isinstance(parent, ast.Expr):
+                    state.unprotected.add(id(parent))
+                state.closed_on_some_paths = True
             elif (
                 isinstance(node, ast.Name)
                 and node.id == span.name
@@ -633,16 +567,10 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
     if state.escaped:
         return state
 
-    def reached(sites: set[int]) -> bool:
-        must = _MustRun(sites, scope.links, lenient_finally=True)
-        return must.after(binding, scope.func)
-
-    if reached(state.protected):
+    if _cleanup_follows(binding, state.protected, scope.links):
         state.closed = True
-    elif reached(state.protected | state.unprotected):
+    elif _cleanup_follows(binding, state.protected | state.unprotected, scope.links):
         state.closed_outside_finally = True
-    elif state.protected or state.unprotected:
-        state.closed_on_some_paths = True
     return state
 
 
@@ -687,12 +615,15 @@ def check_p056(
             state = _lifecycle(scope, scope.span(name, stmt.lineno), stmt)
             if state.closed or state.escaped:
                 continue
-            if state.closed_on_some_paths:
-                how = f"'{name}' is only closed on some paths through the function"
-            elif state.closed_outside_finally:
+            if state.closed_outside_finally:
                 how = (
                     f"'{name}.close()' is only reached when no exception is raised "
                     "before it"
+                )
+            elif state.closed_on_some_paths:
+                how = (
+                    f"'{name}' is only closed inside a branch, loop or handler, "
+                    "not by an 'async with' or 'finally' that follows it"
                 )
             else:
                 how = f"'{name}' is never closed"

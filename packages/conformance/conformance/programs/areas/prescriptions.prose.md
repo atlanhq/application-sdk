@@ -786,9 +786,13 @@ package): `docs/concepts/clients.md`.
 
 - **P056 UnclosedBaseClient** — a function binds a `BaseClient` subclass to a
   local name and neither enters it with `async with` nor calls
-  `await <name>.close()` in a `finally`.  The message says which shape fired:
-  never closed, or closed only on the happy path.  Draft, in order of
-  preference:
+  `await <name>.close()` in a `finally`, in a recognised shape: the
+  `async with` or `try` follows the binding in its own or an enclosing block,
+  or the `try` encloses the binding.  The check matches shapes, not paths, so
+  cleanup nested under an `if`, a loop or an `except` fires even when every
+  path closes.  The message says which case fired: never closed, closed only
+  on the happy path, or closed only inside a branch, loop or handler.  Draft,
+  in order of preference:
   1. **`async with`** when the client's whole use fits in one block:
      `async with Client(...) as client:` and move the uses inside.
      `__aenter__` returns the client and does not call `load()`, so keep the
@@ -801,7 +805,9 @@ package): `docs/concepts/clients.md`.
   `# conformance: ignore[P056] <reason>` that names the owner that closes it.
 
 - **P057 CloseOverrideSkipsSuper** — a `BaseClient` subclass overrides
-  `close()` and never calls `super().close()`.  Draft: keep the subclass's own
+  `close()` and does not await `super().close()` as a statement directly in
+  its body or directly in the `finally` of a `try` in its body (a call under
+  an `if` / loop / `except`, even in every arm, fires).  Draft: keep the subclass's own
   cleanup and add `await super().close()` as the override's last statement.
   Release the pool even when the subclass cleanup raises: wrap that cleanup in
   `try` / `finally` with the super call in the `finally`.  There is no case

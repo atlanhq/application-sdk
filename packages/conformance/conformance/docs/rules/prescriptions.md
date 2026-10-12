@@ -2941,12 +2941,15 @@ See https://github.com/atlanhq/application-sdk/blob/main/docs/concepts/clients.m
 This is a **heuristic** that reasons within one function.  A client that is returned,
 yielded, stored on an attribute or container, or passed as an argument has moved to
 another owner and is not flagged; neither is a module-level client.  A plain local alias
-(`alias = client`) is not a hand-off and is tracked too.  The cleanup must run on every
-path from the binding (both arms of an `if` count together); a condition inside the
-`finally` itself (`if owns_client:`) is accepted as an ownership guard. Subclasses are
-resolved by module-qualified name across the repo, transitively, from a `BaseClient`
-imported from `application_sdk.clients`.  The check is silent unless the app's `uv.lock`
-resolves an SDK whose `BaseClient` shares its pool.
+(`alias = client`) is not a hand-off and is tracked too.  The check matches **shapes,
+not paths**: the `async with` or the `try` / `finally` must follow the binding in its
+own block or an enclosing one (or the `try` must enclose the binding).  Cleanup nested
+under an `if`, a loop or an `except` handler fires even when every arm closes —
+restructure it, or suppress with a reason. A condition inside the `finally` itself (`if
+owns_client:`) is accepted as an ownership guard. Subclasses are resolved by
+module-qualified name across the repo, transitively, from a `BaseClient` imported from
+`application_sdk.clients`.  The check is silent unless the app's `uv.lock` resolves an
+SDK whose `BaseClient` shares its pool.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P056] <reason>` records a
 deliberate exception and stays visible in SARIF.
@@ -2981,10 +2984,11 @@ A `BaseClient` subclass defines `close()` and its own body never awaits
 connection pool; an override that skips it (for example, one that only clears a session
 token) leaves the pool open even when callers close the client in a `finally` or with
 `async with`.  `BaseClient.close()` is a coroutine, so a call without `await` releases
-nothing, a call inside a nested helper only counts if the override runs it, and a call
-in only one arm of an `if`, only inside a loop or only in an `except` handler is skipped
-on some paths — none of these satisfies the rule (a call in both arms of an `if` does).
-An explicit `<Base>.close(self)` counts only when `<Base>` is a strict ancestor.
+nothing.  The check matches **shapes, not paths**: the awaited call must be a statement
+directly in the override's body, or directly in the `finally` of a `try` that is
+directly in the body.  A call in a nested helper, or under an `if`, a loop or an
+`except` handler — even in every arm — does not satisfy the rule.  An explicit
+`<Base>.close(self)` counts only when `<Base>` is a strict ancestor.
 
 Fix — keep the subclass cleanup and add the super call:
 

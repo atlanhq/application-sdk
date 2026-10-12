@@ -31,12 +31,22 @@ accepted false negative — tracking it across functions would trade a WARN's
 precision for a guess.  A plain local alias (``alias = client``) is not a hand-off:
 the alias is tracked too.  Each binding is tracked from its line to the next
 rebinding of its name, so closing a second client under the same name does not
-clear the first.  The cleanup must run on every path from the binding to the
-end of the function: cleanup in both arms of an ``if`` counts, cleanup in only
-one arm, only inside a loop or only in an ``except`` handler fires.  The one accepted condition is a guard
-inside the ``finally`` itself (``finally: if owns_client: await
-client.close()``), which decides who owns the client rather than whether
-cleanup runs.  A module-level client is a process-lifetime singleton
+clear the first.
+
+Both rules match the documented cleanup *shapes*, not paths.  Cleanup counts
+only as an ``async with`` statement or a ``try`` whose ``finally`` closes the
+client, placed after the binding in its own or an enclosing block (or a
+``try`` that encloses the binding); for ``P057``, ``await super().close()``
+directly in the override's body or in the ``finally`` of a ``try`` directly in
+it.  Every recognised shape is exception-safe by construction.  Cleanup nested
+under an ``if``, a loop or an ``except`` handler fires even when every arm
+closes: a path analysis complete enough to accept those cannot be built
+statically, and the fix — restructure into a recognised shape, or suppress
+with a reason — is one edit.  The one accepted condition is a guard inside
+the ``finally`` itself (``finally: if owns_client: await client.close()``),
+which decides who owns the client rather than whether cleanup runs.  An
+exception raised between the binding and the ``try`` that follows it is not
+modelled: the documented shape puts the ``try`` on the next line.  A module-level client is a process-lifetime singleton
 and is out of scope.  A ``close()`` reached only on the happy path (not in a
 ``finally``) still fires: the exception path is exactly when it leaks.
 
@@ -146,10 +156,13 @@ RULES: tuple[RuleDefinition, ...] = (
             "passed as an argument has moved to another owner and is not flagged;\n"
             "neither is a module-level client.  A plain local alias\n"
             "(``alias = client``) is not a hand-off and is tracked too.  The\n"
-            "cleanup must run on every path from the binding (both arms of an\n"
-            "``if`` count together); a condition\n"
-            "inside the ``finally`` itself (``if owns_client:``) is accepted as\n"
-            "an ownership guard.\n"
+            "check matches **shapes, not paths**: the ``async with`` or the\n"
+            "``try`` / ``finally`` must follow the binding in its own block or an\n"
+            "enclosing one (or the ``try`` must enclose the binding).  Cleanup\n"
+            "nested under an ``if``, a loop or an ``except`` handler fires even\n"
+            "when every arm closes — restructure it, or suppress with a reason.\n"
+            "A condition inside the ``finally`` itself (``if owns_client:``) is\n"
+            "accepted as an ownership guard.\n"
             "Subclasses are resolved by module-qualified name across the repo,\n"
             "transitively, from a ``BaseClient`` imported from\n"
             "``application_sdk.clients``.  The check is silent unless the app's\n"
@@ -206,11 +219,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "it (for example, one that only clears a session token) leaves the pool\n"
             "open even when callers close the client in a ``finally`` or with\n"
             "``async with``.  ``BaseClient.close()`` is a coroutine, so a call\n"
-            "without ``await`` releases nothing, a call inside a nested helper\n"
-            "only counts if the override runs it, and a call in only one arm of\n"
-            "an ``if``, only inside a loop or only in an ``except`` handler is\n"
-            "skipped on some paths — none of these satisfies the rule (a call in\n"
-            "both arms of an ``if`` does).  An explicit ``<Base>.close(self)`` counts\n"
+            "without ``await`` releases nothing.  The check matches **shapes,\n"
+            "not paths**: the awaited call must be a statement directly in the\n"
+            "override's body, or directly in the ``finally`` of a ``try`` that is\n"
+            "directly in the body.  A call in a nested helper, or under an\n"
+            "``if``, a loop or an ``except`` handler — even in every arm — does\n"
+            "not satisfy the rule.  An explicit ``<Base>.close(self)`` counts\n"
             "only when ``<Base>`` is a strict ancestor.\n"
             "\n"
             "Fix — keep the subclass cleanup and add the super call::\n"
