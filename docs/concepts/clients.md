@@ -57,7 +57,7 @@ Both SQL client classes are typically **subclassed** for specific database types
             ...
         ```
 
-        Every name in `params` must appear in the query as `:name`. A name the query never references raises `SqlBindParameterError` rather than running the query without that value. Without `params`, every colon in the query is treated as literal text, as before. Values are scalars (`SqlBindValue`: str, int, float, bool, Decimal, date/time, bytes or None). A placeholder may carry a cast, as in `:since::timestamp`; any other colon, such as `x::text` or `'12:30'`, stays literal.
+        Every name in `params` must appear in the query as `:name`. A name the query never references raises `SqlBindParameterError` rather than running the query without that value. Without `params`, every colon in the query is treated as literal text, as before. Values are scalars (`SqlBindValue`: str, int, float, bool, Decimal, date/time, bytes or None). A placeholder may carry a cast, as in `:since::timestamp`; any other colon, such as `x::text` or `'12:30'`, stays literal, as does a `:name` inside quoted text or a comment. Quoting follows standard SQL (`''` doubles a quote, a backslash is literal), plus backtick identifiers and Postgres dollar quotes.
 
 ### Example `DB_CONFIG`
 

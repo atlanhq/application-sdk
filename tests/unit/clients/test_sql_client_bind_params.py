@@ -154,6 +154,37 @@ async def test_a_bind_followed_by_a_cast_binds_and_keeps_the_cast(
     )
 
 
+@pytest.mark.asyncio
+async def test_a_placeholder_inside_quotes_or_comments_stays_literal(
+    sqlite_client: BaseSQLClient,
+):
+    """text() would otherwise bind the quoted ``:v`` too, and the driver would get two values."""
+    rows = await _rows(
+        sqlite_client,
+        "SELECT ':v' AS a, :v AS b, 'it''s :v' AS c /* :v */ -- :v",
+        params={"v": "x"},
+    )
+    assert rows == [{"a": ":v", "b": "x", "c": "it's :v"}]
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "SELECT ':v'",
+        'SELECT "col:v"',
+        "SELECT `col:v`",
+        "SELECT $$ :v $$",
+        "SELECT $q$ :v $q$",
+        "SELECT 1 -- :v",
+        "SELECT 1 /* :v */",
+    ],
+)
+def test_a_name_referenced_only_inside_quotes_or_comments_is_unreferenced(query: str):
+    """Otherwise the param would pass the check and never reach the statement."""
+    with pytest.raises(SqlBindParameterError):
+        _bound_params(query, {"v": "x"})
+
+
 @pytest.mark.parametrize(
     "query",
     [
@@ -161,6 +192,8 @@ async def test_a_bind_followed_by_a_cast_binds_and_keeps_the_cast(
         "x::v = :v AND t = '12:30'",
         "a:v AND :v AND \\:v AND (?:v)",
         "SELECT :v, :since, :other",
+        "SELECT ':v', :since /* :v */",
+        "SELECT 1 FROM V$SESSION WHERE a = :v",
     ],
 )
 def test_validation_and_escaping_agree_with_sqlalchemy_text(query: str):

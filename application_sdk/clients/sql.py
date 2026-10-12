@@ -67,10 +67,27 @@ SqlBindValue = (
 )
 """A value ``run_query`` can bind to a ``:name`` placeholder: a scalar every DB-API driver accepts."""
 
-# One colon: either a ``:name`` placeholder, by SQLAlchemy ``text()``'s own rule (not preceded by
-# a colon, word character or backslash), or any other colon. Escaping and validating ``params``
-# both read placeholders through this pattern, so they cannot disagree on what is a bind.
-_COLON = re.compile(r"(?<![:\w\\]):(\w+)|:")
+# SQL read just far enough to find placeholders: quoted text and comments are skipped whole, so a
+# ``:name`` inside them stays literal; outside them, a ``:name`` placeholder by SQLAlchemy
+# ``text()``'s own rule (not preceded by a colon, word character or backslash), or any other colon.
+# Escaping and validating ``params`` both read the query through this pattern, so they cannot
+# disagree on what is a bind. Quoting is standard SQL ('' doubles a quote; a backslash is literal)
+# plus MySQL backtick identifiers and Postgres dollar quotes.
+_SQL_COLON_SCAN = re.compile(
+    r"""
+      (?P<quoted>
+          '[^']*(?:''[^']*)*'
+        | "[^"]*(?:""[^"]*)*"
+        | `[^`]*`
+        | (?<!\w)\$(?P<tag>(?:[A-Za-z_]\w*)?)\$.*?\$(?P=tag)\$
+        | --[^\n]*
+        | /\*.*?\*/
+      )
+    | (?<![:\w\\]):(?P<name>\w+)
+    | :
+    """,
+    re.DOTALL | re.VERBOSE,
+)
 
 
 def _escape_colons_for_text(
@@ -83,13 +100,18 @@ def _escape_colons_for_text(
     SQLAlchemy strips the backslash before the driver, so the DB receives the literal colon.
 
     Every colon is escaped except a ``:name`` placeholder whose name is in ``bind_names``,
-    the parameters the caller is binding. Both colons of ``::`` are escaped, so ``x::name``
+    the parameters the caller is binding. A colon inside quoted text or a comment is always
+    escaped, so ``':name'`` stays a literal. Both colons of ``::`` are escaped, so ``x::name``
     is never taken for the bind ``:name`` while ``:name::type`` binds ``name`` and keeps the cast.
     """
-    return _COLON.sub(
-        lambda m: m.group(0) if m.group(1) in bind_names else "\\" + m.group(0),
-        query,
-    )
+
+    def escape(match: re.Match[str]) -> str:
+        token = match.group(0)
+        if match.group("name") in bind_names:
+            return token
+        return token.replace(":", "\\:")
+
+    return _SQL_COLON_SCAN.sub(escape, query)
 
 
 def _bound_params(
@@ -98,12 +120,14 @@ def _bound_params(
     """``params`` checked against ``query``, or None when nothing is bound.
 
     Raises :class:`SqlBindParameterError` for a name that ``query`` never references as a
-    ``:name`` placeholder: executing anyway would run the query without that value, so a
+    ``:name`` placeholder outside quoted text and comments: executing anyway would run the query without that value, so a
     filter would silently not apply.
     """
     if not params:
         return None
-    referenced = {m.group(1) for m in _COLON.finditer(query) if m.group(1)}
+    referenced = {
+        m.group("name") for m in _SQL_COLON_SCAN.finditer(query) if m.group("name")
+    }
     for name in params:
         if name not in referenced:
             raise SqlBindParameterError(
