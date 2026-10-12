@@ -734,15 +734,16 @@ moved: T003 retires it, and moving it only carries the T003 finding to the new p
 > Coverage is configured but its effective floor is absent or 0 — the number is measured but never enforced
 
 **Rationale:** A reported coverage percentage is decorative unless the effective floor used by the
-coverage run can fail it. A CI override such as `--cov-fail-under=0` takes precedence
-over `[tool.coverage.report].fail_under`, so a positive TOML fallback does not enforce
-coverage in that run. This is the config-level counterpart to T005-T007: those catch
-tests that run without asserting; this catches a coverage number that exists without an
-effective floor. The unified test-framework onboarding path deliberately starts new
-adopters at `--cov-fail-under=0` and ramps up over time (Athena at 20%, mssql at 60%),
-so WARN (not BLOCK) matches the agreed rollout reality — this rule's value is making the
-'0 is temporary, not the final state' expectation visible and trackable, not blocking
-the initial adoption PR.
+coverage run can fail it. A CI floor passed on the command line takes precedence over
+`[tool.coverage.report].fail_under`: a `tests-reusable.yaml` caller's unit tier is gated
+only by its `unit-coverage-fail-under` input (default `0`), so a positive TOML value
+alone does not enforce coverage there. This is the config-level counterpart to
+T005-T007: those catch tests that run without asserting; this catches a coverage number
+that exists without an effective floor. The unified test-framework onboarding path
+deliberately starts new adopters at `--cov-fail-under=0` and ramps up over time (Athena
+at 20%, mssql at 60%), so WARN (not BLOCK) matches the agreed rollout reality — this
+rule's value is making the '0 is temporary, not the final state' expectation visible and
+trackable, not blocking the initial adoption PR.
 
 ### What correct looks like
 
@@ -757,34 +758,32 @@ the initial adoption PR.
 measurement. T014 fires when the effective coverage floor is absent or `0`, so a run can
 report coverage without failing.
 
-The floor normally comes from `[tool.coverage.report].fail_under` but a recognized CI
-override takes precedence. coverage.py's CLI flag always overrides `pyproject.toml`: a
-workflow passing `--cov-fail-under=0` disables a positive TOML fallback. The rule checks
-the repo's own `.github/workflows/*.yml` for a `connector-unit-tests` `fail-under:`
-input or a `--cov-fail-under=N` flag embedded in a `tests-reusable.yaml` `pytest-args`
-override. A positive CI value is the effective floor; a CI value of `0` still overrides
-TOML but enforces nothing.
+The floor comes from `[tool.coverage.report].fail_under` unless CI passes one on the
+command line, which always wins. The rule checks the repo's own
+`.github/workflows/*.yml` for a `fail-under:` input (`connector-unit-tests`'s, or a
+`tests-reusable.yaml` caller's `unit-coverage-fail-under`) or a `--cov-fail-under=N`
+flag in a `pytest-args` override. A positive CI value is the effective floor; a CI value
+of `0` overrides TOML but enforces nothing.
 
-**Remediation:** make the floor effective in the workflow that runs tests.
+**Remediation:** set the floor on the input that gates the unit tier. First read the
+current *unit* coverage (the unit job's `coverage.json` artifact, or `coverage report`
+after `pytest tests/unit`) and take the whole number at or below it.
 
-First read the test suite's current coverage report (or most recent CI coverage
-artifact) and inspect the workflow's effective setting. If `pytest-args` passes
-`--cov-fail-under=0`, changing `pyproject.toml` alone does not fix CI. Remove that zero
-CLI option so the positive TOML fallback applies, or replace it with a positive floor no
-higher than the current measured percentage. Before removing the override, check that
-the existing TOML fallback is not above current coverage; lower it to the measured floor
-if necessary.
+- `tests-reusable.yaml` caller: set   `unit-coverage-fail-under: "<N>"` in the `with:`
+block, where   the bootstrap template places it (the mysql reference uses   `"90"`).
+This input is the unit tier's only gate: the   unit job runs `coverage report
+--fail-under=<input>`, so   `pyproject.toml` never applies there. Write a quoted whole
+number — `bootstrap --resync` reads it back and keeps it; a   decimal is not read back
+and makes `--resync` refuse the file. - Leave `--cov-fail-under=0` in `pytest-args`
+alone.   `pytest-args` only reaches the integration tier; removing the   flag applies
+the TOML `fail_under` to integration coverage — a   different measurement — and leaves
+the unit gate at `0`. - Direct `connector-unit-tests` user: set its `fail-under:`
+input to `<N>`. - No CI coverage gate at all: set   `[tool.coverage.report].fail_under =
+<N>`.
 
-A `tests-reusable.yaml` caller can set its `unit-coverage-fail-under` input to a
-positive current floor (the mysql reference uses 90 with a local `fail_under = 84`
-fallback). If custom `pytest-args` also contains `--cov-fail-under=0`, remove or raise
-that CLI option too; it still takes precedence. For `connector-unit-tests`, use its
-positive `fail-under:` input.
-
-When there is no CI override, set `[tool.coverage.report].fail_under` to the repo's
-current measured percentage (or the nearest whole number at or below it — never above).
-Keep a positive TOML fallback for local runs and ratchet it up in follow-up PRs toward
-the 90-100% unit-test goal.
+Keep a positive `fail_under` in `pyproject.toml` as the fallback for local runs (mysql
+keeps `84`). Never set a floor above current coverage, and ratchet it up in follow-up
+PRs toward the 90-100% unit-test goal rather than jumping there in one step.
 
 Suppress with `# conformance: ignore[T014] <reason>` on the `[tool.coverage.report]`
 line only during the initial adoption PR itself, explicitly naming the follow-up

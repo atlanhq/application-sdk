@@ -110,6 +110,27 @@ def test_t014_fires_when_ci_fail_under_is_zero() -> None:
     assert "T014" in [f.rule_id for f in findings]
 
 
+def test_t014_message_names_ci_zero_floor_and_unit_input() -> None:
+    """A CI zero floor is named as the cause, and the fix points at the unit
+    tier's input rather than at pyproject.toml or integration pytest-args."""
+    findings = scan_text(
+        "[tool.coverage.report]\nfail_under = 85\n",
+        "pyproject.toml",
+        ci_fail_under=0.0,
+    )
+    (t014,) = [f for f in findings if f.rule_id == "T014"]
+    assert "CI workflow declares a coverage floor of 0" in t014.message
+    assert 'unit-coverage-fail-under: "<N>"' in t014.message
+    assert "leave --cov-fail-under=0 in integration pytest-args alone" in (t014.message)
+
+
+def test_t014_message_without_ci_floor_names_pyproject() -> None:
+    findings = scan_text("[tool.coverage.report]\nfail_under = 0\n", "pyproject.toml")
+    (t014,) = [f for f in findings if f.rule_id == "T014"]
+    assert "no CI workflow declares" in t014.message
+    assert "coverage floor of 0" not in t014.message
+
+
 def test_ci_declared_fail_under_reads_connector_unit_tests_input(
     tmp_path: Path,
 ) -> None:
