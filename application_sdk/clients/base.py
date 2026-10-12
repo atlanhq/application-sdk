@@ -19,6 +19,33 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+class _SharedTransport(httpx.AsyncBaseTransport):
+    """Lends a long-lived transport to a short-lived ``httpx.AsyncClient``.
+
+    Each request builds its own ``AsyncClient``, and ``AsyncClient.__aexit__``
+    closes its transport. When that transport is the client's shared pool,
+    the first request to finish closes the sockets every concurrent request
+    is still reading from, and they fail with ``httpx.ReadError``. This
+    wrapper forwards requests and ignores the per-call close; the owning
+    ``BaseClient.close()`` releases the real transport.
+    """
+
+    def __init__(self, transport: httpx.AsyncBaseTransport) -> None:
+        self._transport = transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self._transport.handle_async_request(request)
+
+    async def __aenter__(self) -> "_SharedTransport":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
+
+
 class BaseClient(ClientInterface):
     """
     Base client for non-SQL based applications.
@@ -143,6 +170,15 @@ class BaseClient(ClientInterface):
 
         raise AbstractClientLoadError()
 
+    async def close(self, *args: Any, **kwargs: Any) -> None:
+        """Release the HTTP transport and its connection pool.
+
+        Requests borrow ``http_retry_transport`` without closing it, so that
+        concurrent requests on one client do not tear down each other's
+        connections. Call this once the client is no longer needed.
+        """
+        await self.http_retry_transport.aclose()
+
     async def execute_http_get_request(
         self,
         url: str,
@@ -194,7 +230,7 @@ class BaseClient(ClientInterface):
         ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
-            transport=self.http_retry_transport,
+            transport=_SharedTransport(self.http_retry_transport),
             verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
@@ -277,7 +313,7 @@ class BaseClient(ClientInterface):
         ssl_context = get_ssl_context()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
-            transport=self.http_retry_transport,
+            transport=_SharedTransport(self.http_retry_transport),
             verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
