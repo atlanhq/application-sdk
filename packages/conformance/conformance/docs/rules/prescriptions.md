@@ -2942,11 +2942,11 @@ This is a **heuristic** that reasons within one function.  A client that is retu
 yielded, stored on an attribute or container, or passed as an argument has moved to
 another owner and is not flagged; neither is a module-level client.  A plain local alias
 (`alias = client`) is not a hand-off and is tracked too.  The cleanup must run on every
-path the binding runs on; a condition inside the `finally` itself (`if owns_client:`) is
-accepted as an ownership guard. Subclasses are resolved by module-qualified name across
-the repo, transitively, from a `BaseClient` imported from `application_sdk.clients`.
-The check is silent unless the app's `uv.lock` resolves an SDK whose `BaseClient` shares
-its pool.
+path from the binding (both arms of an `if` count together); a condition inside the
+`finally` itself (`if owns_client:`) is accepted as an ownership guard. Subclasses are
+resolved by module-qualified name across the repo, transitively, from a `BaseClient`
+imported from `application_sdk.clients`.  The check is silent unless the app's `uv.lock`
+resolves an SDK whose `BaseClient` shares its pool.
 
 Land as `WARN`: a justified inline `# conformance: ignore[P056] <reason>` records a
 deliberate exception and stays visible in SARIF.
@@ -2982,9 +2982,9 @@ connection pool; an override that skips it (for example, one that only clears a 
 token) leaves the pool open even when callers close the client in a `finally` or with
 `async with`.  `BaseClient.close()` is a coroutine, so a call without `await` releases
 nothing, a call inside a nested helper only counts if the override runs it, and a call
-under an `if`, a loop or an `except` handler is skipped on some paths — none of these
-satisfies the rule.  An explicit `<Base>.close(self)` counts only when `<Base>` is a
-strict ancestor.
+in only one arm of an `if`, only inside a loop or only in an `except` handler is skipped
+on some paths — none of these satisfies the rule (a call in both arms of an `if` does).
+An explicit `<Base>.close(self)` counts only when `<Base>` is a strict ancestor.
 
 Fix — keep the subclass cleanup and add the super call:
 

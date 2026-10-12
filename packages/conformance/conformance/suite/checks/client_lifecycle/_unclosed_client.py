@@ -14,8 +14,8 @@ seeded only from the SDK's ``BaseClient``.
 binding (``name = Subclass(...)``) from its line to the next rebinding of that
 name.  Within that range the client is *closed* if the function enters it with
 ``async with <name>`` or calls ``await <name>.close()`` inside a ``finally``, on
-every path the binding runs on (a guard inside the ``finally`` itself is the
-accepted ownership-guard shape); it
+every path from the binding to the end of the function (:class:`_MustRun`; a
+guard inside the ``finally`` itself is the accepted ownership-guard shape); it
 has *escaped* — and is skipped — if it is returned, yielded, passed as an
 argument, stored on an attribute / in a container, or referenced from a nested
 scope.  A plain local alias (``alias = client``) neither closes nor moves it: the
@@ -25,8 +25,9 @@ nor move the client.
 
 ``P057`` flags a ``close`` method defined directly on a registered subclass
 whose own body (not a nested helper) never *awaits* ``super().close()`` (or an
-explicit ``<Base>.close(self)`` on a strict ancestor) on every path.  ``BaseClient.close()`` is a coroutine, so a
-bare call only builds a coroutine object and releases nothing.
+explicit ``<Base>.close(self)`` on a strict ancestor) on every path through it.
+``BaseClient.close()`` is a coroutine, so a bare call only builds a coroutine
+object and releases nothing.
 """
 
 from __future__ import annotations
@@ -95,16 +96,9 @@ def _dotted(expr: ast.expr) -> str | None:
     return None
 
 
-#: Fields of a control-flow node whose statements may not run.
-_CONDITIONAL_FIELDS: dict[type[ast.AST], frozenset[str]] = {
-    ast.If: frozenset({"body", "orelse"}),
+#: Expression fields whose sub-expressions may not be evaluated.
+_CONDITIONAL_EXPR_FIELDS: dict[type[ast.AST], frozenset[str]] = {
     ast.IfExp: frozenset({"body", "orelse"}),
-    ast.For: frozenset({"body", "orelse"}),
-    ast.AsyncFor: frozenset({"body", "orelse"}),
-    ast.While: frozenset({"body", "orelse"}),
-    ast.Match: frozenset({"cases"}),
-    ast.Try: frozenset({"handlers", "orelse"}),
-    ast.TryStar: frozenset({"handlers", "orelse"}),
     ast.BoolOp: frozenset({"values"}),
 }
 
@@ -126,29 +120,108 @@ def _parent_links(root: ast.AST) -> _Links:
     return links
 
 
-def _branch_path(
-    node: ast.AST, links: _Links, *, finally_resets: bool
-) -> frozenset[tuple[int, str]]:
-    """The conditional branches *node* sits under, as ``(id(parent), field)``.
+class _MustRun:
+    """Does every path through a block reach one of a set of *sites*?
 
-    With *finally_resets*, branches inside the innermost enclosing ``finally``
-    are dropped: a guard there decides ownership, not whether cleanup runs.
+    A site is a statement or expression node (``async with client``, ``await
+    client.close()``, ``await super().close()``).  The analysis is structural,
+    over statement blocks: a block reaches a site if any of its statements
+    does; an ``if`` only if both arms do; a ``match`` only if every case does
+    and the last is a bare ``case _``; a loop never (it may run zero times); a
+    ``try`` if its body or ``finally`` does, or its ``else`` and every handler
+    do.  Sites inside a conditional expression (``a if c else b``, ``and`` /
+    ``or``) do not count.  Early ``return`` / ``raise`` are not modelled.
+
+    With *lenient_finally*, any site anywhere inside a ``finally`` counts, so
+    ``finally: if owns_client: await client.close()`` — a guard that decides
+    ownership, not whether cleanup runs — is accepted.
     """
-    path: list[tuple[int, str]] = []
-    current = node
-    while id(current) in links:
-        parent, name = links[id(current)]
-        if (
-            finally_resets
-            and isinstance(parent, (ast.Try, ast.TryStar))
-            and name == "finalbody"
-        ):
-            path.clear()
-            finally_resets = False
-        elif name in _CONDITIONAL_FIELDS.get(type(parent), frozenset()):
-            path.append((id(parent), name))
-        current = parent
-    return frozenset(path)
+
+    def __init__(
+        self, sites: set[int], links: _Links, *, lenient_finally: bool
+    ) -> None:
+        self.sites = sites
+        self.links = links
+        self.lenient_finally = lenient_finally
+
+    def block(self, stmts: list[ast.stmt]) -> bool:
+        return any(self.stmt(s) for s in stmts)
+
+    def _finally(self, stmts: list[ast.stmt]) -> bool:
+        if not self.lenient_finally:
+            return self.block(stmts)
+        return any(
+            id(node) in self.sites
+            for stmt in stmts
+            for node in (stmt, *(child for child, _ in _walk_scope(stmt)))
+        )
+
+    def stmt(self, stmt: ast.stmt) -> bool:
+        if id(stmt) in self.sites:
+            return True
+        if isinstance(stmt, ast.If):
+            return self._expr(stmt.test, stmt) or (
+                self.block(stmt.body) and self.block(stmt.orelse)
+            )
+        if isinstance(stmt, (ast.For, ast.AsyncFor, ast.While)):
+            return False
+        if isinstance(stmt, (ast.Try, ast.TryStar)):
+            return (
+                self.block(stmt.body)
+                or self._finally(stmt.finalbody)
+                or (
+                    self.block(stmt.orelse)
+                    and all(self.block(h.body) for h in stmt.handlers)
+                )
+            )
+        if isinstance(stmt, (ast.With, ast.AsyncWith)):
+            return self.block(stmt.body)
+        if isinstance(stmt, ast.Match):
+            last = stmt.cases[-1].pattern if stmt.cases else None
+            exhaustive = isinstance(last, ast.MatchAs) and last.pattern is None
+            return exhaustive and all(self.block(c.body) for c in stmt.cases)
+        if isinstance(stmt, _SCOPE_NODES):
+            return False
+        return self._expr(stmt, stmt)
+
+    def _expr(self, root: ast.AST, stmt: ast.stmt) -> bool:
+        """True if a site under *root* is evaluated whenever *stmt* runs."""
+        for node, _ in _walk_scope(root):
+            if id(node) in self.sites and self._unconditional(node, stmt):
+                return True
+        return False
+
+    def _unconditional(self, node: ast.AST, stmt: ast.stmt) -> bool:
+        current = node
+        while current is not stmt and id(current) in self.links:
+            parent, name = self.links[id(current)]
+            if name in _CONDITIONAL_EXPR_FIELDS.get(type(parent), frozenset()):
+                return False
+            current = parent
+        return True
+
+    def after(self, stmt: ast.stmt, root: ast.AST) -> bool:
+        """True if every path from *stmt* to the end of *root* reaches a site.
+
+        Checks the statements after *stmt* in its own block, then each enclosing
+        ``finally``, then climbs to the enclosing statement and repeats.
+        """
+        current: ast.AST = stmt
+        while current is not root and id(current) in self.links:
+            parent, name = self.links[id(current)]
+            if isinstance(current, ast.stmt):
+                block = getattr(parent, name)
+                index = next(i for i, s in enumerate(block) if s is current)
+                if self.block(block[index + 1 :]):
+                    return True
+            if (
+                isinstance(parent, (ast.Try, ast.TryStar))
+                and name != "finalbody"
+                and self._finally(parent.finalbody)
+            ):
+                return True
+            current = parent
+        return False
 
 
 def module_name_for(rel: str) -> tuple[str, bool]:
@@ -345,33 +418,34 @@ def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -
 
     The call must be the operand of an ``await`` — ``BaseClient.close()`` is a
     coroutine function, so an un-awaited call releases nothing.  It must run on
-    every path through the override (not under an ``if``, a loop, an ``except``
-    handler, ...).  Nested helper functions are not entered: defining a helper
+    every path through the override: under an ``if`` it needs a call in both
+    arms; under a loop or an ``except`` handler alone it does not count (see
+    :class:`_MustRun`).  Nested helper functions are not entered: defining a helper
     that would close the base is not the same as closing it.  An explicit
     ``<Base>.close(self)`` only counts when ``<Base>`` is a strict ancestor —
     ``Client.close(self)`` inside ``Client.close`` recurses and never reaches it.
     """
-    links = _parent_links(func)
     ancestors = registry.ancestors(record.qualname)
+    sites: set[int] = set()
     for node, _ in _walk_scope(func):
         if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
             continue
         callee = node.value.func
         if not isinstance(callee, ast.Attribute) or callee.attr != "close":
             continue
-        if _branch_path(node, links, finally_resets=False):
-            continue  # conditional: some path through close() skips it
         receiver = callee.value
         if (
             isinstance(receiver, ast.Call)
             and isinstance(receiver.func, ast.Name)
             and receiver.func.id == "super"
+        ) or registry.resolve(record.module, receiver) in (
+            SDK_BASE_CLIENTS | ancestors
         ):
-            return True
-        target = registry.resolve(record.module, receiver)
-        if target in SDK_BASE_CLIENTS or target in ancestors:
-            return True
-    return False
+            sites.add(id(node))
+    if not sites:
+        return False
+    must = _MustRun(sites, _parent_links(func), lenient_finally=False)
+    return must.block(func.body)
 
 
 def check_p057(
@@ -434,6 +508,9 @@ class _Lifecycle:
     closed_outside_finally: bool = False
     closed_on_some_paths: bool = False
     escaped: bool = False
+    #: ``async with`` / ``close()``-in-``finally`` sites, and other ``close()`` sites.
+    protected: set[int] = field(default_factory=set)
+    unprotected: set[int] = field(default_factory=set)
 
 
 @dataclass(frozen=True)
@@ -498,18 +575,12 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
 
     Follows the client through plain local aliases; each name is only
     considered between the line it takes the client and its next rebinding.
-    A close only counts when it runs on every path the binding runs on: its
-    branch path must add no condition the binding is not already under.  A
-    condition *inside* a ``finally`` is allowed — that is the ownership-guard
-    shape (``finally: if owns_client: await client.close()``).
+    Cleanup only counts when every path from the binding to the end of the
+    function reaches it (:class:`_MustRun`) — sites in both arms of an ``if``
+    combine.  A condition *inside* a ``finally`` is allowed — that is the
+    ownership-guard shape (``finally: if owns_client: await client.close()``).
     """
     state = _Lifecycle()
-    bound_under = _branch_path(binding, scope.links, finally_resets=False)
-
-    def always(site: ast.AST, *, in_finally: bool) -> bool:
-        path = _branch_path(site, scope.links, finally_resets=in_finally)
-        return path <= bound_under
-
     pending = [first]
     seen: set[_Span] = set()
     while pending:
@@ -529,18 +600,12 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
                     and item.context_expr.id == span.name
                     for item in node.items
                 ):
-                    if always(node, in_finally=False):
-                        state.closed = True
-                    else:
-                        state.closed_on_some_paths = True
+                    state.protected.add(id(node))
             elif _is_close_call_on(node, span.name):
-                in_finally = id(node) in scope.in_finally
-                if not always(node, in_finally=in_finally):
-                    state.closed_on_some_paths = True
-                elif in_finally:
-                    state.closed = True
+                if id(node) in scope.in_finally:
+                    state.protected.add(id(node))
                 else:
-                    state.closed_outside_finally = True
+                    state.unprotected.add(id(node))
             elif (
                 isinstance(node, ast.Name)
                 and node.id == span.name
@@ -553,6 +618,19 @@ def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifec
                     state.escaped = True
                 elif isinstance(parent, ast.Call) and node is not parent.func:
                     state.escaped = True
+    if state.escaped:
+        return state
+
+    def reached(sites: set[int]) -> bool:
+        must = _MustRun(sites, scope.links, lenient_finally=True)
+        return must.after(binding, scope.func)
+
+    if reached(state.protected):
+        state.closed = True
+    elif reached(state.protected | state.unprotected):
+        state.closed_outside_finally = True
+    elif state.protected or state.unprotected:
+        state.closed_on_some_paths = True
     return state
 
 

@@ -506,6 +506,39 @@ def test_p057_fires_when_base_close_is_conditional(body: str) -> None:
     assert len(_rule(_METABASE_SHAPED_CLIENT + body, "P057")) == 1
 
 
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        if self.session_token:\n            await super().close()\n"
+        "        else:\n            await super().close()\n",
+        "        match self.session_token:\n"
+        "            case None:\n                await super().close()\n"
+        "            case _:\n                await super().close()\n",
+        "        try:\n            pass\n        except Exception:\n"
+        "            await super().close()\n        else:\n"
+        "            await super().close()\n",
+    ],
+    ids=["both-if-arms", "exhaustive-match", "else-and-every-handler"],
+)
+def test_p057_silent_when_every_branch_awaits_base_close(body: str) -> None:
+    assert not _rule(_METABASE_SHAPED_CLIENT + body, "P057")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        if self.session_token:\n            await super().close()\n"
+        "        elif self.closed:\n            await super().close()\n",
+        "        match self.session_token:\n"
+        "            case None:\n                await super().close()\n",
+        "        x = self.flag and await super().close()\n",
+    ],
+    ids=["if-elif-without-else", "non-exhaustive-match", "short-circuit"],
+)
+def test_p057_fires_when_some_branch_skips_base_close(body: str) -> None:
+    assert len(_rule(_METABASE_SHAPED_CLIENT + body, "P057")) == 1
+
+
 def test_p057_silent_when_base_close_is_in_finally() -> None:
     src = _METABASE_SHAPED_CLIENT.replace(
         "        self.session_token = None\n",
@@ -553,6 +586,34 @@ def test_p056_fires_when_cleanup_only_runs_on_some_paths(body: str) -> None:
 )
 def test_p056_silent_when_cleanup_runs_wherever_the_binding_does(body: str) -> None:
     assert not _p056("async def f(flag):\n" + body)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if flag:\n        async with client:\n            await client.load()\n"
+        "    else:\n        async with client:\n            pass\n",
+        "    try:\n        await client.load()\n    finally:\n"
+        "        if flag:\n            await client.close()\n"
+        "        else:\n            await client.close()\n",
+        "    try:\n        if flag:\n            async with client:\n                pass\n"
+        "        else:\n            async with client:\n                pass\n"
+        "    except Exception:\n        raise\n",
+    ],
+    ids=["async-with-in-both-arms", "close-in-both-arms-of-finally", "nested-in-try"],
+)
+def test_p056_silent_when_every_branch_cleans_up(body: str) -> None:
+    assert not _p056("async def f(flag):\n    client = SourceClient()\n" + body)
+
+
+def test_p056_happy_path_when_both_arms_close_outside_finally() -> None:
+    fs = _p056(
+        "async def f(flag):\n    client = SourceClient()\n"
+        "    if flag:\n        await client.close()\n"
+        "    else:\n        await client.close()\n"
+    )
+    assert len(fs) == 1
+    assert "only reached when no exception" in fs[0].message
 
 
 # ── Cross-file resolution + SDK-version gate (repo boundary) ────────────────
