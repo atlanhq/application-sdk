@@ -14,11 +14,13 @@ from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text
+from sqlalchemy.pool import StaticPool
 
 from application_sdk.clients.sql import (
     AsyncBaseSQLClient,
     BaseSQLClient,
+    _bound_params,
     _escape_colons_for_text,
 )
 from application_sdk.clients.sql_errors import SqlBindParameterError
@@ -61,8 +63,15 @@ class _Connection:
 
 
 class _SqliteEngine:
+    """run_query connects and executes on SDK pool threads, which need not be the
+    same thread; sqlite3 refuses cross-thread use unless told otherwise."""
+
     def __init__(self) -> None:
-        self._engine = create_engine("sqlite://")
+        self._engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
 
     def connect(self) -> _Connection:
         return _Connection(self._engine.connect())
@@ -128,6 +137,42 @@ def test_a_cast_is_not_mistaken_for_a_bind_of_the_same_name():
         "x::v = :v AND t = '12:30'", bind_names=frozenset({"v"})
     )
     assert escaped == "x\\:\\:v = :v AND t = '12\\:30'"
+
+
+@pytest.mark.asyncio
+async def test_a_bind_followed_by_a_cast_binds_and_keeps_the_cast(
+    sqlite_client: BaseSQLClient,
+):
+    """`:name::type` is how Postgres casts a bind; the bind must not be rejected."""
+    rows = await _rows(sqlite_client, "SELECT :v AS v, 'a::b' AS t", params={"v": "x"})
+    assert rows == [{"v": "x", "t": "a::b"}]
+    assert (
+        _escape_colons_for_text(
+            "c > :since::timestamp", bind_names=frozenset({"since"})
+        )
+        == "c > :since\\:\\:timestamp"
+    )
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "c > :since::timestamp",
+        "x::v = :v AND t = '12:30'",
+        "a:v AND :v AND \\:v AND (?:v)",
+        "SELECT :v, :since, :other",
+    ],
+)
+def test_validation_and_escaping_agree_with_sqlalchemy_text(query: str):
+    """Exactly the names text() binds after escaping are accepted as params."""
+    names = frozenset({"v", "since"})
+    bound = set(text(_escape_colons_for_text(query, names)).compile().params)
+    for name in names:
+        if name in bound:
+            assert _bound_params(query, {name: 1}) == {name: 1}
+        else:
+            with pytest.raises(SqlBindParameterError):
+                _bound_params(query, {name: 1})
 
 
 def test_without_bind_names_every_colon_is_escaped():

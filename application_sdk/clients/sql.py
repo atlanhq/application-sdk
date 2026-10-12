@@ -8,12 +8,14 @@ database operations, supporting batch processing and server-side cursors.
 import concurrent.futures
 import contextlib
 import contextvars
+import datetime
 import functools
 import hashlib
 import re
 import threading
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
 
@@ -51,11 +53,28 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
-_BIND_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+SqlBindValue = (
+    str
+    | int
+    | float
+    | bool
+    | Decimal
+    | datetime.datetime
+    | datetime.date
+    | datetime.time
+    | bytes
+    | None
+)
+"""A value ``run_query`` can bind to a ``:name`` placeholder: a scalar every DB-API driver accepts."""
+
+# One colon: either a ``:name`` placeholder, by SQLAlchemy ``text()``'s own rule (not preceded by
+# a colon, word character or backslash), or any other colon. Escaping and validating ``params``
+# both read placeholders through this pattern, so they cannot disagree on what is a bind.
+_COLON = re.compile(r"(?<![:\w\\]):(\w+)|:")
 
 
 def _escape_colons_for_text(
-    query: str, bind_names: "frozenset[str]" = frozenset()
+    query: str, bind_names: frozenset[str] = frozenset()
 ) -> str:
     """Backslash-escape literal colons so SQLAlchemy ``text()`` does not treat them as bind params.
 
@@ -64,50 +83,31 @@ def _escape_colons_for_text(
     SQLAlchemy strips the backslash before the driver, so the DB receives the literal colon.
 
     Every colon is escaped except a ``:name`` placeholder whose name is in ``bind_names``,
-    the parameters the caller is binding. A colon that is part of ``::`` is always escaped,
-    so a ``x::name`` cast is never taken for the bind ``:name``.
+    the parameters the caller is binding. Both colons of ``::`` are escaped, so ``x::name``
+    is never taken for the bind ``:name`` while ``:name::type`` binds ``name`` and keeps the cast.
     """
-    if not bind_names:
-        return query.replace(":", "\\:")
-    out: list[str] = []
-    for index, char in enumerate(query):
-        if char != ":":
-            out.append(char)
-            continue
-        previous = query[index - 1] if index else ""
-        following = query[index + 1 : index + 2]
-        name = _BIND_NAME.match(query, index + 1)
-        if (
-            previous != ":"
-            and following != ":"
-            and name
-            and name.group(0) in bind_names
-        ):
-            out.append(":")
-        else:
-            out.append("\\:")
-    return "".join(out)
+    return _COLON.sub(
+        lambda m: m.group(0) if m.group(1) in bind_names else "\\" + m.group(0),
+        query,
+    )
 
 
 def _bound_params(
-    query: str, params: "Mapping[str, Any] | None"
-) -> "dict[str, Any] | None":
+    query: str, params: Mapping[str, SqlBindValue] | None
+) -> dict[str, SqlBindValue] | None:
     """``params`` checked against ``query``, or None when nothing is bound.
 
-    Raises :class:`SqlBindParameterError` for a name that is not an identifier
-    or that ``query`` never references as ``:name``: executing anyway would run
-    the query without that value, so a filter would silently not apply.
+    Raises :class:`SqlBindParameterError` for a name that ``query`` never references as a
+    ``:name`` placeholder: executing anyway would run the query without that value, so a
+    filter would silently not apply.
     """
     if not params:
         return None
+    referenced = {m.group(1) for m in _COLON.finditer(query) if m.group(1)}
     for name in params:
-        if not isinstance(name, str) or not _BIND_NAME.fullmatch(name):
+        if name not in referenced:
             raise SqlBindParameterError(
-                message=f"Bind parameter name {name!r} is not an identifier"
-            )
-        if not re.search(rf"(?<![:\w]):{name}\b(?!:)", query):
-            raise SqlBindParameterError(
-                message=f"Bind parameter {name!r} is not referenced as :{name} in the query"
+                message=f"Bind parameter {name!r} is not referenced as a :name placeholder in the query"
             )
     return dict(params)
 
@@ -544,7 +544,7 @@ class BaseSQLClient(ClientInterface):
         self,
         query: str,
         batch_size: int = 100000,
-        params: "Mapping[str, Any] | None" = None,
+        params: Mapping[str, SqlBindValue] | None = None,
     ):
         """Execute a SQL query and return results in batches using lazy connections.
 
@@ -556,7 +556,7 @@ class BaseSQLClient(ClientInterface):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
-            params (Mapping[str, Any], optional): Values to bind to ``:name``
+            params (Mapping[str, SqlBindValue], optional): Values to bind to ``:name``
                 placeholders in ``query``. The driver receives them as bound
                 values, never as SQL text, so a user-supplied filter value cannot
                 change the statement. Every name must appear in ``query``.
@@ -623,11 +623,7 @@ class BaseSQLClient(ClientInterface):
 
             statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
             execute = handle.bind(_holding_connection(connection.execute))
-            cursor = (
-                await run_in_thread(execute, statement, bound)
-                if bound
-                else await run_in_thread(execute, statement)
-            )
+            cursor = await run_in_thread(execute, statement, bound)
             if not cursor or not cursor.cursor:
                 raise UnsupportedSqlCursorError()
             column_names: list[str] = [
@@ -904,7 +900,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
         self,
         query: str,
         batch_size: int = 100000,
-        params: "Mapping[str, Any] | None" = None,
+        params: Mapping[str, SqlBindValue] | None = None,
     ):
         """Execute a SQL query asynchronously and return results in batches using lazy connections.
 
@@ -916,7 +912,7 @@ class AsyncBaseSQLClient(BaseSQLClient):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
-            params (Mapping[str, Any], optional): Values to bind to ``:name``
+            params (Mapping[str, SqlBindValue], optional): Values to bind to ``:name``
                 placeholders in ``query``, as for :meth:`BaseSQLClient.run_query`.
 
         Yields:
@@ -949,18 +945,11 @@ class AsyncBaseSQLClient(BaseSQLClient):
                     )
 
                 statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
-                if use_server_side_cursor:
-                    result = (
-                        await connection.stream(statement, bound)
-                        if bound
-                        else await connection.stream(statement)
-                    )
-                else:
-                    result = (
-                        await connection.execute(statement, bound)
-                        if bound
-                        else await connection.execute(statement)
-                    )
+                result = (
+                    await connection.stream(statement, bound)
+                    if use_server_side_cursor
+                    else await connection.execute(statement, bound)
+                )
 
                 column_names = list(result.keys())
 
