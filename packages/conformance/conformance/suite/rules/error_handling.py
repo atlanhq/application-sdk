@@ -971,4 +971,64 @@ RULES: tuple[RuleDefinition, ...] = (
             target="programs/areas/error-handling.prose.md",
         ),
     ),
+    RuleDefinition(
+        id="E021",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — `SourceRestartingError` and "
+            "`PreflightProbeTimeoutError` subclass `SourceUnavailableError` with "
+            "SOURCE_UNAVAILABLE_* codes and no audience override: an unreachable "
+            "customer source is SOURCE_UNAVAILABLE / USER by inheritance."
+        ),
+        scope=RuleScope.BOTH,
+        name="DependencyUnavailableOverriddenToUser",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="failure-category",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.47.0",
+        rationale=(
+            "DEPENDENCY_UNAVAILABLE means an Atlan platform service (Dapr, Temporal, "
+            "object store) is down, so a hard preflight gate never blocks on it. "
+            "Overriding its audience to USER says the customer's own system is down, "
+            "which is SOURCE_UNAVAILABLE, and SOURCE_UNAVAILABLE blocks a hard gate on "
+            "its final attempt. "
+            "Customer impact: with the wrong category, a hard gate lets a run start "
+            "against an unreachable source, and the run then fails on the same fault "
+            "after consuming its slot. The failure also routes inconsistently: the "
+            "category says PLATFORM while the audience says USER."
+        ),
+        short_description=(
+            "DependencyUnavailableError subclass overrides audience to USER — a "
+            "customer-owned system that is down is SourceUnavailableError"
+        ),
+        full_description=(
+            "A class whose category is DEPENDENCY_UNAVAILABLE assigns\n"
+            "``audience = Audience.USER`` in its own body.  The category is read the\n"
+            "way Python's MRO reads it: from the first base, in declaration order,\n"
+            "that resolves to an SDK error, unless the class assigns ``category``\n"
+            "itself.  So ``class X(NotFoundError, StorageError)`` is NOT_FOUND and is\n"
+            "not flagged, even though ``StorageError`` is a DEPENDENCY_UNAVAILABLE\n"
+            "leaf.  SDK subclasses outside ``application_sdk.errors`` (e.g.\n"
+            "``StorageError``, ``AzureConnectionError``) count, and app-defined\n"
+            "intermediates are followed through the repo's own imports.\n"
+            "\n"
+            "Fix: re-base the class on ``SourceUnavailableError`` (or an app\n"
+            "subclass of it), rename its code to ``SOURCE_UNAVAILABLE_*``, and delete\n"
+            "the audience override, which ``SourceUnavailableError`` already sets.\n"
+            "This is a behaviour change for an app running a hard preflight gate:\n"
+            "the failure now blocks on the gate's final attempt.  Say so in the PR.\n"
+            "\n"
+            "Only the class that assigns the override is flagged; subclasses that\n"
+            "inherit it are fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf\n"
+            "raised for a customer source *without* an override is not detected:\n"
+            "the rule matches the structural pattern and does not infer intent from\n"
+            "names.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e021",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
 )

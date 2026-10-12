@@ -1,7 +1,7 @@
 """E-series error-handling checks — AST-based.
 
 Scans Python source files for error-handling anti-patterns defined in the
-E001–E019 rule catalog.  Every check is purely deterministic: the same
+E001–E021 rule catalog.  Every check is purely deterministic: the same
 source text always produces the same set of findings.
 
 Inline suppression
@@ -24,6 +24,7 @@ Rule implementations are split by category:
 * ``untyped_raise``      — E012, E013, E018 (untyped or legacy raise sites)
 * ``exception_chaining`` — E015, E016, E019 (chaining and message hygiene)
 * ``security``           — E017 (secrets in error evidence fields)
+* ``dependency_audience`` — E021 (DEPENDENCY_UNAVAILABLE overridden to USER)
 
 ``_checker.py`` assembles these into a single ``Checker`` visitor.
 ``__init__.py`` (this file) exposes the public scan + CLI API.
@@ -57,6 +58,7 @@ from ._constants import (
     LEGACY_ATLAN_ERRORS,
     SERIES,
 )
+from ._dependency_category import dependency_unavailable_classes
 from ._helpers import is_broad_suppress, is_builtin_raise, module_helpers
 from ._sdk_errors import sdk_error_names
 
@@ -90,8 +92,9 @@ def scan_text(
 ) -> list[Finding]:
     """Scan Python source *text* and return all E-series findings.
 
-    *path* and *root* let E004 follow the scanned repo's own imports when it
-    proves an error class is an SDK ``AppError`` (see :mod:`._sdk_errors`).
+    *path* and *root* let E004 and E021 follow the scanned repo's own imports
+    when they resolve an error class's SDK ancestry (see :mod:`._sdk_errors`
+    and :mod:`._dependency_category`).
     """
     try:
         tree = ast.parse(text, filename=file)
@@ -111,6 +114,7 @@ def scan_text(
         legacy_aliases=legacy_aliases,
         local_helpers=local_helpers,
         sdk_errors=sdk_error_names(tree, path=path, root=root),
+        dependency_classes=dependency_unavailable_classes(tree, path=path, root=root),
     )
     checker.visit(tree)
     return checker._findings

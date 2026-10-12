@@ -7,6 +7,7 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
+from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin
 from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
@@ -65,6 +66,7 @@ class Checker(
     ExceptionChainingMixin,
     HttpFailureMixin,
     SecurityMixin,
+    DependencyAudienceMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -77,6 +79,7 @@ class Checker(
         legacy_aliases: frozenset[str] = frozenset(),
         local_helpers: dict[str, ast.FunctionDef] | None = None,
         sdk_errors: frozenset[str] = frozenset(),
+        dependency_classes: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
@@ -84,6 +87,7 @@ class Checker(
         self._legacy_aliases = legacy_aliases
         self._local_helpers = local_helpers or {}
         self._sdk_errors = sdk_errors
+        self._dependency_classes = dependency_classes
         self._findings: list[Finding] = []
         self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
@@ -145,6 +149,8 @@ class Checker(
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._check_p011(node)
+        if not self._class_stack and not self._function_stack:
+            self._check_e021(node)
         self._class_stack.append(node)
         self.generic_visit(node)
         self._class_stack.pop()

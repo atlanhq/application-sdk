@@ -5,7 +5,7 @@
 
 # Error-Handling Rules (E-series)
 
-**20 rules** · Checker: `suite.checks.error_handling` (AST-based)
+**21 rules** · Checker: `suite.checks.error_handling` (AST-based)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -44,6 +44,7 @@ They are documented alongside the orchestration, storage and client seam rules i
 | [E018](#e018) | `BareParentLeafRaise` | `warn` | `both` | `untyped-raise` | yes | 0.2.0 |
 | [E019](#e019) | `ExceptionTextInContractField` | `warn` | `both` | `error-message-hygiene` | yes | 0.9.0 |
 | [E020](#e020) | `HttpFailureToEmptyReturn` | `warn` | `app` | `error-to-return-value` | yes | 0.9.0 |
+| [E021](#e021) | `DependencyUnavailableOverriddenToUser` | `warn` | `both` | `failure-category` | yes | 0.47.0 |
 
 ---
 
@@ -767,5 +768,48 @@ typed error in the tolerating function.  The handler logs with `exc_info=True`, 
 a residual and returns the empty sentinel, and the run declares the gap as
 `PARTIAL_SUCCESS`.  Anchored on HTTP-response markers and a failure-shaped test to avoid
 flagging ordinary `if x is None: return None` guards.
+
+---
+
+## E021 — `DependencyUnavailableOverriddenToUser` {#e021}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `failure-category` · **Autofixable:** yes · **Since:** 0.47.0
+
+> DependencyUnavailableError subclass overrides audience to USER — a customer-owned system that is down is SourceUnavailableError
+
+**Rationale:** DEPENDENCY_UNAVAILABLE means an Atlan platform service (Dapr, Temporal, object store) is
+down, so a hard preflight gate never blocks on it. Overriding its audience to USER says
+the customer's own system is down, which is SOURCE_UNAVAILABLE, and SOURCE_UNAVAILABLE
+blocks a hard gate on its final attempt. Customer impact: with the wrong category, a
+hard gate lets a run start against an unreachable source, and the run then fails on the
+same fault after consuming its slot. The failure also routes inconsistently: the
+category says PLATFORM while the audience says USER.
+
+### What correct looks like
+
+- **Compliant example:** atlan-mysql-app app/failures.py — `SourceRestartingError` and
+  `PreflightProbeTimeoutError` subclass `SourceUnavailableError` with
+  SOURCE_UNAVAILABLE_* codes and no audience override: an unreachable customer source is
+  SOURCE_UNAVAILABLE / USER by inheritance.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
+
+A class whose category is DEPENDENCY_UNAVAILABLE assigns `audience = Audience.USER` in
+its own body.  The category is read the way Python's MRO reads it: from the first base,
+in declaration order, that resolves to an SDK error, unless the class assigns `category`
+itself.  So `class X(NotFoundError, StorageError)` is NOT_FOUND and is not flagged, even
+though `StorageError` is a DEPENDENCY_UNAVAILABLE leaf.  SDK subclasses outside
+`application_sdk.errors` (e.g. `StorageError`, `AzureConnectionError`) count, and
+app-defined intermediates are followed through the repo's own imports.
+
+Fix: re-base the class on `SourceUnavailableError` (or an app subclass of it), rename
+its code to `SOURCE_UNAVAILABLE_*`, and delete the audience override, which
+`SourceUnavailableError` already sets. This is a behaviour change for an app running a
+hard preflight gate: the failure now blocks on the gate's final attempt.  Say so in the
+PR.
+
+Only the class that assigns the override is flagged; subclasses that inherit it are
+fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf raised for a customer source
+*without* an override is not detected: the rule matches the structural pattern and does
+not infer intent from names.
 
 ---
