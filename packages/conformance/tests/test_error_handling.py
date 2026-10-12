@@ -1945,6 +1945,59 @@ def get_value():
     )
 
 
+def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _failed_check(self, label, problem, started):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+        return FailedCheck(label=label, error=problem)
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._failed_check("keys", problem, started))
+            return Verdict(checks=checks)
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _empty_check(self, problem):
+        return EmptyCheck()
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._empty_check(problem))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_logs_unrelated_data() -> None:
+    src = """\
+class Probe:
+    def _report(self, detail):
+        logger.warning("other operation failed: %s", detail, exc_info=detail)
+        return EmptyCheck()
+
+    def inspect(self, unrelated):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._report(unrelated))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_no_finding_log_before_return() -> None:
     _none(
         """\
@@ -1955,6 +2008,142 @@ def get_value():
         logger.warning("key missing", exc_info=True)
         return None
 """
+    )
+
+
+def test_p007_still_flags_classmethod_calling_unbound_plain_helper() -> None:
+    # ``cls._report(problem)`` binds ``problem`` to ``self``; the logged
+    # ``problem`` parameter is its ``None`` default.
+    src = """\
+class Probe:
+    def _report(self, problem=None):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_no_finding_classmethod_calling_classmethod_helper() -> None:
+    src = """\
+class Probe:
+    @classmethod
+    def _report(cls, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_receiver_rebound_before_helper_call() -> None:
+    src = """\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self, silent_proxy):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self = silent_proxy
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_instance_attribute_shadows_helper() -> None:
+    src = """\
+class Probe:
+    def __init__(self, silent):
+        self._failed = silent
+
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    ["bool(problem)", "type(problem)", "problem is None", "len(str(problem))"],
+)
+def test_p007_still_flags_when_helper_logs_lossy_derivation(logged: str) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", {logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        '"failed: %s", problem',
+        '"failed: %s", str(problem)',
+        '"failed: %r", repr(problem)',
+        'f"failed: {problem}"',
+        '"failed: %s" % problem',
+        '"failed", exc_info=problem',
+    ],
+)
+def test_p007_no_finding_when_helper_logs_exception_representation(
+    logged: str,
+) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning({logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_json_parse_failure_returning_original_value() -> None:
+    _single(
+        """\
+def decode_setting(value):
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+""",
+        "E007",
     )
 
 

@@ -89,6 +89,7 @@ class Checker(
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._except_stack: list[ast.ExceptHandler] = []
+        self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
         # _check_p017_call can skip the inline Call (already covered by
@@ -144,7 +145,9 @@ class Checker(
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._check_p011(node)
+        self._class_stack.append(node)
         self.generic_visit(node)
+        self._class_stack.pop()
 
     def visit_For(self, node: ast.For) -> None:
         self._loop_stack.append(node)
