@@ -132,33 +132,107 @@ def test_candidate_is_marked_only_behind_a_blocking_gate(
 # ── vulnerability-scan.yml template ───────────────────────────────────────────
 
 
+def _gh(
+    event: str,
+    head_ref: str,
+    *,
+    action: str = "synchronize",
+    labels: tuple[str, ...] = (),
+    added: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "action": action,
+        "pull_request": {"labels": [{"name": n} for n in labels]},
+    }
+    if added is not None:
+        payload["label"] = {"name": added}
+    return {
+        "github": {
+            "event_name": event,
+            "head_ref": head_ref,
+            "actor": "someone",
+            "event": payload,
+        }
+    }
+
+
 @pytest.mark.parametrize(
-    ("event", "head_ref", "runs"),
+    ("ctx", "runs"),
     [
-        ("pull_request", "bump-version-main", True),
-        ("pull_request", "renovate/foo", False),
-        ("merge_group", "", False),
+        # Bump PR: only once opted in with `gate-check` (FND-3748)…
+        (_gh("pull_request", "bump-version-main"), False),
+        (_gh("pull_request", "bump-version-main", labels=("gate-check",)), True),
+        (
+            _gh(
+                "pull_request",
+                "bump-version-main",
+                action="labeled",
+                labels=("gate-check",),
+                added="gate-check",
+            ),
+            True,
+        ),
+        # …and not again for an unrelated label on an opted-in PR.
+        (
+            _gh(
+                "pull_request",
+                "bump-version-main",
+                action="labeled",
+                labels=("gate-check", "size/S"),
+                added="size/S",
+            ),
+            False,
+        ),
+        # `e2e` is still honoured while the fleet resyncs.
+        (_gh("pull_request", "bump-version-main", labels=("e2e",)), True),
+        (_gh("pull_request", "renovate/foo", labels=("gate-check",)), False),
+        (_gh("merge_group", ""), False),
     ],
 )
-def test_template_builds_a_candidate_only_on_the_bump_pr(
-    event: str, head_ref: str, runs: bool
+def test_template_builds_a_candidate_only_on_an_opted_in_bump_pr(
+    ctx: dict[str, Any], runs: bool
 ) -> None:
     job = _template_jobs()["candidate"]
-    contexts = {
-        "github": {"event_name": event, "head_ref": head_ref, "actor": "someone"}
-    }
-    assert evaluate(job["if"], contexts) is runs
+    assert evaluate(job["if"], ctx) is runs
     assert job["with"]["candidate"] is True
     # Every job of the candidate build must build the same commit.
     assert job["with"]["ref"] == "${{ github.sha }}"
 
 
-def test_template_scan_always_reports_and_scans_the_pinned_candidate() -> None:
+@pytest.mark.parametrize(
+    ("ctx", "runs"),
+    [
+        # Ordinary PRs and queue entries: always, so the required checks report.
+        (_gh("pull_request", "feat/x", action="opened"), True),
+        (_gh("pull_request", "feat/x"), True),
+        (_gh("merge_group", ""), True),
+        # Label events on an ordinary PR start nothing (the shim subscribes to
+        # `labeled` only for the bump-PR opt-in).
+        (_gh("pull_request", "feat/x", action="labeled", added="size/S"), False),
+        # Bump PR: skipped as a CALLER until opted in, so no context is created.
+        (_gh("pull_request", "bump-version-main"), False),
+        (
+            _gh(
+                "pull_request",
+                "bump-version-main",
+                action="labeled",
+                labels=("gate-check",),
+                added="gate-check",
+            ),
+            True,
+        ),
+    ],
+)
+def test_template_scan_runs_except_on_an_un_opted_bump_pr(
+    ctx: dict[str, Any], runs: bool
+) -> None:
+    job = _template_jobs()["scan"]
+    assert evaluate(_strip(job["if"]), ctx) is runs
+
+
+def test_template_scan_scans_the_pinned_candidate() -> None:
     job = _template_jobs()["scan"]
     assert job["needs"] == "candidate"
-    # Runs when the candidate is skipped (ordinary PR) or failed (falls back to
-    # the scan's own build), so the required contexts always report.
-    assert evaluate(job["if"], {"github": {"actor": "someone"}}) is True
     assert job["with"]["image"] == "${{ needs.candidate.outputs.candidate_image }}"
     for image, mark in (("", False), ("ghcr.io/atlanhq/x:candidate-a@sha256:b", True)):
         contexts = {"needs": {"candidate": {"outputs": {"candidate_image": image}}}}
