@@ -2544,6 +2544,72 @@ async def run():
     )
 
 
+def test_p010_no_finding_any_over_gathered_results() -> None:
+    """An exception test in the element, not a filter, still inspects each item."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    if any(isinstance(item, Exception) for item in gathered):
+        return None
+    return gathered
+"""
+    )
+
+
+def test_p010_no_finding_enumerate_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for i, item in enumerate(gathered) if isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_zip_dict_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = {key: item for key, item in zip(keys, gathered) if isinstance(item, Exception)}
+    return errors
+"""
+    )
+
+
+def test_p010_comprehension_dropping_exceptions_still_fires() -> None:
+    """Keeping only the successes is the silent swallow, not an inspection."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if not isinstance(item, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_comparing_exception_test_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, Exception) == False]
+    return values
+""",
+        "E010",
+    )
+
+
 def test_p010_comprehension_without_exception_classification_still_fires() -> None:
     _single(
         """\

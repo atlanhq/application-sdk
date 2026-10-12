@@ -856,8 +856,8 @@ class SilentSwallowMixin:
                 # A comprehension checks per-item values under its bound name;
                 # connect that name back to the gather result before counting it.
                 if isinstance(
-                    node, ast.comprehension
-                ) and _is_exception_filter_comprehension(node, names):
+                    node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+                ) and _comprehension_checks_exceptions(node, names):
                     inspected = True
                     break
                 # for r in var: ... — iteration counts as inspection
@@ -1018,45 +1018,73 @@ def _is_exception_type(node: ast.AST) -> bool:
     return False
 
 
-def _condition_checks_exception(node: ast.AST, item_name: str) -> bool:
-    """Check a comprehension filter for an exception test of its bound item."""
+def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
+    """Whether *node* positively tests a bound comprehension item as an exception.
+
+    Negations (``not isinstance(r, Exception)``) and comparisons
+    (``isinstance(r, Exception) == False``) are deliberately not followed: they
+    select the successes and drop the failures, which is the silent swallow
+    E010 exists to catch.
+    """
     if isinstance(node, ast.Call):
         return (
             isinstance(node.func, ast.Name)
             and node.func.id == "isinstance"
             and len(node.args) >= 2
             and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == item_name
+            and node.args[0].id in item_names
             and _is_exception_type(node.args[1])
         )
     if isinstance(node, ast.BoolOp):
         return any(
-            _condition_checks_exception(value, item_name) for value in node.values
-        )
-    if isinstance(node, ast.UnaryOp):
-        return _condition_checks_exception(node.operand, item_name)
-    if isinstance(node, ast.Compare):
-        return any(
-            _condition_checks_exception(value, item_name)
-            for value in (node.left, *node.comparators)
+            _condition_checks_exception(value, item_names) for value in node.values
         )
     if isinstance(node, ast.IfExp):
-        return _condition_checks_exception(node.test, item_name)
+        return _condition_checks_exception(node.test, item_names)
     return False
 
 
-def _is_exception_filter_comprehension(
-    node: ast.comprehension, result_names: set[str]
+def _bound_names(target: ast.expr) -> set[str]:
+    """Names a comprehension target binds, including tuple unpacking."""
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)):
+        return {name for element in target.elts for name in _bound_names(element)}
+    return set()
+
+
+def _iterates_results(iterable: ast.expr, result_names: set[str]) -> bool:
+    """Whether *iterable* is the result list, directly or via enumerate/zip-style calls."""
+    if isinstance(iterable, ast.Name):
+        return iterable.id in result_names
+    return isinstance(iterable, ast.Call) and any(
+        isinstance(arg, ast.Name) and arg.id in result_names for arg in iterable.args
+    )
+
+
+def _comprehension_checks_exceptions(
+    node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+    result_names: set[str],
 ) -> bool:
-    """Whether this comprehension clause checks each gather result as an exception."""
-    return (
-        isinstance(node.iter, ast.Name)
-        and node.iter.id in result_names
-        and isinstance(node.target, ast.Name)
-        and any(
-            _condition_checks_exception(condition, node.target.id)
-            for condition in node.ifs
-        )
+    """Whether a comprehension over the gather results tests each item as an exception.
+
+    The test may sit in a filter (``[r for r in rs if isinstance(r, Exception)]``)
+    or in the element itself (``any(isinstance(r, Exception) for r in rs)``).
+    """
+    item_names: set[str] = set()
+    for generator in node.generators:
+        if _iterates_results(generator.iter, result_names):
+            item_names |= _bound_names(generator.target)
+    if not item_names:
+        return False
+    if isinstance(node, ast.DictComp):
+        elements: list[ast.expr] = [node.key, node.value]
+    else:
+        elements = [node.elt]
+    conditions = [c for generator in node.generators for c in generator.ifs]
+    return any(
+        _condition_checks_exception(expression, item_names)
+        for expression in (*conditions, *elements)
     )
 
 
