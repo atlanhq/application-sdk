@@ -43,6 +43,7 @@ application_sdk/errors/categories.py
 application_sdk/errors/leaves.py
 application_sdk/errors/wire.py
 application_sdk/handler/__init__.py
+application_sdk/handler/_warmup.py
 application_sdk/handler/asgi.py
 application_sdk/handler/base.py
 application_sdk/handler/context.py

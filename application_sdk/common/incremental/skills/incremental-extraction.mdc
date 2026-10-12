@@ -1,5 +1,5 @@
 ---
-description: Use this rule when implementing or modifying incremental metadata extraction in a connector app using the Application SDK. Applies to activities, workflows, SQL templates, and state management.
+description: Use this rule when implementing or modifying incremental metadata extraction in a connector app using the Application SDK. Applies to the IncrementalSqlMetadataExtractor App class, SQL templates, and state management.
 globs: "**/incremental**,**/extract_*_incremental*"
 alwaysApply: false
 ---
@@ -8,37 +8,35 @@ alwaysApply: false
 
 ## Architecture
 
-### Single Inheritance Chain (MANDATORY)
+### Class Chain
 ```
-BaseSQLMetadataExtractionActivities (SDK)
-    └── IncrementalSQLMetadataExtractionActivities (SDK)
-            └── YourDatabaseActivities (App)
-
-BaseSQLMetadataExtractionWorkflow (SDK)
-    └── IncrementalSQLMetadataExtractionWorkflow (SDK)
-            └── YourDatabaseWorkflow (App)
+SqlMetadataExtractor (SDK)
+    └── IncrementalSqlMetadataExtractor (SDK, deprecated — removed in v4.0.0)
+            └── YourDBExtractor (App)
 ```
+One App class holds every `@task` and inherits `run()`; there is no separate
+activities or workflow class. The replacement for the deprecated template is
+`application_sdk.templates.SqlApp` with a custom `run()`.
 
 ### SDK vs App Contract
-- **SDK provides**: Workflow orchestration, state management, marker management, Daft/DuckDB analysis, parallel batch execution, ancestral column merge
-- **App provides**: `build_incremental_column_sql()` (abstract, MUST implement), `resolve_database_placeholders()` (optional), SQL files in `app/sql/` (auto-loaded by SDK)
+- **SDK provides**: `run()` orchestration, marker management, current-state probe/materialize/commit (`CurrentStateStore`), DuckDB analysis, parallel batch execution, diff with deletion detection
+- **App provides**: `fetch_databases` / `fetch_schemas` / `fetch_tables` / `fetch_columns` / `transform_data` tasks, `build_incremental_column_sql()` (abstract, MUST implement), `execute_column_sql()` (MUST implement), `resolve_database_placeholders()` (optional), the SQL strings as class attributes (the SDK does not load `app/sql/`)
 
 ### Methods You MUST NOT Override
-- `execute_column_batch()` - Concrete in SDK, calls `build_incremental_column_sql()` + `run_column_query()`
-- `run_column_query()` - SDK handles execution
+- `execute_single_column_batch()` - Concrete in SDK, calls `build_incremental_column_sql()` + `execute_column_sql()`
 - `fetch_incremental_marker()` / `update_incremental_marker()` - SDK marker management
-- `read_current_state()` / `write_current_state()` - SDK state management
-- `prepare_column_extraction_queries()` - SDK Daft/DuckDB analysis
-- `execute_single_column_batch()` - SDK batch orchestration
+- `read_current_state()` / `write_current_state()` - SDK state management (override the `after_current_state_read(snapshot, local_dir)` hook instead of `read_current_state`, which is deprecated to override)
+- `prepare_column_extraction_queries()` - SDK DuckDB analysis
 
-### Method You MUST Implement
-- `build_incremental_column_sql(table_ids, workflow_args) -> str` - Build database-specific SQL for column extraction
+### Methods You MUST Implement
+- `build_incremental_column_sql(table_ids, ctx: IncrementalRunContext) -> str` - Build database-specific SQL for column extraction
+- `execute_column_sql(sql, input, ctx) -> int` - Run it and return the record count
 
 ## SQL Template Rules
 
 ### Incremental Table SQL (`extract_table_incremental.sql`)
 - MUST include `incremental_state` column with values: `CREATED`, `UPDATED`, `NO CHANGE`
-- MUST use `{marker_timestamp}` placeholder (SDK resolves it automatically)
+- MUST use `{marker_timestamp}` placeholder (your `fetch_tables()` substitutes `input.marker_timestamp`)
 - MAY use database-specific placeholders resolved by `resolve_database_placeholders()`
 
 ### Incremental Column SQL (`extract_column_incremental.sql`)
@@ -47,22 +45,22 @@ BaseSQLMetadataExtractionWorkflow (SDK)
 - ClickHouse pattern: `{table_ids_in_clause}` → `WHERE IN (...)`
 - PostgreSQL pattern: `{table_ids_array}` → `ANY(ARRAY[...])`
 
-### Placeholder Resolution Order
-1. SDK automatic: `{marker_timestamp}`
-2. App override: `resolve_database_placeholders()` for `{system_schema}`, etc.
-3. App method: `build_incremental_column_sql()` for table ID injection
+### Placeholder Resolution
+The SDK substitutes nothing; every placeholder is the app's:
+1. `fetch_tables()`: `{marker_timestamp}`, then `resolve_database_placeholders()` for `{system_schema}`, etc.
+2. `build_incremental_column_sql()`: table ID injection (and `{marker_timestamp}` from `ctx` if the template uses it)
 
 ## State Mutation Prevention (CRITICAL)
 
-Temporal reuses activity instances across workflow runs. NEVER permanently
-modify class-level SQL attributes:
+Workers reuse App instances across runs. NEVER assign resolved SQL back to
+a class-level SQL attribute:
 
 ```python
 # BAD - breaks on next run!
 self.fetch_table_sql = resolved_sql
 
-# GOOD - SDK handles via _original_fetch_table_sql internally
-# Just set the class attributes and let SDK manage state
+# GOOD - resolve into a local variable
+sql = self.incremental_table_sql.replace("{marker_timestamp}", input.marker_timestamp)
 ```
 
 ## SQL Escaping (MANDATORY)
@@ -82,17 +80,16 @@ if not table_ids:
 
 - Test `build_incremental_column_sql()` - this is YOUR business logic
 - Test `resolve_database_placeholders()` if you override it
-- Use `YourActivities.__new__(YourActivities)` to create test instances
+- Use `YourDBExtractor.__new__(YourDBExtractor)` to create test instances
 - Call `build_incremental_column_sql` (public name), NOT any private alias
-- Do NOT test SDK methods (execute_column_batch, run_column_query, etc.)
+- Do NOT test SDK methods (execute_single_column_batch, prepare_column_extraction_queries, etc.)
 
 ## Dependencies
 
 ```toml
 # pyproject.toml
 dependencies = [
-    "atlan-application-sdk[daft,iam-auth,sqlalchemy,tests,workflows,pandas]==X.Y.Z",
-    "rocksdict>=0.3.0",
+    "atlan-application-sdk[incremental]==X.Y.Z",  # includes rocksdict via [storage]
 ]
 ```
 

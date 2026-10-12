@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         VerifyRefsOutput,
     )
     from application_sdk.contracts.types import (
+        CONNECTION_QN_MIN_SEGMENTS,
         AssetArtifact,
         BoundedDict,
         BoundedList,
@@ -53,13 +54,24 @@ if TYPE_CHECKING:
         MaxItems,
         StorageTier,
         StoreTarget,
+        TreeSelection,
         asset_artifact_fields,
         asset_artifact_marker,
+        connection_qualified_name_defect,
     )
 
 #: Worker-side names: imported on first access, so the api distribution
 #: (which ships this ``__init__`` without them) imports cleanly.
 _LAZY: dict[str, tuple[str, str]] = {
+    "CONNECTION_QN_MIN_SEGMENTS": (
+        "application_sdk.contracts.types",
+        "CONNECTION_QN_MIN_SEGMENTS",
+    ),
+    "TreeSelection": ("application_sdk.contracts.types", "TreeSelection"),
+    "connection_qualified_name_defect": (
+        "application_sdk.contracts.types",
+        "connection_qualified_name_defect",
+    ),
     "AssetArtifact": ("application_sdk.contracts.types", "AssetArtifact"),
     "BoundedDict": ("application_sdk.contracts.types", "BoundedDict"),
     "BoundedList": ("application_sdk.contracts.types", "BoundedList"),
@@ -90,6 +102,7 @@ _LAZY: dict[str, tuple[str, str]] = {
 }
 
 __all__ = [
+    "CONNECTION_QN_MIN_SEGMENTS",
     "AssetArtifact",
     "BoundedDict",
     "BoundedList",
@@ -114,6 +127,7 @@ __all__ = [
     "SerializableEnum",
     "StorageTier",
     "StoreTarget",
+    "TreeSelection",
     "UploadInput",
     "UploadOutput",
     "UploadRefsInput",
@@ -122,6 +136,7 @@ __all__ = [
     "VerifyRefsOutput",
     "asset_artifact_fields",
     "asset_artifact_marker",
+    "connection_qualified_name_defect",
     "get_contract_fields",
     "has_default",
     "is_backwards_compatible",

@@ -5,7 +5,7 @@
 
 # Prescription Rules (P-series)
 
-**48 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
+**50 rules** · Checker: `suite.checks.prescriptions` (P001–P003, P008–P015), `suite.checks.orchestration` (P004–P007, scans test files too), `suite.checks.entrypoint_alignment` (P016), `suite.checks.entrypoint` (P017–P018, scans test files too), `suite.checks.client_seam` (P019), `suite.checks.error_seam` (P043/P045, scans test files too), `suite.checks.determinism` (P020–P024, P031, P036, P054), `suite.checks.app_name_alignment` (P025), `suite.checks.sdr` (P029/P030, P037/P038/P039, P042, P051), `suite.checks.transform_templates` (P040, scans template YAML), `suite.checks.text_io_encoding` (P046), `suite.checks.atomic_publish` (P050), `suite.checks.credential_seam` (P053, gated on the app's locked SDK) (all AST-based / cross-artifact)
 
 Suppress a finding on the violating line or the line directly above it:
 
@@ -23,7 +23,7 @@ reassigned.
 
 | ID | Name | Tier | Scope | Category | Autofixable | Since |
 |---|---|---|---|---|---|---|
-| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | yes | 0.3.0 |
+| [P001](#p001) | `UnboundedContractFields` | `block` | `both` | `contract-payload-safety` | — | 0.3.0 |
 | [P002](#p002) | `CategoryFieldOverride` | `block` | `both` | `category-immutability` | yes | 0.3.0 |
 | [P003](#p003) | `ErrorCodePrefixMismatch` | `block` | `both` | `error-code-shape` | yes | 0.3.0 |
 | [P004](#p004) | `DirectTemporalImport` | `warn` | `app` | `orchestration-seam` | — | 0.5.0 |
@@ -48,7 +48,7 @@ reassigned.
 | [P023](#p023) | `BlockingCallInAsyncDef` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P024](#p024) | `SyncAtlanClientInApp` | `warn` | `both` | `async-correctness` | yes | 0.8.0 |
 | [P025](#p025) | `AppNameContractCodeDrift` | `block` | `app` | `app-name-alignment` | — | 0.9.0 |
-| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | — | 0.9.0 |
+| [P026](#p026) | `GetattrOnTypedContractField` | `warn` | `app` | `typed-contract-boundary` | yes | 0.9.0 |
 | [P027](#p027) | `AppStateAsCrossTaskChannel` | `warn` | `app` | `state-seam` | — | 0.9.0 |
 | [P028](#p028) | `ManualQualifiedNameFString` | `warn` | `app` | `asset-modeling` | — | 0.9.0 |
 | [P029](#p029) | `SdrManifestMissingAgentJson` | `block` | `app` | `sdr-readiness` | yes | 0.9.0 |
@@ -70,23 +70,27 @@ reassigned.
 | [P051](#p051) | `SdrPreflightUnavailable` | `warn` | `app` | `sdr-readiness` | — | 0.25.0 |
 | [P052](#p052) | `EntitySerializationBypass` | `warn` | `app` | `asset-modeling` | — | 0.38.0 |
 | [P053](#p053) | `LocalCredentialRouting` | `warn` | `app` | `credential-seam` | — | 0.40.0 |
-| [P054](#p054) | `HostedHandlerLogs` | `block` | `app` | `hosted-handler` | — | 0.41.0 |
+| [P054](#p054) | `ScopedExecutorJoinedOnCancel` | `warn` | `both` | `async-correctness` | yes | 0.43.0 |
+| [P055](#p055) | `OneToManyLinkFromParent` | `warn` | `app` | `asset-modeling` | — | 0.44.0 |
+| [P056](#p056) | `HostedHandlerLogs` | `block` | `app` | `hosted-handler` | — | 0.41.0 |
 
 ---
 
 ## P001 — `UnboundedContractFields` {#p001}
 
-**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** yes · **Since:** 0.3.0
+**Tier:** `block` · **Scope:** `both` · **Category:** `contract-payload-safety` · **Autofixable:** — · **Since:** 0.3.0
 
 > Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety
 
 **Rationale:** Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008).
 Unbounded fields can silently grow past it in production, failing the workflow with a
-cryptic size error instead of a type error at import time. A justified inline
-suppression keeps every opt-out visible in review and auditable in SARIF. Customer
-impact: payload size scales with the customer's data, so the app that passed every test
-fails only in the tenant with the largest source system — the customer's crawl dies
-mid-run with a serialization error nothing in their configuration explains.
+cryptic size error instead of a type error at import time. Typing every field
+payload-safely and removing the opt-out restores that import-time check; an opt-out that
+genuinely cannot be removed carries a justified inline suppression, which keeps it
+visible in review and auditable in SARIF. Customer impact: payload size scales with the
+customer's data, so the app that passed every test fails only in the tenant with the
+largest source system — the customer's crawl dies mid-run with a serialization error
+nothing in their configuration explains.
 
 ### What correct looks like
 
@@ -94,6 +98,7 @@ mid-run with a serialization error nothing in their configuration explains.
   `AppInputContract(ExtractionInput)` declares no allow_unbounded_fields at all: every
   field it adds is a concrete str or bool, and the include/exclude filters it inherits
   from ExtractionInput are already the bounded `FilterMap | str`.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** B005 + ledger-guard bound the fix, but less tightly than they look, and reading them as
   a wall is how a fixable site gets suppressed. ledger-guard refuses a change to a
   RECORDED type; gen-contract-ledger never deletes an entry and never rewrites a
@@ -109,69 +114,85 @@ mid-run with a serialization error nothing in their configuration explains.
   one. Narrowing in place is free only where _retype_is_compatible allows it: an
   inherited field, a widening, or replacing Any with a concrete type in the SAME OUTER
   SHAPE (which payload safety requires anyway, so it is not optional). Wrapping Any in
-  MaxItems clears P001 AND B005 but the class then raises PayloadSafetyError at import:
-  Any is refused unconditionally. Note also that an app-level OVERRIDE of a base-class
-  field is often what introduces the Any — the SDK's own ExtractionInput already models
-  its filters payload-safely — and dropping an override is not a retype of your contract
-  at all.
-- **Already correct when:** A justified inline `# conformance: ignore[P001] <reason>` at the declaration site is the
-  fix ONLY once narrowing in source, dropping an app-level override, and retiring the
-  field as sunset have each been tried and shown to fail — with the refusal quoted. It
-  is not licensed by the field merely being recorded in the ledger. A site whose
-  justification names no attempted alternative is unremediated, not compliant.
+  MaxItems does not make it acceptable or clear P001: without the opt-out, P001's
+  inverse finding still reports the Any-typed field and class creation raises
+  PayloadSafetyError; with the opt-out, the class-level finding still fires. Any is
+  refused unconditionally. MaxItems bounds a collection only when its element/value type
+  is already payload-safe. Note also that an app-level OVERRIDE of a base-class field is
+  often what introduces the Any — the SDK's own ExtractionInput already models its
+  filters payload-safely — and dropping an override is not a retype of your contract at
+  all.
+- **Already correct when:** The opt-out removed, with every field it guarded bounded, not merely accepted by the
+  payload-safety check. A kept opt-out with a justified `# conformance: ignore[P001]
+  <reason>` is the owner's decision, reached only after the fixes in the description
+  were tried and refused (each refusal named); it keeps the gate green but
+  check_migration still fails, so it stays an open migration item. A field being
+  recorded in the ledger does not license it, and a reason naming no attempted
+  alternative is unremediated.
 
-An `Input`/`Output` contract subclass declared with the `allow_unbounded_fields=True`
-class keyword opts out of the SDK's payload-safety enforcement: arbitrary, untyped
-fields may cross task boundaries unchecked.  This is intended to be *extremely*
-exceptional — the sanctioned way to use it is an inline, justified suppression at the
-declaration site (`# conformance: ignore[P001] <reason>`), so the carve-out is reviewed
-and stays visible.
+An `Input`/`Output` contract subclass that sets `allow_unbounded_fields=True` (or a
+truthy `_allow_unbounded_fields` class attribute, set on the class or inherited from a
+class in the same file) opts out of the SDK's payload-safety check, so untyped or
+unbounded fields can cross task boundaries and fail at Temporal's 2MB limit in the
+tenant with the largest source.  Each finding names the fields this class declares that
+block removing it (the check refuses them), those the check accepts that still bound
+nothing, and any whose type this file cannot resolve (an import, or an alias defined
+elsewhere).
 
-Suppressed declarations are still emitted to the SARIF report (counted in their own
-category), so every opt-out is reported every single time. This rule is `BLOCK`
-(suppress-only): an unsuppressed declaration fails the conformance gate — the only
-sanctioned use is the justified inline suppression above — see BLDX-1428.
+**Removing the opt-out is the goal; the class's fields decide how.**  Work through these
+in order.  Each is a real fix only once the field is bounded, not merely accepted by the
+check.
 
-**The inverse is also a finding.** A contract that declares an `Any`-typed field and
-does NOT set `allow_unbounded_fields` raises `PayloadSafetyError` at class-definition
-time, so the app does not import at all.  `Any` is refused unconditionally: wrapping it
-in `MaxItems` does not make it acceptable.  Removing the opt-out is a real fix only when
-every field is concretely typed.
+1. *Nothing to fix.*  When the finding says every declared field is already payload-safe
+(str, int, a nested model, `FilterMap`, a `MaxItems`-bounded collection), remove the
+keyword, or the `_allow_unbounded_fields` attribute.  This is the most common case.
+`Input` drops undeclared keys with or without the opt-out, so extra arguments a caller
+sends never justify it.
 
-**The opt-out does not govern unknown keys.**  `Input` drops keys the contract does not
-declare (logging which ones, once) whether or not `allow_unbounded_fields` is set — the
-flag only skips the payload-safety type check.  So a contract that receives more args
-than it reads (an AE DAG node's `credential` / `credential_guid`) does NOT need the
-opt-out to tolerate them; a justification that says it does is wrong, and the opt-out
-comes off with nothing else changed once every declared field is concretely typed.
+2. *Drop an override of an SDK base field.*  Re-declaring `connection` as `dict[str,
+Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
+how most `Any` arrives.  Deleting the override inherits the safe type and keeps the wire
+shape.
 
-**Deciding what to do.** Four outcomes, in order of preference.  A field being recorded
-in the ledger does NOT by itself close the first three — reading it that way is what
-turns fixable sites into suppressions.
+3. *Use the SDK's types in the same outer shape.*  `ConnectionRef`; `CredentialRef` or
+`credential_guid` (credentials cross tasks by reference, never inline);
+`AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
+metadata; `FilterMap` for filter maps; a small `BaseModel` for a dict whose keys are
+known.  Absorb legacy wire shapes with a `mode='before'` validator.
 
-1. *Type the field concretely.*  For filter maps the SDK already ships `FilterMap`
-(`application_sdk.templates.contracts`), a bounded `dict[str, list[str]]` — see the
-`mysql` reference app, whose generated contract needs no opt-out at all.  Replacing
-`Any` with a concrete type **in the same outer shape** is compatible under B005: payload
-safety refuses `Any` at class-definition time, so the change is required rather than
-optional.  A narrowing that changes the outer shape is not, and is judged as an ordinary
-retype.
+4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
+from the field's real cardinality.  Every nested `dict` or `list` needs its own bound.
 
-2. *Drop an app-level override.*  An `Any` often arrives because the app re-declared a
-field the SDK base already models safely.  Deleting the override inherits the base type,
-and an inherited field is compatible under B005 by construction — the app did not make
-the change and cannot revert it.
+5. *Data that grows with the source system* (file lists, event batches, per-object
+results) moves by reference: write it to the object store and pass a `FileReference`.
+This is the fix that holds at 2MB.
 
-3. *Retire a field nothing populates.*  Absent from the generated manifest's args and
-constructed nowhere, it is dead weight.  Mark it `deprecated=True` with `x-lifecycle:
-sunset`, regenerate, **then remove it from source** — B005 skips a sunset field only
-once it is gone.  A sunset field still declared with a changed type is still a retype.
+6. *Retire a field nothing populates*: mark it `deprecated=True` with `x-lifecycle:
+sunset`, regenerate the ledger, then remove it from source.
 
-4. *Keep the opt-out with a justified suppression.*  The last resort, reached only after
-1–3 have each been tried and shown to fail, with the refusal quoted in the reason.
-`ledger-guard` rejects a change to a **recorded** type; it does not stop you narrowing
-the annotation in source, because `gen-contract-ledger` never rewrites a recorded type.
-A justification naming no attempted alternative is unremediated, not compliant.
+**Not fixes.**  `object`, `JsonValue`, a bare `dict` or `list`, a recursive alias, or a
+nested `BaseModel(extra='allow')` pass the check while bounding nothing; reach for them
+only as an owner's recorded decision. `MaxItems` never makes `Any` safe.  Removing the
+opt-out while an `Any` field remains raises `PayloadSafetyError` at class definition, so
+the app stops importing: import the module after the change, because a base class or
+mixin the detector cannot see may carry the `Any`.
+
+**Generated contracts** (`app/generated/`) are fixed at their source: the
+`contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
+(`APITree` and similar).  Never hand-edit the generated file, and never let a
+post-generate hook re-insert the opt-out.
+
+**Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
+really carries (its normaliser, its producers, the next task's contract) and confirm
+each still validates.  Only `@entrypoint` fields are in the contract ledger, so task
+contracts can be narrowed freely; for an entrypoint field run `gen-contract-ledger` then
+`ledger-guard` and read the result rather than inferring it.
+
+**Keeping the opt-out** is the owner's decision, reached only after the steps above were
+tried and refused, with each refusal named in `# conformance: ignore[P001] <reason>`.
+The directive keeps the opt-out visible and the gate green, but `check_migration` still
+fails on `allow_unbounded_fields=True`, so a kept opt-out stays an open migration item,
+not an end state.
 
 ---
 
@@ -194,6 +215,7 @@ reporting understates their outage and on-call responds late or not at all.
 - **Compliant example:** atlan-metabase-app app/errors.py — every subclass overrides `code` and never `category`.
   The category comes from the SDK leaf you chose to extend; redeclaring it detaches the
   class from the taxonomy the dashboards group by.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 `FailureCategory` is the closed, single-axis taxonomy the SDK owns — every value is the
 canonical answer to *what happened* and is consumed as an immutable reporting metric
@@ -237,6 +259,7 @@ gets a slower, less accurate answer to 'why did my crawl fail'.
   `AUTH_OPENAPI_SPEC_FETCH`), and none overrides to_failure_details, so that code is
   what dashboards read. The prefix table itself is application_sdk/errors/leaves.py: the
   categorical leaves and the prefix each one owns.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Already correct when:** A class whose MRO overrides to_failure_details() builds the wire envelope itself, so
   `code` is not what a dashboard reads and adding a prefixed one would be dead code
   beside the real one. Those are exempt. Overriding qualified_code alone is NOT exempt —
@@ -283,6 +306,7 @@ and bypasses that seam (BLDX-1417).
   application_sdk.app import App, entrypoint, task`, and the string temporalio appears
   nowhere under that repo's app/ or tests/. Everything a workflow needs, including
   `now`, `sleep` and `uuid4`, is re-exported through the SDK seam.
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports `temporalio` (the raw orchestration engine) directly.  Everything
 an app needs is re-exported through the SDK seam: runtime primitives and decorators via
@@ -317,6 +341,7 @@ longer evolve the seam safely (BLDX-1417).
   `application_sdk.observability.logger_adaptor`. None reaches an underscore-prefixed
   path such as application_sdk.execution._temporal, which the SDK may move without a
   deprecation cycle.
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 A consumer app imports from an SDK-private module — anything with a `_`-prefixed segment
 under `application_sdk` (most commonly `application_sdk.execution._temporal.*`) — or
@@ -401,6 +426,7 @@ let the activity interceptor move the bytes (BLDX-1398).
   return, to deliver the FileReferences they declared. A @task hands its output back as
   a FileReference and lets the framework move it; the transfer is the App's business,
   not the task's.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 - **Interacts with:** P021 pushes the other way. Where side-effecting file I/O sits in the same block as one
   of these transfers, P021 says move the block into a @task and this rule says the
   transfer must stay in run() — so relocating the block wholesale trades one finding for
@@ -453,6 +479,7 @@ extract→publish hand-off. The SDK's infrastructure context (get_infrastructure
 - **Compliant example:** atlan-openapi-app app/connector.py — object-store access goes through the SDK's
   `CloudStore` over `self.context.storage`. No reference app constructs a boto3/gcs/adls
   client of its own.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A consumer app builds its own storage backend directly: importing `boto3` (`import
 boto3` / `from boto3 ...`), constructing an obstore store (`S3Store`, `GCSStore`,
@@ -488,6 +515,7 @@ FileReference.from_local(path, tier=...) instead (BLDX-1398).
   `output_file=FileReference.from_local(out_file, tier=StorageTier.RETAINED)`, and the
   `_ref` helper builds the raw-file references from only local_path and tier.
   storage_path, is_durable and file_count are stamped by the SDK when it moves the file.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 A `FileReference(...)` is constructed with one of the SDK-managed durability fields set
 explicitly: `storage_path=`, `is_durable=`, or `file_count=`.  The SDK owns these fields
@@ -521,6 +549,7 @@ pass a FileReference, which crosses the task boundary as a small durable handle
 - **Compliant example:** atlan-openapi-app app/contracts.py — payloads that could be large travel as
   `FileReference` fields, never as bytes. A bytes field puts the whole artefact inside
   Temporal's 2MB envelope.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a field annotated `bytes`, `bytearray`,
 `memoryview`, or their `| None` / `Optional[…]` variants.  A raw binary blob on a
@@ -557,6 +586,7 @@ underlying file (BLDX-1398).
   remaining `str` fields are URLs, object-store keys and prefixes, identifiers (a legacy
   credential GUID, the workflow id and type) and qualified names; none is a path on a
   worker's disk.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 An `Input`/`Output` contract subclass declares a `str` / `str | None` field whose name
 or documentation indicates a file or directory path (e.g. `output_path`, `local_dir`, a
@@ -599,6 +629,7 @@ tenant, taking every workflow the customer runs on it down with the one bad meth
   input: MetabaseInput) -> MetabaseOutput`. Both sides of the boundary are SDK
   Input/Output subclasses, which is what makes the payload validatable and the schema
   evolvable.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** Resolution is by bare class name. Two files declaring the same name, or a class
   shadowing its own generated base (`class X(_X)` over `from generated import X as _X`),
   used to read as violations on correct code.
@@ -649,6 +680,7 @@ the customer discovers before anyone else does.
   `download_cloud_spec(...) -> DownloadCloudSpecOutput`, `transform(...) ->
   TransformOutput`, all subclassing the SDK Input/Output. A dict or a bare str across a
   task boundary has no schema to evolve.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A method decorated with `@task` must declare:
 
@@ -694,6 +726,7 @@ sanctioned; this is a modeling nudge toward a typed nested model.
   MaxItems(16)]`. The value type is what this rule grades: a bounded dict of str would
   still fire, because MaxItems keeps the payload small but gives the keys and values no
   schema.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A field on an `Input`/`Output` contract whose annotation is a container of primitives or
 `Any` — `dict[str, str]`, `list[str]`, `set[int]`, or the bounded equivalents
@@ -711,6 +744,11 @@ the canonical bounded pattern and are fine.
 This rule lands as `WARN` (not `BLOCK`) because the bounded form is technically
 sanctioned — this is a modeling nudge, not a gate failure.  Suppress with `#
 conformance: ignore[P015] <reason>` when a typed replacement is not feasible.
+
+On a field already recorded in the contract ledger, retyping it to a model in place is a
+B005 break (the ledger keys a field's type by its name). Add the typed field under a new
+name and retire the old one, or keep the bounded container and suppress this warning
+with that reason.
 
 ---
 
@@ -738,6 +776,7 @@ route around it.
   bespoke @entrypoint would be a route the DAG never dispatches. atlan-openapi-app
   app/connector.py is the single-entrypoint form: no @entrypoint at all, just the
   implicit `run()`.
+- **Migrate with:** [`programs/areas/contract-toolkit.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/contract-toolkit.prose.md)
 - **Already correct when:** A temporary migration entrypoint is not a reason to widen the contract. Remove it once
   its job is done — and check the DAG node, the module, the ledger (sunset, never
   delete) and the docs together, since the entrypoint is only the visible end of it.
@@ -793,18 +832,28 @@ no-op.
 The contract `app/generated/` tree is the authoritative source; align code to it as the
 default fix:
 
-1. For each `@entrypoint` name in *code* that is not in the contract, pin it:
-`@entrypoint(name="<contract-name>")`.  Confirm the pairing (code name → contract name)
-intentionally — renaming an entry point is a **breaking wire change** (the Temporal
-workflow type and `?entrypoint=` value both change; coordinate with callers).
+1. For each `@entrypoint` name in *code* that backs a tile with a different name, rename
+the entry point to the tile name: `@entrypoint(name="<tile>")`. The tile name and the
+entry-point name are one identity — a tile cannot start a differently named entry point.
+Renaming changes the entry point's canonical Temporal workflow type, so keep the old
+type dispatching with an inbound-only alias, declared twice: `legacy_workflow_types =
+{"<app>:<old-name>": "<tile>"}` on the `App` class, and the same pair in
+`legacyWorkflowTypes` on every entrypoint contract in `contract/app.pkl` (K015 holds the
+two in agreement). An alias may stay for as long as callers still dispatch the old type.
+The alias covers Temporal workflow-type dispatch only, not the `/start` selector:
+`?entrypoint=` resolves entry-point names, so a caller selecting
+`?entrypoint=<old-name>` must switch to the tile name.
 
-2. For each contract name not matched in code, add or rename an
-`@entrypoint(name="<missing-name>")` on the corresponding App method.
+2. For each contract name not matched in code, add an
+`@entrypoint(name="<missing-name>")` on the corresponding App method, or rename the
+entry point that already backs that tile as in step 1.
 
 3. If the *code* name is the intended one and the contract is wrong, update the
 `entrypoints { new Entrypoint { name = "..." } }` block in `contract/app.pkl` and re-run
 `pkl eval` so the `app/generated/<name>/` dir and `workflow_type` follow — never
-hand-edit `app/generated/` (C002 catches stale generated artifacts).
+hand-edit `app/generated/` (C002 catches stale generated artifacts). On a released app,
+prefer step 1: a tile's name is its Marketplace card and configmap identity, and no
+alias covers renaming it.
 
 4. For a single-entry-point app that now has multiple `@entrypoint`s, either add named
 `Entrypoint` blocks in `contract/app.pkl` or remove the extra `@entrypoint`.
@@ -835,6 +884,7 @@ consistent, SDK-controlled way (BLDX-1411).
   temporal_ui=True, example_input=...)`; no Worker, Client, create_worker or AppWorker
   is constructed anywhere under app/. The launcher is what wires interceptors, the
   activity registry and the task queue together.
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app calls `create_worker(...)`, `create_temporal_client(...)`, or `AppWorker(...)`
 directly, imports removed v2 worker/client boot surface (`application_sdk.worker`,
@@ -877,6 +927,7 @@ safely (BLDX-1411).
 - **Compliant example:** atlan-openapi-app app/run_dev.py — the HTTP surface comes from the same
   `run_dev_combined` call as the worker. A hand-rolled FastAPI app serves none of the
   SDK's platform endpoints (/workflows/v1/auth, /check, /metadata).
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 
 The app constructs `FastAPI(...)` directly (name imported from `fastapi`), calls
 `uvicorn.run(...)`, or invokes a distinctive v2 server lifecycle method (`setup_server`,
@@ -914,6 +965,7 @@ pyatlan already provides, and drifts from the contract every other app follows
   /api/service marker. Atlan itself is reached through the SDK — app/connector.py's
   `self.upload(...)` and the publish DAG node — never by raw HTTP, which would skip auth
   refresh, retry and the client's own request shaping.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A raw HTTP call — `httpx`/`requests`/`aiohttp` request method or
 `urllib.request.urlopen`/`Request` — targets an Atlan service: its URL statically
@@ -962,6 +1014,7 @@ replay is faithful.
   `extract_metadata` nor `extract_lineage` reads the clock, uuid or the RNG. Workflow
   code is replayed, so a non-deterministic call there produces a different history on
   every replay.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `App` subclass's workflow-context method (`run`, an `@entrypoint` method, or a
 `@signal` / `@query` / `@update` handler) a call reads wall-clock time, generates a
@@ -1002,6 +1055,7 @@ whose result is durably recorded in workflow history.
   the object-store download live inside those tasks. The comment above the download call
   states the rule in the app's own words: cloud I/O must run in an activity, not
   workflow code.
+- **Migrate with:** the `migrate-orchestration` skill (`skills-dir`)
 - **Interacts with:** P008 bounds the obvious fix. If the flagged I/O shares a block with self.download() /
   self.upload() / self.upload_refs(), moving the block wholesale into a @task trades
   this finding for P008 findings: those helpers are framework tasks and must be called
@@ -1052,6 +1106,7 @@ that explains the gap.
   `OpenAPIConnector.run` is awaited: `self.download_cloud_spec`, `self.extract_spec` and
   `self.transform`. A dropped coroutine does not run and does not raise; the workflow
   simply proceeds as if the step had succeeded.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A bare expression statement calls a same-class `async def` method via `self.<name>(...)`
 without `await` and without wrapping it in `asyncio.create_task` / `asyncio.gather`.
@@ -1097,6 +1152,7 @@ await an async equivalent, or offload blocking work via App.run_in_thread() insi
   tasks do. Where the blocking work is a sync generator, `build_lineage_records`
   offloads `_build_process_records` in one call, and that helper's docstring records why
   the loop has to be materialised first.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `async def`, code either re-enters the event loop (`asyncio.run(...)` or
 `*.run_until_complete(...)`, including `loop.run_until_complete` /
@@ -1178,6 +1234,7 @@ HTTP) by requiring the async variant of that client.
   need a client, the shape is the SDK seam in
   application_sdk/credentials/atlan_client.py — `create_async_atlan_client` /
   `AtlanClientMixin.get_or_create_async_atlan_client`.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 App code constructs or invokes pyatlan's synchronous `AtlanClient` (or the vendored
 `pyatlan_v9` equivalent) — its constructor or a factory like
@@ -1215,6 +1272,8 @@ reports progress, the same silent-zero-asset class P030 polices at the upload se
   so the three sources this rule compares agree. The task queue and the artifact path
   are derived from that name, so any disagreement routes work to a queue no worker is
   listening on.
+- **Decision:** app owner decides — align the contract and .env.example to the code name, or rename
+  App.name with a legacy_workflow_types alias
 
 Three independent sources declare an app's name:
 
@@ -1273,7 +1332,7 @@ Suppress with `# conformance: ignore[P025] <reason>` on the App class definition
 
 ## P026 — `GetattrOnTypedContractField` {#p026}
 
-**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** — · **Since:** 0.9.0
+**Tier:** `warn` · **Scope:** `app` · **Category:** `typed-contract-boundary` · **Autofixable:** yes · **Since:** 0.9.0
 
 > getattr() with a default on a typed entrypoint/task contract param — defeats the typed boundary
 
@@ -1288,6 +1347,7 @@ site and the type annotation stops being load-bearing.
   attribute and raises SpecUrlRequiredError when it is empty. The field is typed, so the
   right move is to read it and assert it is present, not to getattr past the type with a
   default that silently changes behaviour when the field is renamed.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Inside an `@entrypoint` or `@task` method, a declared field of a typed `Input`/`Output`
 contract parameter is read via `getattr(param, "field", default)` instead of attribute
@@ -1297,9 +1357,11 @@ raise `AttributeError` and surface the drift.  This defeats the typed boundary P
 establish and hides the change from the contract ledger (B005/B006), which only sees
 schema edits, not reads.
 
-Fix: use attribute access (`param.field`).  Suppress with `# conformance: ignore[P026]
-<reason>` only when a value genuinely may be absent and the contract models it as
-`Optional` with a real default.
+Fix: use attribute access (`param.field`) when the field is declared on the contract (or
+a base) and the parameter is not `Optional`; otherwise `param.field` can raise where
+`getattr` returned the default, so each site gets a drafted fix that a human reviews.
+Suppress with `# conformance: ignore[P026] <reason>` only when a value genuinely may be
+absent and the contract models it as `Optional` with a real default.
 
 ---
 
@@ -1319,6 +1381,7 @@ always falls through to its default, so the intended hand-off never happens.
 - **Compliant example:** No reference app uses app state as a cross-task channel; atlan-metabase-app
   app/connector.py mentions `get_app_state` only in a comment about the error it raises
   outside app context. Data between tasks travels as typed Output → Input.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 An `App.get_app_state(KEY)` read whose `KEY` is never written by a `set_app_state(KEY,
 <non-None value>)` anywhere in the app (a writer that only stores `None` — a placeholder
@@ -1354,6 +1417,7 @@ silently. The pyatlan asset .creator() factories own the grammar centrally.
   `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
   string and not the asset, atlan-metabase-app app/qualified_names.py carries a
   per-function ignore[P028] naming the creator whose grammar it mirrors.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
   end state in two cases, and the reason must say which. Either the caller needs the
   qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
@@ -1406,6 +1470,7 @@ where their metadata went.
   for any app that does not model the widgets itself, so an app missing them is
   generating on a toolkit that predates that: bump `app-contract-toolkit` in
   contract/PklProject and regenerate.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** A toolkit-version gap, not a renderer gap: contract-toolkit emits `agent_json`
   unconditionally, and `extraction_method` alongside it since #3633. So the default fix
   is K007's — bump the `app-contract-toolkit` `@<version>` in contract/PklProject,
@@ -1494,6 +1559,7 @@ them to look.
   residual/ separately with `self.upload(UploadInput(..., raise_on_empty=True))`. An SDR
   app with no self.upload() or self.upload_refs() call leaves the ENABLE_ATLAN_UPLOAD
   path unreachable, so the e2e leg greens without moving a byte to the tenant bucket.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, at least one Python
 source file (outside `tests/`) must contain a `self.upload(` or `self.upload_refs(`
@@ -1542,6 +1608,34 @@ segment — the   transfer runs but publish finds nothing at the expected prefix
 mis-rooting class). * **Inline writers that target the deployment store only** — output
 is   written, but never to the tenant bucket (observed for a key-value   store connector
 in fleet testing).
+
+**Transfers that still fire P030.**  Two shapes move bytes but are not `self.upload` /
+`self.upload_refs` and are not the named `upload_to_atlan` bridge P042 reports.  An app
+task that calls `storage.transfer.upload` (against `create_store_from_binding` or
+`upstream_storage`) skips the SDK's upstream checks, dual-write and cross-pod fallback.
+A call to the inherited `BaseMetadataExtractor.upload_to_atlan` shim forwards to
+`self.upload(local_path=output_path, tier=RETAINED)`, which writes under `App.upload`'s
+own run prefix: it works only when the app hands that same prefix downstream, and is the
+re-rooting trap above when it does not.  Convert both, as a refactor that must not move
+a key — and if the shim's keys and the published prefix differ, the conversion is the
+fix.
+
+*Conversion recipe.*  `App.upload` and `upload_refs` are tasks, so call them from the
+entrypoint, never from inside another task.  Either keep the activity and have it stage
+a local tree that mirrors the key layout, returned as a directory `FileReference`, then
+upload it once with `storage_path` pinned to the prefix the app returns.  That is
+replay-safe only for runs pinned to the build that started them (`PINNED` worker
+versioning); an unversioned or `AUTO_UPGRADE` worker replays in-flight runs against the
+new entrypoint, so guard the new `App.upload` call with `workflow.patched(...)`.  Or
+declare the task outputs to `upload_refs` with a `DeclaredFile.label` per key.  Skip
+empty entities (`upload_refs` raises on an empty declared file), keep side outputs such
+as `resolvable/` or miner files in a delivery, and upload the whole tree when downstream
+nodes read more than `transformed/`.  For the shim, swap in its own body, and pin
+`storage_path` if the published prefix differs from the run prefix.
+
+*Verification.*  Run the full-DAG e2e on main first as a baseline, then on the change,
+and compare the Atlas inventory per type.  The inventory need not list every type a
+connector writes; a type absent from both runs is not proven either way.
 
 **Never mark a P030 finding a false positive without a green full-DAG e2e** (extract →
 publish) proving assets actually land in Atlas.  The workflow status is not evidence —
@@ -1608,6 +1702,7 @@ in review.
   run_in_executor(None, ...) land on the shared default executor, which Temporal's
   Python SDK also uses internally, so long blocking calls there can exhaust it and
   deadlock the worker.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** Applied together with F011 on preflight paths. run_in_thread moves the work to the SDK's
   pool but carries no deadline, so F011 treats the swapped call exactly as it treated
   asyncio.to_thread: an executor wait that must sit under an enclosing deadline. When
@@ -1627,9 +1722,8 @@ blocking calls can exhaust the pool and deadlock the worker.  Use `run_in_thread
 `App.run_in_thread()` or `self.task_context.run_in_thread()` — which dispatches onto the
 SDK's own dedicated `sdk-blocking-*` thread pool.
 
-`run_in_executor(<some-executor>, ...)` with any executor other than `None` is not
-flagged — a call-site-owned `ThreadPoolExecutor` is not the shared-pool contention this
-rule targets. `application_sdk/_runtime/offload.py` is exempt: that is where
+`run_in_executor` on an executor other than `None` is not this rule; a `with`-scoped
+executor is P054. `application_sdk/_runtime/offload.py` is exempt: that is where
 `run_in_thread()`'s own dedicated-executor dispatch lives.
 
 Remediation is a restructure (swap in `run_in_thread()`), so findings are fixed per
@@ -1659,6 +1753,7 @@ worker's process model — the class of bug behind the CNCT-85 worker crash.
   application_sdk/execution/heartbeat.py — `run_fault_isolated` and `run_best_effort`,
   re-exported there as the documented app-facing path, which own the pool lifecycle, the
   timeout and what a crashed child means for the activity.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 Code constructs a process-based execution primitive directly —
 `ProcessPoolExecutor(...)` or `multiprocessing.Process(...)` / `Pool(...)` — instead of
@@ -1702,6 +1797,7 @@ for a table-format connector in fleet testing).
   `CredentialRef.resolve`, which covers direct (credential_guid) and agent (agent_json)
   modes from one call. Resolving by credential_guid alone works in direct mode and
   silently ignores agent_json in SDR mode.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, credential resolution
 must be able to consume `agent_json` — the agent-mode routing spec the platform forwards
@@ -1764,6 +1860,7 @@ because the publish step reads a prefix nothing was ever written to.
   prefix the SDK roots from the running app's registered name (APPLICATION_NAME is only
   the fallback). An input field named application_name defaults to empty, so rooting the
   prefix from it silently writes to the bucket root.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, the object-store
 output path/prefix (`artifacts/apps/<identity>/workflows/...`) must be rooted from the
@@ -1834,6 +1931,7 @@ the customer asks where their metadata went.
   rule reads. (The hand-written MetabaseInput in app/contracts.py also types agent_json,
   but it is runtime context, not the checked site.) A bare Input subclass with no
   agent_json field drops the forwarded value before the credential resolver sees it.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** The finding may anchor on generated output (app/generated/**), which is not editable — a
   hand-edit is erased by the next regeneration and turns the freshness gate red. Fix
   contract/*.pkl instead, then run the repo's OWN generate task: a bare `pkl eval` skips
@@ -1907,6 +2005,7 @@ keyword after AS, so there is no runtime failure to report there.
   `QueryBasedTransformer` quotes a plain-column source_query (`_quote_bare_identifier` /
   `_is_quoted_identifier`), so a reserved keyword renders as valid SQL with no template
   change. Raising the SDK is the fix.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 In an app's transform templates (YAML consumed by `application_sdk.transformers.query`),
 a `source_query:` value that is a bare DuckDB **reserved keyword** must be SQL-quoted.
@@ -1994,6 +2093,7 @@ repo would otherwise get a B001 finding alongside P-series silence.
   `self.upload(UploadInput(...))` for residual/ and the lineage stage; there is no
   upload_to_atlan bridge. A hand-rolled bridge re-implements the routing to
   upstream_storage and then has to track it as the SDK changes.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, this rule fires when a
 custom `upload_to_atlan` method **does** perform a real storage/store transfer (in its
@@ -2064,6 +2164,7 @@ became a terminal workflow failure across 12 connections (CONNECT-970).
   app/failures.py subclasses `AuthError`; both come from `application_sdk.errors`.
   Branching on a class the package does not export binds the app to a name the SDK can
   move without a deprecation cycle.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A consumer app makes an SDK-internal error class load-bearing in one of five ways:
 `except X`, `except (X, Y)`, `isinstance(e, X)`, `issubclass(t, X)`, or `class Y(X)`.
@@ -2124,6 +2225,7 @@ customer who finds the gap, if anyone does.
   source_prefix=..., prefix=...))` over the transformed FileReferences the tasks
   declared, not a directory scan. storage.upload_prefix / download_prefix move bytes
   without producing a FileReference the next task can resolve.
+- **Migrate with:** the `migrate-storage` skill (`skills-dir`)
 
 App source calls `upload_prefix` / `download_prefix` (or imports them from
 `application_sdk.storage`) to move artifacts itself, rather than declaring the data on
@@ -2185,6 +2287,7 @@ file just became false (CONNECT-970).
   application_sdk.errors import (...)`: leaves from the package root, nothing from
   application_sdk.errors.base or application_sdk.storage.formats. Reaching into a
   submodule for the same class forfeits the stability promise.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A consumer app imports a class whose name ends in `Error` from a module under
 `application_sdk.storage.formats` — most often
@@ -2293,6 +2396,7 @@ programmatically.
 - **Compliant example:** atlan-mysql-app app/mysql.py — `run()` reads `transformed_data_prefix`,
   `publish_state_prefix` and `current_state_prefix` off the SDK's own result rather than
   composing the connection-scoped layout by hand. The layout is the SDK's to change.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 App code assembles the connection-scoped layout
 `persistent-artifacts/apps/<app>/connection/…` itself rather than asking the SDK where a
@@ -2365,6 +2469,7 @@ takes someone to notice.
   `build_api_spec_qn` and on to `APISpec.creator()`; it never splits or parses it. The
   SDK warns and proceeds on a malformed value; an app that parses and raises turns a
   recoverable run into a failed one.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 A function takes a `connection_qualified_name`, calls `.split(...)` on a value derived
 from it, and can `raise` out of its own body — while that function does not itself call
@@ -2480,6 +2585,7 @@ and publishes normally, it only lacks the interactive setup UX — so it lands a
   because the lower bound declared in pyproject.toml is itself above that floor. The
   rule reads the lock, not the specifier: a floor at or above 3.30.0 keeps every re-lock
   compliant.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 
 For apps declaring `self_deployed_runtime: true` in `atlan.yaml`, `uv.lock` must resolve
 `atlan-application-sdk` to `3.30.0` or newer — the floor at which the SDR interactive
@@ -2553,6 +2659,7 @@ copied, the bypass spreads.
 - **Compliant example:** atlan-openapi-app app/connector.py — `_transform_blocking` writes every connection,
   APISpec and APIPath line as `entity_bytes(asset, entity_type=...,
   envelope=ENTITY_ENVELOPE)`; no mapper result is serialized any other way.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified inline `# conformance: ignore[P052] <reason>` is the correct end state only
   where the value serialized is not an entity line at all — e.g. a `ConnectionRef` built
   from `to_atlas_format`, as the SDK's own `application_sdk/contracts/types.py` does.
@@ -2613,6 +2720,7 @@ never exercise (an agent-mode run, an inline pair with no value).
   template method to call; its seam is application_sdk/credentials/routing.py —
   `route_credentials(input)` returns `ResolvedCredentials(ref, inline)`, and
   `AppContext.resolve_credential_raw_or_inline(ref, inline)` reads it on the task side.
+- **Migrate with:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
 - **Interacts with:** P037 (SdrAgentJsonNotConsumed) predates this rule and names `CredentialRef.resolve` as
   its agent-aware fix, citing a hand-rolled `build_credential_ref` as its reference. On
   an SDK below 3.40.0 that is still the right fix and this rule is silent; from 3.40.0
@@ -2681,7 +2789,106 @@ entry-point input — records that with a justified `# conformance: ignore[P053]
 
 ---
 
-## P054 — `HostedHandlerLogs` {#p054}
+## P054 — `ScopedExecutorJoinedOnCancel` {#p054}
+
+**Tier:** `warn` · **Scope:** `both` · **Category:** `async-correctness` · **Autofixable:** yes · **Since:** 0.43.0
+
+> A `with`-scoped ThreadPoolExecutor joined on cancel blocks the event loop
+
+**Rationale:** `with ThreadPoolExecutor() as pool:` exits by calling `pool.shutdown(wait=True)` on the
+event loop thread. When the awaiting task is cancelled while the executor runs a
+blocking driver call, that `wait=True` blocks the loop until the call returns and
+freezes the whole worker — every other task on the loop stops with it (FND-2873). The
+fix is a dedicated executor created without `with` and shut down with
+`shutdown(wait=False)` in `finally`, or `run_in_thread(fn, ...)` when the call has no
+thread affinity.
+
+### What correct looks like
+
+- **Compliant example:** application_sdk/clients/sql.py — `BaseSQLClient.run_query` and
+  `_execute_async_read_operation` offload every driver call with `run_in_thread` instead
+  of a `with`-scoped executor, so cancelling the awaiting task never joins a blocked
+  driver call on the event loop. atlan-openapi-app app/connector.py offloads blocking
+  work with `self.run_in_thread` the same way.
+- **Fix by:** [`programs/areas/prescriptions.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/prescriptions.prose.md)
+
+Inside an `async def`, a `with` statement constructs a `ThreadPoolExecutor` bound to a
+name and the body offloads work to it with `.run_in_executor(<that name>, ...)`, e.g.
+`with ThreadPoolExecutor() as pool: await loop.run_in_executor(pool, fn)`.
+
+A task cancelled inside that `with` block leaves through `pool.shutdown(wait=True)`,
+which runs on the event loop thread and blocks until the driver call returns — freezing
+the whole worker, not just the cancelled task.
+
+Fix (a): keep a dedicated executor created **without** `with` (same constructor
+arguments) and call `executor.shutdown(wait=False)` in `finally`, after any cleanup that
+still offloads to the pool.  It keeps today's thread behaviour: the calls stay on one
+thread only when `max_workers=1` (some DB-API cursors break when `execute` and
+`fetchmany` run on different threads). Fix (b): for a single offload call with no thread
+affinity, use `run_in_thread(fn, ...)`, which dispatches onto the SDK's dedicated pool
+and does not join on cancel — the shape `application_sdk/clients/sql.py`
+`BaseSQLClient.run_query` uses.
+
+`run_in_executor(None, ...)` is P031, not this rule; a `with`-scoped executor that only
+calls `pool.submit(...)` is out of scope.
+
+Remediation is a restructure, so each site gets a drafted fix that a human reviews, not
+a mechanical rewrite.  Land as `WARN`; suppress a reviewed exception on the `with` line
+(the finding anchors there, not on the `run_in_executor` call) with `# conformance:
+ignore[P054] <reason>`.
+
+---
+
+## P055 — `OneToManyLinkFromParent` {#p055}
+
+**Tier:** `warn` · **Scope:** `app` · **Category:** `asset-modeling` · **Autofixable:** — · **Since:** 0.44.0
+
+> Mapper populates the list end of a 1-to-N relationship instead of the child's single reference
+
+**Rationale:** Publish orders entities by type and sends the '1' side of a 1-to-N relationship first,
+relying on each child to reference its parent. A parent that lists its children instead
+names entities that do not exist yet, so Atlas returns ATLAS-404-00-00A and the run
+fails until a later run, after the children were created. Nothing at runtime stops a new
+connector from writing the link this way, so it recurs app by app; catching it in the
+mapper is the earliest point.
+
+### What correct looks like
+
+- **Compliant example:** atlan-metabase-app app/asset_mapper.py — the dashboard and question mappers link each
+  child to its collection from the child side (`asset.metabase_collection =
+  RelatedMetabaseCollection(...)`) and never populate
+  `MetabaseCollection.metabase_dashboards` / `metabase_questions`.
+- **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
+- **Already correct when:** A justified inline `# conformance: ignore[P055] <reason>` is correct only where the list
+  end is set on an asset that is never published ahead of its children — e.g. a value
+  built for a comparison or a test double. The reason must name why publish ordering
+  cannot apply. A directive on a mapper that writes the asset to transformed output is
+  unremediated.
+
+In a module importing `pyatlan_v9.model.assets`, the mapper sets the list end of a
+1-to-N relationship — the parent's `Process.fabric_activities` or `Table.columns` —
+instead of the single end on each child (`FabricActivity.fabric_process`,
+`Column.table`):
+
+* `X(..., a=...)` or `X.creator(..., a=...)`; * `x.a = ...`, `x.a += ...` or
+`x.a.append(...)` /   `.extend(...)` / `.insert(...)`, where `x` is bound in the same
+scope to `X(...)` / `X.creator(...)` or annotated `X`; * the same assignment or append
+on a receiver of unknown type, when   the value names the child type
+(`[RelatedColumn(...)]`,   `Column.ref_by_qualified_name(...)`) and that pairs with `a`.
+
+The list ends come from a table generated off the pinned pyatlan_v9 models
+(`gen-relationship-directions`): an end whose single-valued inverse is on the child
+type.  Many-to-many ends such as `Process.inputs` are not in it, and assigning `None` is
+not flagged.  Raw-dict mappers are out of scope — move them to `pyatlan_v9` first
+(O004).
+
+Fix: drop the list from the parent and set the single reference on each child, e.g.
+`activity.fabric_process = RelatedProcess(qualified_name=process_qn)`.  Publish then
+sends the parent first and each child references a parent that already exists.
+
+---
+
+## P056 — `HostedHandlerLogs` {#p056}
 
 **Tier:** `block` · **Scope:** `app` · **Category:** `hosted-handler` · **Autofixable:** — · **Since:** 0.41.0
 
@@ -2702,6 +2909,7 @@ every hosted app's operators read, outside the redaction the SDK's routes apply.
   PreflightOutput or raises a typed AppError from app/failures.py and never logs; the
   SDK's shared routes (application_sdk/handler/routes.py) log every outcome with the
   request id on both the worker and the consolidated API host.
+- **Migrate with:** [`docs/hosted-handler-guide.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/hosted-handler-guide.md)
 - **Interacts with:** Evaluated only for an app that declares [tool.atlan-app-api]: that block is the app
   opting into the consolidated API host, and complying is part of that migration.
   application-sdk's gen_app_api.py `fix` removes the flagged statements.

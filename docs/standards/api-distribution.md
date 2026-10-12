@@ -79,7 +79,7 @@ that needs a declared dependency or a guarded fallback.
   the SDK's structured logger on the worker, stdlib logging on the host.
 - **Handler code does not log.** It reports through its return value or a typed
   `AppError`, and the SDK's shared routes log every outcome with the request id.
-  Conformance rule **P054** blocks logging in a hosted app's handler code.
+  Conformance rule **P056** blocks logging in a hosted app's handler code.
 
 ## App side
 
@@ -98,7 +98,7 @@ extras = ["sql", "aws"]
 
 - `fix` makes imports between the handler's `app/` files relative, moves
   `run_in_thread` to `application_sdk.common.concurrency` (its usual path loads
-  Temporal), and deletes logging statements (P054). Review what it removed: a
+  Temporal), and deletes logging statements (P056). Review what it removed: a
   log line was sometimes the only report of a failure the handler should raise
   as a typed `AppError`.
 - `check` runs in CI and fails on an absolute `from app` import in those files.

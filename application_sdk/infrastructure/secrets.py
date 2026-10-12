@@ -4,13 +4,17 @@ import os
 from dataclasses import dataclass
 from typing import Any, ClassVar, Protocol
 
+# Defined in the api distribution's light module so the handler can raise it on
+# the API host; re-exported here, the same class.
+from application_sdk._context_errors import SecretStoreNotConfiguredError  # noqa: F401
 from application_sdk.errors import SECRET_NOT_FOUND, SECRET_STORE_ERROR, ErrorCode
 from application_sdk.errors.categories import Audience
-from application_sdk.errors.leaves import (
+from application_sdk.errors.leaves import (  # noqa: F401 — PreconditionError re-exported for existing importers
     ColdStartRaceError,
     DaprSidecarUnreachableError,
     DependencyUnavailableError,
     NotFoundError,
+    PreconditionError,
 )
 from application_sdk.infrastructure._secret_utils import process_secret_data
 from application_sdk.observability.logger_adaptor import get_logger

@@ -64,6 +64,8 @@ def _check_score(
         score = min(tier_coverage.percent / coverage_target, 1.0)
         return score, f"{tier_coverage.percent:.1f}%"
     if kind is CheckKind.PASS_RATE:
+        if counts.job_failed:
+            return 0.0, "job failed"
         return _pass_rate(counts), f"{counts.passed}/{counts.ran}"
     if kind is CheckKind.PRESENT:
         return (1.0, "yes") if counts.present else (0.0, "no")

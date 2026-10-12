@@ -1,3 +1,5 @@
+import asyncio
+import warnings
 from typing import Any
 
 import httpx
@@ -17,6 +19,34 @@ from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.constants import _HTTP_POOL_LIMITS, _HTTP_POOL_TIMEOUT_SECONDS
 
 logger = get_logger(__name__)
+
+
+class _SharedTransport(httpx.AsyncBaseTransport):
+    """Lends a long-lived transport to a short-lived ``httpx.AsyncClient``.
+
+    Each request builds its own ``AsyncClient``, and ``AsyncClient.__aexit__``
+    closes its transport. When that transport is the client's shared pool,
+    the first request to finish closes the sockets every concurrent request
+    is still reading from, and they fail with ``httpx.ReadError``. This
+    wrapper forwards requests and ignores the per-call enter and close; the
+    owning ``BaseClient`` enters the real transport once, before its first
+    request, and ``BaseClient.close()`` exits it.
+    """
+
+    def __init__(self, transport: httpx.AsyncBaseTransport) -> None:
+        self._transport = transport
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        return await self._transport.handle_async_request(request)
+
+    async def __aenter__(self) -> "_SharedTransport":
+        return self
+
+    async def __aexit__(self, *args: Any) -> None:
+        return None
+
+    async def aclose(self) -> None:
+        return None
 
 
 class BaseClient(ClientInterface):
@@ -108,6 +138,45 @@ class BaseClient(ClientInterface):
         self.http_retry_transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(
             limits=_HTTP_POOL_LIMITS,
         )
+        # The transport entered by the first request and not yet exited by
+        # close(). While set, its connection pool may hold sockets.
+        self._entered_transport: httpx.AsyncBaseTransport | None = None
+        self._enter_lock = asyncio.Lock()
+
+    def __del__(self) -> None:
+        """Warn when a client that made requests is collected unclosed.
+
+        Guarded against interpreter teardown, when module globals such as
+        ``warnings`` may already be cleared: the warning is best-effort and an
+        exception from a finalizer can only surface as an unraisable error.
+        """
+        try:
+            if getattr(self, "_entered_transport", None) is not None:
+                warnings.warn(
+                    f"{type(self).__name__} was not closed; its connection pool "
+                    "may still hold sockets. Use 'async with' or call close(), "
+                    "and call super().close() from a close() override.",
+                    ResourceWarning,
+                    source=self,
+                    stacklevel=2,
+                )
+        except Exception:  # noqa: S110, BLE001 — teardown-only; see docstring
+            pass
+
+    async def _borrow_transport(self) -> _SharedTransport:
+        """Enter ``http_retry_transport`` once, then lend it to a per-call client.
+
+        A per-call ``AsyncClient`` used to enter and exit the transport on
+        every request. The transport is now shared, so it is entered once here
+        (again if ``load()`` swapped it) and exited by ``close()``.
+        """
+        transport = self.http_retry_transport
+        if self._entered_transport is not transport:
+            async with self._enter_lock:
+                if self._entered_transport is not transport:
+                    await transport.__aenter__()
+                    self._entered_transport = transport
+        return _SharedTransport(transport)
 
     async def load(self, **kwargs: Any) -> None:
         """
@@ -142,6 +211,22 @@ class BaseClient(ClientInterface):
         """
 
         raise AbstractClientLoadError()
+
+    async def close(self, *args: Any, **kwargs: Any) -> None:
+        """Release the HTTP transport and its connection pool.
+
+        Requests borrow ``http_retry_transport`` without closing it, so that
+        concurrent requests on one client do not tear down each other's
+        connections. Call this once the client is no longer needed, or use
+        the client as an async context manager (``async with``), which calls it
+        on exit. A subclass that overrides ``close()`` must call
+        ``super().close()``, or the connection pool stays open.
+        """
+        entered, self._entered_transport = self._entered_transport, None
+        if entered is not None:
+            await entered.__aexit__(None, None, None)
+        if entered is not self.http_retry_transport:
+            await self.http_retry_transport.aclose()
 
     async def execute_http_get_request(
         self,
@@ -192,9 +277,10 @@ class BaseClient(ClientInterface):
             ... )
         """
         ssl_context = get_ssl_context()
+        transport = await self._borrow_transport()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
-            transport=self.http_retry_transport,
+            transport=transport,
             verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)
@@ -275,9 +361,10 @@ class BaseClient(ClientInterface):
             ... )
         """
         ssl_context = get_ssl_context()
+        transport = await self._borrow_transport()
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(timeout, pool=_HTTP_POOL_TIMEOUT_SECONDS),
-            transport=self.http_retry_transport,
+            transport=transport,
             verify=ssl_context,
         ) as client:
             merged_headers = Headers(self.http_headers)

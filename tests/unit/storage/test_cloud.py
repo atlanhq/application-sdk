@@ -205,6 +205,72 @@ class TestFromCredentials:
         session_kwargs = mock_session_cls.call_args.kwargs
         assert "region_name" not in session_kwargs
 
+    @pytest.mark.parametrize(
+        ("external_id", "expected"),
+        [
+            ("ext-id-123", "ext-id-123"),
+            ("  ext-id-123  ", "ext-id-123"),
+            ("", None),
+            ("   ", None),
+            (None, None),
+        ],
+    )
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("boto3.Session")
+    @patch("obstore.store.S3Store")
+    def test_s3_role_arn_forwards_external_id(
+        self,
+        mock_s3_cls: MagicMock,
+        mock_session_cls: MagicMock,
+        mock_sts_cls: MagicMock,
+        external_id: str | None,
+        expected: str | None,
+    ):
+        """``extra.aws_external_id`` reaches the STS AssumeRole call as
+        ``ExternalId``; blank values are dropped (STS rejects an empty one)."""
+        extra = {
+            "s3_bucket": "customer-cross-account-bucket",
+            "aws_role_arn": "arn:aws:iam::222222222222:role/CrossAccount",
+        }
+        if external_id is not None:
+            extra["aws_external_id"] = external_id
+
+        CloudStore.from_credentials({"authType": "s3", "extra": extra})
+
+        sts_kwargs = mock_sts_cls.call_args.kwargs
+        assert sts_kwargs["RoleArn"] == "arn:aws:iam::222222222222:role/CrossAccount"
+        if expected is None:
+            assert "ExternalId" not in sts_kwargs
+        else:
+            assert sts_kwargs["ExternalId"] == expected
+        config = mock_s3_cls.call_args.kwargs.get("config") or {}
+        assert "aws_external_id" not in config
+
+    @patch(
+        "application_sdk.storage._credential_providers._UtcExpiryStsCredentialProvider"
+    )
+    @patch("obstore.store.S3Store")
+    def test_s3_external_id_ignored_without_role_arn(
+        self, mock_s3_cls: MagicMock, mock_sts_cls: MagicMock
+    ):
+        """Without a role ARN, static keys are used and no STS call is wired."""
+        CloudStore.from_credentials(
+            {
+                "authType": "s3",
+                "username": "AKID",
+                "password": "secret",
+                "extra": {"s3_bucket": "test-bucket", "aws_external_id": "ext-id-123"},
+            }
+        )
+
+        mock_sts_cls.assert_not_called()
+        call_kwargs = mock_s3_cls.call_args.kwargs
+        assert call_kwargs.get("credential_provider") is None
+        assert call_kwargs["config"]["aws_access_key_id"] == "AKID"
+        assert "aws_external_id" not in call_kwargs["config"]
+
     def test_adls_account_key_auth(self):
         # Azure requires base64-encoded account keys
         fake_key = base64.b64encode(b"0" * 32).decode()

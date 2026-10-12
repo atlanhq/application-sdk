@@ -51,6 +51,7 @@ as a connector one.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any, TypeVar
@@ -365,11 +366,15 @@ class AEWorkflowClient:
         slug: str = "",
         retries: int = 4,
         retry_sleep_seconds: int = 5,
+        on_run_id: Callable[[str], None] | None = None,
     ) -> str:
         """Submit a run; see :meth:`AEClient.submit_workflow`.
 
         The one non-idempotent write on this class. Every guard that keeps a
-        retry from spawning a duplicate run lives in the async method.
+        retry from spawning a duplicate run lives in the async method —
+        including ``on_run_id``, the sink it fires the instant a run id is
+        known so a non-idempotent submit that then raises still leaves the id
+        tracked for teardown.
         """
         return run_sync(
             self._ae.submit_workflow(
@@ -377,6 +382,7 @@ class AEWorkflowClient:
                 slug=slug,
                 retries=retries,
                 retry_sleep_seconds=retry_sleep_seconds,
+                on_run_id=on_run_id,
             )
         )
 

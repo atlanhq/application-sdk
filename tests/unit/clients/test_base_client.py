@@ -321,7 +321,7 @@ class TestBaseClient:
         assert result == mock_response
         # Verify that timeout was passed to AsyncClient (with pool timeout)
         call_kwargs = mock_async_client.call_args.kwargs
-        assert call_kwargs["transport"] is base_client.http_retry_transport
+        assert call_kwargs["transport"]._transport is base_client.http_retry_transport
         assert call_kwargs["verify"] is True
         assert call_kwargs["timeout"].pool == 30.0
         assert call_kwargs["timeout"].connect == timeout
@@ -347,7 +347,7 @@ class TestBaseClient:
         assert result == mock_response
         mock_get_ssl_context.assert_called_once()
         call_kwargs = mock_async_client.call_args.kwargs
-        assert call_kwargs["transport"] is base_client.http_retry_transport
+        assert call_kwargs["transport"]._transport is base_client.http_retry_transport
         assert call_kwargs["verify"] is True
         assert call_kwargs["timeout"].pool == 30.0
 

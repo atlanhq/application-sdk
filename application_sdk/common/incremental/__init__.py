@@ -7,9 +7,11 @@ object-store layout::
     persistent-artifacts/apps/{application_name}/connection/{connection_id}/
 
 ``get_persistent_s3_prefix`` produces that prefix and
-``get_persistent_artifacts_path`` its local counterpart;
-``fetch_marker_from_storage`` / ``persist_marker_to_storage`` read and write the
-incremental marker beneath it.
+``get_persistent_artifacts_path`` its local counterpart; ``fetch_marker`` /
+``persist_marker`` read and write the incremental marker beneath it, returning
+a ``MarkerPair`` / ``MarkerPersistResult``. (``fetch_marker_from_storage`` /
+``persist_marker_to_storage`` are their deprecated tuple- and dict-returning
+forms.)
 
 Import these from here rather than re-deriving them. An app that assembles the
 prefix itself, or parses ``connection_qualified_name`` itself, has forked a
@@ -44,29 +46,41 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
         get_persistent_s3_prefix,
     )
     from application_sdk.common.incremental.marker import (
+        MarkerPair,
+        MarkerPersistResult,
         create_next_marker,
+        fetch_marker,
         fetch_marker_from_storage,
+        persist_marker,
         persist_marker_to_storage,
         process_marker_timestamp,
     )
 
 __all__ = [
+    "MarkerPair",
+    "MarkerPersistResult",
     "create_next_marker",
     "extract_epoch_id_from_qualified_name",
+    "fetch_marker",
     "fetch_marker_from_storage",
     "get_persistent_artifacts_path",
     "get_persistent_s3_prefix",
+    "persist_marker",
     "persist_marker_to_storage",
     "process_marker_timestamp",
 ]
 
 #: Public name -> defining submodule, for the lazy ``__getattr__`` below.
 _EXPORTS: dict[str, str] = {
+    "MarkerPair": "marker",
+    "MarkerPersistResult": "marker",
     "create_next_marker": "marker",
     "extract_epoch_id_from_qualified_name": "helpers",
+    "fetch_marker": "marker",
     "fetch_marker_from_storage": "marker",
     "get_persistent_artifacts_path": "helpers",
     "get_persistent_s3_prefix": "helpers",
+    "persist_marker": "marker",
     "persist_marker_to_storage": "marker",
     "process_marker_timestamp": "marker",
 }

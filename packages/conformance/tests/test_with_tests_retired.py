@@ -57,14 +57,20 @@ def test_the_reusable_reads_the_input_nowhere() -> None:
     assert f"inputs.{_INPUT}" not in body
 
 
-def test_no_conformance_leg_but_dependencies_syncs_an_environment() -> None:
-    for job in _suite_doc()["jobs"].values():
-        include = job.get("strategy", {}).get("matrix", {}).get("include")
-        if include:
-            synced = {leg["series"] for leg in include if leg.get("needs_env")}
-            assert synced == {"D"}, synced
-            return
-    raise AssertionError("no matrix job with an `include` list in the suite")
+def test_no_conformance_series_but_dependencies_syncs_an_environment() -> None:
+    detect = [
+        step
+        for job in _suite_doc()["jobs"].values()
+        for step in job.get("steps", [])
+        if str(step.get("uses", "")).endswith("/run-conformance-detect")
+    ]
+    assert detect, "no run-conformance-detect steps in the suite"
+    synced = {
+        step["with"]["series"]
+        for step in detect
+        if str(step["with"].get("needs-env", "")) == "true"
+    }
+    assert synced == {"D"}, synced
 
 
 def test_the_detect_action_no_longer_declares_the_input() -> None:

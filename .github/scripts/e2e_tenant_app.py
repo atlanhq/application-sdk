@@ -2448,6 +2448,13 @@ def _converged_outcome(
     now **corroborated where it can be**, and the outcome says which layer did
     it, so a skip resting on the record alone is reported as exactly that rather
     than as a verification.
+
+    The skip also means the deploy config, and with it the
+    ``ATLAN_STORE_ASSERT_ENABLED`` override, is not re-applied: the pod keeps
+    the env its version was installed with. Re-publishing could not change
+    that either, for the reason above. A version installed without the
+    override fails store-asserting suites closed, as
+    ``StoreAssertDisabledError``, whose message names this path.
     """
     pod = read_pod_build_identity(read_client)
     if pod.reachable and pod.build_id and pod.build_id != version:
@@ -2491,6 +2498,10 @@ def _converged_outcome(
             "established that the tenant serves the version under test. "
             f"{_unreadable_pod_hint(pod)}{deployment_note}"
         )
+    print(
+        f"::notice::install skipped, so {STORE_ASSERT_ENV} is whatever {version} "
+        "was first installed with; store-asserting suites fail closed if it is unset."
+    )
 
     return InstallOutcome(
         version=version,
@@ -2501,6 +2512,57 @@ def _converged_outcome(
         pod_build_id=pod.build_id,
         verified_layer=layer,
     )
+
+
+#: Env var that opts an app's pod in to the SDK's ``sdk:store-assert`` e2e node
+#: (FND-3571). Every e2e install sets it for the one tenant it targets; a
+#: customer tenant never gets it, so the node there reads nothing.
+STORE_ASSERT_ENV = "ATLAN_STORE_ASSERT_ENABLED"
+
+
+def with_store_assert_override(deploy_config: str, tenant: str) -> str:
+    """Return *deploy_config* with ``env_overrides.<tenant>`` opting in to store
+    assertions.
+
+    ``env_overrides`` is GM's per-tenant env mechanism, the same one a
+    production ``atlan.yaml`` uses, so the install path itself is unchanged:
+    only the deploy config this registration carries gains one entry. Existing
+    overrides, for this tenant or any other, are kept.
+
+    Args:
+        deploy_config: The ``deploy:`` block from ``atlan.yaml`` as YAML text,
+            or empty.
+        tenant: The validated tenant ID the release is scoped to.
+
+    Raises:
+        TenantAppError: *deploy_config* is not a YAML mapping, or its
+            ``env_overrides`` (or this tenant's entry) is not a mapping.
+    """
+    if not deploy_config.strip():
+        # JSON scalars are valid YAML, so no YAML library is needed here.
+        return (
+            f"env_overrides:\n  {json.dumps(tenant)}:\n"
+            f"    {STORE_ASSERT_ENV}: {json.dumps('true')}\n"
+        )
+    try:
+        import yaml  # noqa: PLC0415 — lazy: see resolve_app_id
+    except ModuleNotFoundError as exc:
+        raise TenantAppError(
+            "PyYAML is needed to add the store-assert env override to a "
+            "non-empty deploy config; run the install on the runner's system "
+            "Python, which has it."
+        ) from exc
+    parsed = yaml.safe_load(deploy_config)
+    if not isinstance(parsed, dict):
+        raise TenantAppError("deploy config is not a YAML mapping")
+    overrides = parsed.setdefault("env_overrides", {})
+    if not isinstance(overrides, dict):
+        raise TenantAppError("deploy.env_overrides is not a mapping")
+    tenant_env = overrides.setdefault(tenant, {})
+    if not isinstance(tenant_env, dict):
+        raise TenantAppError(f"deploy.env_overrides.{tenant} is not a mapping")
+    tenant_env[STORE_ASSERT_ENV] = "true"
+    return yaml.safe_dump(parsed, default_flow_style=False, sort_keys=False)
 
 
 def install(args: argparse.Namespace) -> InstallOutcome:
@@ -2525,6 +2587,13 @@ def install(args: argparse.Namespace) -> InstallOutcome:
     # instead of taking the no-op path.
     current = _extract_version(info) or resolve_version_via_catalog(info)
     if current and current == args.version:
+        # Skips the store-assert override below, by design. The version is the
+        # per-commit image tag, and every consumer runs this script from main,
+        # so once the override shipped every install of a new version carries
+        # it. A version can only converge here without it if it was installed
+        # before then, and that commit's pinned SDK predates store expectations,
+        # so its suite cannot declare any. Should it happen anyway, the suite
+        # fails closed with StoreAssertDisabledError, never a pass.
         return _converged_outcome(read_client, app_id, args.version, info, current)
     if current:
         print(f"tenant runs {current}; installing {args.version}")
@@ -2563,6 +2632,7 @@ def install(args: argparse.Namespace) -> InstallOutcome:
             )
         print(f"::warning::{explanation} Double-check before relying on this run.")
 
+    tenant = validate_tenant_id(args.tenant)
     request = PublishRequest(
         app_id=app_id,
         image=args.image,
@@ -2571,8 +2641,11 @@ def install(args: argparse.Namespace) -> InstallOutcome:
         repo_url=repo_url,
         # The whole registration is scoped to this one tenant, so a per-PR build
         # can never become visible to a real one.
-        allowed_tenants=(validate_tenant_id(args.tenant),),
-        deploy_config=args.deploy_config,
+        allowed_tenants=(tenant,),
+        # Every publish carries the override. The converged early return above
+        # skips it; see the comment there for why that cannot reach a suite
+        # with store expectations, and why it fails closed if it does.
+        deploy_config=with_store_assert_override(args.deploy_config, tenant),
         self_deployed_runtime=args.self_deployed_runtime,
         sdk_version=args.sdk_version,
         entrypoints=args.entrypoints,

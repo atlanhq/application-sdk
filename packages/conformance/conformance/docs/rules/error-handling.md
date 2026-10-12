@@ -65,6 +65,7 @@ cannot root-cause.
 - **Compliant example:** atlan-metabase-app app/extracts/questions.py — `fetch_question_queries_single` catches
   broadly, logs with exc_info=True and appends a residual record before returning.
   Tolerating a failure and discarding it are different things.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 A bare `except: pass` catches KeyboardInterrupt, SystemExit, and GeneratorExit and
 discards them with no trace.  This is the hardest class of bugs to debug.  Replace with
@@ -91,6 +92,7 @@ lost or why.
 - **Compliant example:** atlan-metabase-app app/api_types.py — `_to_millis` catches ValueError around timestamp
   parsing and logs the offending value with exc_info=True before returning None. Naming
   the exception type does not excuse an empty body.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Already correct when:** Control flow must not change — the swallow is existing, deliberate behaviour and the fix
   only stops the cause being discarded. Resolve the module's logger from its own source
   rather than assuming the name `logger`, and check it is bound ABOVE the handler: a
@@ -120,6 +122,7 @@ anything broader is a hidden failure sink.
   contextlib.suppress; a deliberately tolerated failure is narrowed to one condition and
   written to residual/failures.jsonl, so the swallow leaves evidence a reviewer can
   find.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 `contextlib.suppress(Exception)` or `suppress(BaseException)` is HIGH severity; narrow
 `suppress(FileNotFoundError)` on a cleanup path is acceptable.  The checker must inspect
@@ -145,6 +148,7 @@ root-cause analysis impossible.
   PreflightCheck row and returns it, and `fetch_metadata` re-raises it chained as
   MetadataFetchError — no suppression needed at any of the three; an unexplained bare
   breadth is not accepted.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Interacts with:** The set of forms that actually clear this rule is narrower than it looks, and two of the
   exits are closed by other rules. The checker accepts logger.exception(), or
   warning/error/critical carrying exc_info=True, or warning/error/critical routed
@@ -174,11 +178,19 @@ fire.
 
 Exempt: handlers whose warning/error/critical log call formats the exception through a
 recognised redaction helper (redact*/sanitiz*/safe_traceback/…) — the failure is logged
-at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify.
+at a deliberate no-traceback boundary.  A sanitized debug/info call does not qualify. A
+direct call to an undecorated same-module helper also counts when it receives the caught
+binding as a parameter and every control-flow path through the helper passes that
+parameter through a recognized sanitizer among the warning/error/critical call
+arguments. The helper call must be on a straight-line handler path; a prior branch that
+can bypass it does not prove the failure was logged.
 
 Also exempt: `raise X(...) from None` whose raised error carries the caught exception
-through such a helper (directly, or via a local assigned from one).  Severing the chain
-is how a frame holding a resolved credential avoids emitting a raw traceback;
+through such a helper (directly, or via a local assigned from one), or hands it as
+`cause=exc` to an SDK error — a class imported from `application_sdk.errors`, or an app
+class whose base chain reaches one — which the SDK renders on the wire through
+`sanitize_cause_repr`. An app class merely taking a `cause` proves nothing.  Severing
+the chain is how a frame holding a resolved credential avoids emitting a raw traceback;
 severed-and-redacted preserves the cause, severed-and-dropped does not.  Without this
 the only way to clear E004 at such a site is a warning/error log, which is exactly what
 L009 forbids before a raise.
@@ -189,13 +201,51 @@ error=SourceUnavailableError(cause=exc).to_failure_details())`, or a row staged 
 local that the enclosing function returns below the `try`. The failure leaves the frame
 in inspectable form, so no log level decides whether it is visible; demanding one is
 what makes E004 and F005 jointly unsatisfiable at the last-resort arm of a preflight
-probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, a
-raw hand-off of the binding (`failed_check(name, exc, start)` proves nothing about its
-type under a broad catch), and `except Exception:` with no `as` binding all still fire.
+probe.  A `return None`, a bare sentinel, a swallowing path before the typed return, or
+an opaque raw hand-off (`failed_check(name, exc, start)`) proves nothing about the type
+under a broad catch.  A same-module straight-line helper also qualifies, within limits
+the checker can prove:
+
+- the helper is an undecorated, synchronous, top-level function with one   final
+`return`, no branching, and no `*args`/`**kwargs`; - its returned value *is* a
+class-like constructor built from the   parameter the binding is passed to (`return
+Outcome(error=err)`), not   an expression that merely contains one (`(Outcome(...),
+None)[1]`); - the handler returns the helper's result directly, stages it in a local
+that the return hands back, or passes it only into class-like   constructors or literal
+containers; a lowercase wrapper   (`discard(helper(exc))`) keeps it opaque; - the name
+still resolves to that helper: not rebound in any enclosing   function, not declared
+`nonlocal` or `global`, and not reassigned   at module level.
+
+A helper that branches — a classifier walking the cause chain — is proven from its
+signature instead: its return annotation names an error class (`-> AppError`, `->
+AppError | None`, `-> Optional[AppError]`) and the binding is passed to an
+exception-annotated parameter, it never falls off its end, and every `return` in it
+builds a class-like constructor from that parameter or a local still carrying it there
+(a local rebound to anything else stops carrying it).  When `None` is a possible result,
+the call must be assigned to a name that the very next statement exits on when it is
+`None`.
+
+`except Exception:` with no `as` binding still fires.
 
 The three exemptions are one principle: the exception must leave the frame in some
 inspectable form — re-raised with its trace, re-raised with a redacted cause, or
 returned as typed data.
+
+**Fixing it well**
+
+* Before narrowing, read what the `try` body and its callees raise today, driver and
+bridge errors included (JDBC/JPype exceptions reach app code raw unless a client
+converts them). Narrow to those types and keep handling them the same way: the same
+classifier, the same check rows, the same log.
+
+* Never narrow to `AppError` at a catch that raw driver errors reach: they would escape
+and turn a reported failure into a crash.
+
+* Keep a shared helper a helper: change the helper's `except`; do not inline it into
+each caller.
+
+* Tests keep asserting the old behaviour (a raw driver error still becomes a failed
+check); never change a fake so it stops raising what the real client raises.
 
 ---
 
@@ -214,6 +264,7 @@ often impossible under production data volumes.
 - **Compliant example:** atlan-metabase-app app/api_types.py — `_to_millis` logs an unparseable timestamp at
   WARNING with exc_info=True before returning None. The message says what failed; the
   traceback says where.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 The message is logged but the stack trace is lost.  Add `exc_info=True` to every
 `logger.warning()` / `logger.error()` call inside an except block.  `logger.exception()`
@@ -243,6 +294,7 @@ in-flight customer workflows mid-run instead of handing them off.
 - **Compliant example:** atlan-openapi-app app/api_client.py — every handler in `validate_spec_url` and
   `_parse_zip` names a type. A bare `except:` appears nowhere in the three reference
   apps, so SystemExit and KeyboardInterrupt still unwind the worker.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 Like P001 but the block may have a body.  Still catches KeyboardInterrupt and
 SystemExit.  Always specify at least `except Exception:`.
@@ -267,6 +319,7 @@ unrelated, making the original failure invisible.
   is the credential-boundary form of the fix: the log is `logger.debug` through
   sanitize_cause_repr with no exc_info, because the url it guards may be a pre-signed
   secret held in that frame. Outside such a boundary, log with exc_info=True.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Interacts with:** E007 and E004 judge the same handler shape with one shared predicate
   (typed_failure_scope in checks/error_handling/_helpers.py). A return that hands the
   caught exception back as typed data already clears both rules: a call that receives
@@ -313,11 +366,27 @@ signal in the observability stack.
   the system CA paths before continuing, so the degraded path leaves a trace. None of
   the three reference apps has an `except ImportError` in the code E008 scans (app/ and
   main.py; tests/ is excluded), so the SDK is the only real compliant site.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 Optional-dependency guard.  Acceptable when the import is genuinely optional AND the
 fallback path is correct AND there is a comment.  Log at DEBUG if the module is
 preferred but not required.  Flag if the module is expected to be present (will fail
-later with a confusing AttributeError).
+later with a confusing AttributeError). A cause-preserving re-raise on every path
+(including a typed error raised from the ImportError) surfaces the failure and does not
+need a duplicate log.
+
+**Fixing it well**
+
+* Fix it at the existing `except ImportError` site, in the shape this rule describes: an
+optional module the code falls back from is logged at `DEBUG` with the module name; a
+required one is re-raised with its cause on every path (`raise ... from exc`), which
+needs no log of its own.
+
+* Keep the import where it is: moving it to module level or into a function changes when
+the app loads its drivers, and the repo's ruff rules then reject the new shape.
+
+* Never add `noqa` to get past ruff; if ruff objects, the shape is wrong — log at the
+original site.
 
 ---
 
@@ -336,6 +405,7 @@ under production conditions where it produces wrong results at scale.
 - **Compliant example:** atlan-metabase-app app/credentials.py — `build_credential_ref` binds the routing error,
   logs it, and then takes the inline-credentials path. A bound name that is never read
   is the tell that the handler is a placeholder.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 Exception sets a flag or default value with no trace.  Combines P007's error-hiding with
 no logging.  Add a `logger.warning(..., exc_info=True)` before the assignment.
@@ -362,6 +432,7 @@ the caller checks each result for Exception.
   application_sdk/execution/heartbeat.py — run_in_thread / run_fault_isolated /
   run_best_effort, which surface per-unit failures for you (`_runtime.offload` is the
   SDK-internal path; importing it from an app is what P005 exists to catch).
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 `return_exceptions=True` returns exception instances as values in the result list.  If
 the list is not subsequently inspected for `Exception` instances, errors vanish
@@ -387,6 +458,7 @@ vector hidden inside observability infra.
   `get_logger`, and redaction to application_sdk/errors/base.py (`sanitize_cause_repr` /
   `safe_traceback`); atlan-mysql-app app/client.py shows the whole of an app's logging
   setup — one import and one module-level logger.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 `Logger.handle()` calls `self.filter(record)` with no surrounding try/except — unlike
 handler errors, filter exceptions are NOT caught by `handleError()`.  An unguarded
@@ -414,6 +486,7 @@ blind, on-call routing can't branch on it, SLA gates can't classify it. (per ADR
 - **Compliant example:** atlan-mysql-app app/failures.py — every leaf subclasses an SDK category (e.g.
   `InvalidInputError`, `AuthError`, `SourceUnavailableError`) and owns a `code`. Raise
   one of these, never a bare ValueError or RuntimeError.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 SDK code raises a bare Python builtin.  The Automation Engine receives an opaque string
 — no category, code, audience, or retryable field. Dashboards are blind; on-call routing
@@ -441,6 +514,7 @@ read the raw string.
 - **Compliant example:** atlan-metabase-app app/errors.py — every error is imported from
   `application_sdk.errors`. No app/ module in the three reference apps raises or imports
   the deprecated AtlanError stack (ClientError, ApiError, …).
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 `AtlanError` and its subclasses emit a `DeprecationWarning` at construction time and
 reach AE as opaque strings.  They produce no typed wire envelope.  Scheduled for removal
@@ -460,15 +534,19 @@ outright crash — callers may act on the wrong result for a long time.
 
 ### What correct looks like
 
-- **Compliant example:** atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an unparseable
-  line only after logging it with exc_info=True. A bare `continue` in an except block
-  turns a shrinking result set into a mystery.
+- **Compliant example:** atlan-metabase-app app/utils.py — the expected ValueError for a candidate date-format
+  mismatch is logged at DEBUG without exc_info before continuing. For an unparseable QI
+  line, app/lineage/qi_reader.py's `iter_qi_records` logs at WARNING with exc_info=True
+  before continuing. Reserve tracebacks for genuine unexpected failures, not routine
+  format probes.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 An `except` block inside a loop whose body is only `continue`, `break`, or `pass` — with
 no logging call — silently swallows the exception and resumes or exits the iteration.
-This is the loop-body twin of P001/P002 (ruff S112 family).  At minimum log at DEBUG
-before the loop control statement; if the exception signals a genuine error, re-raise or
-log at WARNING/ERROR with `exc_info=True`.
+This is the loop-body twin of P001/P002 (ruff S112 family).  Explain a tolerated skip
+before the loop control statement.  For an expected format/probe mismatch, use a concise
+DEBUG diagnostic without `exc_info=True`.  If the exception signals a genuine unexpected
+error, re-raise or log at WARNING/ERROR with `exc_info=True`.
 
 ---
 
@@ -488,6 +566,7 @@ aggregation.
 - **Compliant example:** atlan-mysql-app app/client.py — `get_iam_role_token` raises IamTokenGenerationError with
   a fixed operator-facing message and passes the original as `cause=e`. The caught
   exception's text never lands in `message=`.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 A typed `AppError` raise whose `message=` keyword value embeds the caught exception via
 an f-string (`f'…{exc}…'`), `str(exc)`, `repr(exc)`, or string concatenation (`'…: ' +
@@ -517,6 +596,7 @@ every downstream system that reads it.
 - **Compliant example:** atlan-mysql-app app/handler.py — `fetch_metadata` ends `raise
   MetadataFetchError(cause=e) from e`. Both halves are there: the SDK-visible cause and
   the Python chain.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 A non-bare `raise` inside an `except … as e:` block that does not include `from e` (or
 `from None`).  Without explicit chaining, Python attaches the original as `__context__`
@@ -549,6 +629,7 @@ which is a security incident, not a bug.
   retryable / suggested_action as its evidence. Evidence describes the failure, never
   the credential that produced it; application_sdk/errors/wire.py rejects secret-named
   keys at runtime.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 An error construction call that passes a keyword argument whose name ends in `_secret`,
 `_password`, or `_token` — see `application_sdk.errors.wire` §6.  The wire layer
@@ -576,6 +657,7 @@ right rotation, or alert on per failure mode.
   `TenantObjectStoreUnavailableError` rather than the bare DependencyUnavailableError
   leaf, so failures bucket per connector on the dashboard. The one bare-leaf raise, in
   `run`, is the sanctioned InternalError(classification_pending=True) placeholder.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 Raising a parent leaf directly (`InternalError(...)`, `InvalidInputError(...)`) without
 a domain-specific subclass that overrides `code` collapses all failure modes for a given
@@ -609,6 +691,7 @@ aggregation bucket instead of one countable signal.
   message is the error's authored text, never the exception's. For `test_auth`, return
   the same typed error as `AuthOutput(status=FAILED, error=err.to_failure_details())`,
   as mysql's own `test_auth` does from atlan-mysql-app#729.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 
 Inside an `except … as exc:` block, a call (typically a typed response/output contract
 such as `AuthOutput` or `PreflightCheck`) is constructed with a `message=` keyword that
@@ -653,6 +736,7 @@ there is no except/raise to key on; the failure is swallowed by a plain if-guard
   app/extracts/databases.py `fetch_databases_summaries` logs it with exc_info=True,
   records a residual and returns [], and the run declares the gap as PARTIAL_SUCCESS. No
   site needs a suppression.
+- **Fix by:** [`programs/areas/error-handling.prose.md`](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/programs/areas/error-handling.prose.md)
 - **Already correct when:** The failed response raises a typed AppError at the guard. That is the whole fix where
   the failure should abort the run. Where the app must degrade instead, the end state
   keeps the raise and adds an explicit `except <ThatTypedError>` at the tolerating

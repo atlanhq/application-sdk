@@ -228,9 +228,10 @@ def _resolve_input_contracts(
 
     Two resolution paths, mirroring K018:
 
-    1. explicit ``@entrypoint`` methods in the app's own source name their Input
-       contract (``EntrypointContract.input_class_name``); or
-    2. the app inherits its entrypoint from an SDK template (no decorator to
+    1. explicit ``@entrypoint`` methods, or an ``async def run`` override on an
+       SDK App-family base, in the app's own source name their Input contract
+       (``EntrypointContract.input_class_name``); or
+    2. the app inherits ``run`` from an SDK template unchanged (no method to
        read) — fall back to the app's sole ``ExtractionInput`` descendant, which
        is single-entrypoint-mode only. Kept so resolution matches K018 exactly
        rather than diverging silently. A bare subclass with no in-repo filter

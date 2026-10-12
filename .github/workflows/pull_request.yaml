@@ -27,17 +27,27 @@ jobs:
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      # 'false' only on a bump-version PR not yet opted in with `gate-check`
+      # (FND-3748): the remaining jobs skip and Connector Tests Gate fails fast.
+      opted_in: ${{ steps.opt-in.outputs.opted_in }}
       # 'ci'   — pull_request.yaml itself changed. Self-referential entry
       #          (mirrors sdk-gate.yaml's own self-test pattern) so that editing
       #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
       #          in the merge queue — otherwise workflow-only PRs merge blind.
       ci: ${{ steps.filter.outputs.ci }}
-      # 'scan' — wider net for the Trivy filesystem scan: every first-party
-      #          source tree + the dependency lockfiles. Still short-circuits on
-      #          pure docs/, .github-meta, and .security-only PRs.
-      scan: ${{ steps.filter.outputs.scan }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read from the PR's live labels (bump_pr_opt_in.py), so the answer is
+      # the label STATE: an unrelated label event on an opted-in bump PR still
+      # re-runs these cheap jobs as it always did, and never fails the gate.
+      - name: Check the bump-PR CI opt-in
+        id: opt-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --pr "$PR_NUMBER"
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
       # base automatically; for merge_group it diffs the queued merge ref against
       # the default branch (the same proven setup the conformance jobs use).
@@ -76,13 +86,6 @@ jobs:
               # exclusion is handled in the sdk-refine step below instead.
             ci:
               - '.github/workflows/pull_request.yaml'
-            scan:
-              - 'application_sdk/**'
-              - 'contract-toolkit/**'
-              - 'tests/**'
-              - 'pyproject.toml'
-              - 'uv.lock'
-              - '.github/actions/trivy/**'
 
       # paths-filter sdk=true is necessary but not sufficient: the broad
       # application_sdk/** pattern also matches .md files, so a PR that only
@@ -121,7 +124,7 @@ jobs:
   docstr:
     name: Docstring Coverage
     needs: changes
-    if: needs.changes.outputs.sdk == 'true'
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -130,35 +133,10 @@ jobs:
           module-name: application_sdk
           fail-under: "30"
 
-  # Security Checks
-  # Required status check — must ALWAYS run and ALWAYS conclude (never skip via a
-  # job-level `if:`, which GitHub reports as "skipped" and leaves a required check
-  # pending forever, blocking the merge queue). Instead the job always runs and
-  # short-circuits its real steps when no first-party source/deps changed.
-  trivy:
-    name: Trivy Code Scan
-    needs: changes
-    runs-on: ubuntu-latest
-    steps:
-      - name: Short-circuit when nothing to scan
-        if: needs.changes.outputs.scan != 'true'
-        run: echo "No first-party source or dependency changes — Trivy code scan not needed."
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        if: needs.changes.outputs.scan == 'true'
-      - uses: "./.github/actions/trivy"
-        if: needs.changes.outputs.scan == 'true'
-        with:
-          # Reporting and enforcement are separate switches on purpose — see the
-          # action's input docs. Both are passed explicitly so that a future edit
-          # to one is visibly not an edit to the other. The action itself skips
-          # the comments on merge_group; enforcement runs on every event.
-          add-report-comment-to-pr: "true"
-          fail-on-findings: "true"
-
   trivy-container:
     name: Trivy Container Scan
     needs: changes
-    if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -245,8 +223,13 @@ jobs:
     if: |
       (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      (
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( github.head_ref == 'bump-version-main' &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+      ) &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     # One architecture per job, each on a runner native to it — the same shape
@@ -450,8 +433,13 @@ jobs:
         ) ||
         (
           github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+          (
+            ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+            ( github.head_ref == 'bump-version-main' &&
+              contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+          ) &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -566,8 +554,13 @@ jobs:
       ) ||
       (
         github.event_name == 'pull_request' &&
-        contains(github.event.pull_request.labels.*.name, 'e2e') &&
-        (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+        (
+          ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+            (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+          ( github.head_ref == 'bump-version-main' &&
+            contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+            (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+        ) &&
         github.event.pull_request.head.repo.fork != true &&
         github.event.pull_request.user.login != 'dependabot[bot]'
       )
@@ -663,6 +656,14 @@ jobs:
       # never notice.
       pull-requests: read
     steps:
+      # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
+      # here, before the upstream check would read those skips as a pass.
+      - name: Require the bump-PR CI opt-in
+        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
+        run: |
+          echo "::error::Bump-version PR CI is opt-in (FND-3748). Add the 'gate-check' label to run it."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
@@ -746,10 +747,21 @@ jobs:
     # which made the event arm redundant: `contains(...)` alone was already true
     # for the label-just-added case, so every unrelated label add on a PR carrying
     # the label re-ran the real-cloud suite. AND-ing it is the fix.
+    #
+    # Dependabot is excluded like every other label-gated job here. Its runs get
+    # a read-only GITHUB_TOKEN, so consume-e2e-label skips them (it could not
+    # remove the label) — and a consumer that still fired would re-run on every
+    # push to a Dependabot PR carrying `e2e`.
     if: |
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
-      github.event.pull_request.head.repo.fork != true
+      (
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( github.head_ref == 'bump-version-main' &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+      ) &&
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Keyless: all three clouds authenticate via GitHub OIDC (no static secrets).
@@ -812,3 +824,50 @@ jobs:
   # (sdr-matrix-builder, sdr-e2e-apps, and e2e-full-mysql removed —
   # superseded by connector-tests + the 'e2e' label on tests.yaml)
 
+
+  # Consumes the 'e2e' label once every job it requested has finished
+  # (FND-3411). The label is a one-shot request: left on a PR, every later
+  # push re-runs the whole release tier — connector fan-out, SDR on a live
+  # cluster, real-cloud storage — usually days after anyone wanted it. So the
+  # run that acted on it removes it, and the next run takes a fresh add.
+  #
+  # Same gate as the label-consuming jobs above, so it fires exactly when they
+  # could have. `always()` because a failed or cancelled leg still consumed the
+  # request; retrying is re-adding the label. `needs` covers every
+  # label-consuming job plus connector-gate, which is where the connector legs'
+  # verdicts actually land — removing before that would be removing mid-run.
+  #
+  # `github.token` is load-bearing, not a default: GitHub starts no workflow
+  # run for an event the run's own GITHUB_TOKEN caused, so this `unlabeled`
+  # triggers nothing. Fail-open: a 404 means the label is already gone, and a
+  # housekeeping failure must never read as a test failure.
+  consume-e2e-label:
+    name: Consume e2e label
+    needs:
+      [
+        build-sdk-base-image,
+        merge-sdk-base-image,
+        connector-tests,
+        connector-gate,
+        sdr-k8s-e2e,
+        storage-integration,
+      ]
+    if: |
+      always() &&
+      github.event_name == 'pull_request' &&
+      contains(github.event.pull_request.labels.*.name, 'e2e') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      github.event.pull_request.head.repo.fork != true &&
+      github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Remove the e2e label
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/e2e"

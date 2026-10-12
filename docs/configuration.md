@@ -4,6 +4,8 @@ The Application SDK reads configuration from environment variables at startup. V
 
 Set variables in your shell environment, a `.env` file at the project root, or Docker `ENV` / Kubernetes `ConfigMap` / `Secret` resources. See `.env.example` at the repo root for a ready-to-copy template.
 
+This page covers **runtime** variables only. Variables starting `E2E_` configure the test harness under `application_sdk/testing/`. CI sets them, and a deployed app never reads them. See [Runtime vs test-harness variables](standards/env-vars.md#runtime-vs-test-harness-variables).
+
 ---
 
 ## Application
@@ -103,6 +105,7 @@ Bounds the restart supervisor that rebuilds the worker after a fatal poll error 
 | `ATLAN_WORKER_HEALTHY_RUN_SECONDS` | `300` | A worker that ran at least this long (seconds) before failing is treated as a fresh incident, resetting the consecutive-failure streak. |
 | `ATLAN_WORKER_POLL_DIAGNOSTIC_INTERVAL_SECONDS` | `60` | How often (seconds) to read Temporal core's live poller gauge and log a state transition, so a worker that is alive but claiming no work is visible in logs and in the `/live` / `/ready` probe details. Purely observational — it never restarts the worker and never flips a probe. Set to `0` to disable. |
 | `ATLAN_WORKER_ZERO_POLLER_READINGS_BEFORE_STALE` | `3` | Consecutive definitive zero-poller readings before this worker stops emitting `token_refresh` health events. At the default 60s observer interval that is ~3 minutes of confirmed-parked polling. `unknown` / `polling` never accumulate toward this threshold. |
+| `ATLAN_WORKER_FATAL_TEARDOWN_TIMEOUT_SECONDS` | graceful shutdown timeout + `60` | Upper bound (seconds) on temporalio's own worker teardown after a fatal poll error. The supervisor regains control only when that teardown returns; if it has not returned within this bound the process exits with code 1 so the pod or container restart policy brings up a fresh worker. `0` or negative disables the bound. |
 | `ATLAN_TEMPORAL_CORE_METRICS_MAX_BYTES` | `1048576` | Upper bound (bytes) on the metrics payload read from the loopback endpoint when reading Temporal core's poller gauge for the poll-state diagnostic. Guards the observer against an unbounded allocation if the local exporter misbehaves or grows high-cardinality. An oversize payload is reported as *unknown*, never as zero. |
 
 Reading the poller gauge requires Temporal core's Prometheus exporter, bound by
@@ -219,6 +222,7 @@ Used by `RedisCapacityPool` for distributed slot locking. Leave empty if you use
 | `ATLAN_STORAGE_LOCK_WAIT_PROGRESS_SECONDS` | `30` | Interval (seconds) between progress marks while an activity waits on a per-destination storage lock (a second download of the same path queues behind the first). Capped at a quarter of `ATLAN_MAX_NO_PROGRESS_SECONDS` so a queued activity is never killed as stalled; floored at `1`. |
 | `ATLAN_STORAGE_VERIFY_TRANSFERS` | `true` | Kill-switch for transfer integrity validation. When enabled, every upload confirms the local file did not shrink while it was read and that the store recorded the bytes that were sent, and every download confirms it wrote as many bytes as the store declared and — when a `{key}.sha256` sidecar exists — that they hash to the digest the producer recorded. A content mismatch raises the non-retryable `StorageIntegrityError`. Set to `false` for a backend whose HEAD-after-write is not read-your-writes consistent. |
 | `ATLAN_STORAGE_WRITE_SIDECARS` | `true` | Kill-switch for `{key}.sha256` sidecar emission. Sidecars are what let a *downstream* app detect an artifact its producer truncated. Set to `false` for a deployment whose object-store consumers cannot tolerate the extra keys (e.g. a reader that globs a prefix without filtering sidecars). Verification is independent — downloads still verify whatever sidecars they find. |
+| `ATLAN_STORE_ASSERT_ENABLED` | `false` | Opt-in for the e2e `sdk:store-assert` node, which checks what an app left in the object store. The workflow is registered on every worker either way; unset, the node reads nothing and reports itself disabled. Set only on e2e tenants, by the e2e install through `deploy.env_overrides`. Never set it on a customer tenant. |
 | `ATLAN_FILE_REF_CHUNKED_THRESHOLD_BYTES` | `33554432` (32 MiB) | FileReference size threshold above which downloads use parallel range GETs. |
 | `ATLAN_FILE_REF_CHUNK_SIZE_BYTES` | `16777216` (16 MiB) | Size of each range-GET chunk in a chunked download. |
 | `ATLAN_FILE_REF_CHUNK_CONCURRENCY` | `4` | Maximum concurrent range-GET chunks per file. |

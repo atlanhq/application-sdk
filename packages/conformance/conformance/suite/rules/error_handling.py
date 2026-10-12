@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -43,6 +47,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "should log at DEBUG.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E002",
@@ -83,6 +91,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "there is a comment explaining the reasoning.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E003",
@@ -113,6 +125,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "classifying.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E004",
@@ -152,10 +168,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "exception through a recognised redaction helper\n"
             "(redact*/sanitiz*/safe_traceback/…) — the failure is logged at a\n"
             "deliberate no-traceback boundary.  A sanitized debug/info call does not\n"
-            "qualify.\n"
+            "qualify. A direct call to an undecorated same-module helper also counts\n"
+            "when it receives the caught binding as a parameter and every control-flow\n"
+            "path through the helper passes that parameter through a recognized sanitizer\n"
+            "among the warning/error/critical call arguments. The helper call must be on\n"
+            "a straight-line handler path; a prior branch\n"
+            "that can bypass it does not prove the failure was logged.\n"
             "\n\nAlso exempt: ``raise X(...) from None`` whose raised error carries the\n"
             "caught exception through such a helper (directly, or via a local assigned\n"
-            "from one).  Severing the chain is how a frame holding a resolved\n"
+            "from one), or hands it as ``cause=exc`` to an SDK error — a class imported\n"
+            "from ``application_sdk.errors``, or an app class whose base chain reaches\n"
+            "one — which the SDK renders on the wire through ``sanitize_cause_repr``.\n"
+            "An app class merely taking a ``cause`` proves nothing.  Severing the chain is how a frame holding a resolved\n"
             "credential avoids emitting a raw traceback; severed-and-redacted preserves\n"
             "the cause, severed-and-dropped does not.  Without this the only way to\n"
             "clear E004 at such a site is a warning/error log, which is exactly what\n"
@@ -168,13 +192,44 @@ RULES: tuple[RuleDefinition, ...] = (
             "The failure leaves the frame in inspectable form, so no log level decides\n"
             "whether it is visible; demanding one is what makes E004 and F005 jointly\n"
             "unsatisfiable at the last-resort arm of a preflight probe.  A ``return\n"
-            "None``, a bare sentinel, a swallowing path before the typed return, a raw\n"
-            "hand-off of the binding (``failed_check(name, exc, start)`` proves nothing\n"
-            "about its type under a broad catch), and ``except Exception:`` with no\n"
-            "``as`` binding all still fire.\n"
+            "None``, a bare sentinel, a swallowing path before the typed return, or an\n"
+            "opaque raw hand-off (``failed_check(name, exc, start)``) proves nothing\n"
+            "about the type under a broad catch.  A same-module straight-line helper\n"
+            "also qualifies, within limits the checker can prove:\n"
+            "\n"
+            "- the helper is an undecorated, synchronous, top-level function with one\n"
+            "  final ``return``, no branching, and no ``*args``/``**kwargs``;\n"
+            "- its returned value *is* a class-like constructor built from the\n"
+            "  parameter the binding is passed to (``return Outcome(error=err)``), not\n"
+            "  an expression that merely contains one (``(Outcome(...), None)[1]``);\n"
+            "- the handler returns the helper's result directly, stages it in a local\n"
+            "  that the return hands back, or passes it only into class-like\n"
+            "  constructors or literal containers; a lowercase wrapper\n"
+            "  (``discard(helper(exc))``) keeps it opaque;\n"
+            "- the name still resolves to that helper: not rebound in any enclosing\n"
+            "  function, not declared ``nonlocal`` or ``global``, and not reassigned\n"
+            "  at module level.\n"
+            "\n"
+            "A helper that branches — a classifier walking the cause chain — is\n"
+            "proven from its signature instead: its return annotation names an error\n"
+            "class (``-> AppError``, ``-> AppError | None``, ``-> Optional[AppError]``)\n"
+            "and the binding is passed to an exception-annotated parameter, it never\n"
+            "falls off its end, and every ``return`` in it builds a class-like\n"
+            "constructor from that parameter or a local still carrying it there (a\n"
+            "local rebound to anything else stops carrying it).  When ``None`` is a\n"
+            "possible result, the call must\n"
+            "be assigned to a name that the very next statement exits on when it is\n"
+            "``None``.\n"
+            "\n"
+            "``except Exception:`` with no ``as`` binding still fires.\n"
             "\n\nThe three exemptions are one principle: the exception must leave the\n"
             "frame in some inspectable form — re-raised with its trace, re-raised with a\n"
             "redacted cause, or returned as typed data."
+            "\n\n**Fixing it well**\n\n"
+            "* Before narrowing, read what the ``try`` body and its callees raise today, driver and bridge errors included (JDBC/JPype exceptions reach app code raw unless a client converts them). Narrow to those types and keep handling them the same way: the same classifier, the same check rows, the same log.\n\n"
+            "* Never narrow to ``AppError`` at a catch that raw driver errors reach: they would escape and turn a reported failure into a crash.\n\n"
+            "* Keep a shared helper a helper: change the helper's ``except``; do not inline it into each caller.\n\n"
+            "* Tests keep asserting the old behaviour (a raw driver error still becomes a failed check); never change a fake so it stops raising what the real client raises.\n\n"
         ),
         rule_interactions=(
             "The set of forms that actually clear this rule is narrower than it "
@@ -201,6 +256,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "typed data. Found in a consumer app in FND-2569."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e004",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E005",
@@ -234,6 +293,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "credentials (JDBC URLs, Authorization headers, OAuth bodies)."
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e005",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E006",
@@ -264,6 +327,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "and SystemExit.  Always specify at least ``except Exception:``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e006",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E007",
@@ -326,6 +393,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "is the same typed-failure predicate E004 uses.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e007",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E008",
@@ -356,8 +427,21 @@ RULES: tuple[RuleDefinition, ...] = (
             "optional AND the fallback path is correct AND there is a comment.  Log at\n"
             "DEBUG if the module is preferred but not required.  Flag if the module is\n"
             "expected to be present (will fail later with a confusing AttributeError).\n"
+            "A cause-preserving re-raise on every path (including a typed error raised\n"
+            "from the ImportError) surfaces the failure and does not need a duplicate log.\n"
+            "\n**Fixing it well**\n\n"
+            "* Fix it at the existing ``except ImportError`` site, in the shape this rule describes: "
+            "an optional module the code falls back from is logged at ``DEBUG`` with the module "
+            "name; a required one is re-raised with its cause on every path "
+            "(``raise ... from exc``), which needs no log of its own.\n\n"
+            "* Keep the import where it is: moving it to module level or into a function changes when the app loads its drivers, and the repo's ruff rules then reject the new shape.\n\n"
+            "* Never add ``noqa`` to get past ruff; if ruff objects, the shape is wrong — log at the original site.\n\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e008",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E009",
@@ -387,6 +471,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "before the assignment.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e009",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E010",
@@ -423,6 +511,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "are not checked; ``return_exceptions=True`` itself is acceptable.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e010",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E011",
@@ -460,6 +552,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Never acceptable — filter methods must never let exceptions propagate.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e011",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E012",
@@ -492,6 +588,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``TypeError``/``ValueError`` for stdlib interoperability.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e012",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E013",
@@ -525,13 +625,19 @@ RULES: tuple[RuleDefinition, ...] = (
             "appropriate leaf from ``application_sdk.errors``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E014",
         canonical_reference=(
-            "atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an "
-            "unparseable line only after logging it with exc_info=True. A bare `continue` "
-            "in an except block turns a shrinking result set into a mystery."
+            "atlan-metabase-app app/utils.py — the expected ValueError for a candidate "
+            "date-format mismatch is logged at DEBUG without exc_info before continuing. "
+            "For an unparseable QI line, app/lineage/qi_reader.py's `iter_qi_records` "
+            "logs at WARNING with exc_info=True before continuing. Reserve tracebacks for "
+            "genuine unexpected failures, not routine format probes."
         ),
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
@@ -552,11 +658,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "An ``except`` block inside a loop whose body is only ``continue``,\n"
             "``break``, or ``pass`` — with no logging call — silently swallows the\n"
             "exception and resumes or exits the iteration.  This is the loop-body twin\n"
-            "of P001/P002 (ruff S112 family).  At minimum log at DEBUG before the loop\n"
-            "control statement; if the exception signals a genuine error, re-raise or\n"
-            "log at WARNING/ERROR with ``exc_info=True``.\n"
+            "of P001/P002 (ruff S112 family).  Explain a tolerated skip before the loop\n"
+            "control statement.  For an expected format/probe mismatch, use a concise\n"
+            "DEBUG diagnostic without ``exc_info=True``.  If the exception signals a\n"
+            "genuine unexpected error, re-raise or log at WARNING/ERROR with\n"
+            "``exc_info=True``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E015",
@@ -593,6 +705,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "stable human summary.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E016",
@@ -629,6 +745,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "chained), ``raise X() from None`` (intentional suppression).\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e016",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E017",
@@ -667,6 +787,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``credential_name``, ``token_type``) or pass the value via ``cause=exc``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e017",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E018",
@@ -708,6 +832,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "before suppressing.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e018",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E019",
@@ -764,6 +892,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "symmetric across E015/E019.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e019",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
     RuleDefinition(
         id="E020",
@@ -834,5 +966,9 @@ RULES: tuple[RuleDefinition, ...] = (
             "``if x is None: return None`` guards.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
     ),
 )

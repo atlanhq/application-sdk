@@ -237,7 +237,6 @@ _CONSUMERS_ONLY = frozenset(
         # Read the tag / scan the published image.
         "check-dapr-version.yaml",
         "daily-security-scan.yml",
-        "update-dashboard.yaml",
         "vuln-reconcile-on-release.yml",
     }
 )

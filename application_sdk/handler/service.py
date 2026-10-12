@@ -5,7 +5,8 @@ operations for a single app. Each app runs its own handler service.
 
 Routes:
     POST /workflows/v1/auth - Test authentication
-    POST /workflows/v1/check - Run preflight checks
+    POST /workflows/v1/check - Run preflight checks (optionally only some ``tiers``)
+    POST /workflows/v1/warmup - Probe the source's compute once (stateless)
     POST /workflows/v1/metadata - Fetch metadata
     POST /workflows/v1/start - Start workflow execution
     POST /workflows/v1/stop/{workflow_id}/{run_id:path} - Stop workflow
@@ -56,18 +57,20 @@ from pydantic import ValidationError
 from temporalio.client import WorkflowFailureError
 
 from application_sdk._runtime.offload import run_in_thread
-from application_sdk.app._generated_tree import (
+from application_sdk.common._generated_tree import (
     MANIFEST_STEM,
     choose_form_configmap,
     eligible_form_configmaps,
     names_entrypoint,
 )
-from application_sdk.app.build_identity import (
+from application_sdk.common.build_identity import (
     BUILD_IDENTITY_CONFIGMAP_ID,
     build_identity,
 )
-from application_sdk.app.entrypoint import canonical_workflow_type
-from application_sdk.common.dispatch import resolve_dispatch_workflow_id
+from application_sdk.common.dispatch import (
+    canonical_workflow_type,
+    resolve_dispatch_workflow_id,
+)
 from application_sdk.common.task_queue import (
     resolve_manifest_tokens,
     task_queue_from_env,
@@ -102,19 +105,36 @@ from application_sdk.errors.base import (  # noqa: E402,F401
     sanitize_cause_repr,
 )
 from application_sdk.errors.leaves import InternalError  # noqa: E402,F401
+from application_sdk.handler._preflight_outcome import (  # noqa: E402
+    PreflightSurface,
+    emit_preflight_check_outcome,
+    emit_preflight_crash_outcome,
+)
+from application_sdk.handler._warmup import (  # noqa: E402,F401 — re-exported for existing importers
+    bounded_warmup_probe,
+    rows_outside_tiers,
+    warmup_ceiling_seconds,
+    warmup_probe_timeout_seconds,
+    warmup_unavailable_error,
+)
 from application_sdk.handler.base import HandlerError  # noqa: E402,F401
 from application_sdk.handler.context import bind_handler_context  # noqa: E402,F401
 
 # The handler HTTP surface lives in the api package and is shared with the
 # consolidated API host. These private names are the same objects, kept for the
 # worker-only routes below (and tests) that use them.
-from application_sdk.handler.contracts import (  # noqa: E402,F401
+from application_sdk.handler.contracts import (  # noqa: E402,F401; noqa: E402,F401 — re-exported for existing importers
     AuthInput,
+    CheckTier,
     HandlerCredential,
     MetadataInput,
     PreflightCheck,
     PreflightInput,
     PreflightOutput,
+    PreflightStatus,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
 )
 from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-exported
     flatten_credentials_to_pairs as _flatten_to_pairs,
@@ -122,7 +142,7 @@ from application_sdk.handler.contracts import (  # noqa: E402,F401 — re-export
 from application_sdk.handler.contracts import (  # noqa: E402
     normalize_credentials as _normalize_credentials,
 )
-from application_sdk.handler.contracts import (  # noqa: E402,F401
+from application_sdk.handler.contracts import (  # noqa: E402,F401; noqa: E402,F401 — re-exported for existing importers
     unverifiable_preflight_result,
 )
 from application_sdk.handler.request_contract import ModelT  # noqa: E402,F401
@@ -142,6 +162,7 @@ from application_sdk.handler.routes import (  # noqa: E402,F401 — re-exported 
     _summarize_check,
     _validated_entrypoint,
     _wrap_response,
+    has_warmup,
     include_app_routers_on,
     register_handler_routes,
 )
@@ -158,11 +179,6 @@ class _GatePreflightObserver:
         self._app_name = app_name
 
     def outcome(self, result: Any, *, entrypoint: str, request_id: str) -> None:
-        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — handler/__init__ imports this module; a top-level import back into preflight_gate is a cycle
-            PreflightSurface,
-            emit_preflight_check_outcome,
-        )
-
         emit_preflight_check_outcome(
             logger,
             self._app_name,
@@ -173,11 +189,6 @@ class _GatePreflightObserver:
         )
 
     def crash(self, exc: BaseException, *, entrypoint: str, request_id: str) -> None:
-        from application_sdk.execution._temporal.preflight_gate import (  # noqa: PLC0415 — see outcome()
-            PreflightSurface,
-            emit_preflight_crash_outcome,
-        )
-
         emit_preflight_crash_outcome(
             logger,
             self._app_name,
@@ -357,8 +368,124 @@ _storage: ObjectStore | None = None
 # Directory where generated contract JSON files are stored
 CONTRACT_GENERATED_DIR = Path(_CONTRACT_GENERATED_DIR)
 
+
+def _entrypoint_form(entrypoint: str) -> tuple[Path | None, list[Path]]:
+    """The generated setup form served for *entrypoint*, and the files it was
+    chosen from.
+
+    Searches both generated layouts: multi-entrypoint apps nest each form under
+    ``CONTRACT_GENERATED_DIR/<entrypoint>/``, single-entrypoint apps emit it
+    flat in ``CONTRACT_GENERATED_DIR``. The nested directory wins. Within a
+    directory :func:`choose_form_configmap` decides. ``(None, [])`` when no
+    eligible form exists.
+    """
+    for search_dir in (CONTRACT_GENERATED_DIR / entrypoint, CONTRACT_GENERATED_DIR):
+        candidates = eligible_form_configmaps(search_dir)
+        target = choose_form_configmap(candidates, entrypoint)
+        if target is not None:
+            return target, candidates
+    return None, []
+
+
+def generated_entrypoints() -> list[str]:
+    """The entry points the generated tree serves a setup form for.
+
+    Each subdirectory of ``CONTRACT_GENERATED_DIR`` holding an eligible form is
+    one entry point (the multi-entry-point layout). With none, a flat form makes
+    the app's single entry point, reported as ``""`` (the app-level handler).
+    Read from disk so the handler process never imports the app registry.
+    """
+    if not CONTRACT_GENERATED_DIR.is_dir():
+        return []
+    nested = sorted(
+        d.name
+        for d in CONTRACT_GENERATED_DIR.iterdir()
+        if d.is_dir() and eligible_form_configmaps(d)
+    )
+    if nested:
+        return nested
+    return [""] if eligible_form_configmaps(CONTRACT_GENERATED_DIR) else []
+
+
+SAGE_V2_WIDGET = "sageV2"
+"""The ``ui.widget`` value of the setup form's preflight widget."""
+
+
+def sagev2_warmup_flag(form: dict[str, Any]) -> bool | None:
+    """What a generated setup form declares about the app's warmup.
+
+    Reads the top-level ``config.properties`` (the walk the setup UI makes to
+    find its preflight widget) for a property whose ``ui.widget`` is
+    ``sageV2``. ``None`` when there is none; otherwise whether any such widget
+    sets ``ui.warmup`` to ``true``. A missing ``ui.warmup`` is ``false``.
+    """
+    config = form.get("config", form)
+    properties = config.get("properties") if isinstance(config, dict) else None
+    if not isinstance(properties, dict):
+        return None
+    flags = [
+        prop["ui"].get("warmup") is True
+        for prop in properties.values()
+        if isinstance(prop, dict)
+        and isinstance(prop.get("ui"), dict)
+        and prop["ui"].get("widget") == SAGE_V2_WIDGET
+    ]
+    return any(flags) if flags else None
+
+
+def warn_on_warmup_flag_drift(
+    entrypoints: list[str], has_warmup: Callable[[str], bool]
+) -> list[str]:
+    """Log a WARNING for each entry point whose setup form and handler disagree
+    about the warmup. Returns the entry points it warned about.
+
+    The form's SageV2 ``ui.warmup`` flag tells the setup UI to run the warmup
+    flow; *has_warmup* says whether the entry point's handler actually has one
+    (a module ``warmup`` hook, or an app handler overriding
+    ``Handler.warmup``). The contract is the source of the flag, so nothing is
+    changed here: a mismatch is only reported. An entry point with no served
+    form, or a form with no SageV2 widget, has nothing to compare.
+    """
+    drifted: list[str] = []
+    for entrypoint in entrypoints:
+        target, _ = _entrypoint_form(entrypoint)
+        if target is None:
+            continue
+        with open(target, encoding="utf-8") as f:
+            form = json.load(f)
+        declared = sagev2_warmup_flag(form) if isinstance(form, dict) else None
+        if declared is None:
+            continue
+        actual = has_warmup(entrypoint)
+        if declared == actual:
+            continue
+        drifted.append(entrypoint)
+        if actual:
+            logger.warning(
+                "Entry point %s has a warmup (Handler.warmup is overridden or a "
+                "module warmup hook exists) but its setup form %s does not set "
+                "warmup on the SageV2 widget: the setup check will never run "
+                "the warmup-tier checks, so missing grants on them surface "
+                "only on a real run. Set warmup: true on the SageV2 widget in "
+                "the app's contract.",
+                entrypoint or "<app>",
+                target.name,
+            )
+        else:
+            logger.warning(
+                "Entry point %s sets warmup on the SageV2 widget of its setup "
+                "form %s but has no warmup (Handler.warmup is not overridden "
+                "and there is no module warmup hook): the setup UI makes a "
+                "/warmup round trip that always answers ready. Remove warmup "
+                "from the SageV2 widget, or implement Handler.warmup.",
+                entrypoint or "<app>",
+                target.name,
+            )
+    return drifted
+
+
 # The form-discovery exclusion vocabulary lives in
-# `application_sdk.app._generated_tree`, which is the authority: this endpoint is
+# `application_sdk.common._generated_tree`, which is the authority: this endpoint is
 # what a tenant's /api/service/configmaps/<name> proxies to, and the FND-1667
 # route check compares what this serves against the app's committed contract.
 # A second copy of "which sibling JSON is a form" would let the server serve one
@@ -375,7 +502,7 @@ from application_sdk.handler.routes import _ENTRYPOINT_NAME_RE  # noqa: E402
 
 # Per-entry-point hook signatures resolved by the discovery helpers below.
 # ``HandlerFn`` is the per-entry-point handler convention
-# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata}``); the
+# (``app.<segment>.handler.{test_auth,preflight_check,fetch_metadata,warmup}``); the
 # input/output stay ``Any`` because the concrete contract pair is selected by
 # ``fn_name`` at call time. ``_ComputeManifestFn`` is the dynamic-manifest hook
 # (``app.<segment>.core.compute_manifest``) — it must be ``async def`` (the hook
@@ -1832,14 +1959,8 @@ def _register_workflow_routes(
                 # pod stderr alike. Hence the warning below — the next
                 # unrecognised sibling shows up in the logs on the first
                 # request, before anyone opens the wizard.
-                for search_dir in (
-                    CONTRACT_GENERATED_DIR / ep.name,
-                    CONTRACT_GENERATED_DIR,
-                ):
-                    candidates = eligible_form_configmaps(search_dir)
-                    target = choose_form_configmap(candidates, ep.name)
-                    if target is None:
-                        continue
+                target, candidates = _entrypoint_form(ep.name)
+                if target is not None:
                     if len(candidates) > 1 and not names_entrypoint(
                         target.stem, ep.name
                     ):
@@ -1856,7 +1977,6 @@ def _register_workflow_routes(
                             target.stem,
                             [c.stem for c in candidates],
                         )
-                    break
 
         if target is not None:
             with open(target, encoding="utf-8") as f:
@@ -2508,9 +2628,21 @@ def create_app_handler_service(
         workflow_max_timeout_hours=workflow_max_timeout_hours,
     )
 
+    from fastapi.telemetry import (  # noqa: PLC0415 — cold path: only at handler service startup
+        TelemetryConfig,
+    )
+
     from application_sdk.constants import (  # noqa: PLC0415 — cold path: only at handler service startup
         ENABLE_MCP,
     )
+
+    # FastAPI >=0.142 auto-configures OTLP/HTTP exporters on the global
+    # providers when OTEL_EXPORTER_OTLP_ENDPOINT is set. The SDK owns those
+    # providers (observability/*_adaptor.py) and exports gRPC to that endpoint,
+    # so FastAPI's exporters would race ours for the global TracerProvider and
+    # fail against the gRPC collector. Request telemetry stays with
+    # FastAPIInstrumentor below; FastAPI's native middleware defers to it.
+    fastapi_telemetry: TelemetryConfig = {"auto_configure": False}
 
     if ENABLE_MCP and app_name:
         from contextlib import (  # noqa: PLC0415 — cold path: lifespan setup, only when MCP enabled
@@ -2559,9 +2691,15 @@ def create_app_handler_service(
             description=description,
             version=version,
             lifespan=_mcp_lifespan,
+            telemetry=fastapi_telemetry,
         )
     else:
-        app = FastAPI(title=title, description=description, version=version)
+        app = FastAPI(
+            title=title,
+            description=description,
+            version=version,
+            telemetry=fastapi_telemetry,
+        )
 
     from opentelemetry.instrumentation.fastapi import (  # noqa: PLC0415 — cold path: FastAPI instrumentor wired at app creation
         FastAPIInstrumentor,
@@ -2594,6 +2732,10 @@ def create_app_handler_service(
         secret_store=_secret_store,
         observer=_GatePreflightObserver(app_name),
         include_app_routers=False,
+        warmup_ceiling=getattr(app_class, "preflight_warmup_ceiling_seconds", None),
+        warmup_probe_timeout=getattr(
+            app_class, "preflight_warmup_probe_timeout_seconds", None
+        ),
     )
 
     _register_workflow_routes(
@@ -2712,6 +2854,21 @@ def create_app_handler_service(
         logger.warning(
             "Static UI assets not found at %s, skipping static mount",
             static_dir,
+        )
+
+    # FND-3334: the setup form's SageV2 warmup flag and the handler must agree.
+    # Reported once at startup; never allowed to break the service.
+    # Entry points come from the generated tree, not the app registry:
+    # importing the registry loads execution code, which the handler process
+    # must never do (FND-3280).
+    try:
+        warn_on_warmup_flag_drift(
+            generated_entrypoints(), lambda ep: has_warmup(handler, ep)
+        )
+    except Exception:
+        logger.warning(
+            "Could not compare setup forms' warmup flags with the handler",
+            exc_info=True,
         )
 
     return app

@@ -1,7 +1,7 @@
 """Handler framework for per-app HTTP services.
 
 Provides the Handler ABC and DefaultHandler for implementing auth,
-preflight, and metadata endpoints, plus the service factory for
+preflight, metadata, and optional warmup endpoints, plus the service factory for
 creating FastAPI applications.
 """
 
@@ -18,6 +18,7 @@ from application_sdk.handler.contracts import (
     AuthStatus,
     BaseConnectionConfig,
     BaseMetadataConfig,
+    CheckTier,
     HandlerCredential,
     MetadataInput,
     MetadataOutput,
@@ -28,6 +29,9 @@ from application_sdk.handler.contracts import (
     PreflightStatus,
     SqlMetadataObject,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
 )
 
 if TYPE_CHECKING:
@@ -36,8 +40,10 @@ if TYPE_CHECKING:
         run_app_handler_service,
     )
 
-#: Worker-side names: imported on first access, so the api distribution
-#: (which ships this ``__init__`` without them) imports cleanly.
+#: Names served lazily from :mod:`application_sdk.handler.service` (PEP 562).
+#: The HTTP server pulls in FastAPI and the Temporal client, so importing the
+#: contracts or the ``Handler`` ABC must not load it (FND-3280). The api
+#: distribution ships this ``__init__`` without ``service`` at all.
 _LAZY: dict[str, tuple[str, str]] = {
     "create_app_handler_service": (
         "application_sdk.handler.service",
@@ -57,6 +63,7 @@ __all__ = [
     "AuthStatus",
     "BaseConnectionConfig",
     "BaseMetadataConfig",
+    "CheckTier",
     "DefaultHandler",
     "Handler",
     "HandlerContext",
@@ -71,6 +78,9 @@ __all__ = [
     "PreflightStatus",
     "SqlMetadataObject",
     "SqlMetadataOutput",
+    "WarmupInput",
+    "WarmupObservation",
+    "WarmupState",
     "create_app_handler_service",
     "run_app_handler_service",
 ]

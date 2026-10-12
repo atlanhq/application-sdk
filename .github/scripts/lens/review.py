@@ -13,12 +13,14 @@ The round rules that make the loop converge are here, in code:
   Fingerprint dedupe makes a restatement of an old finding a no-op.
 - **Free resolution.** A finding whose quoted code no longer exists at the
   head is resolved without a model call. Only findings whose code still
-  exists in a file the new commits touched get one verify call.
+  exists get one verify call, in a round whose new commits touched a PR
+  file or that `/lens force` asked for.
 - **Merge rule.** Blocking = open critical/high findings. Medium/low never block.
 """
 
 from __future__ import annotations
 
+import ast
 import json
 import re
 import time
@@ -28,8 +30,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import holistic, prompts, trace
-from .agent import BundleResult, review_bundle
+from . import holistic, prompts, surface, trace
+from .agent import AgentLimits, BundleResult, review_bundle
 from .bundle import Bundle, group
 from .config import Config
 from .diff import (
@@ -42,7 +44,7 @@ from .diff import (
 )
 from .findings import BLOCKING, BODY_KEEP, SEVERITIES, Finding, PRState, merge_new
 from .github import GitHub, bot_login
-from .index import build_index
+from .index import Index, Symbol, build_index, index_source
 from .llm import BudgetExhausted, Client, Ledger, LLMError
 from .rules import RuleSet
 from .select import DEFAULT_EXCLUDE, select_files
@@ -64,6 +66,15 @@ class RunResult:
     unplaced: list[Finding] = field(default_factory=list)
     resolved_free: list[str] = field(default_factory=list)
     resolved_verified: list[str] = field(default_factory=list)
+    # Open items (F-… and A…) sent to a verify call that spent its whole output
+    # budget before answering: not re-judged this round, so not a verdict on them.
+    verify_cut_off: list[str] = field(default_factory=list)
+    verify_max_tokens: int = 0  # the budget that verify call had
+    verify_opt_in_tokens: int = 0  # what `/lens verify-budget` would give it
+    verify_opted_in: bool = False
+    # Open items (F-… and A…) not re-checked because this round changed none of the
+    # PR's own files (e.g. only a merge from the base branch): no verify call ran.
+    verify_skipped: list[str] = field(default_factory=list)
     skipped_files: list[tuple[str, str]] = field(default_factory=list)
     bundles: list[BundleResult] = field(default_factory=list)
     ledger: Ledger | None = None
@@ -254,6 +265,7 @@ def run(
     rules: RuleSet,
     client_factory: Any,
     force: bool = False,
+    verify_budget: bool = False,
     post: bool = True,
     run_url: str = "",
 ) -> RunResult:
@@ -283,9 +295,10 @@ def run(
     # Only a different MODEL is a different reviewer. A lens config change (cards,
     # prompts, limits) does not re-open code an earlier round already passed: that
     # moved the goalposts on reviewed code. It applies from the next new commits.
-    # `/lens force` only lifts the skip and round-cap rules: after new commits it
+    # `/lens force` lifts the skip and round-cap rules: after new commits it
     # reviews just those (the cheap way to get an approval back after a small push);
     # on an unchanged head it re-reviews the whole PR under the current config.
+    # Either way it re-checks every open finding, even when no PR file changed.
     same_reviewer = state.model == cfg.model
     # A head already reviewed is skipped — unless part of it was left unreviewed by a
     # failure, in which case only those files are retried (never the whole PR again).
@@ -507,34 +520,79 @@ def run(
                 gh.set_status(head, *verdict_status(res), url)
             return res
 
+    # ---- the last release's public names this PR takes away ---------------
+    # Once per round, shared by the verify call and every bundle: a removal is a
+    # break only if the name shipped, which neither can tell from a diff.
+    with trace.group("3b · released surface (last release vs PR head)"):
+        released = surface.released_surface_removals(
+            root, full_files, head_text, lambda p: gh.file_at(p, head)
+        )
+        trace.line(
+            released.replace("\n", "; ")[:400]
+            if released
+            else "skipped: the PR changes no package module"
+        )
+    pr_meta["released_surface_removals"] = released
+
     # ---- verify still-open findings (1 call) -------------------------------
     # Every open finding, not only those whose own file changed: a fix often lands
     # in another file (a data file's finding fixed in the code that reads it). The
     # model also sees what changed this round, since the fix may not be at the quote.
     if cfg.verify and round_no > 1:
-        to_verify = state.open_findings() if touched else []
+        # A round that changed no PR file (a merge from the base branch alone) has
+        # nothing new to judge, so it skips verify — unless `/lens force` asked for a
+        # re-check, which then judges the open items against the whole PR's change.
+        recheck = bool(touched) or force
+        verify_files = all_files if touched else full_files
+        if not recheck:
+            res.verify_skipped = [f.id for f in state.open_findings()] + [
+                cid for cid, _ in open_concerns(state)
+            ]
+            if res.verify_skipped:
+                trace.line(
+                    "verify: skipped — no PR file changed this round, so "
+                    f"{', '.join(res.verify_skipped)} were not re-checked"
+                )
+        to_verify = state.open_findings() if recheck else []
         # The approach check runs once per PR, so without this a concern the author
         # has since addressed would stay on the PR forever. It rides the same call.
-        concerns = open_concerns(state) if touched else []
+        concerns = open_concerns(state) if recheck else []
+        res.verify_opted_in = verify_budget
+        res.verify_opt_in_tokens = cfg.limits.verify_max_tokens_opt_in
+        res.verify_max_tokens = (
+            res.verify_opt_in_tokens if verify_budget else cfg.limits.verify_max_tokens
+        )
         with trace.group(
             f"4 · verify {len(to_verify)} still-open finding(s), {len(concerns)} approach concern(s)"
+            f", output budget {res.verify_max_tokens}"
         ):
-            fixed = (
+            verified = (
                 _verify(
                     client,
                     ws,
                     to_verify,
-                    round_diff(all_files, to_verify),
+                    round_diff(verify_files, to_verify),
                     concerns,
                     removed=removed_paths(full_files),
+                    released=released,
+                    max_tokens=res.verify_max_tokens,
                 )
                 if to_verify or concerns
-                else []
+                else Verified()
             )
+            fixed = verified.fixed
+            res.verify_cut_off = verified.cut_off
+            if verified.cut_off:
+                trace.line(
+                    f"WARNING: verify spent its whole output budget ({res.verify_max_tokens}) "
+                    f"before answering for {', '.join(verified.cut_off)}: kept as they were, "
+                    "not re-judged"
+                )
             res.resolved_verified = [i for i in fixed if not _CONCERN_ID.match(i)]
             for f in to_verify:
                 if f.id in res.resolved_verified:
-                    f.fixed_round, f.fixed_by = round_no, "verified"
+                    f.fixed_round = round_no
+                    f.fixed_by = "pr-history" if f.id in verified.moot else "verified"
             addressed = {i for i in fixed if _CONCERN_ID.match(i)}
             for cid, c in concerns:
                 if cid in addressed:
@@ -890,6 +948,73 @@ def _current_line(ws: Workspace, f: Finding, text: str) -> int:
     return locate_in_text(text, f.evidence)  # 0 = the quote is gone; never guess a line
 
 
+BASE_EXCERPT_LINES = 120  # a longer base symbol is shown as a window, like <code_now>
+
+
+def at_base_branch(
+    ws: Workspace, f: Finding, head_sym: Symbol | None, head_line: int = 0
+) -> str:
+    """The finding's enclosing function or class as it is on the BASE branch.
+
+    The checkout is the base branch; `ws.text` overlays the PR head, so the
+    base copy is read from disk. Verify needs it to tell a break against what
+    shipped from one against an intermediate commit of this PR: without it
+    the call sees only the PR head and the round's diff. The symbol is found
+    at the head (enclosing the finding's line), then looked up in the base
+    file by its dotted name, which survives a rename of the file. A finding
+    outside any function or class (a module constant) gets the base lines
+    around its quoted code instead."""
+    fd = ws.diffs.get(f.path)
+    rel = (
+        fd.old_path if fd and fd.status == "renamed" and fd.old_path else f.path
+    ) or ""
+    root = ws.root.resolve()
+    path = (root / rel).resolve()
+    if not rel or root not in path.parents or not path.is_file():
+        return f"absent on base: {rel or f.path} (the file does not exist there)"
+    try:
+        text = path.read_text(encoding="utf-8")
+        ast.parse(text)
+    except (OSError, UnicodeDecodeError, SyntaxError, ValueError):
+        return f"(the base copy of {rel} could not be read or parsed)"
+    lines = text.splitlines()
+
+    def window(lo: int, hi: int) -> str:
+        return "\n".join(
+            f"{i:>5} {lines[i - 1]}" for i in range(max(lo, 1), min(hi, len(lines)) + 1)
+        )
+
+    if head_sym is None:
+        # Module level: no symbol to look up, so the quote locates the site.
+        at = locate_in_text(text, f.evidence)
+        if not at:
+            return f"absent on base: the quoted code is not in {rel}"
+        return f"{rel}: module level\n{window(at - 15, at + 15)}"
+    dotted = head_sym.qualname.split(":", 1)[1]
+    idx = Index(root=str(root))
+    index_source(idx, rel, text)
+    base_sym = next(
+        (
+            idx.symbols[q]
+            for q in idx.by_path.get(rel, [])
+            if q.split(":", 1)[1] == dotted
+        ),
+        None,
+    )
+    if base_sym is None:
+        return f"absent on base: {dotted} in {rel}"
+    lo, hi = base_sym.start, base_sym.end
+    if hi - lo >= BASE_EXCERPT_LINES:
+        at = locate_in_text(text, f.evidence)
+        if not lo <= at <= hi:
+            # The quote is PR-only: take the same offset into the base symbol
+            # as the finding has into the head symbol, not the symbol's top.
+            at = lo + max(head_line - head_sym.start, 0)
+        mid = min(at, hi)
+        lo, hi = max(mid - 15, lo), min(mid + 15, hi)
+    return f"{rel}: {dotted}\n{window(lo, hi)}"
+
+
 VERIFY_BATCH = 20  # findings per verify call; every open finding is checked
 
 
@@ -909,6 +1034,16 @@ def open_concerns(state: PRState) -> list[tuple[str, dict[str, Any]]]:
     ]
 
 
+@dataclass
+class Verified:
+    fixed: list[str] = field(default_factory=list)  # judged fixed: F-… and A…
+    # Sent to a call that spent its whole output budget before answering.
+    cut_off: list[str] = field(default_factory=list)
+    # Of `fixed`, the findings judged moot: never a defect, because the failure
+    # needs history only an earlier commit of this PR could have produced.
+    moot: list[str] = field(default_factory=list)
+
+
 def _verify(
     client: Client,
     ws: Workspace,
@@ -917,20 +1052,33 @@ def _verify(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
-) -> list[str]:
+    released: str = "",
+    max_tokens: int = AgentLimits.verify_max_tokens,
+) -> Verified:
     """Every open finding, VERIFY_BATCH at a time, and the open approach concerns
-    (with the first batch). The paths the PR removes, then the round's changes,
-    lead each call, so the batches share one cached prefix. Returns the ids
-    judged fixed: F-… and A…."""
+    (with the first batch). The paths the PR removes, the last release's public
+    names it removes (`surface`), then the round's changes, lead each call, so the batches share one cached prefix. Returns the ids
+    judged fixed, and the ids no verdict came back for because a call ran out
+    of output budget first."""
     batches = [
         open_[i : i + VERIFY_BATCH] for i in range(0, len(open_), VERIFY_BATCH)
     ] or [[]]
-    fixed: list[str] = []
+    out = Verified()
     for n, batch in enumerate(batches):
-        fixed += _verify_batch(
-            client, ws, batch, changes, concerns if n == 0 else None, removed=removed
+        got = _verify_batch(
+            client,
+            ws,
+            batch,
+            changes,
+            concerns if n == 0 else None,
+            removed=removed,
+            released=released,
+            max_tokens=max_tokens,
         )
-    return fixed
+        out.fixed += got.fixed
+        out.cut_off += got.cut_off
+        out.moot += got.moot
+    return out
 
 
 def _verify_batch(
@@ -941,12 +1089,18 @@ def _verify_batch(
     concerns: list[tuple[str, dict[str, Any]]] | None = None,
     *,
     removed: str = "",
-) -> list[str]:
+    released: str = "",
+    max_tokens: int = AgentLimits.verify_max_tokens,
+) -> Verified:
     items = (
         [f"<paths_removed_by_this_pr>\n{removed}\n</paths_removed_by_this_pr>"]
         if removed
         else []
     )
+    if released:
+        items.append(
+            f"<released_surface_removals>\n{released}\n</released_surface_removals>"
+        )
     if changes:
         items.append(f"<changes_this_round>\n{changes}\n</changes_this_round>")
     for cid, c in concerns or []:
@@ -973,7 +1127,8 @@ def _verify_batch(
         items.append(
             f'<finding id="{f.id}" path="{f.path}">\n{f.title}. {f.body}\n'
             f"<quoted_when_raised>\n{f.evidence}\n</quoted_when_raised>\n"
-            f"<code_now>\n{code}\n</code_now>\n</finding>"
+            f"<code_now>\n{code}\n</code_now>\n"
+            f"<at_base_branch>\n{at_base_branch(ws, f, sym, at)}\n</at_base_branch>\n</finding>"
         )
     messages = [
         {"role": "system", "content": prompts.VERIFY_SYSTEM},
@@ -983,14 +1138,21 @@ def _verify_batch(
         comp = client.complete(
             "verify",
             messages,
-            max_tokens=8000,
+            max_tokens=max_tokens,
             tools=prompts.VERIFY_TOOLS,
             tool_choice="required",
             cache_key="lens-verify",
         )
     except (BudgetExhausted, LLMError):
-        return []
+        return Verified()
+    if not comp.tool_calls and _out_of_output_budget(comp, max_tokens):
+        # No verdict is not "nothing fixed": the model reasoned to the cap and
+        # never answered. Keep every item as it was, and say so.
+        return Verified(
+            cut_off=[f.id for f in open_] + [cid for cid, _ in concerns or []]
+        )
     fixed: list[str] = []
+    moot: list[str] = []
     by_id = {f.id: f for f in open_}
     concern_ids = {cid for cid, _ in concerns or []}
     for tc in comp.tool_calls:
@@ -998,14 +1160,24 @@ def _verify_batch(
             parse_args((tc.get("function") or {}).get("arguments") or "").get("items")
             or []
         ):
-            iid, ok = str(it.get("id")), it.get("status") == "fixed"
+            verdict = it.get("status")
+            iid, ok = str(it.get("id")), verdict in ("fixed", "moot")
             f = by_id.get(iid)
             if f and ok:
                 f.status = "fixed"
                 fixed.append(f.id)
+                if verdict == "moot":
+                    moot.append(f.id)
             elif iid in concern_ids and ok:
                 fixed.append(iid)
-    return fixed
+    return Verified(fixed=fixed, moot=moot)
+
+
+def _out_of_output_budget(comp: Any, max_tokens: int) -> bool:
+    """The call stopped at its output cap: `length` on Chat Completions,
+    `incomplete` on Responses, or every allowed token spent."""
+    used = int((comp.usage or {}).get("completion_tokens") or 0)
+    return comp.finish_reason in ("length", "incomplete") or used >= max_tokens
 
 
 # ---- rendering ---------------------------------------------------------------
@@ -1022,6 +1194,7 @@ _SEV_LABEL = {
 _FIXED_BY = {
     "code-gone": "its code was removed or rewritten",
     "verified": "verified fixed",
+    "pr-history": "closed: needed history only this PR's own earlier commits could produce",
 }
 _CLOSE_HINT = (
     "Fix them and comment `/lens`, or close one the team won't fix with "
@@ -1120,7 +1293,9 @@ def spiral_paths(
             {
                 f.round
                 for f in state.findings
-                if f.path == path and f.severity in BLOCKING
+                if f.path == path
+                and f.severity in BLOCKING
+                and f.fixed_by != "pr-history"  # never a defect: not a spiral
             }
         )
         if len(rounds) >= SPIRAL_ROUNDS:
@@ -1308,6 +1483,8 @@ def render_summary(res: RunResult) -> str:
         else 0.0
     )
     failed = int(led.get("failed_requests", 0))
+    if verify_notice_line(res):
+        lines.append("\n> " + verify_notice_line(res))
     for n in res.notes:
         lines.append(f"\n> ℹ️ {n}")
     lines.append(
@@ -1356,6 +1533,69 @@ def _without_resolved(lines: list[str]) -> list[str]:
             continue
         out.append(line)
     return out
+
+
+def verify_cut_off_line(res: RunResult) -> str:
+    """Why some open items were not re-judged, and whether the opt-in is worth it."""
+    if not res.verify_cut_off:
+        return ""
+    ids = ", ".join(res.verify_cut_off)
+    line = (
+        f"⚠️ **Verify ran out of output budget** — the re-check of {ids} spent all "
+        f"{res.verify_max_tokens:,} output tokens before answering, so they were **not "
+        "re-judged** this round. They show as open because nothing checked them, not "
+        "because a check found them unfixed."
+    )
+    if res.verify_opted_in:
+        return line + (
+            " This was already the opt-in budget (`agent.verify_max_tokens_opt_in` in "
+            "`.github/lens/config.toml`)."
+        )
+    return line + (
+        f" Worth opting in: comment `/lens force verify-budget` to re-check them with "
+        f"{res.verify_opt_in_tokens:,}. Keep `force`: without it, a round whose push "
+        "changes none of the PR's files (a merge from the base branch) re-checks nothing; "
+        "with it, they are re-checked whatever the push changed."
+    )
+
+
+def verify_skipped_line(res: RunResult) -> str:
+    """Why a round re-checked nothing, and how to make it re-check."""
+    if not res.verify_skipped:
+        return ""
+    return (
+        f"ℹ️ **Nothing was re-checked this round** — none of the PR's own files changed "
+        "since the last review (a merge from the base branch alone changes none), so "
+        f"{', '.join(res.verify_skipped)} were not re-judged. They show as open because "
+        "nothing checked them. Comment `/lens force` to re-check them against the whole "
+        "PR, or `/lens force verify-budget` if the last re-check ran out of output budget."
+    )
+
+
+def verify_notice_line(res: RunResult) -> str:
+    """The one verify notice a round can carry: cut off, or not run at all."""
+    return verify_cut_off_line(res) or verify_skipped_line(res)
+
+
+def verify_cut_off_report(res: RunResult) -> dict[str, Any] | None:
+    """The cut-off for machine readers: which items, the budget they had, the
+    opt-in, and the same guidance the verdict gives. None when nothing was cut off."""
+    if not res.verify_cut_off:
+        return None
+    return {
+        "items": res.verify_cut_off,
+        "max_tokens": res.verify_max_tokens,
+        "opt_in_tokens": res.verify_opt_in_tokens,
+        "opted_in": res.verify_opted_in,
+        "message": verify_cut_off_line(res),
+    }
+
+
+def verify_skipped_report(res: RunResult) -> dict[str, Any] | None:
+    """The skipped re-check for machine readers. None when verify ran or had nothing."""
+    if not res.verify_skipped:
+        return None
+    return {"items": res.verify_skipped, "message": verify_skipped_line(res)}
 
 
 def verdict_brief(res: RunResult, summary_url: str) -> str:
@@ -1409,6 +1649,8 @@ def _verdict_brief(res: RunResult, summary_url: str, detail_chars: int | None) -
     fixed = len(res.resolved_free) + len(res.resolved_verified)
     if fixed:
         lines.append(f"**Resolved this round:** {fixed}")
+    if verify_notice_line(res):
+        lines.append("\n" + verify_notice_line(res))
     ap = st.approach or {}
     if ap.get("verdict"):
         # The holistic review, in full: how lens reads the change, and whether the
@@ -1505,6 +1747,8 @@ def to_json(res: RunResult) -> str:
             "unplaced": [f.__dict__ for f in res.unplaced],
             "resolved_free": res.resolved_free,
             "resolved_verified": res.resolved_verified,
+            "verify_cut_off": verify_cut_off_report(res),
+            "verify_skipped": verify_skipped_report(res),
             "skipped_files": res.skipped_files,
             "bundles": [
                 {

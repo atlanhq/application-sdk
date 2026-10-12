@@ -360,6 +360,50 @@ class TestCreateWorker:
             create_worker(client)
         assert "preflight" in str(excinfo.value)
 
+    def test_store_assert_workflow_registered_on_every_worker(self) -> None:
+        """FND-3571: registered whatever ATLAN_STORE_ASSERT_ENABLED says — the
+        gate is checked at run time, so start-up is identical everywhere."""
+        from application_sdk.execution._temporal.store_assert import (
+            STORE_ASSERT_ACTIVITY_NAME,
+            StoreAssertWorkflow,
+        )
+
+        class _PlainApp(App):
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        captured: dict = {}
+
+        def capture_worker(*args, **kwargs):
+            captured.update(kwargs)
+            return mock.MagicMock()
+
+        with mock.patch(
+            "application_sdk.execution._temporal.worker.Worker",
+            side_effect=capture_worker,
+        ):
+            create_worker(_make_mock_client())
+
+        assert StoreAssertWorkflow in captured["workflows"]
+        activity_names = {
+            getattr(a, "__temporal_activity_definition").name  # type: ignore[union-attr]
+            for a in captured["activities"]
+            if hasattr(a, "__temporal_activity_definition")
+        }
+        assert STORE_ASSERT_ACTIVITY_NAME in activity_names
+
+    def test_task_named_like_store_assert_collides(self) -> None:
+        class Sdk(App):
+            @task(timeout_seconds=60, name="store-assert")
+            async def clash(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+            async def run(self, input: _WorkerInput) -> _WorkerOutput:
+                return _WorkerOutput()
+
+        with pytest.raises(WorkerActivityNameCollisionError, match="sdk:store-assert"):
+            create_worker(_make_mock_client())
+
     def test_rejects_caller_supplied_log_interceptor(self) -> None:
         """``create_worker(interceptors=[LogInterceptor()])`` must fail loudly:
         the SDK adds the observability trio automatically and a duplicate would

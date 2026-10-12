@@ -29,6 +29,19 @@ def test_the_sdk_pins_the_api_distribution_at_its_own_version() -> None:
     assert api["version"] == sdk["version"] == application_sdk.__version__
 
 
+def test_the_api_core_dependencies_match_the_sdks_pins() -> None:
+    """The api wheel's own dependencies carry the SDK's pins, so the host and the
+    worker resolve the same versions (FastAPI moved to 0.142 on main once and the
+    api package was left behind)."""
+    sdk = {
+        re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0]: re.sub(r"\[[^\]]*\]", "", r)
+        for r in _project(ROOT / "pyproject.toml")["dependencies"]
+    }
+    for req in _project(ROOT / "packages/api/pyproject.toml")["dependencies"]:
+        name = re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0]
+        assert sdk.get(name) == req, (name, sdk.get(name), req)
+
+
 def test_the_api_extras_match_the_sdks_pins() -> None:
     """A handler declares the same extra on either install and gets the same pin."""
     sdk_reqs = {

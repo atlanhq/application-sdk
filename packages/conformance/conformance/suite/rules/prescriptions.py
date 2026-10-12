@@ -22,7 +22,11 @@ retired in place.  Those five P-ids stay vacant.
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -57,34 +61,44 @@ RULES: tuple[RuleDefinition, ...] = (
             "free only where _retype_is_compatible allows it: an inherited field, a "
             "widening, or replacing Any with a concrete type in the SAME OUTER SHAPE "
             "(which payload safety requires anyway, so it is not optional). "
-            "Wrapping Any in MaxItems clears P001 AND B005 "
-            "but the class then raises PayloadSafetyError at import: Any is refused "
-            "unconditionally. Note also that an app-level OVERRIDE of a base-class "
-            "field is often what introduces the Any — the SDK's own ExtractionInput "
-            "already models its filters payload-safely — and dropping an override is "
-            "not a retype of your contract at all."
+            "Wrapping Any in MaxItems does not make it acceptable or clear P001: "
+            "without the opt-out, P001's inverse finding still reports the "
+            "Any-typed field and class creation raises PayloadSafetyError; with "
+            "the opt-out, the class-level finding still fires. Any is refused "
+            "unconditionally. MaxItems bounds a collection only when its "
+            "element/value type is already payload-safe. Note also that an "
+            "app-level OVERRIDE of a base-class field is often what introduces "
+            "the Any — the SDK's own ExtractionInput already models its filters "
+            "payload-safely — and dropping an override is not a retype of your "
+            "contract at all."
         ),
         terminal_state=(
-            "A justified inline `# conformance: ignore[P001] <reason>` at the "
-            "declaration site is the fix ONLY once narrowing in source, dropping an "
-            "app-level override, and retiring the field as sunset have each been tried "
-            "and shown to fail — with the refusal quoted. It is not licensed by the "
-            "field merely being recorded in the ledger. A site whose justification "
-            "names no attempted alternative is unremediated, not compliant."
+            "The opt-out removed, with every field it guarded bounded, not merely "
+            "accepted by the payload-safety check. A kept opt-out with a justified "
+            "`# conformance: ignore[P001] <reason>` is the owner's decision, reached only "
+            "after the fixes in the description were tried and refused (each refusal "
+            "named); it keeps the gate green but check_migration still fails, so it "
+            "stays an open migration item. A field being recorded in the ledger does "
+            "not license it, and a reason naming no attempted alternative is "
+            "unremediated."
         ),
         scope=RuleScope.BOTH,
         name="UnboundedContractFields",
         tier=EnforcementTier.BLOCK,
         mechanism=RuleMechanism.STATIC,
         category="contract-payload-safety",
-        autofixable=True,
+        # Removing the opt-out changes what a contract accepts on the wire, so each site needs the
+        # app owner's decision on the payload shape, often with a ledger retirement: a migration.
+        autofixable=False,
         orthogonal_gate="tests",
         since="0.3.0",
         rationale=(
             "Temporal enforces a hard 2MB payload limit on workflow/activity I/O (ADR-0008). "
             "Unbounded fields can silently grow past it in production, failing the workflow "
-            "with a cryptic size error instead of a type error at import time. A justified "
-            "inline suppression keeps every opt-out visible in review and auditable in SARIF. "
+            "with a cryptic size error instead of a type error at import time. Typing every "
+            "field payload-safely and removing the opt-out restores that import-time check; "
+            "an opt-out that genuinely cannot be removed carries a justified inline "
+            "suppression, which keeps it visible in review and auditable in SARIF. "
             "Customer impact: payload size scales with the customer's data, so the app that "
             "passed every test fails only in the tenant with the largest source system — the "
             "customer's crawl dies mid-run with a serialization error nothing in their "
@@ -92,72 +106,81 @@ RULES: tuple[RuleDefinition, ...] = (
         ),
         short_description="Input/Output contract declared with allow_unbounded_fields=True — opts out of payload safety",
         full_description=(
-            "An ``Input``/``Output`` contract subclass declared with the\n"
-            "``allow_unbounded_fields=True`` class keyword opts out of the SDK's\n"
-            "payload-safety enforcement: arbitrary, untyped fields may cross task\n"
-            "boundaries unchecked.  This is intended to be *extremely* exceptional —\n"
-            "the sanctioned way to use it is an inline, justified suppression at the\n"
-            "declaration site (``# conformance: ignore[P001] <reason>``), so the\n"
-            "carve-out is reviewed and stays visible.\n"
+            "An ``Input``/``Output`` contract subclass that sets ``allow_unbounded_fields=True``\n"
+            "(or a truthy ``_allow_unbounded_fields`` class attribute, set on the class or\n"
+            "inherited from a class in the same file) opts out of the SDK's\n"
+            "payload-safety check, so untyped or unbounded fields can cross task boundaries\n"
+            "and fail at Temporal's 2MB limit in the tenant with the largest source.  Each\n"
+            "finding names the fields this class declares that block removing it (the\n"
+            "check refuses them), those the check accepts that still bound nothing, and any\n"
+            "whose type this file cannot resolve (an import, or an alias defined elsewhere).\n"
             "\n"
-            "Suppressed declarations are still emitted to the SARIF report (counted in\n"
-            "their own category), so every opt-out is reported every single time.\n"
-            "This rule is ``BLOCK`` (suppress-only): an unsuppressed declaration fails\n"
-            "the conformance gate — the only sanctioned use is the justified inline\n"
-            "suppression above — see BLDX-1428.\n"
+            "**Removing the opt-out is the goal; the class's fields decide how.**  Work\n"
+            "through these in order.  Each is a real fix only once the field is bounded,\n"
+            "not merely accepted by the check.\n"
             "\n"
-            "**The inverse is also a finding.** A contract that declares an\n"
-            "``Any``-typed field and does NOT set ``allow_unbounded_fields`` raises\n"
-            "``PayloadSafetyError`` at class-definition time, so the app does not\n"
-            "import at all.  ``Any`` is refused unconditionally: wrapping it in\n"
-            "``MaxItems`` does not make it acceptable.  Removing the opt-out is a\n"
-            "real fix only when every field is concretely typed.\n"
+            "1. *Nothing to fix.*  When the finding says every declared field is already\n"
+            "payload-safe (str, int, a nested model, ``FilterMap``, a ``MaxItems``-bounded\n"
+            "collection), remove the keyword, or the ``_allow_unbounded_fields``\n"
+            "attribute.  This is the most common case.  ``Input``\n"
+            "drops undeclared keys with or without the opt-out, so extra arguments a\n"
+            "caller sends never justify it.\n"
             "\n"
-            "**The opt-out does not govern unknown keys.**  ``Input`` drops keys\n"
-            "the contract does not declare (logging which ones, once) whether or\n"
-            "not ``allow_unbounded_fields`` is set — the flag only skips the\n"
-            "payload-safety type check.  So a contract that receives more args than\n"
-            "it reads (an AE DAG node's ``credential`` / ``credential_guid``) does\n"
-            "NOT need the opt-out to tolerate them; a justification that says it\n"
-            "does is wrong, and the opt-out comes off with nothing else changed\n"
-            "once every declared field is concretely typed.\n"
+            "2. *Drop an override of an SDK base field.*  Re-declaring ``connection`` as\n"
+            "``dict[str, Any]`` over ``ConnectionRef``, or filters as ``dict[str, Any]``\n"
+            "over ``FilterMap | str``, is how most ``Any`` arrives.  Deleting the override\n"
+            "inherits the safe type and keeps the wire shape.\n"
             "\n"
-            "**Deciding what to do.** Four outcomes, in order of preference.  A\n"
-            "field being recorded in the ledger does NOT by itself close the first\n"
-            "three — reading it that way is what turns fixable sites into\n"
-            "suppressions.\n"
+            "3. *Use the SDK's types in the same outer shape.*  ``ConnectionRef``;\n"
+            "``CredentialRef`` or ``credential_guid`` (credentials cross tasks by\n"
+            "reference, never inline); ``AgentCredentialSpec`` for ``agent_json``; a\n"
+            "``BaseMetadataConfig`` subclass for wizard metadata; ``FilterMap`` for\n"
+            "filter maps; a small ``BaseModel`` for a dict whose keys are known.  Absorb\n"
+            "legacy wire shapes with a ``mode='before'`` validator.\n"
             "\n"
-            "1. *Type the field concretely.*  For filter maps the SDK already ships "
-            "``FilterMap`` (``application_sdk.templates.contracts``), a bounded "
-            "``dict[str, list[str]]`` — see the ``mysql`` reference app, whose "
-            "generated contract needs no opt-out at all.  Replacing ``Any`` with a "
-            "concrete type **in the same outer shape** is compatible under B005: "
-            "payload safety refuses ``Any`` at class-definition time, so the change "
-            "is required rather than optional.  A narrowing that changes the outer "
-            "shape is not, and is judged as an ordinary retype.\n"
+            "4. *Bound a collection of safe values* with ``Annotated[..., MaxItems(n)]``,\n"
+            "``n`` taken from the field's real cardinality.  Every nested ``dict`` or\n"
+            "``list`` needs its own bound.\n"
             "\n"
-            "2. *Drop an app-level override.*  An ``Any`` often arrives because the "
-            "app re-declared a field the SDK base already models safely.  Deleting "
-            "the override inherits the base type, and an inherited field is "
-            "compatible under B005 by construction — the app did not make the "
-            "change and cannot revert it.\n"
+            "5. *Data that grows with the source system* (file lists, event batches,\n"
+            "per-object results) moves by reference: write it to the object store and\n"
+            "pass a ``FileReference``.  This is the fix that holds at 2MB.\n"
             "\n"
-            "3. *Retire a field nothing populates.*  Absent from the generated "
-            "manifest's args and constructed nowhere, it is dead weight.  Mark it "
-            "``deprecated=True`` with ``x-lifecycle: sunset``, regenerate, **then "
-            "remove it from source** — B005 skips a sunset field only once it is "
-            "gone.  A sunset field still declared with a changed type is still a "
-            "retype.\n"
+            "6. *Retire a field nothing populates*: mark it ``deprecated=True`` with\n"
+            "``x-lifecycle: sunset``, regenerate the ledger, then remove it from source.\n"
             "\n"
-            "4. *Keep the opt-out with a justified suppression.*  The last resort, "
-            "reached only after 1–3 have each been tried and shown to fail, with "
-            "the refusal quoted in the reason.  ``ledger-guard`` rejects a change "
-            "to a **recorded** type; it does not stop you narrowing the annotation "
-            "in source, because ``gen-contract-ledger`` never rewrites a recorded "
-            "type.  A justification naming no attempted alternative is "
-            "unremediated, not compliant.\n"
+            "**Not fixes.**  ``object``, ``JsonValue``, a bare ``dict`` or ``list``, a\n"
+            "recursive alias, or a nested ``BaseModel(extra='allow')`` pass the check while\n"
+            "bounding nothing; reach for them only as an owner's recorded decision.\n"
+            "``MaxItems`` never makes ``Any`` safe.  Removing the opt-out while an ``Any``\n"
+            "field remains raises ``PayloadSafetyError`` at class definition, so the app\n"
+            "stops importing: import the module after the change, because a base class or\n"
+            "mixin the detector cannot see may carry the ``Any``.\n"
+            "\n"
+            "**Generated contracts** (``app/generated/``) are fixed at their source: the\n"
+            "``contract/*.pkl`` widget, or the toolkit when it emits ``dict[str, Any]``\n"
+            "for a widget (``APITree`` and similar).  Never hand-edit the generated file,\n"
+            "and never let a post-generate hook re-insert the opt-out.\n"
+            "\n"
+            "**Narrowing changes what the app accepts.**  Before narrowing, list the shapes\n"
+            "the field really carries (its normaliser, its producers, the next task's\n"
+            "contract) and confirm each still validates.  Only ``@entrypoint`` fields are\n"
+            "in the contract ledger, so task contracts can be narrowed freely; for an\n"
+            "entrypoint field run ``gen-contract-ledger`` then ``ledger-guard`` and read\n"
+            "the result rather than inferring it.\n"
+            "\n"
+            "**Keeping the opt-out** is the owner's decision, reached only after the steps\n"
+            "above were tried and refused, with each refusal named in\n"
+            "``# conformance: ignore[P001] <reason>``.  The directive keeps the opt-out\n"
+            "visible and the gate green, but ``check_migration`` still fails on\n"
+            "``allow_unbounded_fields=True``, so a kept opt-out stays an open migration\n"
+            "item, not an end state.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p001",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P002",
@@ -209,6 +232,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "declaration site — see BLDX-1432.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p002",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P003",
@@ -272,6 +299,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "that is the log surface, and the wire code still collapses to the leaf.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p003",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P013",
@@ -341,6 +372,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P013] <reason>`` at the method definition.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p013",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P014",
@@ -400,6 +435,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "``# conformance: ignore[P014] <reason>`` at the method definition.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p014",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P015",
@@ -457,8 +496,17 @@ RULES: tuple[RuleDefinition, ...] = (
             "failure.  Suppress with\n"
             "``# conformance: ignore[P015] <reason>`` when a typed replacement\n"
             "is not feasible.\n"
+            "\n"
+            "On a field already recorded in the contract ledger, retyping it to a\n"
+            "model in place is a B005 break (the ledger keys a field's type by its\n"
+            "name). Add the typed field under a new name and retire the old one, or\n"
+            "keep the bounded container and suppress this warning with that reason.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p015",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P026",
@@ -474,7 +522,7 @@ RULES: tuple[RuleDefinition, ...] = (
         tier=EnforcementTier.WARN,
         mechanism=RuleMechanism.STATIC,
         category="typed-contract-boundary",
-        autofixable=False,
+        autofixable=True,
         orthogonal_gate="tests",
         since="0.9.0",
         rationale=(
@@ -499,11 +547,18 @@ RULES: tuple[RuleDefinition, ...] = (
             "the change from the contract ledger (B005/B006), which only sees schema\n"
             "edits, not reads.\n"
             "\n"
-            "Fix: use attribute access (``param.field``).  Suppress with\n"
+            "Fix: use attribute access (``param.field``) when the field is declared on\n"
+            "the contract (or a base) and the parameter is not ``Optional``; otherwise\n"
+            "``param.field`` can raise where ``getattr`` returned the default, so each\n"
+            "site gets a drafted fix that a human reviews.  Suppress with\n"
             "``# conformance: ignore[P026] <reason>`` only when a value genuinely may\n"
             "be absent and the contract models it as ``Optional`` with a real default.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p026",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P027",
@@ -551,6 +606,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "writer is genuinely external to the scanned source.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p027",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="programs/areas/prescriptions.prose.md",
+        ),
     ),
     RuleDefinition(
         id="P028",
@@ -612,6 +671,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "qualifiedName string is genuinely required.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p028",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
     ),
     RuleDefinition(
         id="P052",
@@ -646,7 +709,7 @@ RULES: tuple[RuleDefinition, ...] = (
             "reference apps are copied, the bypass spreads."
         ),
         short_description=(
-            "Pyatlan asset serialized in app code without going through " "entity_bytes"
+            "Pyatlan asset serialized in app code without going through entity_bytes"
         ),
         full_description=(
             "App code under ``app/`` (``app/generated/`` excluded) turns a pyatlan\n"
@@ -689,5 +752,80 @@ RULES: tuple[RuleDefinition, ...] = (
             "use, such as a ``ConnectionRef`` built from ``to_atlas_format``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p052",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
+    ),
+    RuleDefinition(
+        id="P055",
+        canonical_reference=(
+            "atlan-metabase-app app/asset_mapper.py — the dashboard and question "
+            "mappers link each child to its collection from the child side "
+            "(`asset.metabase_collection = RelatedMetabaseCollection(...)`) and "
+            "never populate `MetabaseCollection.metabase_dashboards` / "
+            "`metabase_questions`."
+        ),
+        terminal_state=(
+            "A justified inline `# conformance: ignore[P055] <reason>` is correct "
+            "only where the list end is set on an asset that is never published "
+            "ahead of its children — e.g. a value built for a comparison or a "
+            "test double. The reason must name why publish ordering cannot apply. "
+            "A directive on a mapper that writes the asset to transformed output "
+            "is unremediated."
+        ),
+        scope=RuleScope.APP,
+        name="OneToManyLinkFromParent",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="asset-modeling",
+        autofixable=False,
+        orthogonal_gate="tests",
+        since="0.44.0",
+        rationale=(
+            "Publish orders entities by type and sends the '1' side of a 1-to-N "
+            "relationship first, relying on each child to reference its parent. "
+            "A parent that lists its children instead names entities that do not "
+            "exist yet, so Atlas returns ATLAS-404-00-00A and the run fails until "
+            "a later run, after the children were created. Nothing at runtime "
+            "stops a new connector from writing the link this way, so it recurs "
+            "app by app; catching it in the mapper is the earliest point."
+        ),
+        short_description=(
+            "Mapper populates the list end of a 1-to-N relationship instead of "
+            "the child's single reference"
+        ),
+        full_description=(
+            "In a module importing ``pyatlan_v9.model.assets``, the mapper sets\n"
+            "the list end of a 1-to-N relationship — the parent's\n"
+            "``Process.fabric_activities`` or ``Table.columns`` — instead of the\n"
+            "single end on each child (``FabricActivity.fabric_process``,\n"
+            "``Column.table``):\n"
+            "\n"
+            "* ``X(..., a=...)`` or ``X.creator(..., a=...)``;\n"
+            "* ``x.a = ...``, ``x.a += ...`` or ``x.a.append(...)`` /\n"
+            "  ``.extend(...)`` / ``.insert(...)``, where ``x`` is bound in the same\n"
+            "  scope to ``X(...)`` / ``X.creator(...)`` or annotated ``X``;\n"
+            "* the same assignment or append on a receiver of unknown type, when\n"
+            "  the value names the child type (``[RelatedColumn(...)]``,\n"
+            "  ``Column.ref_by_qualified_name(...)``) and that pairs with ``a``.\n"
+            "\n"
+            "The list ends come from a table generated off the pinned pyatlan_v9\n"
+            "models (``gen-relationship-directions``): an end whose single-valued\n"
+            "inverse is on the child type.  Many-to-many ends such as\n"
+            "``Process.inputs`` are not in it, and assigning ``None`` is not\n"
+            "flagged.  Raw-dict mappers are out of scope — move them to\n"
+            "``pyatlan_v9`` first (O004).\n"
+            "\n"
+            "Fix: drop the list from the parent and set the single reference on\n"
+            "each child, e.g. ``activity.fabric_process =\n"
+            "RelatedProcess(qualified_name=process_qn)``.  Publish then sends the\n"
+            "parent first and each child references a parent that already exists.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p055",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.SKILL,
+            target="migrate-asset-modeling",
+        ),
     ),
 )

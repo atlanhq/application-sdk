@@ -41,6 +41,9 @@ fi
 # just F401) drifts from whatever's actually configured (see
 # .github/scripts/renovate_pkl_sync.py's _format_generated for the consumer-repo
 # equivalent of this same fix).
+# --force-exclude: honour exclude patterns for these explicitly-named paths, the
+# same calls as .github/scripts/pkl_contract_layout.py's format_generated_python
+# (FND-3560), so every regeneration path formats identically.
 # Match every generated *.py (_input.py, _e2e_base.py, _e2e_credential.py,
 # _e2e_substitutions.py, …) — not just _input.py — so none lands unformatted.
 PY_FILES=$(find examples -path '*/app/generated/*.py' | sort)
@@ -48,11 +51,11 @@ if [ -n "$PY_FILES" ]; then
   echo ""
   echo ":: Linting and formatting generated Python files..."
   if command -v uvx &> /dev/null; then
-    echo "$PY_FILES" | xargs uvx ruff check --fix --quiet
-    echo "$PY_FILES" | xargs uvx ruff format
+    echo "$PY_FILES" | xargs uvx ruff check --fix --quiet --force-exclude
+    echo "$PY_FILES" | xargs uvx ruff format --force-exclude
   elif command -v ruff &> /dev/null; then
-    echo "$PY_FILES" | xargs ruff check --fix --quiet
-    echo "$PY_FILES" | xargs ruff format
+    echo "$PY_FILES" | xargs ruff check --fix --quiet --force-exclude
+    echo "$PY_FILES" | xargs ruff format --force-exclude
   else
     echo "WARNING: ruff not found — skipping Python lint/format."
   fi

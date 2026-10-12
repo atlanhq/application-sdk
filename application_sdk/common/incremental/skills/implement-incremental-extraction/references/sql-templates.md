@@ -44,7 +44,7 @@ WHERE ...
 Key points:
 - Oracle uses `CREATED` and `LAST_DDL_TIME` columns for change detection
 - Uses `TO_TIMESTAMP()` for proper timestamp comparison
-- `{marker_timestamp}` is resolved by SDK's `_resolve_common_placeholders()`
+- `{marker_timestamp}` is resolved by your `fetch_tables()` (from `input.marker_timestamp`)
 - `{system_schema}` is resolved by app's `resolve_database_placeholders()`
 
 ### ClickHouse Example
@@ -181,15 +181,19 @@ WHERE (current_database() || '.' || n.nspname || '.' || c.relname) = ANY({table_
 
 ## Placeholder Resolution Order
 
-The SDK resolves placeholders in this order:
+With `IncrementalSqlMetadataExtractor` every substitution is the app's; the
+SDK substitutes nothing into these templates:
 
-1. **`_resolve_common_placeholders()`** (SDK automatic): `{marker_timestamp}`
-2. **`resolve_database_placeholders()`** (app override): `{system_schema}`, etc.
-3. **`build_incremental_column_sql()`** (app method): `--TABLE_FILTER_CTE--`, `{table_ids_in_clause}`, etc.
+1. **Table SQL** — your `fetch_tables()` replaces `{marker_timestamp}` from
+   `input.marker_timestamp`, then calls `resolve_database_placeholders(sql, input)`
+   for `{system_schema}` and the like.
+2. **Column SQL** — your `build_incremental_column_sql(table_ids, ctx)`
+   replaces the table-ID placeholder (`--TABLE_FILTER_CTE--`,
+   `{table_ids_in_clause}`, …) and, if the template uses it,
+   `{marker_timestamp}` from `ctx.marker_timestamp`.
 
-Note: `_resolve_common_placeholders()` is called automatically by the SDK inside
-`run_column_query()`, so your `build_incremental_column_sql()` does NOT need to
-replace `{marker_timestamp}` - but it can if needed (the replacement is idempotent).
+The marker value has already passed the contracts' SQL-injection validator by
+the time it reaches you; any new placeholder value must be validated by you.
 
 ## Table ID Format
 

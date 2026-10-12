@@ -9,6 +9,7 @@ file.
 from __future__ import annotations
 
 import asyncio
+import errno
 import os
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -17,13 +18,16 @@ import obstore
 import pytest
 
 from application_sdk.common._listing import PARTIAL_DIRNAME
+from application_sdk.errors import STORAGE_DISK_FULL, DiskFullError
+from application_sdk.storage._concurrency import _run_bounded
+from application_sdk.storage.batch import download_prefix
 from application_sdk.storage.chunked import (
     _TRANSFER_LOCKS,
     _discard_transfer_state,
     _part_path,
     _transfer_state_path,
 )
-from application_sdk.storage.errors import StorageError
+from application_sdk.storage.errors import StorageDiskFullError, StorageError
 from application_sdk.storage.factory import create_memory_store
 from application_sdk.storage.ops import _put, download_file, download_file_chunked
 from application_sdk.storage.reference import _materialize_lock
@@ -752,3 +756,216 @@ class TestOwnedTempCleanupRemovesBothStagingFiles:
                 "writer's own discard, so it can silently stop matching the "
                 "staging layout"
             )
+
+
+class TestDiskFullDuringDownload:
+    """A full volume while writing the downloaded file is a disk-full failure,
+    not a generic storage dependency failure: the two need different fixes,
+    and only the typed error lets a reader of the failure tell them apart."""
+
+    @staticmethod
+    def _failing_stream(code: int):
+        class _Result:
+            meta = {"size": 64}
+
+            async def stream(self, **kw):
+                yield b"x" * 32
+                raise OSError(code, os.strerror(code))
+
+        return _Result()
+
+    @pytest.mark.parametrize("code", [errno.ENOSPC, errno.EDQUOT])
+    async def test_a_full_volume_mid_stream_is_a_disk_full_error(
+        self, tmp_path, code
+    ) -> None:
+        path = tmp_path / "f.bin"
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(return_value=self._failing_stream(code)),
+        ):
+            with pytest.raises(DiskFullError) as caught:
+                await download_file(
+                    "k", path, MagicMock(), normalize=False, verify=False
+                )
+
+        assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
+        assert isinstance(
+            caught.value, StorageError
+        ), "except StorageError: blocks keep catching it"
+        assert caught.value.key == "k" and caught.value.required_bytes == 64
+        assert (
+            isinstance(caught.value.__cause__, OSError)
+            and caught.value.__cause__.errno == code
+        )
+        assert not path.exists(), "the destination never holds a partial file"
+        assert not list(
+            (tmp_path / PARTIAL_DIRNAME).glob("*")
+        ), "no staging file is stranded"
+
+    async def test_a_full_volume_at_writeback_is_a_disk_full_error(
+        self, tmp_path
+    ) -> None:
+        """On a delayed-allocation filesystem ENOSPC can surface only at the
+        fsync that precedes the publish."""
+
+        class _Result:
+            meta = {"size": 4}
+
+            async def stream(self, **kw):
+                yield b"data"
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(return_value=_Result()),
+            ),
+            patch(
+                "application_sdk.storage.ops.os.fsync",
+                side_effect=OSError(errno.ENOSPC, "no space"),
+            ),
+        ):
+            with pytest.raises(DiskFullError):
+                await download_file(
+                    "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
+                )
+
+    async def test_another_write_error_is_still_a_storage_error(self, tmp_path) -> None:
+        """The classification is narrow to a full volume: an I/O error keeps the
+        generic wrapper."""
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(return_value=self._failing_stream(errno.EIO)),
+        ):
+            with pytest.raises(StorageError, match="Failed to write downloaded file"):
+                await download_file(
+                    "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
+                )
+
+    def test_the_code_is_the_disk_full_code_both_classes_share(self) -> None:
+        """Consumers classify a full disk by this code, so the subclass must not drift from it."""
+        assert (
+            StorageDiskFullError.code
+            == DiskFullError.code
+            == "RESOURCE_EXHAUSTED_DISK_FULL"
+        )
+
+    def test_the_legacy_error_code_is_its_own_not_the_generic_storage_one(
+        self,
+    ) -> None:
+        """Every typed storage error declares its own legacy code; inheriting
+        StorageError's would label a full disk as a generic store failure."""
+        err = StorageDiskFullError("no space", key="k")
+        assert err.error_code is STORAGE_DISK_FULL
+        assert str(err).startswith(f"[{STORAGE_DISK_FULL.code}] no space")
+
+    async def test_concurrent_downloads_surface_the_typed_error_not_a_group(
+        self, tmp_path
+    ) -> None:
+        """Fan-out paths (`download_prefix`, `FileReference` materialize) run their
+        downloads through `_run_bounded`, which unwraps a group only when every
+        leaf is a StorageError. A full volume on several at once must reach the
+        caller as one typed error with its code, not a bare ExceptionGroup."""
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(
+                side_effect=lambda *a, **k: self._failing_stream(errno.ENOSPC)
+            ),
+        ):
+            coros = [
+                download_file(
+                    f"k{i}",
+                    tmp_path / f"f{i}.bin",
+                    MagicMock(),
+                    normalize=False,
+                    verify=False,
+                )
+                for i in range(3)
+            ]
+            with pytest.raises(StorageError) as caught:
+                await _run_bounded(coros, None)
+
+        assert isinstance(caught.value, StorageDiskFullError)
+        assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
+
+    async def test_download_prefix_surfaces_the_typed_error_not_a_group(
+        self, store, tmp_path
+    ) -> None:
+        """The fan-out path end to end: a prefix download runs through `_run_bounded`,
+        and a volume that fills during it must reach the caller typed."""
+        for i in range(3):
+            await _put(f"pfx/f{i}.bin", b"x" * 8, store, normalize=False)
+
+        with patch(
+            "application_sdk.storage.ops.obstore.get_async",
+            new=AsyncMock(
+                side_effect=lambda *a, **k: self._failing_stream(errno.ENOSPC)
+            ),
+        ):
+            with pytest.raises(StorageError) as caught:
+                await download_prefix("pfx", tmp_path / "out", store, normalize=False)
+
+        assert isinstance(caught.value, StorageDiskFullError)
+        assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
+
+    async def test_a_volume_that_cannot_hold_the_object_fails_before_streaming(
+        self, tmp_path
+    ) -> None:
+        """The declared size is known before the first byte arrives: a plainly
+        undersized volume fails in seconds, naming what was needed and what is
+        free, instead of part-way through the transfer."""
+
+        class _Result:
+            meta = {"size": 64}
+
+            def stream(self, **kw):
+                raise AssertionError(
+                    "the transfer must not start on a volume that cannot hold it"
+                )
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(return_value=_Result()),
+            ),
+            patch("application_sdk.common.atomic._free_bytes", return_value=10),
+        ):
+            with pytest.raises(StorageDiskFullError) as caught:
+                await download_file(
+                    "k", tmp_path / "f.bin", MagicMock(), normalize=False, verify=False
+                )
+
+        assert caught.value.required_bytes == 64 and caught.value.free_bytes == 10
+
+    async def test_a_full_volume_creating_the_parent_is_a_disk_full_error(
+        self, tmp_path
+    ) -> None:
+        """Creating a missing destination directory needs room too: an ENOSPC
+        there must reach the caller typed, not as a bare OSError."""
+
+        class _Result:
+            meta = {"size": 4}
+
+            async def stream(self, **kw):
+                yield b"data"
+
+        with (
+            patch(
+                "application_sdk.storage.ops.obstore.get_async",
+                new=AsyncMock(return_value=_Result()),
+            ),
+            patch(
+                "pathlib.Path.mkdir",
+                side_effect=OSError(errno.ENOSPC, "No space left on device"),
+            ),
+        ):
+            with pytest.raises(StorageDiskFullError) as caught:
+                await download_file(
+                    "k",
+                    tmp_path / "missing" / "f.bin",
+                    MagicMock(),
+                    normalize=False,
+                    verify=False,
+                )
+
+        assert caught.value.code == "RESOURCE_EXHAUSTED_DISK_FULL"
+        assert caught.value.key == "k"

@@ -1,4 +1,4 @@
-"""Hosted-handler rule definitions (P054).
+"""Hosted-handler rule definitions (P056).
 
 An app whose root ``pyproject.toml`` declares ``[tool.atlan-app-api]`` has its
 handler served by the consolidated API host. The host installs a wheel built
@@ -16,7 +16,11 @@ P-ids are a permanent public contract (see ``prescriptions.py``).
 
 from __future__ import annotations
 
-from conformance.suite.schema.catalog import RuleDefinition
+from conformance.suite.schema.catalog import (
+    RemediationKind,
+    RemediationReference,
+    RuleDefinition,
+)
 from conformance.suite.schema.disposition import (
     EnforcementTier,
     RuleMechanism,
@@ -25,7 +29,7 @@ from conformance.suite.schema.disposition import (
 
 RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
-        id="P054",
+        id="P056",
         canonical_reference=(
             "atlan-mysql-app app/handler.py — the hosted handler returns an "
             "AuthOutput / PreflightOutput or raises a typed AppError from "
@@ -94,6 +98,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "Blocks for one that has it, because declaring the block is the app\n"
             "moving to the host.\n"
         ),
-        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p054",
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/packages/conformance/conformance/docs/rules/prescriptions.md#p056",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.GUIDE,
+            target="docs/hosted-handler-guide.md",
+        ),
     ),
 )

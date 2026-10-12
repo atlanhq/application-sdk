@@ -36,6 +36,8 @@ import renovate_approval_conditions as gate  # noqa: E402
 
 SHA = "abc123"
 REPO = "owner/repo"
+CALLER_REF = "owner/repo/.github/workflows/renovate-auto-approve.yml@refs/heads/main"
+FOLLOW_UP = {"FOLLOW_UP_WHEN_PENDING": "true", "CALLER_WORKFLOW_REF": CALLER_REF}
 
 
 # ---------------------------------------------------------------------------
@@ -165,7 +167,9 @@ class FakeGh:
         self.calls.append(cmd)
         args = cmd[1:]
         out, rc = "", 0
-        if args[0] == "api":
+        if args[:3] == ["api", "-X", "POST"] and args[3].endswith("/reviews"):
+            self.approvals.append(cmd)
+        elif args[0] == "api":
             path = args[1]
             if path.endswith("/files"):
                 out, rc = self._respond(self.files, slurp=True)
@@ -176,12 +180,33 @@ class FakeGh:
             elif path.endswith("/pulls"):
                 out, rc = self._respond(self.commit_pulls)
             else:
-                out, rc = self._respond(self.meta)
+                out, rc = self._respond(self._next("meta"))
         elif args[:2] == ["pr", "checks"]:
-            rc = self.checks_exit
+            rc = self._next("checks_exit")
         elif args[:2] == ["pr", "review"]:
             self.approvals.append(cmd)
         return subprocess.CompletedProcess(cmd, rc, stdout=out, stderr="")
+
+    def _next(self, attr):
+        """A list-valued ``meta``/``checks_exit`` is served one entry per call,
+        the last repeating — how a test makes state change across polls."""
+        value = getattr(self, attr)
+        if not isinstance(value, list):
+            return value
+        return value.pop(0) if len(value) > 1 else value[0]
+
+    @property
+    def checks_calls(self) -> int:
+        return sum(1 for c in self.calls if c[1:3] == ["pr", "checks"])
+
+    @property
+    def approved_prs(self) -> list[str]:
+        """PR numbers approved, read from ``repos/<o>/<r>/pulls/<n>/reviews``."""
+        return [c[4].split("/")[-2] for c in self.approvals]
+
+    @property
+    def dispatches(self) -> list[list[str]]:
+        return [c for c in self.calls if c[1:3] == ["workflow", "run"]]
 
     @property
     def api_paths(self) -> list[str]:
@@ -209,8 +234,12 @@ def _defaults(**over):
     return base
 
 
-def run_main(monkeypatch, *, env=None, capsys=None, **gh_kwargs):
-    """Drive ``main`` end to end against a :class:`FakeGh`."""
+def run_main(monkeypatch, *, env=None, capsys=None, sleeps=None, **gh_kwargs):
+    """Drive ``main`` end to end against a :class:`FakeGh`.
+
+    ``sleeps`` collects every requested sleep instead of sleeping, so a test of
+    the fan-in wait runs instantly and can assert how long it would have waited.
+    """
     environ = {
         "REPO": REPO,
         "EVENT_NAME": "workflow_run",
@@ -222,7 +251,7 @@ def run_main(monkeypatch, *, env=None, capsys=None, **gh_kwargs):
     for key, value in environ.items():
         monkeypatch.setenv(key, value)
     fake = FakeGh(**_defaults(**gh_kwargs))
-    code = gate.main(fake)
+    code = gate.main(fake, sleep=(sleeps if sleeps is not None else []).append)
     log = capsys.readouterr().out if capsys else ""
     return code, fake, log
 
@@ -781,6 +810,310 @@ class TestResolvePrs:
 
 
 # ---------------------------------------------------------------------------
+# Fan-in wait (FND-3317): one trigger per SHA waits out pending checks
+# ---------------------------------------------------------------------------
+
+
+class TestFanInWait:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("", 0),
+            ("  ", 0),
+            ("0", 0),
+            ("-3", 0),
+            ("1.5", 90),
+            ("5", 300),
+            ("100", gate.MAX_CHECKS_WAIT_SECONDS),
+            ("nan", 0),
+            ("inf", 0),
+            # Finite, but `* 60` overflows: must clamp, not raise OverflowError.
+            ("1e308", gate.MAX_CHECKS_WAIT_SECONDS),
+            ("-1e308", 0),
+        ],
+    )
+    def test_wait_minutes_parse_and_clamp(self, raw, expected):
+        assert gate.parse_wait_seconds(raw) == expected
+
+    def test_unreadable_wait_is_no_wait_with_a_warning(self, capsys):
+        assert gate.parse_wait_seconds("ten") == 0
+        assert "::warning::" in capsys.readouterr().out
+
+    def test_no_wait_configured_keeps_the_one_shot_behaviour(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch, capsys=capsys, sleeps=sleeps, checks_exit=8
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+        assert fake.checks_calls == 1
+
+    def test_pending_then_green_is_approved_after_waiting(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            checks_exit=[8, 8, 0],
+        )
+        assert len(fake.approvals) == 1
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        assert "still pending" in log
+
+    def test_budget_spent_while_pending_withholds(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "1"},
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        # 60s budget / 30s poll = 2 waits, then (e) judges the still-pending checks.
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        assert "wait budget spent" in log
+
+    def test_red_check_ends_the_wait_immediately(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            checks_exit=1,
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+
+    def test_head_moving_mid_wait_stops_waiting_and_withholds(
+        self, monkeypatch, capsys
+    ):
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            # The initial read sees SHA; the re-read after the first sleep sees
+            # a new push. Checks would have gone green, but for the new HEAD.
+            meta=[pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=[8, 0],
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS]
+        assert fake.checks_calls == 1
+        assert "deadbeef" in log
+
+    def test_one_budget_covers_every_pr_at_the_sha(self, monkeypatch, capsys):
+        # Two PRs at one SHA, both pending: a per-PR budget would wait twice and
+        # outlive the job's timeout-minutes. The run's budget is shared.
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
+            commit_pulls=[
+                {"state": "open", "number": 7},
+                {"state": "open", "number": 8},
+            ],
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS] * 2
+        # ONE follow-up for the SHA: the reusable's per-SHA group holds a single
+        # pending run, so a second same-SHA dispatch would evict the first.
+        assert [d[-3:] for d in fake.dispatches] == [
+            ["pr_number=7,8", "-f", f"head_sha={SHA}"],
+        ]
+
+    def test_still_pending_at_budget_end_dispatches_one_follow_up(
+        self, monkeypatch, capsys
+    ):
+        # The anchor gave up with a check still running. That check's own
+        # first-attempt completion is filtered out by the caller's `if:`, so
+        # without a follow-up the PR would never be re-evaluated.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert fake.dispatches == [
+            [
+                "gh",
+                "workflow",
+                "run",
+                "renovate-auto-approve.yml",
+                "--repo",
+                REPO,
+                "-f",
+                "pr_number=7",
+                "-f",
+                f"head_sha={SHA}",
+            ]
+        ]
+        assert "dispatched one follow-up" in log
+
+    def test_a_follow_up_for_several_prs_evaluates_each(self, monkeypatch, capsys):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={
+                "EVENT_NAME": "workflow_dispatch",
+                "RUN_SHA": SHA,
+                "DISPATCH_PR": "7,8",
+            },
+        )
+        assert fake.approved_prs == ["7", "8"]
+
+    def test_a_multi_pr_dispatch_without_a_sha_is_refused(self):
+        fake = FakeGh(**_defaults())
+        with pytest.raises(gate.GhError):
+            gate.resolve_prs(REPO, "workflow_dispatch", "", "7,8", fake)
+
+    def test_a_follow_up_judges_the_sha_it_was_dispatched_for(
+        self, monkeypatch, capsys
+    ):
+        # The follow-up carries head_sha so it shares the anchor's per-SHA lock.
+        # It must also judge that SHA: after a push, it stands down.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"EVENT_NAME": "workflow_dispatch", "RUN_SHA": SHA, "DISPATCH_PR": "7"},
+            meta=pr_payload(head="deadbeef"),
+        )
+        assert fake.approvals == []
+        assert "deadbeef" in log
+
+    def test_checks_settling_after_a_push_are_not_the_evaluated_shas(
+        self, monkeypatch, capsys
+    ):
+        # `gh pr checks` reads the PR's CURRENT head. Pending at SHA, then a
+        # push lands and the new head is green: that green is not SHA's.
+        sleeps: list[float] = []
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            # initial read, re-read after the sleep (still SHA), re-read once
+            # checks settle (moved).
+            meta=[pr_payload(), pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=[8, 0],
+        )
+        assert fake.approvals == []
+        assert sleeps == [gate.CHECKS_POLL_SECONDS]
+        assert "deadbeef" in log
+
+    def test_head_moving_just_before_approval_withholds(self, monkeypatch, capsys):
+        # Every condition passed at SHA, then a push landed before the review
+        # was posted: approving now would vouch for an unexamined commit.
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            # initial read, re-read once checks settle, re-read before approval.
+            meta=[pr_payload(), pr_payload(), pr_payload(head="deadbeef")],
+        )
+        assert fake.approvals == []
+        assert "deadbeef" in log
+
+    def test_a_follow_up_never_dispatches_another(self, monkeypatch, capsys):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={
+                "EVENT_NAME": "workflow_dispatch",
+                "RUN_SHA": "",
+                "DISPATCH_PR": "7",
+                "CHECKS_WAIT_MINUTES": "1",
+                **FOLLOW_UP,
+            },
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert fake.dispatches == []
+        assert "not dispatching another" in log
+
+    @pytest.mark.parametrize("checks_exit", [0, 1])
+    def test_settled_checks_never_dispatch(self, monkeypatch, capsys, checks_exit):
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", **FOLLOW_UP},
+            checks_exit=checks_exit,
+        )
+        assert fake.dispatches == []
+
+    def test_a_caller_without_follow_up_never_dispatches(self, monkeypatch, capsys):
+        # A caller still firing on every upstream workflow leaves the flag off:
+        # the late check's own completion re-fires the gate there.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "1", "CALLER_WORKFLOW_REF": CALLER_REF},
+            checks_exit=8,
+        )
+        assert fake.dispatches == []
+
+    def test_head_moving_mid_wait_does_not_dispatch(self, monkeypatch, capsys):
+        # The new HEAD has its own anchor run coming.
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={"CHECKS_WAIT_MINUTES": "5", **FOLLOW_UP},
+            meta=[pr_payload(), pr_payload(head="deadbeef")],
+            checks_exit=8,
+        )
+        assert fake.dispatches == []
+
+    def test_unreadable_caller_ref_warns_instead_of_dispatching(
+        self, monkeypatch, capsys
+    ):
+        _code, fake, log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            env={
+                "CHECKS_WAIT_MINUTES": "1",
+                "FOLLOW_UP_WHEN_PENDING": "true",
+                "CALLER_WORKFLOW_REF": "",
+            },
+            checks_exit=8,
+        )
+        assert fake.dispatches == []
+        assert "::warning::" in log
+
+    @pytest.mark.parametrize(
+        "ref,expected",
+        [
+            (CALLER_REF, "renovate-auto-approve.yml"),
+            ("o/r/.github/workflows/a.yaml@refs/pull/7/merge", "a.yaml"),
+            ("", ""),
+            ("o/r/not-a-workflow@main", ""),
+        ],
+    )
+    def test_caller_workflow_file(self, ref, expected):
+        assert gate.caller_workflow_file(ref) == expected
+
+    def test_a_pr_that_cannot_qualify_never_waits(self, monkeypatch, capsys):
+        sleeps: list[float] = []
+        _code, fake, _log = run_main(
+            monkeypatch,
+            capsys=capsys,
+            sleeps=sleeps,
+            env={"CHECKS_WAIT_MINUTES": "5"},
+            files=file_payload("uv.lock", "src/a.py"),
+            checks_exit=8,
+        )
+        assert fake.approvals == []
+        assert sleeps == []
+        assert fake.checks_calls == 0
+
+
+# ---------------------------------------------------------------------------
 # Fail-closed sweep
 # ---------------------------------------------------------------------------
 
@@ -903,7 +1236,7 @@ class TestOrchestration:
                 {"state": "open", "number": 8},
             ],
         )
-        assert [c[3] for c in fake.approvals] == ["7", "8"]
+        assert fake.approved_prs == ["7", "8"]
         assert "--- Evaluating PR #7 ---" in log and "--- Evaluating PR #8 ---" in log
 
     def test_one_pr_failing_a_condition_does_not_abort_the_rest(
@@ -942,7 +1275,7 @@ class TestOrchestration:
         log = capsys.readouterr().out
         assert code == 0
         assert "PR #7: HEAD moved" in log
-        assert [c[3] for c in fake.approvals] == ["8"]
+        assert fake.approved_prs == ["8"]
 
     def test_conditions_short_circuit_before_paying_for_later_calls(
         self, monkeypatch, capsys
@@ -962,7 +1295,7 @@ class TestOrchestration:
         _code, fake, _log = run_main(monkeypatch, capsys=capsys)
         joined = [" ".join(c) for c in fake.calls]
         status_at = next(i for i, c in enumerate(joined) if c.endswith("/status"))
-        review_at = next(i for i, c in enumerate(joined) if "pr review" in c)
+        review_at = next(i for i, c in enumerate(joined) if "event=APPROVE" in c)
         assert status_at < review_at
 
     def test_no_open_prs_exits_clean_without_touching_anything(
@@ -978,9 +1311,15 @@ class TestOrchestration:
     ):
         _code, fake, _log = run_main(monkeypatch, capsys=capsys)
         cmd = fake.approvals[0]
-        assert cmd[:6] == ["gh", "pr", "review", "7", "--repo", REPO]
-        assert "--approve" in cmd
-        assert cmd[cmd.index("--body") + 1] == gate.APPROVAL_BODY
+        assert cmd[:5] == ["gh", "api", "-X", "POST", f"repos/{REPO}/pulls/7/reviews"]
+        assert "event=APPROVE" in cmd
+        assert f"body={gate.APPROVAL_BODY}" in cmd
+
+    def test_approval_is_bound_to_the_evaluated_sha(self, monkeypatch, capsys):
+        # `gh pr review` approves whatever the head is when it lands; a push
+        # after the last HEAD read would get an unexamined commit approved.
+        _code, fake, _log = run_main(monkeypatch, capsys=capsys)
+        assert f"commit_id={SHA}" in fake.approvals[0]
 
     def test_dispatch_path_evaluates_the_named_pr(self, monkeypatch, capsys):
         _code, fake, log = run_main(

@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import asyncio
 import faulthandler
-import importlib.util
 import json
 import time
 from pathlib import Path
@@ -44,8 +43,6 @@ from application_sdk.app.base import (
     _warn_on_invalid_transformed_assets,
 )
 from application_sdk.observability.logger_adaptor import ASSET_VALIDATION_MATRIX_KEY
-
-_HAS_ROCKSDICT = importlib.util.find_spec("rocksdict") is not None
 
 APP = "test-app"
 CONN = "default/snow/123"
@@ -231,7 +228,6 @@ class TestWarnOnInvalidTransformedAssets:
             # rather than a bare truthiness check.
             assert "qualified_name is required" in invalid_rows[0]["error"]
 
-    @pytest.mark.skipif(not _HAS_ROCKSDICT, reason="orphan pass needs rocksdict")
     async def test_orphan_assets_warn_but_do_not_raise(self, tmp_path: Path) -> None:
         # BLDX-1555 decision: the upload hook runs the full referential pass by
         # default — extracts and transforms are full by design, so the batch is
@@ -262,6 +258,90 @@ class TestWarnOnInvalidTransformedAssets:
             orphan_rows = [r for r in matrix if r["kind"] == "orphan"]
             assert len(orphan_rows) == 1
             assert orphan_rows[0]["reference_count"] == 1
+
+    async def test_declared_parts_are_validated_as_one_batch(
+        self, tmp_path: Path
+    ) -> None:
+        # FND-3414: upload_refs hands the hook every declared part. A Column part
+        # whose parent Table sits in the Table part must not orphan, and the
+        # hand-off emits exactly one event covering every part.
+        _valid_hierarchy(tmp_path)
+        _write_transformed(
+            tmp_path,
+            "Column",
+            [
+                Column.creator(
+                    name="C1",
+                    parent_type=Table,
+                    parent_qualified_name=f"{SCHEMA_QN}/T1",
+                    order=1,
+                )
+            ],
+        )
+        parts = [
+            str(tmp_path / "transformed" / entity / "entities.json")
+            for entity in ("Database", "Schema", "Table", "Column")
+        ]
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(parts, APP)
+            logger.warning.assert_not_called()
+            ev = _outcome_event(logger)
+            assert ev["outcome"] == "clean"
+            assert ev["assets_total"] == 4
+            assert ev["assets_orphaned"] == 0
+            assert ev["assets_upload_kind"] == "upload_refs"
+            assert ev["assets_parts_validated"] == 4
+            assert ev["assets_parts_not_local"] == 0
+            assert ev["assets_referential_check"] == "ran"
+
+    async def test_a_part_not_on_this_pod_skips_only_the_orphan_pass(
+        self, tmp_path: Path
+    ) -> None:
+        # A distributed fan-in: the Schema part was written on another pod, so
+        # the lone Table's parent is not here. Reporting it as an orphan would be
+        # the false positive; per-asset validation of the local parts still runs.
+        _write_transformed(tmp_path, "Table", [_invalid_table()])
+        parts = [str(tmp_path / "transformed" / "Table" / "entities.json")]
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                parts, APP, not_local=["run/transformed/Schema/entities.json"]
+            )
+            messages = [c.args[0] for c in logger.warning.call_args_list]
+            assert any("not on this pod" in m for m in messages)
+            ev = _outcome_event(logger)
+            assert ev["assets_invalid"] == 1
+            assert ev["assets_orphaned"] == 0
+            assert ev["assets_parts_not_local"] == 1
+            assert ev["assets_referential_check"] == "not_requested"
+
+    async def test_a_fully_remote_fan_in_warns_instead_of_going_silent(
+        self,
+    ) -> None:
+        # Every declared part was written on another pod: there is nothing local
+        # to scan, and that must be said rather than skipped without a trace.
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                [],
+                APP,
+                not_local=[
+                    "run/transformed/Table/entities.json",
+                    "run/transformed/Column/entities.json",
+                ],
+            )
+            logger.warning.assert_called_once()
+            assert "not on this pod" in logger.warning.call_args.args[0]
+            assert logger.warning.call_args.args[-1] == "skipping validation"
+            logger.info.assert_not_called()
+
+    async def test_remote_raw_parts_do_not_warn(self) -> None:
+        # Only transformed parts make an asset batch incomplete; a raw part
+        # delivered by the same declaration is not an asset file.
+        with patch.object(base_module, "_task_logger") as logger:
+            await _warn_on_invalid_transformed_assets(
+                [], APP, not_local=["run/raw/table/chunk-0.json"]
+            )
+            logger.warning.assert_not_called()
+            logger.info.assert_not_called()
 
     async def test_transformed_dir_passed_directly_is_scanned(
         self, tmp_path: Path

@@ -31,8 +31,16 @@ on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: PR number to evaluate (for manual testing / re-approval)
+        description: >-
+          PR number to evaluate (for manual testing / re-approval). The fan-in
+          follow-up passes several, comma-separated, together with head_sha.
         required: true
+        type: string
+      head_sha:
+        description: >-
+          Commit to evaluate. Set by the fan-in follow-up so it shares the
+          anchor run's per-SHA lock; leave empty to evaluate the PR's HEAD.
+        required: false
         type: string
 
 permissions:
@@ -44,14 +52,32 @@ jobs:
     # Skip failed/cancelled upstream runs — the reusable's gh pr checks guard
     # would no-op them anyway, but filtering here avoids consuming a runner
     # at all. workflow_dispatch always runs (used for manual testing).
+    #
+    # Fan-in to one billed run per SHA (FND-3317), on event-payload fields only
+    # so a skipped trigger never gets a runner: SDK Gate is the anchor (it
+    # composes the SDK tests; measured for FND-3343, it finished last on 23 of
+    # 28 Renovate SHAs, the rest within 1.4 min of it) and the reusable waits
+    # out any required check still pending when it fires (checks_wait_minutes). A check that finishes after that wait (CodeQL
+    # Advanced) is skipped here as a non-anchor first attempt, so
+    # follow_up_when_pending makes the reusable dispatch this workflow once with
+    # pr_number to re-evaluate the PR. Any re-run (run_attempt > 1) also passes, so
+    # re-running a flaked workflow still re-evaluates the PR.
     if: >-
       github.event_name == 'workflow_dispatch'
-      || github.event.workflow_run.conclusion == 'success'
+      || (github.event.workflow_run.conclusion == 'success'
+          && (github.event.workflow_run.name == 'SDK Gate'
+              || github.event.workflow_run.run_attempt > 1))
     uses: ./.github/workflows/renovate-auto-approve-reusable.yml
     with:
       event_name: ${{ github.event_name }}
-      head_sha: ${{ github.event.workflow_run.head_sha }}
+      head_sha: ${{ github.event.workflow_run.head_sha || inputs.head_sha }}
       pr_number: ${{ inputs.pr_number }}
+      # Same value as the bootstrap template: 28 SHAs are too few to set a
+      # lower one on, and 8 is still well past the 1.4-minute tail measured.
+      checks_wait_minutes: 8
+      # A late first-attempt finish (e.g. CodeQL Advanced after the SDK Gate
+      # anchor's wait ran out) is re-evaluated by one dispatched follow-up.
+      follow_up_when_pending: true
       # application-sdk tracks the SHA-pinned actions in its shipped conformance
       # bootstrap templates (Renovate config in renovate.json). Those live under
       # packages/conformance/ source, outside the built-in allowlist, so declare

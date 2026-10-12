@@ -13,6 +13,11 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, _parse_directives
+from conformance.suite.checks._sdk_contract_mixins import SDK_TEMPLATE_CONTRACT_FIELDS
+from conformance.suite.checks.prescriptions._boundary_methods import (
+    BoundaryScope,
+    classify_boundary_method,
+)
 from conformance.suite.checks.prescriptions._decorator_provenance import (
     _SDK_CONTRACT_MODULE_PREFIXES,
     ImportProvenance,
@@ -24,7 +29,6 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
     collect_classes,
     collect_import_aliases,
-    resolve_ancestor,
 )
 from conformance.suite.checks.prescriptions._typed_boundaries import (
     _annotation_terminal_name,
@@ -377,42 +381,26 @@ def is_preflightcheck_call(
 def collect_entrypoint_input_contract_names(reg: Registry) -> frozenset[str]:
     """Class names of every entrypoint *input* contract (outputs excluded).
 
-    Fork of ``_entrypoint_contract_fields.collect_entrypoint_contract_names`` with
-    the ``func.returns`` (output) branch dropped, so the gate-path metadata parity
-    check compares only against what the extraction input actually carries.
+    Same boundary detection as
+    ``_entrypoint_contract_fields.collect_entrypoint_contract_names``
+    (``classify_boundary_method``) with the output side dropped, so the gate-path
+    metadata parity check compares only against what the extraction input
+    actually carries.
     """
     contracts: set[str] = set()
     app_cache: dict[str, bool | None] = {}
     for src in reg.sources:
+        scope = BoundaryScope.for_module(
+            src.tree,
+            prov=src.prov,
+            aliases=src.aliases,
+            by_name=reg.by_name,
+            app_cache=app_cache,
+        )
         for cls in _class_defs(src.tree):
             for func in _iter_class_body_methods(cls):
-                is_ep = False
-                if any(
-                    is_entrypoint_decorator(d, src.prov) for d in func.decorator_list
-                ):
-                    is_ep = True
-                elif any(is_task_decorator(d, src.prov) for d in func.decorator_list):
-                    continue
-                elif func.name == "run" and isinstance(func, ast.AsyncFunctionDef):
-                    for base in cls.bases:
-                        bname = (
-                            base.id
-                            if isinstance(base, ast.Name)
-                            else getattr(base, "attr", None)
-                        )
-                        if bname is None:
-                            continue
-                        bname = src.aliases.get(bname, bname)
-                        if (
-                            bname == "App"
-                            or resolve_ancestor(
-                                bname, "App", reg.by_name, app_cache, set()
-                            )
-                            is True
-                        ):
-                            is_ep = True
-                            break
-                if not is_ep:
+                boundary = classify_boundary_method(cls, func, scope)
+                if boundary is None or boundary.kind == "task":
                     continue
                 non_self = _get_non_self_params(func)
                 if non_self and non_self[0].annotation is not None:
@@ -562,7 +550,10 @@ def coverage_findings(reg: Registry):
                 )
     for src, func in sites:
         contracts = contracts_for_site(reg, src)
-        if contracts and any(name not in reg.by_name for name in contracts):
+        if contracts and any(
+            name not in reg.by_name and name not in SDK_TEMPLATE_CONTRACT_FIELDS
+            for name in contracts
+        ):
             findings.append(
                 make_finding(
                     filename=src.rel,

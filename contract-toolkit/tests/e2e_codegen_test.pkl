@@ -118,6 +118,8 @@ local widgetApp = (App) {
             possibleValues { ["p"] = "P"; ["q"] = "Q" }
             defaultSelection { "p" }
           }
+          ["tags_field"] = new App.TagsInput { title = "Tags" }
+          ["repeater_field"] = new App.InputRepeater { title = "Repeater" }
           ["quoted_default_field"] = new App.TextInput {
             title = "Quoted"
             default = "he said \"hi\""
@@ -731,6 +733,12 @@ facts {
   ["defaultSelection drives the generated list default"] {
     // 92 chars → fmtSubsField wraps to multi-line form
     widgetSubs.contains("multi_default_field: list[str] = Field(\n        default_factory=lambda: [\"p\", \"q\"],\n        alias=\"{{multi_default_field}}\",\n    )")
+  }
+
+  // TagsInput and InputRepeater submit a list, as `_input.py` already types them.
+  ["TagsInput and InputRepeater emit list[str], not str"] {
+    widgetSubs.contains("tags_field: list[str] = Field(default_factory=list, alias=\"{{tags_field}}\")")
+    widgetSubs.contains("repeater_field: list[str] = Field(default_factory=list, alias=\"{{repeater_field}}\")")
   }
 
   ["a one-key defaultSelection generates a one-element list"] {

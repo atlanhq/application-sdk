@@ -13,6 +13,7 @@ from ._helpers import (
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _body_returns_typed_failure,
+    _call_argument_for_parameter,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
@@ -23,6 +24,7 @@ from ._helpers import (
     _return_carries_typed_failure,
     redaction_scope,
     typed_failure_scope,
+    visible_helpers,
 )
 
 
@@ -96,6 +98,10 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
+        from .._ast_common._sanitizers import is_sanitizer_call
+
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
+
         # Pass only if the handler re-raises with the cause preserved on *every*
         # path (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad
         # catch that translates-and-chains swallows nothing. A guaranteeing raise
@@ -104,7 +110,7 @@ class SilentSwallowMixin:
         # disqualify. A severed raise that carries the caught exception through a
         # redaction helper does not: it preserves the cause in the only form that
         # is safe to emit from a frame holding a resolved credential.
-        scope = redaction_scope(node)
+        scope = redaction_scope(node, sdk_errors=self._sdk_errors)
         if _body_always_raises(node.body, scope) and not _body_has_bypassing_exit(
             node.body, scope=scope
         ):
@@ -118,8 +124,185 @@ class SilentSwallowMixin:
             node,
             function=self._function_stack[-1] if self._function_stack else None,
             redaction=scope,
+            local_helpers=local_helpers,
         ):
             return
+
+        def _call_redacts_parameter(call: ast.Call, parameter: str) -> bool:
+            # `exc_info` is a traceback switch, not message text: any value not
+            # provably falsy — the parameter, `True`, a sanitized string —
+            # attaches the raw active traceback past the sanitizer, so the call
+            # is no redaction boundary.
+            if any(
+                keyword.arg == "exc_info"
+                and not (
+                    isinstance(keyword.value, ast.Constant) and not keyword.value.value
+                )
+                for keyword in call.keywords
+            ):
+                return False
+            sanitized = False
+            raw = False
+            pending: list[ast.AST] = [
+                *call.args,
+                *[keyword.value for keyword in call.keywords],
+            ]
+            while pending:
+                current = pending.pop()
+                if isinstance(current, ast.Call) and is_sanitizer_call(current):
+                    sanitizer_args = [
+                        *current.args,
+                        *[keyword.value for keyword in current.keywords],
+                    ]
+                    if any(
+                        isinstance(inner, ast.Name)
+                        and inner.id == parameter
+                        and isinstance(inner.ctx, ast.Load)
+                        for argument in sanitizer_args
+                        for inner in ast.walk(argument)
+                    ):
+                        sanitized = True
+                        continue
+                if (
+                    isinstance(current, ast.Name)
+                    and current.id == parameter
+                    and isinstance(current.ctx, ast.Load)
+                ):
+                    raw = True
+                pending.extend(ast.iter_child_nodes(current))
+            return sanitized and not raw
+
+        def _logged_paths(
+            body: list[ast.stmt], incoming: set[bool], parameter: str
+        ) -> tuple[set[bool], set[bool]] | None:
+            active = set(incoming)
+            exited: set[bool] = set()
+            for statement in body:
+                if not active or active == {True}:
+                    break
+                if (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                ):
+                    continue  # helper docstring
+                if isinstance(statement, ast.If):
+                    then_paths = _logged_paths(statement.body, active, parameter)
+                    if then_paths is None:
+                        return None
+                    else_paths = (
+                        _logged_paths(statement.orelse, active, parameter)
+                        if statement.orelse
+                        else (set(active), set())
+                    )
+                    if else_paths is None:
+                        return None
+                    active = then_paths[0] | else_paths[0]
+                    exited.update(then_paths[1] | else_paths[1])
+                    continue
+                if isinstance(statement, (ast.Return, ast.Raise)):
+                    exited.update(active)
+                    active.clear()
+                    continue
+                if isinstance(statement, ast.Pass):
+                    continue
+                if isinstance(statement, ast.Expr) and isinstance(
+                    statement.value, ast.Call
+                ):
+                    call = statement.value
+                    if (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr in ("warning", "error", "critical")
+                        and _call_redacts_parameter(call, parameter)
+                    ):
+                        active = {True}
+                        continue
+                # Do not summarize assignments, loops, or opaque calls before a
+                # redacted log: their effect on whether the failure reaches it is
+                # not proven by this deliberately small flow analysis.
+                return None
+            return active, exited
+
+        def _helper_logs_parameter(helper: ast.FunctionDef, parameter: str) -> bool:
+            # A write to the parameter anywhere — an `if (p := None):` test, a
+            # walrus inside the log call's own arguments — can replace the
+            # failure before the sanitizer sees it; the flow below does not
+            # track values, so any rebinding leaves the proof incomplete.
+            if any(
+                (
+                    isinstance(descendant, ast.Name)
+                    and descendant.id == parameter
+                    and isinstance(descendant.ctx, (ast.Store, ast.Del))
+                )
+                or (
+                    isinstance(descendant, (ast.Global, ast.Nonlocal))
+                    and parameter in descendant.names
+                )
+                for statement in helper.body
+                for descendant in ast.walk(statement)
+            ):
+                return False
+            paths = _logged_paths(helper.body, {False}, parameter)
+            if paths is None:
+                return False
+            all_paths = paths[0] | paths[1]
+            return bool(all_paths) and all_paths == {True}
+
+        def _handler_logs_through_helper() -> bool:
+            if node.name is None:
+                return False
+            for index, statement in enumerate(node.body):
+                if not isinstance(statement, ast.Expr) or not isinstance(
+                    statement.value, ast.Call
+                ):
+                    continue
+                call = statement.value
+                if not isinstance(call.func, ast.Name):
+                    continue
+                helper = local_helpers.get(call.func.id)
+                if (
+                    helper is None
+                    or helper.decorator_list
+                    or helper.args.vararg is not None
+                    or helper.args.kwarg is not None
+                ):
+                    continue
+                prefix = node.body[:index]
+                if any(
+                    not isinstance(
+                        previous, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)
+                    )
+                    for previous in prefix
+                ):
+                    continue
+                if any(
+                    isinstance(descendant, ast.Name)
+                    and descendant.id == node.name
+                    and isinstance(descendant.ctx, (ast.Store, ast.Del))
+                    for previous in prefix
+                    for descendant in ast.walk(previous)
+                ):
+                    continue
+                parameters = [
+                    *helper.args.posonlyargs,
+                    *helper.args.args,
+                    *helper.args.kwonlyargs,
+                ]
+                for parameter in parameters:
+                    passed = _call_argument_for_parameter(call, helper, parameter.arg)
+                    if (
+                        isinstance(passed, ast.Name)
+                        and passed.id == node.name
+                        and _helper_logs_parameter(helper, parameter.arg)
+                    ):
+                        return True
+            return False
+
+        # Follow only an unconditional direct call to a proven same-module helper.
+        # A preceding branch can bypass the helper and leaves this proof incomplete.
+        if _handler_logs_through_helper():
+            return
+
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
             if not isinstance(n, ast.Expr):
@@ -143,7 +326,7 @@ class SilentSwallowMixin:
             # the failure IS logged; exc_info there would leak past the
             # sanitizer, so its absence must not flag the handler.
             if func.attr in ("warning", "error", "critical") and call_uses_sanitizer(
-                call
+                call, handler=node
             ):
                 return
         self._add(
@@ -170,7 +353,7 @@ class SilentSwallowMixin:
                 continue
             if func.attr == "exception":
                 continue  # logger.exception() implies exc_info — skip
-            if call_uses_sanitizer(call):
+            if call_uses_sanitizer(call, handler=node):
                 # Deliberate redaction boundary — exc_info would serialize the
                 # raw exception past the sanitizer and can leak credentials.
                 continue
@@ -192,7 +375,13 @@ class SilentSwallowMixin:
         # is the same predicate E004 uses for its typed-failure exemption, so
         # the two rules never disagree about one shape. It is applied per
         # return, because E007 judges each return on its own.
-        scope = typed_failure_scope(node)
+        scope = typed_failure_scope(
+            node,
+            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
+            enclosing_function=self._function_stack[-1]
+            if self._function_stack
+            else None,
+        )
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
@@ -214,6 +403,16 @@ class SilentSwallowMixin:
             return
         exc_type = _get_name(node.type)
         if exc_type not in _OPTIONAL_IMPORT_TYPES:
+            return
+        # An unconditional cause-preserving re-raise surfaces the missing
+        # dependency instead of hiding it behind a silent fallback. An explicit
+        # ``from`` replaces the implicit context, so it only counts when the
+        # cause carries the caught ImportError.
+        if (
+            _body_always_raises(node.body)
+            and not _body_has_bypassing_exit(node.body)
+            and _raises_chain_caught(node)
+        ):
             return
         if _any_logging_in(node.body):
             return
@@ -287,15 +486,16 @@ class SilentSwallowMixin:
                         and kw.value.value is True
                         for kw in val.keywords
                     )
-                    if has_re:
+                    if (
+                        has_re
+                        and len(node.targets) == 1
+                        and isinstance(node.targets[0], ast.Name)
+                    ):
                         # Only track single Name targets: chained assignments
                         # (a = b = ...) would emit one finding per target, and
                         # attribute targets (self.x = ...) produce false positives
                         # because the inspection-side check only matches ast.Name.
-                        if len(node.targets) == 1 and isinstance(
-                            node.targets[0], ast.Name
-                        ):
-                            gather_vars[node.targets[0].id] = node
+                        gather_vars[node.targets[0].id] = node
 
         cancelled = _cancelled_task_names(func_node)
 
@@ -320,11 +520,15 @@ class SilentSwallowMixin:
                 # isinstance(var, ...) direct check
                 if isinstance(node, ast.Call):
                     func = node.func
-                    if isinstance(func, ast.Name) and func.id == "isinstance":
-                        if node.args and isinstance(node.args[0], ast.Name):
-                            if node.args[0].id in names:
-                                inspected = True
-                                break
+                    if (
+                        isinstance(func, ast.Name)
+                        and func.id == "isinstance"
+                        and node.args
+                        and isinstance(node.args[0], ast.Name)
+                        and node.args[0].id in names
+                    ):
+                        inspected = True
+                        break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -341,10 +545,13 @@ class SilentSwallowMixin:
                         break
                 # `x = var[i]` / `x = var[0]` — subscripting the result list to
                 # inspect elements one by one.
-                if isinstance(node, ast.Subscript):
-                    if isinstance(node.value, ast.Name) and node.value.id in names:
-                        inspected = True
-                        break
+                if (
+                    isinstance(node, ast.Subscript)
+                    and isinstance(node.value, ast.Name)
+                    and node.value.id in names
+                ):
+                    inspected = True
+                    break
             if not inspected:
                 self._add(
                     "E010",
@@ -386,6 +593,28 @@ class SilentSwallowMixin:
             f"except {exc_type}: [continue/break/pass] inside a loop — exception is "
             f"silently swallowed. Log at DEBUG before the loop control statement.",
         )
+
+
+def _raises_chain_caught(handler: ast.ExceptHandler) -> bool:
+    """True when every ``raise ... from <cause>`` in *handler* chains the caught error.
+
+    A bare ``raise`` or ``raise X(...)`` keeps the ImportError as implicit
+    context. An explicit ``from`` replaces that context, so the cause must read
+    the handler's bound name; an unbound handler has nothing to chain. Nested
+    ``def``/``class`` bodies are skipped — their raises are not handler exits.
+    """
+    caught = frozenset({handler.name}) if handler.name else frozenset()
+    for stmt in handler.body:
+        if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        for node in (stmt, *_iter_shallow(stmt)):
+            if not isinstance(node, ast.Raise) or node.cause is None:
+                continue
+            if not any(
+                isinstance(n, ast.Name) and n.id in caught for n in ast.walk(node.cause)
+            ):
+                return False
+    return True
 
 
 def _inspection_aliases(

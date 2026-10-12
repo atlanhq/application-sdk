@@ -21,7 +21,9 @@ Seed NDJSON under ``artifacts/apps/<app>/e2e-seed/``  harness     403
 
 The 403 and the "unreachable" are the same mechanism, and it is not a
 permissions oversight — :mod:`._dag` has the detail. Nothing about it is fixable
-from a runner, which is why the node is the fix.
+from a runner, which is why the node is the fix. Since FND-3569 it covers the
+last row too: PURGE deletes the seed root and reports it on the ``delete`` node's
+``storage_deleted_by_prefix`` output, which teardown reads back (FND-3572).
 
 Two functions, and which one runs is not a preference:
 

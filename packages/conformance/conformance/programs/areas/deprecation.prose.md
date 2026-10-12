@@ -26,7 +26,7 @@ includes unsuppressed WARNING results, which is where B-series remediation
 actually runs.
 
 The active scope decides which rules can appear: on a consumer app only
-B001/B007 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
+B001/B007/B008 (scope `app`) surface; on the SDK only B002/B003/B004 (scope `sdk`).
 The runner
 auto-detects scope, so each repo only ever sees its own half.
 
@@ -106,8 +106,28 @@ with `recheck-narrowest` + the test orthogonal gate, then routes to residue for
 human audit):
 
 - **B005 NonAdditiveContractChange** (app source, the contract class) — a field
-  the ledger records is absent from the live contract, or its type changed.
-  Work in this order and stop at the first step that applies:
+  the ledger records is absent from the live contract, its type changed,
+  source marks it `sunset` while the ledger records something else, or it is
+  required in source where the ledger records it not required (or it is new
+  and required on a contract the ledger records).
+  A skipped deprecation (`sunset` over `active`) has one fix: change the
+  source marker from `sunset` to `deprecated`, regenerate, and leave `sunset`
+  to a later PR.  Over a ledger `deprecated`, regenerate.  Report `classification = "mechanical"`; never hand-edit the
+  ledger to `sunset` — `ledger-guard` refuses `active` → `sunset` too.
+  A field the finding calls **required** (no default) on an existing contract
+  — new, or with its default removed — is fixed by giving it a default in the
+  contract source (in a generated contract, in its Pkl definition), never by
+  hand-editing `required` in the ledger, which `ledger-guard` refuses.  Pick
+  the default that keeps today's behaviour for a caller that omits the field:
+  for a removed default, restore the one the base ref had; for a new field,
+  the value that makes it a no-op (`None`, `""`, an empty collection, `False`).
+  Report `classification = "mechanical"` only when such a no-op exists and the
+  app's code handles it; otherwise route to residue — the owner decides the
+  default, and migrates callers to send the field.  The way to add a
+  mandatory input is to add it optional with a default, then migrate callers;
+  a new entrypoint contract may declare required fields freely.
+  For a removal or retype, work in this order and stop at the first step that
+  applies:
   1. **Suspect a false positive before proposing anything.**  The ledger keys
      entries by **bare class name**, which is not unique, and three independent
      families make a B005 finding noise rather than a real removal: the same
@@ -123,13 +143,17 @@ human audit):
      If either holds this is a **defect in the rule, not in the app**: take the
      `false-positive` path in `remediate-finding` step 5 so
      `report-rule-defect` raises it against the suite.  Never suppress it
-     silently.
+     silently.  A field the SDK itself retired from a template the contract
+     inherits never reaches this list: B005 excuses it when the SDK's bundled
+     ledger records it `sunset` on that template, so do not hand-edit the
+     app's ledger for it.
   2. **Restore the field** when the removal was unintentional and the ledger
      entry gives its type — re-declare it on the contract class with that type.
      Report `classification = "mechanical"` only when the finding names the
      field and the ledger type round-trips; the recheck gate confirms.
   3. **Otherwise route to residue** proposing the owner's choice: restore the
-     field, or deprecate and sunset it.
+     field, or deprecate it (and sunset it in a later PR, once the
+     deprecation has merged).
   **Never propose a sunset for a field still referenced anywhere in the repo.**
   Grep the whole tree first, including `scripts/` and `*.sh` JSONPath arguments
   such as `$.extract.outputs.<field>`: a field removed from the contract while a
@@ -305,6 +329,25 @@ human audit):
   `DeprecationWarning` in `__init__`/`__init_subclass__`) is a small design
   choice for the symbol's owner; record in residue with the suggestion the
   finding message already carries.
+
+- **B008 PrivateModuleImport** (app source and tests) — a migration rule
+  (`autofixable = false`): apply nothing, `classification = "judgment"`,
+  return a `migration_brief`.  The app imports or uses an underscore-prefixed
+  module or name it does not own: a private segment in the module path, a
+  private name from a public module, a third-party private (`pandas._libs`),
+  or a reach-through on a module alias (`sdk.execution._temporal.x`).  The
+  app's own privates (relative imports, or imports rooted at a package inside
+  the repo) and dunders are never flagged.  Target shape, from
+  `atlan-openapi-app` `app/connector.py`: every foreign import names a public
+  module (`application_sdk.app`, `.contracts`, `.credentials`, `.errors`,
+  `.observability`, `.outputs`).  The brief names, per site, the public
+  equivalent to import, or — when the site is a test asserting on an SDK
+  private — the public behaviour to test instead.  When no public equivalent
+  exists, the brief says so and proposes
+  `# conformance: ignore[B008] no public equivalent — tracked in <id>`.  An
+  error class from `application_sdk.storage.formats` is also a P045 finding;
+  follow that prescription.  For the human reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this package): `.claude/skills/upgrade-v3` Phase 2d
+  (positive-idiom check 1).
 
 **Suppress outcome (strict mode only, WARNING-tier findings)**: the model may
 propose an inline `# conformance: ignore[Bxxx] <8–40 word justification>` when

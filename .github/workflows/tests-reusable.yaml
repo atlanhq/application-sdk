@@ -545,6 +545,13 @@ on:
 
           Unset = the four single-tenant secrets below are used and the cloud
           fan-out is skipped, which is exactly the pre-FND-6 behaviour.
+      E2E_SYSTEM_TENANT_MATRIX_JSON:
+        required: false
+        description: |
+          Tenant map for system-app e2e (FND-3542), same shape as
+          E2E_TENANT_MATRIX_JSON. When set it is used instead of that secret
+          and the single-tenant fallback, so a system app's legs run only on
+          these tenants. Suites built on SystemAppE2ETest require it.
       SDR_TEST_TENANT:
         required: false
         description: |
@@ -690,7 +697,7 @@ jobs:
   detect-merge-queue:
     name: Detect merge queue
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -763,8 +770,11 @@ jobs:
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
-    runs-on: ubuntu-latest
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( startsWith(github.head_ref, 'bump-version') &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
       count: ${{ steps.detect.outputs.count }}
@@ -894,7 +904,10 @@ jobs:
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( startsWith(github.head_ref, 'bump-version') &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
@@ -982,9 +995,9 @@ jobs:
       # because every action this workflow calls is pinned @main: an input added
       # on a feature branch is silently ignored until it lands. Sparse-checks-out
       # .github/scripts and globalprotect-connect (the latter needed only on the
-      # dataforge path — a couple of extra files otherwise).
-      - name: Fetch SDK CI scripts (source-credential export + dataforge fetch)
-        if: env.E2E_SOURCE_ENV_JSON != '' || inputs.dataforge-datasource != ''
+      # dataforge path — a couple of extra files otherwise). Unconditional: the
+      # Docker Hub mirror step below runs a script from it on every connector.
+      - name: Fetch SDK CI scripts (Docker mirror, source credentials, dataforge fetch)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: atlanhq/application-sdk
@@ -1131,6 +1144,20 @@ jobs:
       # A services-script has no token of its own, so log in here for it. It
       # is non-fatal: only a pull of a private image needs it, and that pull
       # then fails loudly (`denied`/`unauthorized`) on its own.
+      # Docker Hub images (mysql, testcontainers' ryuk, ...) are pulled
+      # anonymously from a shared runner IP, so they hit Docker Hub's rate limit
+      # and its 5xx, fail test setup, and eject the PR from the merge queue.
+      # `registry-mirrors` makes the daemon try mirror.gcr.io (Google's public
+      # Docker Hub cache) first and fall back to Docker Hub on a miss; image
+      # names and testcontainers are unchanged, and only docker.io pulls are
+      # affected. Must run AFTER the GlobalProtect step: its `resubnet-docker`
+      # overwrites daemon.json, which would drop the mirror. Best-effort: fails
+      # only if Docker is down even after restoring the old daemon.json.
+      - name: Use mirror.gcr.io as a Docker Hub mirror
+        run: >-
+          sudo python3 application-sdk-scripts/.github/scripts/docker_registry_mirror.py
+          --mirror https://mirror.gcr.io
+
       - name: Log in to GHCR (private CI images for services-script)
         continue-on-error: true
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
@@ -1164,10 +1191,13 @@ jobs:
   # resolution — is exercised before release rather than after.
   discover-e2e:
     name: Discover e2e suites
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
     # hold the required check pending for GitHub's 6-hour default.
     timeout-minutes: 10
+    # On a bump-version PR, `gate-check` opts in to the full release gate
+    # (FND-3748) and so implies e2e; elsewhere only `e2e` does.
+    #
     # The `contains(...labels...)` term asks "does the PR carry `e2e` right now",
     # which is the right question for `opened`/`synchronize`/`reopened` but the
     # wrong one for `labeled`: on a PR that already carries `e2e`, adding ANY
@@ -1185,8 +1215,17 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
         (
           github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+          (
+            (
+              contains(github.event.pull_request.labels.*.name, 'e2e') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'e2e')
+            ) ||
+            (
+              startsWith(github.head_ref, 'bump-version') &&
+              contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'gate-check')
+            )
+          ) &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -1230,7 +1269,7 @@ jobs:
     env:
       # Job-level so the step-level `if:` below can read it — a step condition
       # cannot reference the `secrets` context directly.
-      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+      HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       # Human breadcrumb correlating this dispatched run back to the SDK PR that
       # fired it. Emitted here (the first job in the e2e path) so it is visible
@@ -1279,6 +1318,33 @@ jobs:
           echo "::error::the tenant-install path is on (the default since FND-128) but E2E_TENANT_MATRIX_JSON is not available to this repository, so no tenant ID can be resolved and a release cannot be scoped to any tenant. GM matches allowed_tenants EXACTLY against the tenant's vcluster instance name (e.g. 'markeznp37') — not its hostname — and the legacy single-tenant fallback (SDR_TEST_TENANT) has no matrix entry to carry that value, so there is nothing to fall back to. Either share E2E_TENANT_MATRIX_JSON with this repository, with a 'tenant_id' field on each cloud's entry (see docs/standards/connector-ci-e2e.md), or set 'install-app-to-tenant: false' in this repo's tests.yaml and use the E2E Tenant Install workflow, whose tenant_id input covers the one-off case. Failing at discovery rather than at prepare-tenant so this costs seconds instead of two image builds."
           exit 1
 
+      # ── Claim the commit's e2e verdict (FND-3650) ─────────────────────────
+      # After the free precondition check above (a failure there is still
+      # recorded, as `error`, by the gate job), before anything costs time.
+      # This job runs only in the run that acts on the `e2e` label, so this run
+      # owns the e2e verdict for the head commit. `pending` goes up here: every
+      # other `Tests` run on this commit (started by an unrelated label, which
+      # skips e2e per FND-48) holds its gate on this status instead of reading
+      # its own skipped e2e as a pass. The gate job below always replaces it
+      # with success / failure / error. Fail-open: a run that never sees
+      # `pending` while the PR carries `e2e` still fails closed after a short
+      # wait (e2e_commit_verdict.py).
+      - name: Mark the e2e verdict pending on the head commit
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh api -X POST "repos/${REPO}/statuses/${HEAD_SHA}" \
+            -f state=pending \
+            -f context=e2e \
+            -f description="End-to-end suite running on this commit" \
+            -f target_url="$RUN_URL"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -1312,10 +1378,12 @@ jobs:
         if: env.HAS_TENANT_MATRIX != ''
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
       - name: Discover suites
         id: discover
@@ -1339,7 +1407,7 @@ jobs:
           # so the natural form collapses the default (empty = SDK cloud list)
           # into "none" and quietly disables the matrix on every un-customised
           # caller. The negated form never evaluates the input for truthiness.
-          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          clouds: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           # ── The per-suite dimensions (FND-1865) ─────────────────────────────
           # Resolved here, once, and carried in the matrix — so a leg's source
           # availability and compose overlay arrive the same way its artifact
@@ -1371,7 +1439,7 @@ jobs:
         uses: atlanhq/application-sdk/.github/actions/discover-e2e-suites@main
         with:
           clouds-only: "true"
-          clouds: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          clouds: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           # Same narrowing as the full matrix above, from the same step output:
           # prepare-tenant must install onto exactly the clouds the legs then
           # run against, and a cloud it prepared but no leg used (or vice versa)
@@ -1769,7 +1837,7 @@ jobs:
     name: Recheck the dispatched SDK ref
     needs: [merge-e2e-image]
     if: inputs.install-app-to-tenant && needs.merge-e2e-image.result == 'success'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       # Nothing beyond the default. Every read is of public data in
@@ -1986,6 +2054,7 @@ jobs:
       contents: read
     env:
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ matrix.cloud }}
       FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
       FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
@@ -2051,6 +2120,7 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2059,6 +2129,7 @@ jobs:
             --mask-only
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2306,6 +2377,7 @@ jobs:
       # tenant — a silent wrong-tenant run is indistinguishable from a right one
       # in the logs, since the host is masked. One writer, no precedence.
       E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+      E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
       E2E_CLOUD: ${{ matrix.cloud }}
       FALLBACK_SDR_TEST_TENANT: ${{ secrets.SDR_TEST_TENANT }}
       FALLBACK_SDR_CLIENT_ID: ${{ secrets.SDR_CLIENT_ID }}
@@ -2387,6 +2459,7 @@ jobs:
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2395,6 +2468,7 @@ jobs:
             --mask-only
           python3 application-sdk-scripts/.github/scripts/resolve_e2e_tenant.py \
             --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" \
             --cloud "$E2E_CLOUD" \
             --fallback-tenant "$FALLBACK_SDR_TEST_TENANT" \
             --fallback-client-id "$FALLBACK_SDR_CLIENT_ID" \
@@ -2516,9 +2590,9 @@ jobs:
       # (SDK-PR dispatch); the plain-label path (empty ref) otherwise has no uv
       # and fails with `uv: command not found`. Install it unconditionally here.
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.20"
+          version: "0.13.0"
           enable-cache: true
 
       - uses: atlanhq/application-sdk/.github/actions/sdr-e2e@main
@@ -2635,7 +2709,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.discover-e2e.outputs.cloud-count != '0' && needs.discover-e2e.outputs.cloud-matrix || '{"include":[{"cloud":""}]}') }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: write
@@ -2771,7 +2845,10 @@ jobs:
       always() &&
       github.event_name == 'workflow_dispatch' &&
       inputs.application-sdk-ref != ''
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
+    # Explicit, not the platform's: ubuntu-slim kills a job at 15 minutes
+    # whatever it declares (docs/standards/ci.md, "Runner sizing").
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -2864,7 +2941,7 @@ jobs:
       # verdict is the gate line appended below rather than anything in it.
       - name: Download connector e2e results
         if: needs.e2e.result != 'skipped'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Trailing `*` as well as the middle one: a leg whose first upload
@@ -2976,8 +3053,8 @@ jobs:
   # ways out were considered and this is the one that survives contact with how
   # the artifact is consumed:
   #
-  #   * Also run on the e2e-labelled PR path — DEAD. update-dashboard.yaml picks
-  #     the newest DEFAULT-BRANCH Tests run carrying a live scorecard artifact,
+  #   * Also run on the e2e-labelled PR path — DEAD. update-fleet-dashboards.yaml
+  #     picks the newest live scorecard artifact from a DEFAULT-BRANCH run,
   #     so a PR-run scorecard is never ingested. Worse, on a PR the integration
   #     job is skipped, so such a scorecard would publish a zeroed integration
   #     tier: a fabricated regression, which is exactly what this job's `if:`
@@ -3008,7 +3085,7 @@ jobs:
     # need does not satisfy.
     needs: [unit, detect-integration, integration, discover-e2e, e2e]
     if: always() && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     timeout-minutes: 10
     permissions:
       contents: read
@@ -3017,12 +3094,12 @@ jobs:
       # cannot reference the `secrets` context directly. Same shape as
       # discover-e2e, deliberately: both answer "is this repo wired for the
       # cross-CSP matrix", and two different answers would be a bug.
-      HAS_TENANT_MATRIX: ${{ secrets.E2E_TENANT_MATRIX_JSON != '' && 'true' || '' }}
+      HAS_TENANT_MATRIX: ${{ (secrets.E2E_TENANT_MATRIX_JSON != '' || secrets.E2E_SYSTEM_TENANT_MATRIX_JSON != '') && 'true' || '' }}
     steps:
       - name: Install uv
-        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
-          version: "0.12.20"
+          version: "0.13.0"
           enable-cache: true
 
       # The SDK's arg builder and the discovery driver. `ref: job.workflow_sha`
@@ -3049,7 +3126,7 @@ jobs:
       # integration is absent when it had no suite / was skipped — the CLI then
       # scores an empty (zero) integration tier, which correctly counts against.
       - name: Download unit evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Glob + merge-multiple rather than the bare name: the tier's retry
@@ -3060,7 +3137,7 @@ jobs:
           path: unit-evidence
 
       - name: Download integration evidence
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Glob + merge-multiple, for the same reason as the unit tier above.
@@ -3083,7 +3160,7 @@ jobs:
       # applicable", never as "e2e scored zero".
       - name: Download e2e evidence (one artifact per leg)
         if: needs.e2e.result != 'skipped'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         continue-on-error: true
         with:
           # Trailing `*` as well as the middle one: a leg whose first upload
@@ -3105,10 +3182,12 @@ jobs:
         if: inputs.enable-e2e && env.HAS_TENANT_MATRIX != ''
         env:
           E2E_TENANT_MATRIX_JSON: ${{ secrets.E2E_TENANT_MATRIX_JSON }}
+          E2E_SYSTEM_TENANT_MATRIX_JSON: ${{ secrets.E2E_SYSTEM_TENANT_MATRIX_JSON }}
         run: |
           set -euo pipefail
           python3 application-sdk-scripts/.github/scripts/e2e_tenant_matrix_clouds.py \
-            --matrix-json "$E2E_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
+            --matrix-json "$E2E_TENANT_MATRIX_JSON" \
+            --system-matrix-json "$E2E_SYSTEM_TENANT_MATRIX_JSON" >> "$GITHUB_OUTPUT"
 
       # The same driver, the same `clouds` expression and the same narrowing as
       # discover-e2e — so `configured` is the list discovery WOULD resolve, not
@@ -3126,7 +3205,7 @@ jobs:
         if: inputs.enable-e2e
         continue-on-error: true
         env:
-          CLOUDS: ${{ secrets.E2E_TENANT_MATRIX_JSON == '' && 'none' || inputs.e2e-clouds }}
+          CLOUDS: ${{ (secrets.E2E_TENANT_MATRIX_JSON == '' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON == '') && 'none' || inputs.e2e-clouds }}
           AVAILABLE_CLOUDS: ${{ steps.matrix-clouds.outputs.clouds }}
         run: |
           set -euo pipefail
@@ -3145,6 +3224,7 @@ jobs:
           UNIT_COVERAGE: unit-evidence/coverage.json
           INTEGRATION_JUNIT: integration-evidence/results/test-results.xml
           INTEGRATION_COVERAGE: integration-evidence/coverage.json
+          INTEGRATION_RESULT: ${{ needs.integration.result }}
           # Quoted through to the CLI, which expands it: the legs' artifact
           # directories are only known at download time, and expanding it in the
           # shell would need a loop this file is not allowed to contain
@@ -3167,9 +3247,9 @@ jobs:
           # and --cross-cloud-configured / a repeatable --e2e-junit only exist
           # from 0.21.0; until that publishes, argparse rejects them, this step
           # warns, and no scorecard artifact is produced for that run. The
-          # dashboard already tolerates that — update-dashboard.yaml walks back
-          # through the last 20 completed runs for one that still carries a live
-          # scorecard — and the same gap was accepted when the per-tier flags
+          # dashboard already tolerates that — update-fleet-dashboards.yaml reads
+          # the newest default-branch run that still carries a live scorecard —
+          # and the same gap was accepted when the per-tier flags
           # landed ahead of 0.17.0. It closes on the next conformance release.
           uvx atlan-application-sdk-conformance scorecard "${sc_args[@]}" \
             || echo "::warning::test-readiness scorecard generation failed (skipped)"
@@ -3184,7 +3264,7 @@ jobs:
         id: upload-scorecard
         if: hashFiles('results/test-readiness.json') != ''
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: test-readiness-scorecard
           path: results/test-readiness.json
@@ -3206,7 +3286,7 @@ jobs:
       - name: Upload scorecard (retry)
         if: steps.upload-scorecard.outcome == 'failure'
         continue-on-error: true
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           # A DISTINCT name, never the first attempt's: a FinalizeArtifact
           # failure leaves an unfinalized record holding that name for the whole
@@ -3219,9 +3299,19 @@ jobs:
           overwrite: true
 
   # ── Aggregator gate (single required check for branch protection) ────────
+  #
+  # Job-level `if`, not an early exit in the script: a job that starts and then
+  # passes at once is still billed a full runner minute, and before FND-3320
+  # this one started on every PR, push and merge-group run in every app repo
+  # just to see a non-Renovate head ref. `github.head_ref` is empty off the
+  # pull_request event, so the filter is exactly the script's own pass-at-once
+  # rule. The skip is not a gap: the `Enforce Renovate artifacts` step in
+  # tests-passed accepts `skipped`, and this job is not itself a required
+  # context — Tests Gate is.
   renovate-artifacts:
     name: Renovate artifacts
-    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'renovate/')
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read
@@ -3267,13 +3357,18 @@ jobs:
         api-member,
       ]
     if: always()
-    runs-on: ubuntu-latest
-    # Comment + gate-eval only; cap so a wedged runner can't hold the required
-    # check pending for GitHub's 6-hour default.
-    timeout-minutes: 10
+    runs-on: ubuntu-slim
+    # Gate-eval, comment, and up to 10 min waiting on the e2e verdict of a
+    # sibling run (FND-3650). GitHub kills a slim job at 15 min regardless
+    # (FND-3335); the explicit cap keeps that limit visible here.
+    timeout-minutes: 15
     permissions:
       pull-requests: write
       contents: read
+      # The `e2e` commit status the consumer's Release Gate reads once the
+      # label is consumed (below). Every scaffolded caller already grants it —
+      # the e2e job declares it too — so asking here clamps nothing.
+      statuses: write
     steps:
       # The hosted api member leg is outside verify-test-gate's inputs (that action
       # is consumed at @main). It is skipped for repos without an atlan.app_api
@@ -3327,6 +3422,62 @@ jobs:
           # skipping it (FND-701).
           superseded: ${{ needs.sdk-head-recheck.outputs.superseded }}
 
+      # The drivers for the e2e-verdict hold and both sibling-run repairs below.
+      # Fail-open for the repairs; the hold fails closed without it, because its
+      # enforce step treats a missing `passed` as a failure.
+      - name: Check out the gate's helper drivers
+        if: always() && github.event_name == 'pull_request'
+        continue-on-error: true
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      # ── Hold this gate to the commit's e2e verdict (FND-3650) ────────────
+      #
+      # A run started by an unrelated label skips e2e (FND-48), and a skipped
+      # e2e is a pass to the driver above. But this run may be the NEWEST check
+      # suite on the commit, and GitHub reads the required context from the
+      # newest suite (FND-2167). Left alone, its green would override the run
+      # that is actually running e2e, or one whose e2e failed.
+      #
+      # So a run that did not act on the label defers to the `e2e` commit
+      # status the acting run owns: success passes, failure/error fails,
+      # pending is waited on (10 min; past that the gate fails and the acting
+      # run re-runs it once its verdict is recorded), and no status passes
+      # unless this run would have acted on the label but for the FND-48
+      # filter. Only reached when this run's own gate passed; a failed gate
+      # already fails.
+      - name: Hold the gate to the e2e verdict on this commit
+        id: e2e-verdict
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          inputs.enable-e2e && needs.discover-e2e.result == 'skipped' &&
+          steps.gate.outputs.passed == 'true'
+        timeout-minutes: 12
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          # The same terms as discover-e2e's PR clause, minus the FND-48
+          # `labeled` filter: true means this run skipped e2e only because the
+          # event was an unrelated label.
+          AWAITING_LABEL_RUN: >-
+            ${{ (contains(github.event.pull_request.labels.*.name, 'e2e') ||
+            (startsWith(github.head_ref, 'bump-version') &&
+            contains(github.event.pull_request.labels.*.name, 'gate-check'))) &&
+            github.event.pull_request.head.repo.fork != true &&
+            github.event.pull_request.user.login != 'dependabot[bot]' }}
+        run: |
+          python3 .github/scripts/e2e_commit_verdict.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --awaiting-label-run "$AWAITING_LABEL_RUN" >> "$GITHUB_OUTPUT"
+
       - name: Post unified test-summary comment on PR
         if: always() && github.event_name == 'pull_request'
         uses: mshick/add-pr-comment@ec328af66588ab8f77cdeb2c264f14aba45bbf59 # v3.12.0
@@ -3339,9 +3490,9 @@ jobs:
             |---|---|---|
             | unit | ${{ steps.gate.outputs.unit-status }} | `${{ needs.unit.outputs.summary || 'no summary' }}` |
             | integration | ${{ steps.gate.outputs.integration-status }} | `${{ needs.integration.outputs.summary || 'no summary' }}` |
-            | e2e | ${{ steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
+            | e2e | ${{ steps.e2e-verdict.outputs.e2e-status || steps.gate.outputs.e2e-status }} | per-suite results + live logs in the run |
 
-            **Overall:** ${{ steps.gate.outputs.overall-status }} — [view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            **Overall:** ${{ steps.e2e-verdict.outputs.passed == 'false' && '❌ Some failed' || steps.gate.outputs.overall-status }} —[view run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
         continue-on-error: true
 
       # ── Repair an evicted sibling run on this same commit (FND-2167) ─────
@@ -3366,25 +3517,8 @@ jobs:
       # skipping the duplicate runs' jobs publishes `skipped`, which GitHub
       # counts as a PASS and would let a label run override a genuine failure;
       # and greening the gate on cancellation lets a manual cancel merge
-      # untested code.
-      - name: Check out the evicted-run repair driver
-        if: >-
-          always() && github.event_name == 'pull_request' &&
-          steps.gate.outputs.conclusion != 'cancelled'
-        # Same reasoning as the step below, and just as load-bearing: this job
-        # IS the required `tests / Tests Gate` context, so a 404 or a timeout
-        # fetching the driver must not turn a measured `passed=true` into a
-        # required-check failure. Every step in this job after the gate
-        # evaluation is fail-open; a checkout is no exception.
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: atlanhq/application-sdk
-          ref: ${{ job.workflow_sha }}
-          sparse-checkout: .github/scripts
-          sparse-checkout-cone-mode: false
-          persist-credentials: false
-
+      # untested code. The driver comes from "Check out the gate's helper
+      # drivers" above.
       - name: Re-run an evicted Tests run on this commit
         # Only a run holding a real verdict repairs anything: `conclusion` is
         # "cancelled" exactly when this run's own gate was blocked solely by
@@ -3419,14 +3553,128 @@ jobs:
             --head-sha "$HEAD_SHA" \
             --self-run-id "$SELF_RUN_ID"
 
+      # ── Consume the `e2e` label (FND-3411) ───────────────────────────────
+      #
+      # The label is a one-shot request, not a standing setting. Left on a PR,
+      # every later push re-runs the live-tenant suite — usually days after
+      # anyone wanted it. So the run that acted on the label removes it, and
+      # the next e2e run takes a fresh add.
+      #
+      # First the verdict goes onto the head commit as an `e2e` status, because
+      # the label was the only thing the consumer's Release Gate could see.
+      # With the label gone, the gate reads this status instead, and the
+      # status is bound to the SHA: a push lands on a commit that has none, so
+      # it re-blocks exactly as a missing label did.
+      #
+      # The status is also how every other run on this commit learns the
+      # verdict (FND-3650): discover-e2e marked it `pending`, so this step must
+      # always replace that once this run acted on the label. A real verdict is
+      # recorded as success / failure. Anything else (a skipped or cancelled
+      # matrix, a failed discovery or install, a busy tenant) proves nothing and
+      # is recorded as `error`, which blocks like a failure. The Release Gate
+      # already treats `error` as not passed, so a release still needs a real
+      # pass.
+      #
+      # Both steps use `github.token`, never the PAT, and that is load-bearing:
+      # GitHub starts no workflow run for an event the run's own GITHUB_TOKEN
+      # caused. So the `unlabeled` event below re-fires neither this workflow
+      # nor a Release Gate that predates the status check — an un-resynced
+      # gate keeps its green verdict from the `labeled` run. Both are
+      # fail-open for the same reason as the repair step above: this job IS
+      # the required check, and housekeeping must not redden it.
+      - name: Record the e2e verdict on the head commit
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.discover-e2e.result != 'skipped'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          STATE: >-
+            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+            && needs.e2e.result || 'error' }}
+          DESCRIPTION: >-
+            ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
+            && format('End-to-end suite {0} on this commit', needs.e2e.result)
+            || 'No e2e verdict on this commit (cancelled, tenant busy, or setup failed); add the e2e label again' }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # The driver skips the write when a newer e2e attempt has already
+        # posted on this commit: the Release Gate reads the combined status,
+        # where an older attempt's late row would mask the newer one. If the
+        # driver checkout failed, this step fails and `pending` stays, which
+        # holds sibling gates closed rather than open.
+        run: |
+          python3 .github/scripts/record_e2e_verdict.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --run-id "$RUN_ID" \
+            --state "$STATE" \
+            --description "$DESCRIPTION" \
+            --target-url "$RUN_URL"
+
+      # A newer run on this commit may have given up waiting for the verdict
+      # just recorded, and as the newest suite its red gate owns the required
+      # context. Re-running its failed jobs re-runs only that gate, which now
+      # reads the final status. Fail-open and PAT-backed for the same reasons
+      # as the evicted-run repair above.
+      - name: Re-run a newer gate that gave up waiting for this verdict
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.discover-e2e.result != 'skipped'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.ORG_PAT_GITHUB || github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          SELF_RUN_ID: ${{ github.run_id }}
+        run: |
+          python3 .github/scripts/rerun_deferred_gate.py \
+            --repo "$REPO" \
+            --head-sha "$HEAD_SHA" \
+            --self-run-id "$SELF_RUN_ID"
+
+      # Whenever this run acted on the label — `discover-e2e` ran rather than
+      # skipped — whatever the verdict: a failed run is retried by adding the
+      # label again, same as a passed one. A 404 means a sibling run already
+      # removed it, which is the outcome wanted.
+      - name: Remove the e2e label
+        if: >-
+          always() && github.event_name == 'pull_request' &&
+          needs.discover-e2e.result != 'skipped'
+        continue-on-error: true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api -X DELETE "repos/${REPO}/issues/${PR_NUMBER}/labels/e2e"
+
       # Branch-free enforcement: the decision lives in the driver's `passed`
       # output; this step just fails the required check when it isn't "true".
+      # `skipped` is the non-Renovate path (the job's own `if`), so only a
+      # failed or cancelled check holds the gate.
       - name: Enforce Renovate artifacts
-        if: always() && needs.renovate-artifacts.result != 'success'
+        if: >-
+          always() && needs.renovate-artifacts.result != 'success' &&
+          needs.renovate-artifacts.result != 'skipped'
         shell: bash
         run: exit 1
 
       - name: Enforce gate
         if: always() && steps.gate.outputs.passed != 'true'
+        shell: bash
+        run: exit 1
+
+      # Fails closed: a hold step that ran but left no `passed` (crashed, timed
+      # out, or its driver was never checked out) fails here. The name is read
+      # by rerun_deferred_gate.py to recognise a gate it may re-run.
+      - name: Enforce the e2e verdict on this commit
+        if: >-
+          always() && steps.e2e-verdict.conclusion != 'skipped' &&
+          steps.e2e-verdict.outputs.passed != 'true'
         shell: bash
         run: exit 1

@@ -41,7 +41,7 @@ with workflow.unsafe.imports_passed_through():
         PreconditionError,
         SourceUnavailableError,
     )
-    from application_sdk.execution._temporal.preflight_gate import (
+    from application_sdk.handler._preflight_outcome import (
         PreflightSurface,
         emit_preflight_check_outcome,
         emit_preflight_crash_outcome,

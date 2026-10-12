@@ -1,157 +1,81 @@
-# Workflow Implementation Guide
+# Orchestration (`run()`) Guide
 
-This reference covers the workflow class setup for incremental extraction.
+In v3 there is no workflow class to write. `IncrementalSqlMetadataExtractor`
+(deprecated, removed in v4.0.0) defines a concrete `run()` that calls your
+`@task` methods; each task becomes a Temporal activity automatically, so
+there is no `get_activities()` list and no activity registration. (The file
+keeps its old name so existing links still resolve.)
 
-## Minimal Workflow
-
-For most databases, the workflow class is extremely minimal:
-
-```python
-from temporalio import workflow
-from application_sdk.workflows.metadata_extraction.incremental_sql import (
-    IncrementalSQLMetadataExtractionWorkflow,
-)
-from app.activities.metadata_extraction.your_db import YourDBActivities
-
-
-@workflow.defn
-class YourDBWorkflow(IncrementalSQLMetadataExtractionWorkflow):
-    """Workflow for YourDB incremental metadata extraction."""
-
-    activities_cls = YourDBActivities
-```
-
-That's it. The SDK's `IncrementalSQLMetadataExtractionWorkflow` provides:
-- `get_activities()` - registers all incremental activities
-- `run()` - 4-phase execution
-- `_run_incremental_column_extraction()` - parallel batch execution
-
-## Customizing Activity Registration
-
-If your database doesn't support certain entities, override `get_activities()`
-and `get_fetch_functions()`:
+## Minimal App
 
 ```python
-@workflow.defn
-class ClickHouseWorkflow(IncrementalSQLMetadataExtractionWorkflow):
-    activities_cls = ClickHouseActivities
+from application_sdk.templates import IncrementalSqlMetadataExtractor
 
-    @staticmethod
-    def get_activities(activities):
-        """Register activities, excluding fetch_procedures (ClickHouse has none)."""
-        return [
-            activities.preflight_check,
-            activities.get_workflow_args,
-            activities.fetch_incremental_marker,
-            activities.read_current_state,
-            activities.fetch_databases,
-            activities.fetch_schemas,
-            activities.fetch_tables,
-            activities.fetch_columns,
-            # activities.fetch_procedures,  # ClickHouse has no stored procedures
-            activities.transform_data,
-            activities.prepare_column_extraction_queries,
-            activities.execute_single_column_batch,
-            activities.write_current_state,
-            activities.upload_to_atlan,  # v2-native activity; v3 equivalent: self.upload(UploadInput(...))
-            activities.update_incremental_marker,
-            activities.save_workflow_state,
-        ]
 
-    @staticmethod
-    def get_fetch_functions():
-        """Exclude fetch_procedures from the fetch pipeline."""
-        return {
-            "database": "fetch_databases",
-            "schema": "fetch_schemas",
-            "table": "fetch_tables",
-            "column": "fetch_columns",
-            # No "procedure" entry
-        }
+class YourDBExtractor(IncrementalSqlMetadataExtractor):
+    sql_client_class = YourDBClient
+    ...  # tasks and build_incremental_column_sql — see activities-implementation.md
 ```
 
-## Workflow Execution Flow
+Override `run()` only to change the orchestration structure itself. An entity
+your source does not have (for example, stored procedures) needs nothing: the
+incremental `run()` never calls a procedures task.
 
-The `run()` method in `IncrementalSQLMetadataExtractionWorkflow` executes:
+## Execution Flow
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│ Phase 1: Setup                                           │
-│                                                          │
-│  get_workflow_args  →  fetch_incremental_marker           │
-│        ↓                         ↓                       │
-│  (inject workflow_run_id)  read_current_state             │
-│        ↓                         ↓                       │
-│              save_workflow_state                          │
-├─────────────────────────────────────────────────────────┤
-│ Phase 2: Base Extraction (inherited from parent)         │
-│                                                          │
-│  super().run(workflow_config)                             │
-│  → fetch_databases → fetch_schemas → fetch_tables        │
-│  → fetch_columns (SKIPPED if incremental)                │
-│  → fetch_procedures → transform_data → App.upload()       │
-├─────────────────────────────────────────────────────────┤
-│ Phase 3: Incremental Column Extraction                   │
-│          (only if is_incremental_ready() == True)        │
-│                                                          │
-│  prepare_column_extraction_queries                        │
-│        ↓                                                 │
-│  execute_single_column_batch × N  (parallel, max 3)     │
-│        ↓                                                 │
-│  transform_data (typename="column")                      │
-├─────────────────────────────────────────────────────────┤
-│ Phase 4: Finalization                                    │
-│                                                          │
-│  write_current_state  →  update_incremental_marker       │
-│  (ancestral merge + S3 upload)                           │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│ Phase 1: Prerequisites (sequential)                          │
+│   fetch_incremental_marker → read_current_state              │
+│   (marker.txt)               (CurrentStateStore.probe)       │
+├──────────────────────────────────────────────────────────────┤
+│ Phase 2: Base extraction                                     │
+│   fetch_databases ┐                                          │
+│   fetch_schemas   ┴→ fetch_tables → fetch_columns            │
+│   (parallel)                        (skipped if incremental) │
+├──────────────────────────────────────────────────────────────┤
+│ Phase 3: Incremental columns (only if is_incremental_ready)  │
+│   prepare_column_extraction_queries                          │
+│        ↓                                                     │
+│   execute_single_column_batch × N                            │
+│   (MAX_CONCURRENT_COLUMN_BATCHES = 10 at a time)             │
+├──────────────────────────────────────────────────────────────┤
+│ Phase 4: Write state                                         │
+│   write_current_state                                        │
+│   (build → diff → upload diff → CurrentStateStore.commit)    │
+├──────────────────────────────────────────────────────────────┤
+│ Phase 5: Update marker (only after the state write)          │
+│   update_incremental_marker                                  │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Retry Policy
-
-The workflow uses:
-```python
-retry_policy = RetryPolicy(maximum_attempts=3, backoff_coefficient=2)
-```
-
-All activities get the same retry policy. Column batch execution uses controlled
-concurrency via `MAX_CONCURRENT_COLUMN_BATCHES` (default: 3).
+`IncrementalRunContext.is_incremental_ready()` is true when incremental
+extraction is enabled, a marker exists, and the current state is available.
 
 ## Concurrency Control
 
-Column batches are executed in groups to avoid overwhelming the database:
+Column batches run in groups so the source database is not overwhelmed. The
+group size is `MAX_CONCURRENT_COLUMN_BATCHES` in
+`application_sdk.templates.incremental_sql_metadata_extractor`, which is
+`10`. (`application_sdk.constants` has a `MAX_CONCURRENT_COLUMN_BATCHES = 3`
+that `run()` does not read.)
 
 ```python
-# From SDK's _run_incremental_column_extraction
-for i in range(0, total_batches, MAX_CONCURRENT_COLUMN_BATCHES):
-    chunk = list(range(i, min(i + MAX_CONCURRENT_COLUMN_BATCHES, total_batches)))
-    handles = [
-        workflow.start_activity_method(
-            self.activities_cls.execute_single_column_batch,
-            {**workflow_args, "batch_index": idx, "total_batches": total_batches},
-            ...
-        )
-        for idx in chunk
-    ]
-    all_results.extend(await asyncio.gather(*handles))
+# Simplified from IncrementalSqlMetadataExtractor.run()
+for chunk_start in range(0, prep_result.total_batches, MAX_CONCURRENT_COLUMN_BATCHES):
+    chunk_end = min(chunk_start + MAX_CONCURRENT_COLUMN_BATCHES, prep_result.total_batches)
+    chunk_results = await asyncio.gather(
+        *[
+            self.execute_single_column_batch(ExecuteColumnBatchInput(..., batch_index=i))
+            for i in range(chunk_start, chunk_end)
+        ]
+    )
 ```
 
-## main.py Integration
+## Retries and Timeouts
 
-Your `main.py` must register both the workflow and activities:
-
-```python
-from application_sdk.server import ApplicationServer
-
-from app.activities.metadata_extraction.your_db import YourDBActivities
-from app.workflows.metadata_extraction.your_db import YourDBWorkflow
-
-app = ApplicationServer()
-
-# Register workflow and activities
-app.register_workflow(YourDBWorkflow)
-app.register_activities(YourDBActivities)
-
-if __name__ == "__main__":
-    app.run()
-```
+Each task's timeout comes from its `@task(timeout_seconds=...)`; retries are
+the SDK's task defaults. Every infrastructure task is safe to retry: local
+state is run-scoped under `{output_path}/incremental/`, and a
+`write_current_state` retry after the commit point reports that commit
+instead of rebuilding.

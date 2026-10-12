@@ -31,9 +31,9 @@
 #
 # NOT YET A REQUIRED CHECK — and it has to become one to be worth anything.
 #
-# As of this commit the `main` ruleset (id 16702782) requires: Authorized
-# Approver Check, Pre-commit Checks, Trivy Code Scan, Capability Manifest Drift,
-# Validate PR title, SDK Gate, Connector Tests Gate, Guard release-owned files.
+# As of this commit the `main` ruleset (id 16702782) requires: Pre-commit
+# Checks, Capability Manifest Drift, Validate PR title, SDK Gate, Connector
+# Tests Gate, Guard release-owned files.
 # This job is not among them and no aggregator rolls it up, so today a PR that
 # removes an un-deprecated public name gets a red advisory check and merges
 # anyway — the precise failure mode the gate was written to close. Wiring it up

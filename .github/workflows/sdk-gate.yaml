@@ -67,8 +67,24 @@ jobs:
       force_sdk: ${{ steps.final-force.outputs.force_sdk }}
       force_conformance: ${{ steps.final-force.outputs.force_conformance }}
       force_toolkit: ${{ steps.final-force.outputs.force_toolkit }}
+      opted_in: ${{ steps.opt-in.outputs.opted_in }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Bump-version PR CI is opt-in (FND-3748): every area below skips until a
+      # reviewer adds `gate-check`, and the gate fails fast saying so. Read from
+      # the PR's LIVE labels, not the event payload: this workflow deliberately
+      # does not subscribe to `labeled` (an unrelated label would skip the
+      # inline gate, and a skipped required check reads as a pass), so adding
+      # `gate-check` re-runs it instead (bump-pr-gate-check.yaml) — and a
+      # re-run replays the original, label-less payload. `true` off a bump PR.
+      - name: Check the bump-PR CI opt-in
+        id: opt-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --pr "$PR_NUMBER"
 
       # Compute force-all FIRST — it needs no diff base, only the ref/head_ref.
       - name: Compute force flags
@@ -270,7 +286,7 @@ jobs:
   sdk-tests:
     name: SDK Tests
     needs: changes
-    if: needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true'
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_sdk == 'true')
     uses: ./.github/workflows/sdk-tests-reusable.yaml
     # packages: read lets the Storage Emulator job pull the private MinIO
     # mirror (ghcr.io/atlanhq/ci-mirror/minio). A called workflow cannot hold
@@ -283,7 +299,7 @@ jobs:
   conformance:
     name: Conformance
     needs: changes
-    if: needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_conformance == 'true'
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.conformance == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_conformance == 'true')
     uses: ./.github/workflows/conformance-reusable.yaml
     with:
       # Dogfood the in-flight suite: run the PR's own conformance package, not
@@ -301,8 +317,9 @@ jobs:
       # conformance package (its tests embed deprecation-notice strings as fixtures)
       # and tooling so only application_sdk/ deprecations are graded.
       exclude-paths-b: "tools/,contract-toolkit/,packages/conformance/"
-      # SDK's own ledger lives inside the conformance package data dir.
-      ledger-path: "packages/conformance/conformance/data/contract_schema.lock.json"
+      # The SDK's only committed ledger is the repo-root file; the conformance
+      # wheel packages it at build time (FND-3108).
+      ledger-path: "contract_schema.lock.json"
       event_name: ${{ github.event_name }}
       # force-all the inner per-series run for conformance releases AND container
       # changes — a Dockerfile/entrypoint diff isn't .py/.github/pyproject, so
@@ -313,7 +330,7 @@ jobs:
   toolkit:
     name: Contract Toolkit
     needs: changes
-    if: needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_toolkit == 'true'
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.toolkit == 'true' || needs.changes.outputs.container == 'true' || needs.changes.outputs.force_toolkit == 'true')
     uses: ./.github/workflows/contract-toolkit-reusable.yaml
     secrets: inherit
 
@@ -336,7 +353,7 @@ jobs:
   conformance-suite-tests:
     name: Conformance Suite Tests
     needs: changes
-    if: needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_conformance == 'true'
+    if: needs.changes.outputs.opted_in == 'true' && (needs.changes.outputs.conformance_pkg == 'true' || needs.changes.outputs.sdk == 'true' || needs.changes.outputs.force_conformance == 'true')
     uses: ./.github/workflows/conformance-suite-tests-reusable.yaml
     secrets: inherit
 
@@ -366,6 +383,14 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      # An un-opted bump PR skipped every area; without this the gate would
+      # read success|skipped as a pass and the PR could merge with nothing run.
+      - name: Require the bump-PR CI opt-in
+        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
+        run: |
+          echo "::error::Bump-version PR CI is opt-in (FND-3748). Add the 'gate-check' label to run it."
+          exit 1
+
       - name: Evaluate composed areas
         env:
           CHANGES_RESULT: ${{ needs.changes.result }}

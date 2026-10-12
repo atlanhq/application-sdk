@@ -66,6 +66,22 @@ contributors cannot.
 - **Developer Experience** — API ergonomics, error messages, migration paths
 - **Structural** — symptoms vs causes, file health, design coherence
 
+### CI Cost
+
+Applies to any change under `.github/workflows/`, a reusable workflow, or
+a bootstrap template. The rules and the reasoning behind them are in
+[CI cost](../standards/ci.md#ci-cost). Anything in a template or reusable
+runs in ~140 repos, so judge it by its fleet total.
+
+- New billed jobs — could the work be steps in an existing job?
+- "Nothing to do" filters sit on the job's `if:`, not on steps
+- No matrix whose legs finish in under a minute
+- Every PR-triggered workflow cancels superseded runs, or explains why not
+- Every `upload-artifact` sets `retention-days`
+- A new `workflow_run` trigger states its fan-in; a new cron justifies
+  its frequency
+- No check re-runs on PR, merge queue and release with unchanged inputs
+
 ### Cross-Model Review
 
 The review uses two models to reduce bias:

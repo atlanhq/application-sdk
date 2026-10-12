@@ -439,6 +439,171 @@ except Exception as exc:
     )
 
 
+_SDK_LEAF_PRELUDE = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
+"""
+
+
+@pytest.mark.parametrize(
+    "prelude, raised",
+    [
+        (_SDK_LEAF_PRELUDE, "StoreTransientError"),
+        (
+            "from application_sdk.errors import SourceUnavailableError\n",
+            "SourceUnavailableError",
+        ),
+        (
+            "from application_sdk.errors.leaves import SourceUnavailableError as Down\n",
+            "Down",
+        ),
+        ("from application_sdk import errors\n", "errors.SourceUnavailableError"),
+        (
+            "import application_sdk.errors as sdk_errors\n",
+            "sdk_errors.SourceUnavailableError",
+        ),
+        (
+            "from application_sdk import errors\n\n\n"
+            "class StoreTransientError(errors.SourceUnavailableError):\n    pass\n",
+            "StoreTransientError",
+        ),
+    ],
+    ids=[
+        "local-leaf",
+        "sdk-leaf",
+        "sdk-submodule-alias",
+        "module-attr",
+        "module-alias",
+        "local-leaf-attr-base",
+    ],
+)
+def test_p004_no_finding_when_severed_raise_hands_the_cause_to_a_typed_error(
+    prelude: str, raised: str
+) -> None:
+    # An SDK error given the caught exception as ``cause=`` carries it through
+    # the SDK's own redaction: the wire envelope renders it with
+    # sanitize_cause_repr, so ``from None`` severs only the raw traceback.
+    assert "E004" not in _findings(
+        prelude
+        + f"""\
+try:
+    found = read_store(credential)
+except Exception as exc:
+    raise {raised}(message="store did not answer", cause=exc) from None
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "prelude",
+    [
+        "class StoreTransientError(Exception):\n"
+        "    def __init__(self, message, cause):\n"
+        '        super().__init__(f"{message}: {cause}")\n',
+        "from app.errors import StoreTransientError\n",
+        "",
+        "from somewhere.errors import SourceUnavailableError\n\n\n"
+        "class StoreTransientError(SourceUnavailableError):\n    pass\n",
+    ],
+    ids=[
+        "app-class-on-exception",
+        "unresolvable-import",
+        "undefined-name",
+        "lookalike-base",
+    ],
+)
+def test_p004_still_flags_severed_cause_to_an_unproven_error(prelude: str) -> None:
+    # Capitalisation is not proof of the SDK's redaction: an app error that
+    # formats its cause raw would put a credential-bearing exception in the log.
+    assert "E004" in _findings(
+        prelude
+        + """\
+try:
+    found = read_store(credential)
+except Exception as exc:
+    raise StoreTransientError(message="store did not answer", cause=exc) from None
+"""
+    )
+
+
+def _scan_repo(tmp_path, files: dict[str, str], target: str) -> list[str]:
+    from conformance.suite.checks.error_handling import scan_path
+
+    for rel, text in files.items():
+        path = tmp_path / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    return sorted(f.rule_id for f in scan_path(tmp_path / target, tmp_path))
+
+
+_SEVERED_HANDLER = """\
+from app.errors import StoreTransientError
+
+
+def probe(credential):
+    try:
+        return read_store(credential)
+    except Exception as exc:
+        raise StoreTransientError(message="store did not answer", cause=exc) from None
+"""
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_p004_resolves_an_sdk_leaf_defined_in_another_module(
+    tmp_path, relative
+) -> None:
+    handler = _SEVERED_HANDLER.replace(
+        "from app.errors", "from .errors" if relative else "from app.errors"
+    )
+    files = {
+        "app/__init__.py": "",
+        "app/errors.py": (
+            "from application_sdk.errors import SourceUnavailableError\n\n\n"
+            "class StoreTransientError(SourceUnavailableError):\n    pass\n"
+        ),
+        "app/handler.py": handler,
+    }
+    assert "E004" not in _scan_repo(tmp_path, files, "app/handler.py")
+
+
+def test_p004_flags_an_app_error_in_another_module_not_on_the_sdk_chain(
+    tmp_path,
+) -> None:
+    files = {
+        "app/__init__.py": "",
+        "app/errors.py": "class StoreTransientError(Exception):\n    pass\n",
+        "app/handler.py": _SEVERED_HANDLER,
+    }
+    assert "E004" in _scan_repo(tmp_path, files, "app/handler.py")
+
+
+@pytest.mark.parametrize(
+    "raised",
+    [
+        'StoreTransientError(message="store did not answer", cause=str(exc))',
+        'StoreTransientError(message="store did not answer", cause=previous)',
+        'make_store_error(message="store did not answer", cause=exc)',
+        'StoreTransientError(message="store did not answer", context=exc)',
+    ],
+    ids=["stringified-cause", "other-cause", "lowercase-factory", "other-keyword"],
+)
+def test_p004_still_flags_severed_raise_without_a_typed_cause(raised: str) -> None:
+    assert "E004" in _findings(
+        f"""\
+def probe(previous):
+    try:
+        found = read_store(credential)
+    except Exception as exc:
+        raise {raised} from None
+"""
+    )
+
+
 def test_p004_no_finding_when_severed_raise_uses_staged_redacted_local() -> None:
     # The redacted text may be built up over several statements before the
     # raise references it — the fixpoint in redaction_scope() resolves the chain.
@@ -945,6 +1110,222 @@ def probe():
     )
 
 
+def test_p004_no_finding_when_module_helper_logs_redacted_caught_exception() -> None:
+    # The helper forwards the received exception through a sanitizer on every
+    # branch, even though the except handler itself contains no logger call.
+    src = """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error(
+            "%s failed [%s]: %s",
+            operation,
+            classification.code,
+            sanitize_cause_repr(problem),
+        )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        _report_failure("authentication", caught, classification)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_no_finding_when_helper_log_disables_exc_info() -> None:
+    # A provably falsy `exc_info` attaches no traceback; the sanitized message
+    # remains the only form the failure leaves in.
+    src = """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=False)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A conditional exit before the helper can bypass the log, like the
+        # unclassified arm of the pg_stat_statements probe.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        if classification is None:
+            raise
+        _report_failure("query", caught, classification)
+        return None
+""",
+        # Every helper branch needs a warning/error/critical log; DEBUG is not enough.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.debug("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, classify_failure(caught))
+        return None
+""",
+        # The helper exposes the exception raw instead of redacting it.
+        """\
+def _report_failure(operation, problem):
+    logger.error("%s failed: %s", operation, problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught)
+        return None
+""",
+        # A sanitizer in the helper is not enough when it is applied to a
+        # different value than the caught exception.
+        """\
+def _report_failure(operation, problem, endpoint):
+    logger.error(
+        "%s failed: %s", operation, sanitize_cause_repr(endpoint)
+    )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, endpoint)
+        return None
+""",
+        # `exc_info` is a traceback switch: a truthy sanitized value still
+        # attaches the raw active traceback, so it proves no redaction.
+        """\
+def _report_failure(problem):
+    logger.error("failed", exc_info=safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A sanitized message does not redact the raw traceback that a
+        # truthy `exc_info` attaches alongside it.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=True)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A walrus in an `if` test replaces the failure before the log.
+        """\
+def _report_failure(problem):
+    if (problem := None):
+        pass
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A conditional module-level rebinding may replace the proven helper.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem))
+
+
+if DISABLE_LOGGING:
+    _report_failure = lambda problem: None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A positional-only parameter cannot be bound by keyword.
+        """\
+def _report_failure(problem, /):
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(problem=caught)
+        return None
+""",
+    ],
+    ids=[
+        "conditional-bypass",
+        "helper-unaccepted-debug-branch",
+        "raw-exception",
+        "sanitizes-other-value",
+        "sanitizer-in-exc-info",
+        "sanitized-message-raw-exc-info",
+        "sanitized-message-exc-info-true",
+        "walrus-in-if-test",
+        "conditional-module-rebinding",
+        "positional-only-by-keyword",
+    ],
+)
+def test_p004_still_flags_unproven_redacted_logging_helper(src: str) -> None:
+    assert "E004" in _findings(src)
+
+
 def test_p004_still_flags_row_built_by_a_lowercase_helper() -> None:
     # The classifier returns an AppError, but recognition is by construction
     # of a capitalised type: a lowercase helper wrapping a lowercase classifier
@@ -971,6 +1352,262 @@ def probe():
 """
     assert "E004" in _findings(helper)
     assert "E004" not in _findings(inline)
+
+
+def test_p004_no_finding_when_local_helper_returns_typed_failure() -> None:
+    # The helper's return is inspectable in this module: the caught value flows
+    # through classification into a typed check, whether returned directly or
+    # staged in a value handed to the enclosing function's return.
+    src = """\
+def _build_failed_outcome(error):
+    details = classify_failure(error)
+    return Outcome(checks=[Check(name="connection", passed=False, error=details)])
+
+
+def direct_probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+
+
+def staged_probe():
+    try:
+        connect()
+    except Exception as caught:
+        outcome = _build_failed_outcome(caught)
+        return ProbeOutput(checks=outcome.checks)
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_a_proven_helper_whose_result_an_opaque_call_consumes() -> (
+    None
+):
+    # A proven helper nested inside a lowercase call does not reach the return:
+    # ``discard`` may drop the typed result, so the handoff stays opaque.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(checks=[Check(name="connection", passed=False, error=classify_failure(error))])
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return discard(_build_failed_outcome(caught))
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_no_finding_when_a_typed_constructor_wraps_the_helper_result() -> None:
+    # A class-like constructor keeps its arguments as part of the typed value.
+    src = """\
+def _build_failed_check(error):
+    return Check(name="connection", passed=False, error=classify_failure(error))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return ProbeOutput(checks=[_build_failed_check(caught)])
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_still_flags_a_helper_whose_return_only_mentions_a_typed_constructor() -> (
+    None
+):
+    # The helper's actual result is None: a constructor elsewhere in the return
+    # expression proves nothing about what the caller receives.
+    src = """\
+def _build_failed_outcome(error):
+    return (Outcome(error=error), None)[1]
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    findings = _findings(src)
+    assert "E004" in findings
+    assert "E007" in findings
+
+
+def test_p004_still_flags_a_helper_name_an_enclosing_function_rebinds() -> None:
+    # The call resolves to the outer local, not the module helper.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe(normalize):
+    _build_failed_outcome = normalize
+
+    def probe():
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_name_declared_nonlocal() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def make_probe():
+    _build_failed_outcome = None
+
+    def probe():
+        nonlocal _build_failed_outcome
+        try:
+            connect()
+        except Exception as caught:
+            return _build_failed_outcome(caught)
+
+    return probe
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_another_function_rebinds_with_global() -> None:
+    # Any function in the module can swap the helper through ``global``, so its
+    # summary is not a proof of what the call returns.
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+def install(replacement):
+    global _build_failed_outcome
+    _build_failed_outcome = replacement
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_still_flags_a_helper_reassigned_at_module_level() -> None:
+    src = """\
+def _build_failed_outcome(error):
+    return Outcome(error=classify_failure(error))
+
+
+_build_failed_outcome = normalize
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _build_failed_outcome(caught)
+"""
+    assert "E004" in _findings(src)
+
+
+def test_p004_no_finding_when_the_helper_returns_a_private_typed_class() -> None:
+    # The evidence app's helper returns a module-private result class
+    # (``_TargetOutcome``); a leading underscore does not make it less class-like.
+    src = """\
+def _connect_failed_outcome(flavor, label, e, *, operation="connect"):
+    connect_error = classify_failure(e, operation=operation).to_failure_details()
+    return _TargetOutcome(
+        reachable=False,
+        checks=[PreflightCheck(name="version", passed=False, error=connect_error)],
+        message=f"{flavor} connection failed",
+    )
+
+
+async def preflight(flavor):
+    try:
+        targets = await discover(flavor)
+    except Exception as e:
+        outcome = _connect_failed_outcome(flavor, "", e, operation="discover targets")
+        return PreflightOutput(checks=outcome.checks, message=outcome.message)
+    return targets
+
+
+async def probe(flavor, label):
+    try:
+        client = await build(flavor, label)
+    except Exception as e:
+        return _connect_failed_outcome(flavor, label, e)
+    return client
+"""
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_p004_still_flags_opaque_helper_handoff() -> None:
+    # Passing the binding to a lowercase helper is not proof that its returned
+    # value preserves the failure as typed data.
+    assert "E004" in _findings(
+        """\
+def _opaque_outcome(error):
+    return normalize(error)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _opaque_outcome(caught)
+"""
+    )
+
+
+def test_p004_still_flags_helper_with_a_dropping_return_path() -> None:
+    # A typed result on one branch is not enough when another branch returns a
+    # bare sentinel instead of carrying the caught failure.
+    assert "E004" in _findings(
+        """\
+def _sometimes_typed(error):
+    if should_report(error):
+        return Outcome(error=classify_failure(error))
+    return None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        return _sometimes_typed(caught)
+"""
+    )
+
+
+def test_p004_still_flags_unbound_exception_continue() -> None:
+    # A broad handler with no binding cannot hand the caught exception to a
+    # typed-result helper; continuing silently loses it.
+    assert "E004" in _findings(
+        """\
+def probe(items):
+    for item in items:
+        try:
+            inspect(item)
+        except Exception:
+            continue
+"""
+    )
 
 
 def test_p004_still_flags_typed_row_appended_inside_a_loop() -> None:
@@ -1515,6 +2152,108 @@ except ImportError:
     logger.debug("ujson not available, falling back to stdlib json")
     import json
 """
+    )
+
+
+def test_p008_no_finding_when_typed_error_is_chained() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable(
+            message="backend runtime is required",
+            cause=exc,
+        ) from exc
+    return optional_backend
+"""
+    )
+
+
+def test_p008_silent_return_still_fires() -> None:
+    findings = _findings(
+        """\
+def use_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        return
+"""
+    )
+    assert "E008" in findings
+
+
+def test_p008_dropping_cause_still_fires() -> None:
+    _single(
+        """\
+try:
+    import optional_backend
+except ImportError:
+    raise BackendUnavailable("backend runtime is required") from None
+""",
+        "E008",
+    )
+
+
+def test_p008_unrelated_explicit_cause_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_explicit_cause_on_unbound_handler_still_fires() -> None:
+    _single(
+        """\
+def load_backend(unrelated_error):
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend unavailable") from unrelated_error
+""",
+        "E008",
+    )
+
+
+def test_p008_no_finding_on_implicit_chain_or_bare_reraise() -> None:
+    _none(
+        """\
+def load_backend():
+    try:
+        import optional_backend
+    except ImportError:
+        raise BackendUnavailable("backend runtime is required")
+    return optional_backend
+
+
+def load_other():
+    try:
+        import other_backend
+    except ImportError:
+        raise
+    return other_backend
+"""
+    )
+
+
+def test_p008_conditional_reraise_that_can_fall_through_still_fires() -> None:
+    _single(
+        """\
+def load_backend(should_reraise):
+    try:
+        import optional_backend
+    except ImportError as exc:
+        if should_reraise:
+            raise BackendUnavailable("backend runtime is required") from exc
+""",
+        "E008",
     )
 
 
@@ -2374,6 +3113,76 @@ def fail():
     _single(src, "E018")
 
 
+@pytest.mark.parametrize(
+    ("imports", "cancelled_error"),
+    [
+        ("import asyncio", "asyncio.CancelledError()"),
+        ("import asyncio as tasklib", "tasklib.CancelledError()"),
+        ("from asyncio import CancelledError", "CancelledError()"),
+    ],
+)
+def test_p018_no_finding_stdlib_asyncio_cancelled_error(
+    imports: str, cancelled_error: str
+) -> None:
+    _none(
+        f"""\
+{imports}
+
+async def cancel_work():
+    raise {cancelled_error}
+"""
+    )
+
+
+def test_p018_no_finding_dotted_asyncio_exceptions_import() -> None:
+    _none(
+        """\
+import asyncio.exceptions
+
+async def cancel_work():
+    raise asyncio.exceptions.CancelledError()
+"""
+    )
+
+
+def test_p018_rebound_asyncio_name_is_not_trusted() -> None:
+    # The name was rebound after the import, so it no longer names the stdlib module.
+    _single(
+        """\
+import asyncio
+import domain_errors
+
+asyncio = domain_errors
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_sdk_cancelled_error_still_flagged() -> None:
+    _single(
+        """\
+def fail():
+    raise application_sdk.errors.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
+def test_p018_other_module_aliased_as_asyncio_still_flagged() -> None:
+    _single(
+        """\
+import domain_errors as asyncio
+
+def fail():
+    raise asyncio.CancelledError(message="operation stopped")
+""",
+        "E018",
+    )
+
+
 def test_p018_no_finding_classification_pending() -> None:
     _none(
         """\
@@ -2977,6 +3786,84 @@ def poll():
     )
 
 
+def test_e020_no_finding_on_bounded_2xx_success_return() -> None:
+    # The return is guarded by the success range; a non-2xx response raises.
+    _none(
+        """\
+def publish(response):
+    if 200 <= response.status_code < 300:
+        return
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_bounded_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if 200 <= response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_no_finding_on_and_joined_2xx_success_return() -> None:
+    _none(
+        """\
+def publish(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return []
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_and_joined_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_chained_bounds_span_different_responses() -> None:
+    # a.status_code == 200, b.status_code == 500 satisfies the test.
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code <= 200 <= b.status_code:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_and_joined_bounds_span_different_responses() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code >= 200 and b.status_code < 300:
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_status_code_not_200_return_none() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code != 200:
+        return None
+"""
+    )
+
+
 def test_e020_no_finding_on_plain_none_guard() -> None:
     # No HTTP-response marker — an ordinary guard clause, not the hazard.
     _none(
@@ -3233,6 +4120,65 @@ def test_e005_silent_for_sanitize_helper_attribute() -> None:
     assert "E005" not in _findings(src)
 
 
+def test_e005_silent_for_sanitized_cause_with_qualified_error_code() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s (%s)', failure.qualified_code,\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_classified_error_with_status_code() -> None:
+    src = (
+        "try:\n    request()\nexcept Exception as failure:\n"
+        "    logger.warning('request failed (%s): %s', failure.status_code,\n"
+        "                   sanitize_cause_repr(classify_failure(failure)))\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+@pytest.mark.parametrize("field", ["message", "payload", "response"])
+def test_e005_still_fires_when_sanitized_cause_shares_raw_exception_field(
+    field: str,
+) -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        f"    logger.warning('operation failed: %s %s', failure.{field},\n"
+        "                   sanitize_cause_repr(failure))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_for_metadata_beside_a_sanitized_local_alias() -> None:
+    # The sanitized exception may reach the log through a local first; the metadata fields
+    # beside it are as safe as when the sanitizer is called inline.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    detail = sanitize_cause_repr(failure)\n"
+        "    logger.warning('failed (%s): %s', failure.status_code, detail)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_the_sanitizer_covers_something_else() -> None:
+    # The metadata fields are only safe beside a sanitizer of the caught exception itself:
+    # redacting an unrelated value does not make the exception's own fields a boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('failed: %s %s', failure.status_code, redact(config))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_for_typed_code_without_sanitizer() -> None:
+    src = (
+        "try:\n    connect()\nexcept Exception as failure:\n"
+        "    logger.warning('operation failed: %s', failure.qualified_code)\n"
+    )
+    assert "E005" in _findings(src)
+
+
 def test_e005_still_fires_without_sanitizer() -> None:
     src = "try:\n    x()\nexcept Exception as e:\n    logger.warning('failed: %s', e)\n"
     assert "E005" in _findings(src)
@@ -3259,6 +4205,111 @@ def test_e005_silent_for_presanitized_traceback_variable() -> None:
         "    logger.error('prime failed:\\n%s', safe_traceback)\n"
     )
     assert "E005" not in _findings(src)
+
+
+def test_e005_silent_for_sanitized_traceback_in_generic_local_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(''.join(traceback.format_exception(caught)))\n"
+        "    logger.error('connection failed:\\n%s', trace_text)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_contains_unrelated_value() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_log_also_passes_raw_exception() -> None:
+    # The alias is not the only route: the raw exception is formatted too.
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    logger.error('connection failed: %s %s', trace_text, caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_direct_sanitizer_is_logged_with_raw_exception() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    logger.error('connection failed: %s %s', redact(caught), caught)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_silent_when_sanitized_log_adds_exception_type_name() -> None:
+    # type(e).__name__ / e.__class__ carry no message text, so they do not
+    # undo the redaction boundary.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s (%s %s)', safe_traceback(caught),\n"
+        "                 type(caught).__name__, caught.__class__.__qualname__)\n"
+    )
+    assert "E005" not in _findings(src)
+
+
+def test_e005_still_fires_when_type_projection_hides_raw_exception() -> None:
+    # type(...) of something other than the bare binding is not a projection.
+    src = (
+        "try:\n    connect()\nexcept Exception as caught:\n"
+        "    logger.error('failed: %s %s', safe_traceback(caught), type(caught, str(caught)))\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitizer_input_is_conditional() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught) if include_trace else endpoint)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_match_capture_rebinds_alias() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    match caught:\n"
+        "        case trace_text:\n"
+        "            pass\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+def test_e005_still_fires_when_sanitized_alias_is_overwritten() -> None:
+    src = (
+        "try:\n    connect()\nexcept ConnectionError as caught:\n"
+        "    trace_text = scrub_secret_text(str(caught))\n"
+        "    trace_text = str(caught)\n"
+        "    logger.error('connection failed: %s', trace_text)\n"
+    )
+    assert "E005" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "exception, message",
+    [
+        ("TimeoutError", "operation exceeded its time budget"),
+        ("RuntimeError", "cleanup was skipped after shutdown"),
+    ],
+)
+def test_e005_still_fires_for_unredacted_best_effort_warnings(
+    exception: str, message: str
+) -> None:
+    src = (
+        "try:\n    perform_operation()\n"
+        f"except {exception}:\n"
+        f"    logger.warning({message!r})\n"
+    )
+    assert "E005" in _findings(src)
 
 
 def test_e004_silent_when_handler_logs_via_sanitizer() -> None:
@@ -3314,3 +4365,290 @@ def test_e004_f005_cleanup_helper_in_preflight_clears_only_at_error(
     error = _cleanup_helper_in_gate("error")
     assert "E004" not in _findings(error)
     assert "F005" not in _preflight_ids(tmp_path / "error", error)
+
+
+# ---------------------------------------------------------------------------
+# Typed-failure exemption: helpers proven by their return annotation
+# ---------------------------------------------------------------------------
+
+# A classifier that walks the cause chain cannot be summarised as straight-line
+# code, but its signature still says what it hands back. ``-> AppError | None``
+# called with the caught exception, behind a guard that exits on ``None``, is the
+# failure carried out as typed data.
+_ANNOTATED_CLASSIFIER = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
+def _classify(exc: BaseException) -> {annotation}:
+    current = exc
+    while current is not None:
+        if isinstance(current, DeniedError):
+            return AccessDeniedError(message="denied", cause=current)
+        current = current.__cause__
+    return None
+
+
+async def probe():
+    try:
+        await read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+{guard}        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+
+_EXITING_GUARD = """\
+        if failure is None:
+            return Check(
+                name="store",
+                passed=False,
+                error=StoreTransientError(message="unavailable", cause=exc).to_failure_details(),
+            )
+"""
+
+_CHAINED_RAISE_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from exc
+"""
+
+_SEVERED_RAISE_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+"""
+
+_SEVERED_UNCAUSED_GUARD = """\
+        if failure is None:
+            raise StoreTransientError(message="unavailable") from None
+"""
+
+
+@pytest.mark.parametrize("annotation", ["AppError | None", "Optional[AppError]"])
+@pytest.mark.parametrize(
+    "guard", [_EXITING_GUARD, _CHAINED_RAISE_GUARD, _SEVERED_RAISE_GUARD]
+)
+def test_typed_failure_no_finding_when_annotated_helper_classifies_the_caught_error(
+    annotation: str, guard: str
+) -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation=annotation, guard=guard)
+    findings = _findings(src)
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_typed_failure_severed_guard_raise_without_a_cause_is_still_e004() -> None:
+    # The helper proof clears the return (E007), but the other exit severs the
+    # chain and drops the cause, which E004 judges on its own.
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AppError | None", guard=_SEVERED_UNCAUSED_GUARD
+    )
+    assert _findings(src) == ["E004"]
+
+
+@pytest.mark.parametrize("annotation", ["bool", "dict", "str", "Check | None"])
+def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
+    annotation: str,
+) -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation=annotation, guard=_EXITING_GUARD)
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '    return AppError(message="probe failed")\n',
+        '    return AppError(message="probe failed", cause=other)\n',
+        "    if isinstance(exc, DeniedError):\n"
+        '        return AccessDeniedError(message="denied", cause=exc)\n'
+        '    return AppError(message="probe failed")\n',
+        "    current = exc\n"
+        "    while current is not None:\n"
+        "        current = current.__cause__\n"
+        '    return AppError(message="probe failed")\n',
+        # Provenance ends at the rebinding: ``detail`` no longer holds the failure.
+        "    detail = exc\n"
+        "    if isinstance(exc, DeniedError):\n"
+        '        detail = "unrelated"\n'
+        "        return AccessDeniedError(message=detail)\n"
+        "    return AppError(message=detail)\n",
+        # The other path falls off the end and hands back None.
+        "    if isinstance(exc, DeniedError):\n"
+        '        return AccessDeniedError(message="denied", cause=exc)\n',
+        # The parameter itself is rebound: its name no longer holds the failure.
+        "    exc = None\n" '    return AppError(message="probe failed", cause=exc)\n',
+        # A name copied from the rebound parameter carries nothing either.
+        "    exc = None\n"
+        "    detail = exc\n"
+        '    return AppError(message="probe failed", cause=detail)\n',
+    ],
+    ids=[
+        "discards",
+        "other-cause",
+        "one-return-discards",
+        "walks-then-discards",
+        "rebound-before-return",
+        "falls-through",
+        "parameter-rebound",
+        "copied-after-rebind",
+    ],
+)
+def test_typed_failure_still_flags_annotated_helper_that_drops_the_failure(
+    body: str,
+) -> None:
+    # The annotation says what type comes back, not that the failure is in it:
+    # every typed return must be built from the parameter or a name derived
+    # from it.
+    src = (
+        "def _classify(exc: BaseException) -> AppError:\n"
+        + body
+        + """
+
+def probe(other):
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    )
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_returning_none_without_the_optional_form() -> (
+    None
+):
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AccessDeniedError", guard=_EXITING_GUARD
+    )
+    assert "return None" in src
+    assert "E007" in _findings(src)
+
+
+_CHAIN_WALKER_ENDING_IN_NONE = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
+def _classify(exc: BaseException) -> AppError | None:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, DeniedError):
+            return AccessDeniedError(message="denied", cause={cause})
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            current = None
+        else:
+            current = current.__context__
+    return None
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+
+
+def test_typed_failure_no_finding_when_the_chain_walk_ends_in_none() -> None:
+    # ``current = None`` only stops the walk; it holds nothing else. Where the
+    # return reads ``current``, the isinstance test proves it is not None.
+    findings = _findings(_CHAIN_WALKER_ENDING_IN_NONE.format(cause="current"))
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_typed_failure_still_flags_a_none_rebound_name_without_narrowing() -> None:
+    src = """\
+def _classify(exc: BaseException) -> AppError:
+    detail = exc
+    if should_drop(exc):
+        detail = None
+    return AppError(message="probe failed", cause=detail)
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_a_name_rebound_to_none_inside_the_narrowed_block() -> (
+    None
+):
+    src = _CHAIN_WALKER_ENDING_IN_NONE.replace(
+        '            return AccessDeniedError(message="denied", cause={cause})\n',
+        "            current = None\n"
+        '            return AccessDeniedError(message="denied", cause={cause})\n',
+    ).format(cause="current")
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_that_falls_through() -> None:
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AppError | None", guard=_EXITING_GUARD
+    ).replace("    return None\n", "")
+    assert "return None" not in src.split("async def probe")[0]
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_an_unannotated_branching_helper() -> None:
+    src = _ANNOTATED_CLASSIFIER.format(annotation="AppError", guard=_EXITING_GUARD)
+    src = src.replace(" -> AppError:", ":")
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_without_a_none_guard() -> None:
+    # Without the guard the handler can hand back whatever ``None`` becomes.
+    src = """\
+def _classify(exc: BaseException) -> AppError | None:
+    for cause in walk(exc):
+        if isinstance(cause, DeniedError):
+            return AccessDeniedError(message="denied", cause=cause)
+    return None
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return failure
+"""
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_annotated_helper_not_given_the_caught_error() -> (
+    None
+):
+    src = """\
+def _classify(exc: BaseException) -> AppError | None:
+    for cause in walk(exc):
+        if isinstance(cause, DeniedError):
+            return AccessDeniedError(message="denied", cause=cause)
+    return None
+
+
+def probe(previous):
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(previous)
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    assert "E007" in _findings(src)

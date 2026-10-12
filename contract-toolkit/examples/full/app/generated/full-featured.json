@@ -153,6 +153,26 @@
           "Materialised view"
         ]
       },
+      "tag_keys": {
+        "type": "array",
+        "required": false,
+        "ui": {
+          "widget": "select",
+          "label": "Tag keys",
+          "hidden": false,
+          "help": "Source tag keys to sync; leave empty to sync none.",
+          "placeholder": "OwningTeam",
+          "grid": 4,
+          "mode": "tags",
+          "tokenSeparators": [
+            ", ",
+            ","
+          ],
+          "allowClear": true,
+          "maxTagCount": "responsive",
+          "open": false
+        }
+      },
       "lineage_depth": {
         "type": "number",
         "required": false,
@@ -250,6 +270,18 @@
           "type": "array"
         },
         "default": "{}"
+      },
+      "preflight-check": {
+        "type": "string",
+        "required": false,
+        "ui": {
+          "widget": "sageV2",
+          "label": "",
+          "hidden": false,
+          "help": "",
+          "grid": 8,
+          "warmup": true
+        }
       }
     },
     "anyOf": [
@@ -293,6 +325,7 @@
           "load-to-atlan",
           "log_level",
           "asset_types",
+          "tag_keys",
           "lineage_depth",
           "table_prefix",
           "custom_attributes",
@@ -305,7 +338,8 @@
         "description": "",
         "id": "schema_selection",
         "properties": [
-          "schemas"
+          "schemas",
+          "preflight-check"
         ]
       }
     ]

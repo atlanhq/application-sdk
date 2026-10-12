@@ -80,6 +80,12 @@ description: >
     it before proposing a fix — see its *Reference apps, impact analysis and
     verification* section. Present on every app-facing rule; null only for the
     handful of SDK-only rules.
+  - `remediation_reference` — object or null (from
+    `atlan/remediationReference`): `kind` (`skill`, `guide`, `decision`,
+    `prescription` or `command`), `target` and `note`. How the fix is
+    performed. Present on every migration rule (`autofixable = false`); it is
+    what `/remediate` hands the finding to — see `remediate-finding`'s
+    *Auto-fixable vs migration*.
   - `hint` — string or null (from `atlan/hint`).
   - `message` — human-readable violation message from the runner.
 
@@ -158,8 +164,9 @@ Tag each result's area by reading the first letter of `result.rule_id`:
 `K` → `contract-toolkit`, `S` → `security`.
 
 Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
-`atlan/forcesExternalInfluence` (default `false` if absent) and
-`atlan/canonicalReference` (default `null` if absent) from
+`atlan/forcesExternalInfluence` (default `false` if absent),
+`atlan/canonicalReference` and `atlan/remediationReference` (each default
+`null` if absent) from
 `run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` from
 `result.properties`.  Return `sarif_path` and the structured `findings` list.
 

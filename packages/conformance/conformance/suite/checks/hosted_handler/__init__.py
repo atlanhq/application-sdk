@@ -1,4 +1,4 @@
-"""P-series hosted-handler check (P054 HostedHandlerLogs).
+"""P-series hosted-handler check (P056 HostedHandlerLogs).
 
 Scans the handler code of an app that declares ``[tool.atlan-app-api]`` in its
 root ``pyproject.toml``: the module ``handler = "app.<module>:<Class>"`` names,
@@ -6,7 +6,7 @@ plus every ``app/`` module it imports (relatively or absolutely), which is what
 the consolidated API host installs. Flags logging there. Silent for an app
 without the block.
 
-Inline suppression: ``# conformance: ignore[P054] <reason>``.
+Inline suppression: ``# conformance: ignore[P056] <reason>``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from conformance.suite.checks._ast_common import (
 from conformance.suite.schema.findings import Finding
 
 SERIES = "P"
-RULE_ID = "P054"
+RULE_ID = "P056"
 SECTION = "atlan-app-api"
 APP = "app"
 
@@ -169,7 +169,7 @@ def _logging_sites(tree: ast.AST) -> list[tuple[ast.AST, str]]:
 
 
 def scan_text(text: str, file: str) -> list[Finding]:
-    """P054 findings for one handler file's *text* (the caller decides it is one)."""
+    """P056 findings for one handler file's *text* (the caller decides it is one)."""
     try:
         tree = ast.parse(text, filename=file)
     except SyntaxError:
@@ -224,7 +224,7 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 main = make_cli_main(
     scan_all=scan_all,
     description=(
-        "Hosted-handler P-series check (P054): flag logging in the handler code of "
+        "Hosted-handler P-series check (P056): flag logging in the handler code of "
         "an app that declares [tool.atlan-app-api] (silent otherwise)."
     ),
 )

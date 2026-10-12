@@ -236,6 +236,112 @@ class TestPersistFileReference:
         assert result.file_count == 1
 
 
+class TestDirectoryLocalSidecars:
+    """A persisted directory ref must be a same-pod cache hit (FND-3213).
+
+    The single-file branch writes a local ``{local_path}.sha256`` sidecar on
+    persist; the directory branch used to write only the store-side one, so
+    the first same-pod materialize re-downloaded every file of the handoff.
+    """
+
+    _FILES = {
+        "chunk-0-part0.json": b'{"row": 0}\n',
+        "chunk-1-part0.json": b'{"row": 1}\n',
+        "sub/chunk-2-part0.json": b'{"row": 2}\n',
+    }
+
+    def _write_tree(self, root: Path) -> None:
+        for rel, data in self._FILES.items():
+            (root / rel).parent.mkdir(parents=True, exist_ok=True)
+            (root / rel).write_bytes(data)
+
+    async def _materialize_counting(self, store, ref: FileReference) -> int:
+        calls = 0
+        real = ops.download_file_chunked
+
+        async def counting(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            return await real(*args, **kwargs)
+
+        with patch.object(ops, "download_file_chunked", new=counting):
+            await materialize_file_reference(store, ref)
+        return calls
+
+    async def test_persist_writes_local_sidecar_per_file(self, store, tmp_path) -> None:
+        self._write_tree(tmp_path)
+        ref = FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+
+        await persist_file_reference(store, ref)
+
+        for rel, data in self._FILES.items():
+            sidecar = tmp_path / (rel + ".sha256")
+            assert sidecar.read_text() == _hash_bytes(data), rel
+
+    async def test_same_pod_materialize_after_persist_downloads_nothing(
+        self, store, tmp_path
+    ) -> None:
+        self._write_tree(tmp_path)
+        durable = await persist_file_reference(
+            store, FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+        )
+
+        assert await self._materialize_counting(store, durable) == 0
+        for rel, data in self._FILES.items():
+            assert (tmp_path / rel).read_bytes() == data
+
+    async def test_cross_pod_materialize_downloads_and_verifies_every_file(
+        self, store, tmp_path
+    ) -> None:
+        producer = tmp_path / "producer"
+        producer.mkdir()
+        self._write_tree(producer)
+        durable = await persist_file_reference(
+            store, FileReference(local_path=str(producer), tier=StorageTier.TRANSIENT)
+        )
+        consumer = tmp_path / "consumer"
+        cross_pod = FileReference(
+            local_path=str(consumer),
+            is_durable=True,
+            storage_path=durable.storage_path,
+            file_count=durable.file_count,
+            tier=durable.tier,
+        )
+
+        assert await self._materialize_counting(store, cross_pod) == len(self._FILES)
+        for rel, data in self._FILES.items():
+            assert (consumer / rel).read_bytes() == data
+            assert (consumer / (rel + ".sha256")).read_text() == _hash_bytes(data)
+
+    async def test_repersist_does_not_upload_local_sidecars(
+        self, store, tmp_path
+    ) -> None:
+        """A tree that already carries local sidecars ships only its data."""
+        self._write_tree(tmp_path)
+        await persist_file_reference(
+            store, FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+        )
+
+        again = await persist_file_reference(
+            store, FileReference(local_path=str(tmp_path), tier=StorageTier.TRANSIENT)
+        )
+
+        assert again.file_count == len(self._FILES)
+        assert again.storage_path is not None
+        for rel, data in self._FILES.items():
+            stored = await _get_bytes(
+                f"{again.storage_path}{rel}.sha256", store, normalize=False
+            )
+            assert stored is not None
+            assert stored.decode().strip() == _hash_bytes(data)
+            assert (
+                await _get_bytes(
+                    f"{again.storage_path}{rel}.sha256.sha256", store, normalize=False
+                )
+                is None
+            )
+
+
 # ---------------------------------------------------------------------------
 # materialize_file_reference
 # ---------------------------------------------------------------------------
