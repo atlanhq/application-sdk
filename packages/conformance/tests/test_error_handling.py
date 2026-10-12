@@ -4173,8 +4173,24 @@ def test_typed_failure_still_flags_helper_annotated_with_a_non_error_type(
         "    while current is not None:\n"
         "        current = current.__cause__\n"
         '    return AppError(message="probe failed")\n',
+        # Provenance ends at the rebinding: ``detail`` no longer holds the failure.
+        "    detail = exc\n"
+        "    if isinstance(exc, DeniedError):\n"
+        '        detail = "unrelated"\n'
+        "        return AccessDeniedError(message=detail)\n"
+        "    return AppError(message=detail)\n",
+        # The other path falls off the end and hands back None.
+        "    if isinstance(exc, DeniedError):\n"
+        '        return AccessDeniedError(message="denied", cause=exc)\n',
     ],
-    ids=["discards", "other-cause", "one-return-discards", "walks-then-discards"],
+    ids=[
+        "discards",
+        "other-cause",
+        "one-return-discards",
+        "walks-then-discards",
+        "rebound-before-return",
+        "falls-through",
+    ],
 )
 def test_typed_failure_still_flags_annotated_helper_that_drops_the_failure(
     body: str,
@@ -4205,6 +4221,85 @@ def test_typed_failure_still_flags_optional_helper_returning_none_without_the_op
         annotation="AccessDeniedError", guard=_EXITING_GUARD
     )
     assert "return None" in src
+    assert "E007" in _findings(src)
+
+
+_CHAIN_WALKER_ENDING_IN_NONE = """\
+from application_sdk.errors import SourceUnavailableError
+
+
+class StoreTransientError(SourceUnavailableError):
+    pass
+
+
+def _classify(exc: BaseException) -> AppError | None:
+    current: BaseException | None = exc
+    while current is not None:
+        if isinstance(current, DeniedError):
+            return AccessDeniedError(message="denied", cause={cause})
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            current = None
+        else:
+            current = current.__context__
+    return None
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        if failure is None:
+            raise StoreTransientError(message="unavailable", cause=exc) from None
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+
+
+def test_typed_failure_no_finding_when_the_chain_walk_ends_in_none() -> None:
+    # ``current = None`` only stops the walk; it holds nothing else. Where the
+    # return reads ``current``, the isinstance test proves it is not None.
+    findings = _findings(_CHAIN_WALKER_ENDING_IN_NONE.format(cause="current"))
+    assert "E004" not in findings
+    assert "E007" not in findings
+
+
+def test_typed_failure_still_flags_a_none_rebound_name_without_narrowing() -> None:
+    src = """\
+def _classify(exc: BaseException) -> AppError:
+    detail = exc
+    if should_drop(exc):
+        detail = None
+    return AppError(message="probe failed", cause=detail)
+
+
+def probe():
+    try:
+        read_store()
+    except Exception as exc:
+        failure = _classify(exc)
+        return Check(name="store", passed=False, error=failure.to_failure_details())
+"""
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_a_name_rebound_to_none_inside_the_narrowed_block() -> (
+    None
+):
+    src = _CHAIN_WALKER_ENDING_IN_NONE.replace(
+        '            return AccessDeniedError(message="denied", cause={cause})\n',
+        "            current = None\n"
+        '            return AccessDeniedError(message="denied", cause={cause})\n',
+    ).format(cause="current")
+    assert "E007" in _findings(src)
+
+
+def test_typed_failure_still_flags_optional_helper_that_falls_through() -> None:
+    src = _ANNOTATED_CLASSIFIER.format(
+        annotation="AppError | None", guard=_EXITING_GUARD
+    ).replace("    return None\n", "")
+    assert "return None" not in src.split("async def probe")[0]
     assert "E007" in _findings(src)
 
 

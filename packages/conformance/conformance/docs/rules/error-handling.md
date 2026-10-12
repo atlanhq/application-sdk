@@ -214,9 +214,11 @@ still resolves to that helper: not rebound in any enclosing   function, not decl
 A helper that branches — a classifier walking the cause chain — is proven from its
 signature instead: its return annotation names an error class (`-> AppError`, `->
 AppError | None`, `-> Optional[AppError]`) and the binding is passed to an
-exception-annotated parameter, and every `return` in it builds a class-like constructor
-from that parameter or a local derived from it.  When `None` is a possible result, the
-call must be assigned to a name that the very next statement exits on when it is `None`.
+exception-annotated parameter, it never falls off its end, and every `return` in it
+builds a class-like constructor from that parameter or a local still carrying it there
+(a local rebound to anything else stops carrying it).  When `None` is a possible result,
+the call must be assigned to a name that the very next statement exits on when it is
+`None`.
 
 `except Exception:` with no `as` binding still fires.
 

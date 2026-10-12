@@ -889,67 +889,43 @@ def _helper_typed_parameters(
     )
 
 
-def _own_scope_nodes(function: ast.FunctionDef) -> Iterator[ast.AST]:
-    """Every node in *function*'s body, not entering nested ``def``/``class``/``lambda``."""
-    pending: list[ast.AST] = list(function.body)
-    while pending:
-        node = pending.pop()
-        if isinstance(
-            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
-        ):
-            continue
-        yield node
-        pending.extend(ast.iter_child_nodes(node))
-
-
-def _names_derived_from(function: ast.FunctionDef, parameter: str) -> frozenset[str]:
-    """*parameter* and every local assigned from it, to a fixpoint.
-
-    Loop-carried rebinding counts (``current = exc`` then
-    ``current = current.__cause__``), as does a ``for`` target over an iterable
-    built from it.
-    """
-    derived = {parameter}
-    bindings: list[tuple[list[ast.expr], ast.expr]] = []
-    for node in _own_scope_nodes(function):
-        if isinstance(node, ast.Assign):
-            bindings.append((node.targets, node.value))
-        elif (
-            isinstance(node, (ast.AnnAssign, ast.AugAssign)) and node.value is not None
-        ):
-            bindings.append(([node.target], node.value))
-        elif isinstance(node, ast.NamedExpr):
-            bindings.append(([node.target], node.value))
-        elif isinstance(node, (ast.For, ast.AsyncFor)):
-            bindings.append(([node.target], node.iter))
-    changed = True
-    while changed:
-        changed = False
-        for targets, value in bindings:
-            if not _references_any(value, frozenset(derived)):
-                continue
-            for target in targets:
-                for name in ast.walk(target):
-                    if isinstance(name, ast.Name) and name.id not in derived:
-                        derived.add(name.id)
-                        changed = True
-    return frozenset(derived)
-
-
 def _every_return_builds_from(
     function: ast.FunctionDef, parameter: str, *, allow_none: bool
 ) -> bool:
-    """True when every ``return`` hands back a constructor built from *parameter*.
+    """True when every path through *function* hands back a constructor built from *parameter*.
 
     The annotation names the type that comes back; this proves the failure is
-    in it. Each non-``None`` return must be a class-like call whose arguments
-    read *parameter* or a local derived from it. A bare or ``None`` return is
-    allowed only when the annotation itself admits ``None``.
+    in it. The body must not fall off its end (:func:`_body_always_exits`), and
+    each ``return`` must be a class-like call whose arguments read *parameter* or
+    a local still carrying it at that return. Provenance is the flow-sensitive
+    :func:`_track_carried` the straight-line summary uses: a local rebound to
+    anything else stops carrying it, and a loop that walks the cause chain
+    (``current = current.__cause__``) keeps it. A ``None`` return is allowed
+    only when the annotation itself admits ``None``.
     """
-    derived = _names_derived_from(function, parameter)
-    returns = [n for n in _own_scope_nodes(function) if isinstance(n, ast.Return)]
+    if not _body_always_exits(function.body):
+        return False
+
+    def carries_input(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _references_any(value, frozenset({exc_name, *live}))
+
+    def carries_input_or_none(value: ast.expr, exc_name: str, live: set[str]) -> bool:
+        return _is_none_constant(value) or carries_input(value, exc_name, live)
+
+    carried_at: dict[int, frozenset[str]] = {}
+    _track_carried(function.body, parameter, {parameter}, carried_at, carries_input)
+    # A walk over the cause chain ends with ``current = None``: that holds
+    # nothing *else*, it only stops the walk. Such a name counts at a return
+    # only where an enclosing ``isinstance(name, ...)`` proves it is not None.
+    maybe_none_at: dict[int, frozenset[str]] = {}
+    _track_carried(
+        function.body, parameter, {parameter}, maybe_none_at, carries_input_or_none
+    )
+    narrowed_at = _isinstance_narrowed_returns(function.body)
     typed = 0
-    for stmt in returns:
+    for stmt in _iter_block(function.body):
+        if not isinstance(stmt, ast.Return):
+            continue
         if stmt.value is None or _is_none_constant(stmt.value):
             if not allow_none:
                 return False
@@ -957,11 +933,66 @@ def _every_return_builds_from(
         value = stmt.value
         if not (isinstance(value, ast.Call) and _class_like(_get_name(value.func))):
             return False
-        arguments = [*value.args, *[kw.value for kw in value.keywords]]
-        if not any(_references_any(arg, derived) for arg in arguments):
+        carried = frozenset(
+            {
+                parameter,
+                *carried_at.get(id(stmt), frozenset()),
+                *(
+                    maybe_none_at.get(id(stmt), frozenset())
+                    & narrowed_at.get(id(stmt), frozenset())
+                ),
+            }
+        )
+        if not any(
+            _references_any(arg, carried)
+            for arg in [*value.args, *[kw.value for kw in value.keywords]]
+        ):
             return False
         typed += 1
     return typed > 0
+
+
+def _rebound_names_in(stmt: ast.stmt) -> set[str]:
+    """Names *stmt* itself binds: assignment, augmented/annotated, ``for``, ``with``."""
+    targets: list[ast.expr] = []
+    if isinstance(stmt, ast.Assign):
+        targets = list(stmt.targets)
+    elif isinstance(stmt, (ast.AnnAssign, ast.AugAssign)):
+        targets = [stmt.target]
+    elif isinstance(stmt, (ast.For, ast.AsyncFor)):
+        targets = [stmt.target]
+    elif isinstance(stmt, (ast.With, ast.AsyncWith)):
+        targets = [i.optional_vars for i in stmt.items if i.optional_vars]
+    names = {n.id for t in targets for n in ast.walk(t) if isinstance(n, ast.Name)}
+    return names | _walrus_names(stmt)
+
+
+def _isinstance_narrowed_returns(body: list[ast.stmt]) -> dict[int, frozenset[str]]:
+    """Map each ``return`` to the names an enclosing ``if isinstance(name, ...)`` narrows.
+
+    Only the ``if`` body counts (not ``else``), and only a bare ``isinstance``
+    test whose first argument is a plain name the body never rebinds: there the
+    name is an instance of the tested type, so it is not ``None``.
+    """
+    narrowed: dict[int, set[str]] = {}
+    for stmt in _iter_block(body):
+        if not isinstance(stmt, ast.If):
+            continue
+        test = stmt.test
+        if not (
+            isinstance(test, ast.Call)
+            and _get_name(test.func) == "isinstance"
+            and test.args
+            and isinstance(test.args[0], ast.Name)
+        ):
+            continue
+        name = test.args[0].id
+        if any(name in _rebound_names_in(inner) for inner in _iter_block(stmt.body)):
+            continue  # rebound inside the narrowed block: the test no longer holds
+        for inner in _iter_block(stmt.body):
+            if isinstance(inner, ast.Return):
+                narrowed.setdefault(id(inner), set()).add(name)
+    return {key: frozenset(names) for key, names in narrowed.items()}
 
 
 def _none_guarded_calls(body: list[ast.stmt]) -> frozenset[int]:
