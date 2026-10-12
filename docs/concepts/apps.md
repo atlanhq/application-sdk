@@ -513,16 +513,16 @@ must not raise `SOURCE_UNAVAILABLE` for that: it reports `COLD`, `WARMING` or `Q
 
 When a verdict has several failed checks and no aggregate `result.error`, `details[0]` is the most
 decisive one: the first in a deterministic blocking category (`AUTH`, `PERMISSION`, ...), else the
-first `SOURCE_UNAVAILABLE`, else the first typed error. So an unreachable or timed-out row listed
+first `SOURCE_UNAVAILABLE` or `RATE_LIMITED`, else the first typed error. So an unreachable or timed-out row listed
 ahead of a failed login cannot let a run proceed on bad credentials. An aggregate `result.error` is
 always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
 | Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
-| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only, earlier attempts retry), else `would_block` |
+| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`, `RATE_LIMITED`: final attempt only, earlier attempts retry), else `would_block` |
 | Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
-| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`: final attempt only), else `would_block` (an untyped crash is `INTERNAL`) |
+| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`, `RATE_LIMITED`: final attempt only, earlier attempts retry), else `would_block` (an untyped crash is `INTERNAL`) |
 | Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
@@ -556,8 +556,9 @@ resuming — by **returning** `READY` with the failed check carrying the typed r
 by raising. `PARTIAL` is deprecated and the gate treats it exactly like `READY`, so it adds nothing
 but a warning. The run proceeds in both modes, the row carries the check's code as `reason`, and
 the check list is preserved. Returning an *untyped* `NOT_READY` for a transient makes hard mode
-fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it keeps the run going
-but loses every other check.
+fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it gets the retry (a hard gate
+still blocks a `SOURCE_UNAVAILABLE` or `RATE_LIMITED` that persists to the final attempt) but loses
+every other check.
 
 A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
 holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure
@@ -654,7 +655,8 @@ The handler gets `preflight_gate_timeout_seconds` (default 150, clamped 5-300) t
 checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses.
 `preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries for the gate's own
 retryable plumbing, a store probe or a credential lookup; a handler fault is a verdict on the
-attempt it happens and is never retried. Both Temporal timeouts derive from the pair:
+attempt it happens, except that a hard gate defers a `SOURCE_UNAVAILABLE` or `RATE_LIMITED` fault
+to its final attempt (see [Preflight Gate Posture](#preflight-gate-posture)). Both Temporal timeouts derive from the pair:
 
 ```python
 class MyConnector(App):

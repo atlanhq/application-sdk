@@ -309,10 +309,11 @@ guide](https://github.com/atlanhq/application-sdk/blob/main/packages/conformance
 > Return verdicts for source states; raise only retryable, non-deprecated transients.
 
 **Rationale:** The gate classifies by who raised: anything the handler raises is its statement about
-the source. A retryable SOURCE_UNAVAILABLE or TIMEOUT leaf is reported as an
-unverifiable source and never blocks; any other raised failure loses the check row a
-returned verdict carries, and a raised fail-open category is a deprecated request the
-gate no longer honours as plumbing.
+the source. A retryable SOURCE_UNAVAILABLE, RATE_LIMITED or TIMEOUT leaf is reported as
+an unverifiable source: TIMEOUT never blocks, and a hard gate retries the other two and
+blocks only if they persist to its final attempt. Any other raised failure loses the
+check row a returned verdict carries, and a raised fail-open category is a deprecated
+request the gate no longer honours as plumbing.
 
 ### What correct looks like
 

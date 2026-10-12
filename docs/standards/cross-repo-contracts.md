@@ -254,7 +254,8 @@ treat `checks` as supplementary, never index `checks[0]`.
 
 `details[0]` is `_primary_failure()` in `application_sdk/handler/_preflight_outcome.py`: the
 verdict's aggregate `result.error` when set, else the most decisive failed check (a deterministic
-blocking category such as `AUTH` first, then `SOURCE_UNAVAILABLE`, then the first typed error).
+blocking category such as `AUTH` first, then the first `SOURCE_UNAVAILABLE` or `RATE_LIMITED`
+check, then the first typed error).
 Before FND-3774 it was the first failed check, so a verdict mixing an unreachable or timed-out row
 with a later `AUTH` row now names the `AUTH` row. Since FND-3774 a hard gate also raises
 `PreflightNoVerdict` on a non-final attempt whose `details[0]` is `SOURCE_UNAVAILABLE` or

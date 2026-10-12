@@ -84,10 +84,12 @@ status. Read its `app/handler.py` before proposing changes.
   `{app}:preflight_warmup`, one `Handler.warmup` probe (the default answers
   `READY` at once, so an app without a warmup notices nothing), then
   `{app}:preflight`, which calls the app's one `Handler.preflight_check`.
-- `PreflightOutput.status` is the gate verdict: `NOT_READY` is always reported
+- `PreflightOutput.status` is the gate verdict: `NOT_READY` is reported
   (as `outcome="would_block"`), and **aborts the run** only when the app has
   opted into hard mode (`preflight_gate_mode = "hard"`, typed `PreflightFailed`,
-  red activity); `READY` and `PARTIAL` proceed. `PARTIAL` is display-only — use
+  red activity). A hard gate defers a `NOT_READY` whose primary failure is
+  `SOURCE_UNAVAILABLE` or `RATE_LIMITED` to its next attempt with no row, and
+  reports and blocks on it only at the final attempt; `READY` and `PARTIAL` proceed. `PARTIAL` is display-only — use
   it for "advisory check failed, run anyway".
 - There is no per-check `blocking` flag. Importance is expressed by **control
   flow**: required checks short-circuit (return `NOT_READY` early), advisory
@@ -151,7 +153,8 @@ returns the honest verdict; the gate decides what to do with `NOT_READY`:
 - **hard**: raise `PreflightFailed`, run aborts on `NOT_READY` when the
   primary failure is customer-actionable (`AUTH`, `PERMISSION`,
   `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`; an untyped verdict counts as
-  `PRECONDITION`). The opt-in for every app whose checks are trusted to gate
+  `PRECONDITION`), or is `SOURCE_UNAVAILABLE` / `RATE_LIMITED` still failing
+  at the final attempt (earlier attempts retry). The opt-in for every app whose checks are trusted to gate
   real runs.
 
 Opting in is deliberately explicit and deliberately small:
@@ -246,8 +249,10 @@ Rules the skill enforces during adoption:
   failure that should block hides the truth from every surface; posture
   belongs on the App class, verdicts belong in the handler.
 - **Never return `NOT_READY` for a transient.** A 429 or a dependency outage is
-  "ask me later", not "the source is not ready" — collapsing them makes hard mode
-  fail *closed* on a blip. Never return it as a failed row on `READY` either:
+  "ask me later", not "the source is not ready". An untyped `NOT_READY` is
+  attributed to `PRECONDITION`, so hard mode fails *closed* on a blip with no
+  retry; a typed `SOURCE_UNAVAILABLE` / `RATE_LIMITED` one is retried like a
+  raise but drops the other checks' context. Never return it as a failed row on `READY` either:
   a failed mandatory row on `READY` is a green light nothing verified, and
   `assert_preflight_result` rejects it. Raise a retryable `SourceUnavailableError`
   leaf when the source did not answer, a `RateLimitedError` when it answered 429,
