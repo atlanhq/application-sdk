@@ -31,7 +31,12 @@ accepted false negative — tracking it across functions would trade a WARN's
 precision for a guess.  A plain local alias (``alias = client``) is not a hand-off:
 the alias is tracked too.  Each binding is tracked from its line to the next
 rebinding of its name, so closing a second client under the same name does not
-clear the first.  A module-level client is a process-lifetime singleton
+clear the first.  The cleanup must run on every path the binding runs on: an
+``async with`` or ``close()`` under an ``if``, a loop or an ``except`` handler
+the binding is not also under fires.  The one accepted condition is a guard
+inside the ``finally`` itself (``finally: if owns_client: await
+client.close()``), which decides who owns the client rather than whether
+cleanup runs.  A module-level client is a process-lifetime singleton
 and is out of scope.  A ``close()`` reached only on the happy path (not in a
 ``finally``) still fires: the exception path is exactly when it leaks.
 
@@ -140,7 +145,10 @@ RULES: tuple[RuleDefinition, ...] = (
             "that is returned, yielded, stored on an attribute or container, or\n"
             "passed as an argument has moved to another owner and is not flagged;\n"
             "neither is a module-level client.  A plain local alias\n"
-            "(``alias = client``) is not a hand-off and is tracked too.\n"
+            "(``alias = client``) is not a hand-off and is tracked too.  The\n"
+            "cleanup must run on every path the binding runs on; a condition\n"
+            "inside the ``finally`` itself (``if owns_client:``) is accepted as\n"
+            "an ownership guard.\n"
             "Subclasses are resolved by module-qualified name across the repo,\n"
             "transitively, from a ``BaseClient`` imported from\n"
             "``application_sdk.clients``.  The check is silent unless the app's\n"
@@ -197,8 +205,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "it (for example, one that only clears a session token) leaves the pool\n"
             "open even when callers close the client in a ``finally`` or with\n"
             "``async with``.  ``BaseClient.close()`` is a coroutine, so a call\n"
-            "without ``await`` releases nothing, and a call inside a nested helper\n"
-            "only counts if the override runs it — neither satisfies the rule.\n"
+            "without ``await`` releases nothing, a call inside a nested helper\n"
+            "only counts if the override runs it, and a call under an ``if``, a\n"
+            "loop or an ``except`` handler is skipped on some paths — none of\n"
+            "these satisfies the rule.  An explicit ``<Base>.close(self)`` counts\n"
+            "only when ``<Base>`` is a strict ancestor.\n"
             "\n"
             "Fix — keep the subclass cleanup and add the super call::\n"
             "\n"

@@ -429,6 +429,127 @@ def test_p056_fires_on_unaliased_dotted_sdk_import() -> None:
     assert len(_rule(src, "P056")) == 1
 
 
+# ── Scope of imports, ancestry and conditional cleanup (lens round 2) ───────
+
+
+def test_function_local_import_does_not_rebind_a_module_level_base() -> None:
+    src = (
+        "from application_sdk.clients import BaseClient\n"
+        "\n"
+        "class C(BaseClient):\n"
+        "    pass\n"
+        "\n"
+        "def helper():\n"
+        "    from unrelated import BaseClient\n"
+        "    return BaseClient\n"
+        "\n"
+        "async def f():\n"
+        "    c = C()\n"
+        "    await c.load()\n"
+    )
+    assert len(_rule(src, "P056")) == 1
+
+
+def test_p056_resolves_a_function_local_client_import(tmp_path: Path) -> None:
+    root = _write(
+        tmp_path,
+        {
+            "app/client.py": (
+                "from application_sdk.clients import BaseClient\n"
+                "\n"
+                "class Client(BaseClient):\n"
+                "    pass\n"
+            ),
+            "app/handler.py": (
+                "async def handle():\n"
+                "    from app.client import Client\n"
+                "    c = Client()\n"
+                "    await c.load()\n"
+            ),
+        },
+    )
+    fs = scan_all(discover(root), root)
+    assert [(f.rule_id, f.file) for f in fs] == [("P056", "app/handler.py")]
+
+
+def test_p057_fires_on_recursive_close_of_its_own_class() -> None:
+    src = (
+        "from application_sdk.clients import BaseClient\n"
+        "\n"
+        "class Client(BaseClient):\n"
+        "    async def close(self):\n"
+        "        await Client.close(self)\n"
+    )
+    assert len(_rule(src, "P057")) == 1
+
+
+def test_p057_silent_on_explicit_close_of_an_intermediate_ancestor() -> None:
+    src = (
+        _CLIENT_HEADER + "\n"
+        "class Tuned(SourceClient):\n"
+        "    async def close(self):\n"
+        "        await SourceClient.close(self)\n"
+    )
+    assert not _rule(src, "P057")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "        if self.session_token:\n            await super().close()\n",
+        "        for _ in range(1):\n            await super().close()\n",
+        "        try:\n            pass\n        except Exception:\n            await super().close()\n",
+    ],
+    ids=["under-if", "in-loop", "in-except-handler"],
+)
+def test_p057_fires_when_base_close_is_conditional(body: str) -> None:
+    assert len(_rule(_METABASE_SHAPED_CLIENT + body, "P057")) == 1
+
+
+def test_p057_silent_when_base_close_is_in_finally() -> None:
+    src = _METABASE_SHAPED_CLIENT.replace(
+        "        self.session_token = None\n",
+        "        try:\n"
+        "            self.session_token = None\n"
+        "        finally:\n"
+        "            await super().close()\n",
+    )
+    assert not _rule(src, "P057")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if flag:\n        async with client:\n            await client.load()\n",
+        "    try:\n        await client.load()\n    finally:\n        pass\n"
+        "    if flag:\n        await client.close()\n",
+        "    for _ in range(3):\n        async with client:\n            pass\n",
+        "    try:\n        await client.load()\n    except Exception:\n"
+        "        await client.close()\n        raise\n",
+    ],
+    ids=["async-with-under-if", "close-under-if", "async-with-in-loop", "close-in-except"],
+)
+def test_p056_fires_when_cleanup_only_runs_on_some_paths(body: str) -> None:
+    fs = _p056("async def f(flag):\n    client = SourceClient()\n" + body)
+    assert len(fs) == 1
+    assert "only closed on some paths" in fs[0].message
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "    if flag:\n        client = SourceClient()\n"
+        "        async with client:\n            await client.load()\n",
+        "    for _ in range(3):\n        client = SourceClient()\n"
+        "        try:\n            await client.load()\n"
+        "        finally:\n            await client.close()\n",
+    ],
+    ids=["bound-and-closed-under-same-if", "bound-and-closed-in-same-loop"],
+)
+def test_p056_silent_when_cleanup_runs_wherever_the_binding_does(body: str) -> None:
+    assert not _p056("async def f(flag):\n" + body)
+
+
 # ── Cross-file resolution + SDK-version gate (repo boundary) ────────────────
 
 _HANDLER = (

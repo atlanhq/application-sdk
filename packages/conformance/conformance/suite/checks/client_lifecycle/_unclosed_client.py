@@ -13,7 +13,9 @@ seeded only from the SDK's ``BaseClient``.
 ``P056`` then walks each function on its own and tracks each constructor
 binding (``name = Subclass(...)``) from its line to the next rebinding of that
 name.  Within that range the client is *closed* if the function enters it with
-``async with <name>`` or calls ``await <name>.close()`` inside a ``finally``; it
+``async with <name>`` or calls ``await <name>.close()`` inside a ``finally``, on
+every path the binding runs on (a guard inside the ``finally`` itself is the
+accepted ownership-guard shape); it
 has *escaped* — and is skipped — if it is returned, yielded, passed as an
 argument, stored on an attribute / in a container, or referenced from a nested
 scope.  A plain local alias (``alias = client``) neither closes nor moves it: the
@@ -23,14 +25,14 @@ nor move the client.
 
 ``P057`` flags a ``close`` method defined directly on a registered subclass
 whose own body (not a nested helper) never *awaits* ``super().close()`` (or an
-explicit ``<Base>.close(self)``).  ``BaseClient.close()`` is a coroutine, so a
+explicit ``<Base>.close(self)`` on a strict ancestor) on every path.  ``BaseClient.close()`` is a coroutine, so a
 bare call only builds a coroutine object and releases nothing.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
@@ -91,6 +93,62 @@ def _dotted(expr: ast.expr) -> str | None:
         head = _dotted(expr.value)
         return f"{head}.{expr.attr}" if head is not None else None
     return None
+
+
+#: Fields of a control-flow node whose statements may not run.
+_CONDITIONAL_FIELDS: dict[type[ast.AST], frozenset[str]] = {
+    ast.If: frozenset({"body", "orelse"}),
+    ast.IfExp: frozenset({"body", "orelse"}),
+    ast.For: frozenset({"body", "orelse"}),
+    ast.AsyncFor: frozenset({"body", "orelse"}),
+    ast.While: frozenset({"body", "orelse"}),
+    ast.Match: frozenset({"cases"}),
+    ast.Try: frozenset({"handlers", "orelse"}),
+    ast.TryStar: frozenset({"handlers", "orelse"}),
+    ast.BoolOp: frozenset({"values"}),
+}
+
+_Links = dict[int, tuple[ast.AST, str]]
+
+
+def _parent_links(root: ast.AST) -> _Links:
+    """Map ``id(node)`` to ``(parent, field)`` within *root*'s own scope."""
+    links: _Links = {}
+    stack: list[ast.AST] = [root]
+    while stack:
+        parent = stack.pop()
+        for name, value in ast.iter_fields(parent):
+            for child in value if isinstance(value, list) else [value]:
+                if isinstance(child, ast.AST):
+                    links[id(child)] = (parent, name)
+                    if not isinstance(child, _SCOPE_NODES):
+                        stack.append(child)
+    return links
+
+
+def _branch_path(
+    node: ast.AST, links: _Links, *, finally_resets: bool
+) -> frozenset[tuple[int, str]]:
+    """The conditional branches *node* sits under, as ``(id(parent), field)``.
+
+    With *finally_resets*, branches inside the innermost enclosing ``finally``
+    are dropped: a guard there decides ownership, not whether cleanup runs.
+    """
+    path: list[tuple[int, str]] = []
+    current = node
+    while id(current) in links:
+        parent, name = links[id(current)]
+        if (
+            finally_resets
+            and isinstance(parent, (ast.Try, ast.TryStar))
+            and name == "finalbody"
+        ):
+            path.clear()
+            finally_resets = False
+        elif name in _CONDITIONAL_FIELDS.get(type(parent), frozenset()):
+            path.append((id(parent), name))
+        current = parent
+    return frozenset(path)
 
 
 def module_name_for(rel: str) -> tuple[str, bool]:
@@ -154,15 +212,26 @@ class ModuleIndex:
         return ".".join(parts[: len(parts) - drop])
 
     def _collect_bindings(self) -> None:
-        for node in ast.walk(self.tree):
+        # Module scope only: an import inside a function or class body binds a
+        # name in that scope, not in the module, so it must not change what a
+        # module-level class base resolves to.  Function-local imports are
+        # overlaid where they apply (see ``_FunctionScope.local_bindings``).
+        self.bindings.update(
+            self.import_bindings(node for node, _ in _walk_scope(self.tree))
+        )
+
+    def import_bindings(self, nodes: Iterable[ast.AST]) -> dict[str, str]:
+        """Names bound by the ``import`` statements among *nodes*."""
+        bindings: dict[str, str] = {}
+        for node in nodes:
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if alias.asname:
-                        self.bindings[alias.asname] = alias.name
+                        bindings[alias.asname] = alias.name
                     else:
                         # ``import a.b.c`` binds ``a`` to the top-level package.
                         top = alias.name.split(".")[0]
-                        self.bindings[top] = top
+                        bindings[top] = top
             elif isinstance(node, ast.ImportFrom):
                 if node.level:
                     base = self._package(node.level)
@@ -175,17 +244,18 @@ class ModuleIndex:
                     if alias.name == "*":
                         continue
                     bound = alias.asname or alias.name
-                    self.bindings[bound] = (
-                        f"{source}.{alias.name}" if source else alias.name
-                    )
+                    bindings[bound] = f"{source}.{alias.name}" if source else alias.name
+        return bindings
 
-    def qualify(self, expr: ast.expr) -> str | None:
-        """Resolve a Name/Attribute chain to a qualified name via this module's bindings."""
+    def qualify(
+        self, expr: ast.expr, local: Mapping[str, str] | None = None
+    ) -> str | None:
+        """Resolve a Name/Attribute chain via *local* bindings, then the module's."""
         dotted = _dotted(expr)
         if dotted is None:
             return None
         head, _, rest = dotted.partition(".")
-        origin = self.bindings.get(head)
+        origin = (local or {}).get(head) or self.bindings.get(head)
         if origin is None:
             return None
         return f"{origin}.{rest}" if rest else origin
@@ -214,13 +284,39 @@ class Registry:
             qualname = target
         return qualname
 
-    def resolve(self, module: ModuleIndex, expr: ast.expr) -> str | None:
+    def resolve(
+        self,
+        module: ModuleIndex,
+        expr: ast.expr,
+        local: Mapping[str, str] | None = None,
+    ) -> str | None:
         """Canonical qualified name *expr* refers to inside *module*."""
-        return self.canonical(module.qualify(expr))
+        return self.canonical(module.qualify(expr, local))
 
-    def is_client(self, module: ModuleIndex, expr: ast.expr) -> bool:
+    def is_client(
+        self,
+        module: ModuleIndex,
+        expr: ast.expr,
+        local: Mapping[str, str] | None = None,
+    ) -> bool:
         """True if *expr* in *module* names a ``BaseClient`` subclass."""
-        return self.resolve(module, expr) in self.subclasses
+        return self.resolve(module, expr, local) in self.subclasses
+
+    def ancestors(self, qualname: str) -> frozenset[str]:
+        """Every class *qualname* strictly inherits from (canonical names)."""
+        found: set[str] = set()
+        pending = [qualname]
+        while pending:
+            record = self._classes.get(pending.pop())
+            if record is None:
+                continue
+            for base in record.node.bases:
+                target = self.resolve(record.module, base)
+                if target is not None and target not in found:
+                    found.add(target)
+                    pending.append(target)
+        found.discard(qualname)
+        return frozenset(found)
 
     def _resolve_subclasses(self) -> frozenset[str]:
         derived: set[str] = set()
@@ -248,16 +344,23 @@ def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -
     """True if *func*'s own scope awaits ``super().close()`` / ``<Base>.close(self)``.
 
     The call must be the operand of an ``await`` — ``BaseClient.close()`` is a
-    coroutine function, so an un-awaited call releases nothing.  Nested helper
-    functions are not entered: defining a helper that would close the base is
-    not the same as closing it.
+    coroutine function, so an un-awaited call releases nothing.  It must run on
+    every path through the override (not under an ``if``, a loop, an ``except``
+    handler, ...).  Nested helper functions are not entered: defining a helper
+    that would close the base is not the same as closing it.  An explicit
+    ``<Base>.close(self)`` only counts when ``<Base>`` is a strict ancestor —
+    ``Client.close(self)`` inside ``Client.close`` recurses and never reaches it.
     """
+    links = _parent_links(func)
+    ancestors = registry.ancestors(record.qualname)
     for node, _ in _walk_scope(func):
         if not isinstance(node, ast.Await) or not isinstance(node.value, ast.Call):
             continue
         callee = node.value.func
         if not isinstance(callee, ast.Attribute) or callee.attr != "close":
             continue
+        if _branch_path(node, links, finally_resets=False):
+            continue  # conditional: some path through close() skips it
         receiver = callee.value
         if (
             isinstance(receiver, ast.Call)
@@ -266,7 +369,7 @@ def _awaits_base_close(func: ast.AST, record: ClassRecord, registry: Registry) -
         ):
             return True
         target = registry.resolve(record.module, receiver)
-        if target in SDK_BASE_CLIENTS or target in registry.subclasses:
+        if target in SDK_BASE_CLIENTS or target in ancestors:
             return True
     return False
 
@@ -329,6 +432,7 @@ class _Lifecycle:
 
     closed: bool = False
     closed_outside_finally: bool = False
+    closed_on_some_paths: bool = False
     escaped: bool = False
 
 
@@ -348,9 +452,11 @@ class _Span:
 class _FunctionScope:
     """Per-function facts P056 needs, computed once."""
 
-    def __init__(self, func: ast.AST) -> None:
+    def __init__(self, func: ast.AST, module: ModuleIndex) -> None:
         self.func = func
         self.nodes = list(_walk_scope(func))
+        self.links = _parent_links(func)
+        self.local_bindings = module.import_bindings(node for node, _ in self.nodes)
         self.in_finally: set[int] = set()
         self.stores: dict[str, list[int]] = {}
         self.captured: set[str] = set()
@@ -387,13 +493,23 @@ def _local_alias(parent: ast.AST, node: ast.Name) -> str | None:
     return None
 
 
-def _lifecycle(scope: _FunctionScope, first: _Span) -> _Lifecycle:
+def _lifecycle(scope: _FunctionScope, first: _Span, binding: ast.stmt) -> _Lifecycle:
     """Classify how the function closes, or hands off, one constructed client.
 
     Follows the client through plain local aliases; each name is only
     considered between the line it takes the client and its next rebinding.
+    A close only counts when it runs on every path the binding runs on: its
+    branch path must add no condition the binding is not already under.  A
+    condition *inside* a ``finally`` is allowed — that is the ownership-guard
+    shape (``finally: if owns_client: await client.close()``).
     """
     state = _Lifecycle()
+    bound_under = _branch_path(binding, scope.links, finally_resets=False)
+
+    def always(site: ast.AST, *, in_finally: bool) -> bool:
+        path = _branch_path(site, scope.links, finally_resets=in_finally)
+        return path <= bound_under
+
     pending = [first]
     seen: set[_Span] = set()
     while pending:
@@ -413,9 +529,15 @@ def _lifecycle(scope: _FunctionScope, first: _Span) -> _Lifecycle:
                     and item.context_expr.id == span.name
                     for item in node.items
                 ):
-                    state.closed = True
+                    if always(node, in_finally=False):
+                        state.closed = True
+                    else:
+                        state.closed_on_some_paths = True
             elif _is_close_call_on(node, span.name):
-                if id(node) in scope.in_finally:
+                in_finally = id(node) in scope.in_finally
+                if not always(node, in_finally=in_finally):
+                    state.closed_on_some_paths = True
+                elif in_finally:
                     state.closed = True
                 else:
                     state.closed_outside_finally = True
@@ -447,7 +569,7 @@ def _client_bindings(
         else:
             continue
         if not isinstance(value, ast.Call) or not registry.is_client(
-            module, value.func
+            module, value.func, scope.local_bindings
         ):
             continue
         cls = _dotted(value.func) or "client"
@@ -470,12 +592,14 @@ def check_p056(
     for func in ast.walk(module.tree):
         if not isinstance(func, _FUNC_NODES):
             continue
-        scope = _FunctionScope(func)
+        scope = _FunctionScope(func, module)
         for name, cls, stmt in _client_bindings(scope, module, registry):
-            state = _lifecycle(scope, scope.span(name, stmt.lineno))
+            state = _lifecycle(scope, scope.span(name, stmt.lineno), stmt)
             if state.closed or state.escaped:
                 continue
-            if state.closed_outside_finally:
+            if state.closed_on_some_paths:
+                how = f"'{name}' is only closed on some paths through the function"
+            elif state.closed_outside_finally:
                 how = (
                     f"'{name}.close()' is only reached when no exception is raised "
                     "before it"
