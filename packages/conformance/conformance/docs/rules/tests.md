@@ -759,27 +759,29 @@ measurement. T014 fires when the effective coverage floor is absent or `0`, so a
 report coverage without failing.
 
 The floor comes from `[tool.coverage.report].fail_under` unless CI passes one on the
-command line, which always wins. The rule checks the repo's own
-`.github/workflows/*.yml` for a `fail-under:` input (`connector-unit-tests`'s, or a
-`tests-reusable.yaml` caller's `unit-coverage-fail-under`) or a `--cov-fail-under=N`
-flag in a `pytest-args` override. A positive CI value is the effective floor; a CI value
-of `0` overrides TOML but enforces nothing.
+command line, which always wins. The rule reads the unit tier's floor from the repo's
+own `.github/workflows/*.yml`: for a `tests-reusable.yaml` caller, its
+`unit-coverage-fail-under` input, or the reusable's default `0` when omitted (its
+`pytest-args` feed only the integration tier and are not read); for any other workflow,
+a `connector-unit-tests` `fail-under:` input or a `--cov-fail-under=N` flag. A positive
+CI value is the effective floor; a CI value of `0` overrides TOML but enforces nothing.
 
 **Remediation:** set the floor on the input that gates the unit tier. First read the
 current *unit* coverage (the unit job's `coverage.json` artifact, or `coverage report`
 after `pytest tests/unit`) and take the whole number at or below it.
 
-- `tests-reusable.yaml` caller: set   `unit-coverage-fail-under: "<N>"` in the `with:`
-block, where   the bootstrap template places it (the mysql reference uses   `"90"`).
-This input is the unit tier's only gate: the   unit job runs `coverage report
---fail-under=<input>`, so   `pyproject.toml` never applies there. Write a quoted whole
-number — `bootstrap --resync` reads it back and keeps it; a   decimal is not read back
-and makes `--resync` refuse the file. - Leave `--cov-fail-under=0` in `pytest-args`
-alone.   `pytest-args` only reaches the integration tier; removing the   flag applies
-the TOML `fail_under` to integration coverage — a   different measurement — and leaves
-the unit gate at `0`. - Direct `connector-unit-tests` user: set its `fail-under:`
-input to `<N>`. - No CI coverage gate at all: set   `[tool.coverage.report].fail_under =
-<N>`.
+*tests-reusable.yaml caller:* set `unit-coverage-fail-under: "<N>"` in the `with:` block
+(the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit job
+runs `coverage report --fail-under=<input>`, so `pyproject.toml` never applies there.
+Write a quoted whole number — `bootstrap --resync` reads it back and keeps it; a decimal
+is not read back and makes `--resync` refuse the file.
+
+Leave `--cov-fail-under=0` in `pytest-args` alone. `pytest-args` only reaches the
+integration tier; removing the flag applies the TOML `fail_under` to integration
+coverage — a different measurement — and leaves the unit gate at `0`.
+
+*Direct connector-unit-tests user:* set its `fail-under:` input to `<N>`. *No CI
+coverage gate at all:* set `[tool.coverage.report].fail_under = <N>`.
 
 Keep a positive `fail_under` in `pyproject.toml` as the fallback for local runs (mysql
 keeps `84`). Never set a floor above current coverage, and ratchet it up in follow-up

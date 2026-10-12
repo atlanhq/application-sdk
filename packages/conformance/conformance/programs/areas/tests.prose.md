@@ -369,8 +369,7 @@ residue for a human to apply, not an applied edit:
   that gates the unit tier:
 
   - **`tests-reusable.yaml` caller** — set `unit-coverage-fail-under: "<N>"`
-    in the `with:` block, where the bootstrap template places it (the mysql
-    reference uses `"90"`). This input is the unit tier's only gate: the unit
+    in the `with:` block (the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit
     job runs `coverage report --fail-under=<input>` (default `0`), so
     `[tool.coverage.report].fail_under` never applies there. Write a quoted
     whole number — `bootstrap --resync` reads it back and keeps it; a decimal
