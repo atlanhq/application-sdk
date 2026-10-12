@@ -474,6 +474,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # class that can move, or stop being the one a boundary raises, in a minor
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
+    # P056/P057: client lifecycle — only consumer apps subclass and construct
+    # BaseClient; the SDK defines it and constructs no subclass in product code,
+    # and the version gate reads a consumed SDK version the SDK repo does not
+    # have (FND-3778).
     assert app_scoped == {
         "B001",
         "B007",
@@ -491,6 +495,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P052",
         "P053",
         "P055",
+        "P056",
+        "P057",
         "C002",
         "D001",
         "D002",
@@ -777,6 +783,10 @@ def test_catalog_p_series_present() -> None:
     route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
     P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
     whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
+    P056/P057 are the client-lifecycle rules — UnclosedBaseClient (a BaseClient
+    subclass constructed in a function with no ``async with`` and no ``close()``
+    in a ``finally``) and CloseOverrideSkipsSuper (a ``close()`` override that
+    never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -832,6 +842,8 @@ def test_catalog_p_series_present() -> None:
         "P053",
         "P054",
         "P055",
+        "P056",
+        "P057",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -1560,6 +1572,12 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
     "E008": (
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
+    ),
+    "P057": (
+        "no reference app overrides close() on a BaseClient subclass and chains to "
+        "super(); atlan-metabase-app's MetabaseApiClient.close() is the violation "
+        "the rule was written for, so the SDK's BaseClient.close() is the only "
+        "compliant shape to cite (FND-3778)"
     ),
 }
 

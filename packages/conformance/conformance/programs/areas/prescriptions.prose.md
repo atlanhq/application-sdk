@@ -84,6 +84,14 @@ of which pyatlan surface to use — or whether to suppress when no equivalent ex
 auto-applies.  (This rule is backed by a separate `suite.checks.client_seam` check
 — see its module docs.)
 
+The client-lifecycle rules (P056/P057, FND-3778) are also P-series and
+suggest-only.  P057's fix is one line (add `await super().close()` to the
+override), but P056's depends on where the client's use ends and whether the
+function really owns it, which only the developer can confirm.  Both draft a
+proposal for human review.  (These rules are backed by a separate
+`suite.checks.client_lifecycle` check, which is silent unless the app's `uv.lock`
+resolves `atlan-application-sdk` >= 3.46.0 — see its module docs.)
+
 The determinism / async-correctness rules (P020–P024) are also P-series
 and suggest-only.  P020 (non-deterministic primitive in workflow context) has a
 concrete mechanical proposal for time/uuid/sleep — swap to the SDK seam — but its
@@ -768,6 +776,36 @@ around `finding.line` before drafting any proposal — the proposal is a
   `# conformance: ignore[P019] <reason>` instead, where the justification names
   the missing surface.  Either way the proposal is recorded for the developer to
   apply or reject; this area never mutates the working tree.
+
+**Client-lifecycle rules (P056/P057)** — suggest-only, scope=app, WARN-tier;
+`classification` is always `"judgment"`.  `BaseClient` keeps one shared
+`httpx.AsyncClient` and its connection pool open until `close()`.  Read the
+whole enclosing function (P056) or class (P057) before drafting.  For the human
+reading the brief (in the `atlanhq/application-sdk` repo, not shipped with this
+package): `docs/concepts/clients.md`.
+
+- **P056 UnclosedBaseClient** — a function binds a `BaseClient` subclass to a
+  local name and neither enters it with `async with` nor calls
+  `await <name>.close()` in a `finally`.  The message says which shape fired:
+  never closed, or closed only on the happy path.  Draft, in order of
+  preference:
+  1. **`async with`** when the client's whole use fits in one block:
+     `async with Client(...) as client:` and move the uses inside.
+     `__aenter__` returns the client and does not call `load()`, so keep the
+     `await client.load(...)` call inside the block.
+  2. **`try` / `finally`** when the use spans code that cannot move into a
+     block: put `await client.close()` in the `finally`, and remove a
+     happy-path `close()` it replaces.
+  If the function hands the client to a longer-lived owner in a way the check
+  could not see, do not move the close.  Propose an inline
+  `# conformance: ignore[P056] <reason>` that names the owner that closes it.
+
+- **P057 CloseOverrideSkipsSuper** — a `BaseClient` subclass overrides
+  `close()` and never calls `super().close()`.  Draft: keep the subclass's own
+  cleanup and add `await super().close()` as the override's last statement.
+  Release the pool even when the subclass cleanup raises: wrap that cleanup in
+  `try` / `finally` with the super call in the `finally`.  There is no case
+  where skipping the base close is correct, so do not propose a suppression.
 
 **Determinism / async-correctness rules (P020–P024)** — all suggest-only,
 scope=both, WARN-tier; `classification` is always `"judgment"`.  Read the enclosing

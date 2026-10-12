@@ -32,6 +32,7 @@ from conformance.suite.checks import (
     asyncio_loop_scope,
     atomic_publish,
     bootstrap_drift,
+    client_lifecycle,
     client_seam,
     coverage_config,
     credential_seam,
@@ -114,6 +115,12 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=client_lifecycle.SERIES,
+        discover=client_lifecycle.discover,
+        scan_path=client_lifecycle.scan_path,
+        scan_all=client_lifecycle.scan_all,
     ),
     CheckRegistration(
         series=persistence_seam.SERIES,
