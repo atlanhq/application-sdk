@@ -1110,6 +1110,222 @@ def probe():
     )
 
 
+def test_p004_no_finding_when_module_helper_logs_redacted_caught_exception() -> None:
+    # The helper forwards the received exception through a sanitizer on every
+    # branch, even though the except handler itself contains no logger call.
+    src = """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error(
+            "%s failed [%s]: %s",
+            operation,
+            classification.code,
+            sanitize_cause_repr(problem),
+        )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        _report_failure("authentication", caught, classification)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+def test_p004_no_finding_when_helper_log_disables_exc_info() -> None:
+    # A provably falsy `exc_info` attaches no traceback; the sanitized message
+    # remains the only form the failure leaves in.
+    src = """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=False)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+"""
+    assert "E004" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # A conditional exit before the helper can bypass the log, like the
+        # unclassified arm of the pg_stat_statements probe.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        classification = classify_failure(caught)
+        if classification is None:
+            raise
+        _report_failure("query", caught, classification)
+        return None
+""",
+        # Every helper branch needs a warning/error/critical log; DEBUG is not enough.
+        """\
+def _report_failure(operation, problem, classification):
+    if classification.audience == "owner":
+        logger.error("%s failed: %s", operation, safe_traceback(problem))
+    else:
+        logger.debug("%s failed: %s", operation, sanitize_cause_repr(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, classify_failure(caught))
+        return None
+""",
+        # The helper exposes the exception raw instead of redacting it.
+        """\
+def _report_failure(operation, problem):
+    logger.error("%s failed: %s", operation, problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught)
+        return None
+""",
+        # A sanitizer in the helper is not enough when it is applied to a
+        # different value than the caught exception.
+        """\
+def _report_failure(operation, problem, endpoint):
+    logger.error(
+        "%s failed: %s", operation, sanitize_cause_repr(endpoint)
+    )
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure("operation", caught, endpoint)
+        return None
+""",
+        # `exc_info` is a traceback switch: a truthy sanitized value still
+        # attaches the raw active traceback, so it proves no redaction.
+        """\
+def _report_failure(problem):
+    logger.error("failed", exc_info=safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A sanitized message does not redact the raw traceback that a
+        # truthy `exc_info` attaches alongside it.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=problem)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem), exc_info=True)
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A walrus in an `if` test replaces the failure before the log.
+        """\
+def _report_failure(problem):
+    if (problem := None):
+        pass
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A conditional module-level rebinding may replace the proven helper.
+        """\
+def _report_failure(problem):
+    logger.error("%s", safe_traceback(problem))
+
+
+if DISABLE_LOGGING:
+    _report_failure = lambda problem: None
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(caught)
+        return None
+""",
+        # A positional-only parameter cannot be bound by keyword.
+        """\
+def _report_failure(problem, /):
+    logger.error("%s", safe_traceback(problem))
+
+
+def probe():
+    try:
+        connect()
+    except Exception as caught:
+        _report_failure(problem=caught)
+        return None
+""",
+    ],
+    ids=[
+        "conditional-bypass",
+        "helper-unaccepted-debug-branch",
+        "raw-exception",
+        "sanitizes-other-value",
+        "sanitizer-in-exc-info",
+        "sanitized-message-raw-exc-info",
+        "sanitized-message-exc-info-true",
+        "walrus-in-if-test",
+        "conditional-module-rebinding",
+        "positional-only-by-keyword",
+    ],
+)
+def test_p004_still_flags_unproven_redacted_logging_helper(src: str) -> None:
+    assert "E004" in _findings(src)
+
+
 def test_p004_still_flags_row_built_by_a_lowercase_helper() -> None:
     # The classifier returns an AppError, but recognition is by construction
     # of a capitalised type: a lowercase helper wrapping a lowercase classifier
@@ -1729,6 +1945,59 @@ def get_value():
     )
 
 
+def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _failed_check(self, label, problem, started):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+        return FailedCheck(label=label, error=problem)
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._failed_check("keys", problem, started))
+            return Verdict(checks=checks)
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _empty_check(self, problem):
+        return EmptyCheck()
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._empty_check(problem))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_logs_unrelated_data() -> None:
+    src = """\
+class Probe:
+    def _report(self, detail):
+        logger.warning("other operation failed: %s", detail, exc_info=detail)
+        return EmptyCheck()
+
+    def inspect(self, unrelated):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._report(unrelated))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_no_finding_log_before_return() -> None:
     _none(
         """\
@@ -1739,6 +2008,142 @@ def get_value():
         logger.warning("key missing", exc_info=True)
         return None
 """
+    )
+
+
+def test_p007_still_flags_classmethod_calling_unbound_plain_helper() -> None:
+    # ``cls._report(problem)`` binds ``problem`` to ``self``; the logged
+    # ``problem`` parameter is its ``None`` default.
+    src = """\
+class Probe:
+    def _report(self, problem=None):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_no_finding_classmethod_calling_classmethod_helper() -> None:
+    src = """\
+class Probe:
+    @classmethod
+    def _report(cls, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_receiver_rebound_before_helper_call() -> None:
+    src = """\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self, silent_proxy):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self = silent_proxy
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_instance_attribute_shadows_helper() -> None:
+    src = """\
+class Probe:
+    def __init__(self, silent):
+        self._failed = silent
+
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    ["bool(problem)", "type(problem)", "problem is None", "len(str(problem))"],
+)
+def test_p007_still_flags_when_helper_logs_lossy_derivation(logged: str) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", {logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        '"failed: %s", problem',
+        '"failed: %s", str(problem)',
+        '"failed: %r", repr(problem)',
+        'f"failed: {problem}"',
+        '"failed: %s" % problem',
+        '"failed", exc_info=problem',
+    ],
+)
+def test_p007_no_finding_when_helper_logs_exception_representation(
+    logged: str,
+) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning({logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_json_parse_failure_returning_original_value() -> None:
+    _single(
+        """\
+def decode_setting(value):
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+""",
+        "E007",
     )
 
 
@@ -2897,6 +3302,100 @@ def fail():
     _single(src, "E018")
 
 
+def test_p018_no_finding_for_external_precondition_translated_to_domain_error() -> None:
+    src = """\
+from backend_store.exceptions import PreconditionError
+from application_sdk.errors import DependencyUnavailableError
+
+class CheckpointConflict(DependencyUnavailableError):
+    code = "DEPENDENCY_UNAVAILABLE_SYNTHETIC_CHECKPOINT_CONFLICT"
+
+def update_local():
+    raise PreconditionError("concurrent update")
+
+def write_checkpoint():
+    try:
+        update_local()
+    except PreconditionError:
+        raise CheckpointConflict(message="retry")
+"""
+    assert "E018" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised_type"),
+    [
+        (
+            "from application_sdk.errors import PreconditionError",
+            "PreconditionError",
+        ),
+        (
+            "import application_sdk.errors as sdk_errors",
+            "sdk_errors.PreconditionError",
+        ),
+    ],
+)
+def test_p018_sdk_precondition_leaf_still_flagged(
+    imports: str, raised_type: str
+) -> None:
+    _single(
+        f"""\\
+{imports}
+
+def fail():
+    raise {raised_type}(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_non_exception_module_import_still_flagged() -> None:
+    _single(
+        """
+from domain_errors import PreconditionError
+
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
+@pytest.mark.parametrize("local_first", [True, False])
+def test_p018_function_local_import_does_not_mask_module_sdk_leaf(
+    local_first: bool,
+) -> None:
+    local = """\
+def translate():
+    from backend_store.exceptions import PreconditionError
+    raise PreconditionError("concurrent update")
+"""
+    sdk = """\
+def fail():
+    raise PreconditionError(message="state conflict")
+"""
+    body = local + "\n" + sdk if local_first else sdk + "\n" + local
+    src = "from application_sdk.errors import PreconditionError\n\n" + body
+    # The module-level SDK leaf raise must still be flagged; the name's
+    # provenance is ambiguous, so the local raise is flagged conservatively too.
+    sdk_line = (
+        src.splitlines().index('    raise PreconditionError(message="state conflict")')
+        + 1
+    )
+    e018_lines = [f.line for f in scan_text(src, "fake.py") if f.rule_id == "E018"]
+    assert sdk_line in e018_lines
+
+
+def test_p018_unresolved_precondition_leaf_still_flagged() -> None:
+    _single(
+        """\\
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
 @pytest.mark.parametrize(
     ("imports", "cancelled_error"),
     [
@@ -3566,6 +4065,84 @@ def poll():
     r = client.get(url)
     if r.status_code == 204:
         return
+"""
+    )
+
+
+def test_e020_no_finding_on_bounded_2xx_success_return() -> None:
+    # The return is guarded by the success range; a non-2xx response raises.
+    _none(
+        """\
+def publish(response):
+    if 200 <= response.status_code < 300:
+        return
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_bounded_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if 200 <= response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_no_finding_on_and_joined_2xx_success_return() -> None:
+    _none(
+        """\
+def publish(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return []
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_and_joined_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_chained_bounds_span_different_responses() -> None:
+    # a.status_code == 200, b.status_code == 500 satisfies the test.
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code <= 200 <= b.status_code:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_and_joined_bounds_span_different_responses() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code >= 200 and b.status_code < 300:
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_status_code_not_200_return_none() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code != 200:
+        return None
 """
     )
 

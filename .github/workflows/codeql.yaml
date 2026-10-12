@@ -16,7 +16,12 @@ on:
 
 jobs:
   analyze:
-    if: github.event_name != 'merge_group'
+    # Bump-version PR CI is opt-in (FND-3748): on a `bump-version-*` PR this
+    # runs only on the event that adds `gate-check` (or while it is carried);
+    # SDK Gate and Connector Tests Gate fail closed until then.
+    if: >-
+      github.event_name != 'merge_group' &&
+      (!startsWith(github.head_ref, 'bump-version') || (contains(github.event.pull_request.labels.*.name, 'gate-check') && (github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || (contains(github.event.pull_request.labels.*.name, 'e2e') && (github.event.action != 'labeled' || github.event.label.name == 'e2e')))
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -149,6 +154,11 @@ jobs:
   # Code Quality Checks
   lint:
     name: Pre-commit Checks
+    # Bump-version PR CI is opt-in (FND-3748): on a `bump-version-*` PR this
+    # runs only on the event that adds `gate-check` (or while it is carried);
+    # SDK Gate and Connector Tests Gate fail closed until then.
+    if: >-
+      !startsWith(github.head_ref, 'bump-version') || (contains(github.event.pull_request.labels.*.name, 'gate-check') && (github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || (contains(github.event.pull_request.labels.*.name, 'e2e') && (github.event.action != 'labeled' || github.event.label.name == 'e2e'))
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

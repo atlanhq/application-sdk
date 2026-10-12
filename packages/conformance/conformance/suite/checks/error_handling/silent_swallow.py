@@ -13,12 +13,15 @@ from ._helpers import (
     _body_is_only_loop_control_no_logging,
     _body_is_only_pass,
     _body_returns_typed_failure,
+    _call_argument_for_parameter,
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
+    _handler_rebinds_exception,
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
+    _is_log_call_stmt,
     _iter_shallow,
     _return_carries_typed_failure,
     redaction_scope,
@@ -97,6 +100,10 @@ class SilentSwallowMixin:
         if not broad:
             return
         exc_type = next(iter(broad))
+        from .._ast_common._sanitizers import is_sanitizer_call
+
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
+
         # Pass only if the handler re-raises with the cause preserved on *every*
         # path (bare `raise`, `raise X(...)`, or `raise X(...) from e`): a broad
         # catch that translates-and-chains swallows nothing. A guaranteeing raise
@@ -119,9 +126,185 @@ class SilentSwallowMixin:
             node,
             function=self._function_stack[-1] if self._function_stack else None,
             redaction=scope,
-            local_helpers=visible_helpers(self._local_helpers, self._function_stack),
+            local_helpers=local_helpers,
         ):
             return
+
+        def _call_redacts_parameter(call: ast.Call, parameter: str) -> bool:
+            # `exc_info` is a traceback switch, not message text: any value not
+            # provably falsy — the parameter, `True`, a sanitized string —
+            # attaches the raw active traceback past the sanitizer, so the call
+            # is no redaction boundary.
+            if any(
+                keyword.arg == "exc_info"
+                and not (
+                    isinstance(keyword.value, ast.Constant) and not keyword.value.value
+                )
+                for keyword in call.keywords
+            ):
+                return False
+            sanitized = False
+            raw = False
+            pending: list[ast.AST] = [
+                *call.args,
+                *[keyword.value for keyword in call.keywords],
+            ]
+            while pending:
+                current = pending.pop()
+                if isinstance(current, ast.Call) and is_sanitizer_call(current):
+                    sanitizer_args = [
+                        *current.args,
+                        *[keyword.value for keyword in current.keywords],
+                    ]
+                    if any(
+                        isinstance(inner, ast.Name)
+                        and inner.id == parameter
+                        and isinstance(inner.ctx, ast.Load)
+                        for argument in sanitizer_args
+                        for inner in ast.walk(argument)
+                    ):
+                        sanitized = True
+                        continue
+                if (
+                    isinstance(current, ast.Name)
+                    and current.id == parameter
+                    and isinstance(current.ctx, ast.Load)
+                ):
+                    raw = True
+                pending.extend(ast.iter_child_nodes(current))
+            return sanitized and not raw
+
+        def _logged_paths(
+            body: list[ast.stmt], incoming: set[bool], parameter: str
+        ) -> tuple[set[bool], set[bool]] | None:
+            active = set(incoming)
+            exited: set[bool] = set()
+            for statement in body:
+                if not active or active == {True}:
+                    break
+                if (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                ):
+                    continue  # helper docstring
+                if isinstance(statement, ast.If):
+                    then_paths = _logged_paths(statement.body, active, parameter)
+                    if then_paths is None:
+                        return None
+                    else_paths = (
+                        _logged_paths(statement.orelse, active, parameter)
+                        if statement.orelse
+                        else (set(active), set())
+                    )
+                    if else_paths is None:
+                        return None
+                    active = then_paths[0] | else_paths[0]
+                    exited.update(then_paths[1] | else_paths[1])
+                    continue
+                if isinstance(statement, (ast.Return, ast.Raise)):
+                    exited.update(active)
+                    active.clear()
+                    continue
+                if isinstance(statement, ast.Pass):
+                    continue
+                if isinstance(statement, ast.Expr) and isinstance(
+                    statement.value, ast.Call
+                ):
+                    call = statement.value
+                    if (
+                        isinstance(call.func, ast.Attribute)
+                        and call.func.attr in ("warning", "error", "critical")
+                        and _call_redacts_parameter(call, parameter)
+                    ):
+                        active = {True}
+                        continue
+                # Do not summarize assignments, loops, or opaque calls before a
+                # redacted log: their effect on whether the failure reaches it is
+                # not proven by this deliberately small flow analysis.
+                return None
+            return active, exited
+
+        def _helper_logs_parameter(helper: ast.FunctionDef, parameter: str) -> bool:
+            # A write to the parameter anywhere — an `if (p := None):` test, a
+            # walrus inside the log call's own arguments — can replace the
+            # failure before the sanitizer sees it; the flow below does not
+            # track values, so any rebinding leaves the proof incomplete.
+            if any(
+                (
+                    isinstance(descendant, ast.Name)
+                    and descendant.id == parameter
+                    and isinstance(descendant.ctx, (ast.Store, ast.Del))
+                )
+                or (
+                    isinstance(descendant, (ast.Global, ast.Nonlocal))
+                    and parameter in descendant.names
+                )
+                for statement in helper.body
+                for descendant in ast.walk(statement)
+            ):
+                return False
+            paths = _logged_paths(helper.body, {False}, parameter)
+            if paths is None:
+                return False
+            all_paths = paths[0] | paths[1]
+            return bool(all_paths) and all_paths == {True}
+
+        def _handler_logs_through_helper() -> bool:
+            if node.name is None:
+                return False
+            for index, statement in enumerate(node.body):
+                if not isinstance(statement, ast.Expr) or not isinstance(
+                    statement.value, ast.Call
+                ):
+                    continue
+                call = statement.value
+                if not isinstance(call.func, ast.Name):
+                    continue
+                helper = local_helpers.get(call.func.id)
+                if (
+                    helper is None
+                    or helper.decorator_list
+                    or helper.args.vararg is not None
+                    or helper.args.kwarg is not None
+                ):
+                    continue
+                prefix = node.body[:index]
+                if any(
+                    not isinstance(
+                        previous, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)
+                    )
+                    for previous in prefix
+                ):
+                    continue
+                if any(
+                    isinstance(descendant, ast.Name)
+                    and descendant.id == node.name
+                    and isinstance(descendant.ctx, (ast.Store, ast.Del))
+                    for previous in prefix
+                    for descendant in ast.walk(previous)
+                ):
+                    continue
+                parameters = [
+                    *helper.args.posonlyargs,
+                    *helper.args.args,
+                    *helper.args.kwonlyargs,
+                ]
+                for parameter in parameters:
+                    passed = _call_argument_for_parameter(call, helper, parameter.arg)
+                    if (
+                        isinstance(passed, ast.Name)
+                        and passed.id == node.name
+                        and _helper_logs_parameter(helper, parameter.arg)
+                    ):
+                        return True
+            return False
+
+        # Follow only an unconditional direct call to a proven same-module helper.
+        # A preceding branch can bypass the helper and leaves this proof incomplete.
+        if _handler_logs_through_helper():
+            return
+
         # Pass if body has logger.exception() or any log call with exc_info=True
         for n in _iter_shallow(node):
             if not isinstance(n, ast.Expr):
@@ -188,12 +371,332 @@ class SilentSwallowMixin:
 
     # ── E007 ─────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _eager_calls(expression: ast.expr) -> list[ast.Call]:
+        """Calls evaluated unconditionally by a simple expression."""
+        if isinstance(expression, ast.Call):
+            if any(isinstance(arg, ast.Starred) for arg in expression.args) or any(
+                keyword.arg is None for keyword in expression.keywords
+            ):
+                return []
+            children = [
+                *expression.args,
+                *(keyword.value for keyword in expression.keywords),
+            ]
+            return [
+                expression,
+                *(
+                    call
+                    for child in children
+                    for call in SilentSwallowMixin._eager_calls(child)
+                ),
+            ]
+        if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
+            return [
+                call
+                for element in expression.elts
+                if not isinstance(element, ast.Starred)
+                for call in SilentSwallowMixin._eager_calls(element)
+            ]
+        if isinstance(expression, ast.Dict):
+            return [
+                call
+                for element in (*expression.keys, *expression.values)
+                if element is not None
+                for call in SilentSwallowMixin._eager_calls(element)
+            ]
+        return []
+
+    @staticmethod
+    def _supported_method_decorators(
+        method: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> bool:
+        """Whether a method keeps the ordinary bound-method call shape."""
+        return not method.decorator_list or (
+            len(method.decorator_list) == 1
+            and _get_name(method.decorator_list[0]) == "classmethod"
+        )
+
+    @staticmethod
+    def _class_statement_binds_name(statement: ast.stmt, name: str) -> bool:
+        """Whether a class-body statement can replace a method binding."""
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return statement.name == name
+        nodes = [statement, *_iter_shallow(statement)]
+        for node in nodes:
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound == name:
+                        return True
+        return False
+
+    def _class_helper(
+        self, class_node: ast.ClassDef, name: str
+    ) -> ast.FunctionDef | None:
+        """Resolve one unshadowed, synchronous helper declared on this class."""
+        methods = [
+            statement
+            for statement in class_node.body
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and statement.name == name
+        ]
+        if len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef):
+            return None
+        helper = methods[0]
+        if not self._supported_method_decorators(helper):
+            return None
+        if any(
+            statement is not helper
+            and self._class_statement_binds_name(statement, name)
+            for statement in class_node.body
+        ):
+            return None
+        # ``self._helper = other`` anywhere in the class shadows the method on
+        # instances, so the lexical definition no longer proves the callee.
+        if any(
+            isinstance(node, ast.Attribute)
+            and node.attr == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in ast.walk(class_node)
+        ):
+            return None
+        return helper
+
+    @staticmethod
+    def _bound_method_argument(
+        call: ast.Call, helper: ast.FunctionDef, parameter: str
+    ) -> ast.expr | None:
+        """Map an explicit call argument to a bound method parameter."""
+        if (
+            helper.args.vararg is not None
+            or helper.args.kwarg is not None
+            or any(isinstance(arg, ast.Starred) for arg in call.args)
+            or any(keyword.arg is None for keyword in call.keywords)
+        ):
+            return None
+        positional = [*helper.args.posonlyargs, *helper.args.args]
+        if len(positional) < 2 or len(call.args) > len(positional) - 1:
+            return None
+        supplied = {
+            formal.arg: value
+            for formal, value in zip(positional[1:], call.args, strict=False)
+        }
+        positional_only = {formal.arg for formal in helper.args.posonlyargs[1:]}
+        keywordable = {formal.arg for formal in helper.args.args[1:]} | {
+            formal.arg for formal in helper.args.kwonlyargs
+        }
+        for keyword in call.keywords:
+            assert keyword.arg is not None
+            if (
+                keyword.arg in positional_only
+                or keyword.arg not in keywordable
+                or keyword.arg in supplied
+            ):
+                return None
+            supplied[keyword.arg] = keyword.value
+        return supplied.get(parameter)
+
+    @staticmethod
+    def _statement_rebinds_name(statement: ast.stmt, name: str) -> bool:
+        """Whether a helper statement shadows or overwrites one of its inputs."""
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return statement.name == name
+        for node in [statement, *_iter_shallow(statement)]:
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if isinstance(node, ast.ExceptHandler) and node.name == name:
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound == name:
+                        return True
+            if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+                return True
+            if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+                return True
+            if isinstance(node, ast.MatchMapping) and node.rest == name:
+                return True
+        return False
+
+    @staticmethod
+    def _expression_represents_parameter(expression: ast.expr, parameter: str) -> bool:
+        """Whether a value passed to a log carries its input's identity or text.
+
+        Allowlisted shapes only: the bare name (``%s`` / ``exc_info=``),
+        ``str()`` / ``repr()`` of it, an f-string field of it, or ``%``
+        formatting with it as an operand. Lossy derivations such as
+        ``bool(problem)`` or ``type(problem)`` do not surface the exception.
+        """
+
+        def is_parameter(node: ast.AST) -> bool:
+            return (
+                isinstance(node, ast.Name)
+                and node.id == parameter
+                and isinstance(node.ctx, ast.Load)
+            )
+
+        if is_parameter(expression):
+            return True
+        if isinstance(expression, ast.Call):
+            return (
+                isinstance(expression.func, ast.Name)
+                and expression.func.id in {"str", "repr"}
+                and len(expression.args) == 1
+                and not expression.keywords
+                and is_parameter(expression.args[0])
+            )
+        if isinstance(expression, ast.JoinedStr):
+            return any(
+                isinstance(value, ast.FormattedValue)
+                and value.format_spec is None
+                and is_parameter(value.value)
+                for value in expression.values
+            )
+        if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Mod):
+            if not (
+                isinstance(expression.left, ast.Constant)
+                and isinstance(expression.left.value, str)
+            ):
+                return False
+            operands = (
+                expression.right.elts
+                if isinstance(expression.right, ast.Tuple)
+                else [expression.right]
+            )
+            return any(is_parameter(operand) for operand in operands)
+        return False
+
+    def _helper_logs_parameter_before_return(
+        self, helper: ast.FunctionDef, parameter: str
+    ) -> bool:
+        """Prove a straight-line helper logs its un-rebound input before returning."""
+        if any(
+            isinstance(node, (ast.Yield, ast.YieldFrom))
+            for node in _iter_shallow(helper)
+        ):
+            return False
+        control_flow = (
+            ast.If,
+            ast.For,
+            ast.AsyncFor,
+            ast.While,
+            ast.Try,
+            ast.TryStar,
+            ast.With,
+            ast.AsyncWith,
+            ast.Match,
+            ast.Return,
+            ast.Raise,
+            ast.Break,
+            ast.Continue,
+        )
+        for statement in helper.body:
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if isinstance(statement, control_flow):
+                return False
+            if self._statement_rebinds_name(statement, parameter):
+                return False
+            if not _is_log_call_stmt(statement):
+                continue
+            call = statement.value
+            if isinstance(call, ast.Await):
+                call = call.value
+            if isinstance(call, ast.Call) and any(
+                self._expression_represents_parameter(value, parameter)
+                for value in [*call.args, *(keyword.value for keyword in call.keywords)]
+            ):
+                return True
+        return False
+
+    def _helper_logs_caught_exception(
+        self, handler: ast.ExceptHandler, statements: list[ast.stmt]
+    ) -> bool:
+        """True when a prior same-class call logs the handler's actual exception."""
+        if (
+            handler.name is None
+            or _handler_rebinds_exception(handler)
+            or not self._function_stack
+            or not self._class_stack
+        ):
+            return False
+        caller = self._function_stack[-1]
+        class_node = self._class_stack[-1]
+        caller_parameters = [*caller.args.posonlyargs, *caller.args.args]
+        if (
+            caller not in class_node.body
+            or not caller_parameters
+            or not self._supported_method_decorators(caller)
+        ):
+            return False
+        receiver = caller_parameters[0].arg
+        # A rebound receiver (``self = proxy``) no longer resolves to this class.
+        if any(
+            self._statement_rebinds_name(statement, receiver)
+            for statement in caller.body
+        ) or any(
+            isinstance(node, ast.Nonlocal) and receiver in node.names
+            for node in ast.walk(caller)
+        ):
+            return False
+        caller_is_classmethod = bool(caller.decorator_list)
+        for statement in statements:
+            if isinstance(statement, ast.Expr):
+                expression = statement.value
+            elif isinstance(statement, ast.Assign | ast.AnnAssign):
+                expression = statement.value
+            else:
+                continue
+            if expression is None:
+                continue
+            for call in self._eager_calls(expression):
+                if not (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == receiver
+                ):
+                    continue
+                helper = self._class_helper(class_node, call.func.attr)
+                if helper is None:
+                    continue
+                # ``cls.method(x)`` on a plain method is unbound: ``x`` lands in
+                # ``self``, so the descriptor-binding argument shift is wrong.
+                if caller_is_classmethod and not helper.decorator_list:
+                    continue
+                argument = self._bound_method_argument(call, helper, handler.name)
+                if (
+                    isinstance(argument, ast.Name)
+                    and argument.id == handler.name
+                    and self._helper_logs_parameter_before_return(helper, handler.name)
+                ):
+                    return True
+        return False
+
     def _check_p007(self, node: ast.ExceptHandler) -> None:
         # A return that hands the caught exception back as typed data hides
         # nothing: the failure leaves the frame for the caller to report. This
         # is the same predicate E004 uses for its typed-failure exemption, so
         # the two rules never disagree about one shape. It is applied per
         # return, because E007 judges each return on its own.
+        # A prior same-class helper call also counts as logging only when its
+        # straight-line body demonstrably logs the caught binding; opaque calls
+        # remain unproven.
         scope = typed_failure_scope(
             node,
             local_helpers=visible_helpers(self._local_helpers, self._function_stack),
@@ -204,7 +707,9 @@ class SilentSwallowMixin:
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
-            if _any_logging_in(node.body[:i]):
+            if _any_logging_in(node.body[:i]) or self._helper_logs_caught_exception(
+                node, node.body[:i]
+            ):
                 continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue

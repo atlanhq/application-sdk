@@ -15,8 +15,11 @@ reach it, and none of it touches the network.
 
 Two signals count as "e2e has run":
 
-* the ``e2e`` label is on the PR - a run has been requested, and the
-  required ``tests / Tests Gate`` check enforces its result; or
+* the ``gate-check`` or ``e2e`` label is on the PR - a run has been
+  requested, and the required ``tests / Tests Gate`` check enforces its
+  result. ``gate-check`` is the bump-PR opt-in (FND-3748): CI does not run
+  on a release PR at all until it is added, and it implies e2e. ``e2e`` is
+  still honoured while the fleet resyncs; or
 * the head commit carries a successful ``e2e`` commit status.
 
 The second exists because the SDK's Tests Gate consumes the label once the
@@ -45,12 +48,13 @@ import sys
 
 RELEASE_LABEL = "release"
 E2E_LABEL = "e2e"
+GATE_CHECK_LABEL = "gate-check"
 
 # Kept at module level so each line fits inside the tightest wrap in the
 # fleet and `ruff format` is a no-op at every width (see FND-445).
-MISSING_HINT = "Release PR needs a passing e2e run on its head. Add the 'e2e' label."
-FAILED_HINT = "e2e failed on this commit. Fix it, then add the 'e2e' label again."
-LABEL_OK = "Release PR has the 'e2e' label - Tests Gate enforces the result."
+MISSING_HINT = "Release PR CI is opt-in. Add the 'gate-check' label to run it."
+FAILED_HINT = "e2e failed on this commit. Fix it, then add 'gate-check' again."
+LABEL_OK = "Release PR is opted in to CI - Tests Gate enforces the result."
 
 
 def parse_labels(raw: str) -> list[str]:
@@ -87,7 +91,7 @@ def decide(labels: list[str], e2e_state: str) -> tuple[bool, str]:
     """
     if RELEASE_LABEL not in labels:
         return True, "Not a release PR - gate passes."
-    if E2E_LABEL in labels:
+    if GATE_CHECK_LABEL in labels or E2E_LABEL in labels:
         return True, LABEL_OK
     if e2e_state == "success":
         return True, "e2e passed on this commit - gate passes."

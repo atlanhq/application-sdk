@@ -1846,6 +1846,46 @@ class TestSubmitReconciliation:
         assert mock_req.call_count == 1
         mock_find.assert_not_called()
 
+    def test_the_recovery_path_reports_the_adopted_id_to_on_run_id(self):
+        """The submit-timeout recovery path records the recovered id the instant
+        it reads it — the hook fires from inside recovery, not only once the
+        submit returns, so a caller tracking runs for teardown has the id even if
+        a later step raised. A submit that started a run must never be an
+        untracked orphan."""
+        client = _make_client()
+        seen: list[str] = []
+        with (
+            patch.object(client._ae, "_request", side_effect=self._ambiguous()),
+            patch.object(
+                client._ae,
+                "find_run_created_since",
+                return_value=RunLookup(run_id="r-adopted", conclusive=True),
+            ),
+            patch(_SLEEP),
+        ):
+            got = client.submit_workflow(
+                {"any": "p"}, slug="slug-x", on_run_id=seen.append
+            )
+        assert got == "r-adopted"
+        # Fires from the recovery path, and the adopted run comes back through
+        # the normal 2xx return which fires it again — hence the documented
+        # idempotency requirement. What matters is the id is reported at all.
+        assert set(seen) == {"r-adopted"}
+
+    def test_a_normal_submit_reports_its_id_to_on_run_id(self):
+        """The same sink fires on the ordinary 2xx path, so tracking never hinges
+        on the caller's post-return bookkeeping."""
+        client = _make_client()
+        seen: list[str] = []
+        with patch.object(
+            client._ae, "_request", return_value=(200, {"run_id": "r-ok"})
+        ):
+            got = client.submit_workflow(
+                {"any": "p"}, slug="slug-x", on_run_id=seen.append
+            )
+        assert got == "r-ok"
+        assert seen == ["r-ok"]
+
     def test_connect_failure_skips_the_reconcile_read(self):
         """A never-delivered request needs no proof: re-POST straight away
         instead of spending the reconcile window on a settled question."""

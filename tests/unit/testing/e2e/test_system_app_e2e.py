@@ -231,6 +231,7 @@ class _FakeAE:
 
     async def submit_published_version(self, slug: str, **kwargs: Any) -> str:
         self.direct.append(slug)
+        self.direct_kwargs = kwargs
         return "run-direct"
 
     async def submit_workflow(self, payload: dict[str, Any], **kwargs: Any) -> str:
@@ -248,6 +249,18 @@ async def test_system_suite_submits_straight_to_ae() -> None:
     assert run_id == "run-direct"
     assert fake.direct == ["slug-1"]
     assert fake.heracles == []
+
+
+async def test_system_suite_submit_carries_the_teardown_tracking_sink() -> None:
+    """The ambiguous-submit recovery inside submit_published_version can only
+    record an adopted run id if the sink reaches it."""
+    harness = _SystemSuite()
+    fake = _FakeAE()
+    harness._ae = fake  # type: ignore[assignment]
+
+    await harness._submit({}, slug="slug-1")
+
+    assert fake.direct_kwargs["on_run_id"] == harness._track_unsettled_run
 
 
 async def test_deployed_manifest_check_never_runs_on_the_system_path() -> None:

@@ -20,7 +20,16 @@ feat/fix commit merged to main
 - Reads the current version from `pyproject.toml`.
 - Analyses conventional commits since the last non-rc tag (`feat` → minor bump, `fix` → patch, `BREAKING CHANGE` / `!:` → major).
 - Updates `pyproject.toml` and regenerates `uv.lock`.
-- Prepends a new section to `CHANGELOG.md` with categorised commits.
+- Prepends a new section to `CHANGELOG.md` with categorised commits. Every conventional
+  type is rendered except `ci` (FND-3748): the release notes are the human review gate for
+  a semver release, so any change to what ships — `perf`, `refactor`, `chore(deps)` — must
+  appear in them. Non-conventional subjects are listed under *Other Changes*.
+  *Rollout:* app repos pass `--sections auto`, which renders the full notes only once the
+  repo's own workflows carry the `gate-check` gate (below) and otherwise keeps the old
+  Features + Bug Fixes notes byte for byte. Rendering chores moves the bump PR on every
+  Renovate merge, so each repo switches over in the same `bootstrap --resync` that gates
+  its bump-PR CI — the extra pushes never run ahead of the gate. The SDK repo renders the
+  full notes immediately; it gates its own bump PRs from the same merge.
 - Opens a PR from `bump-version-main` into `main` with the `release` label — or, when
   that PR is already open, re-syncs its title, body and label to the version this run
   produced (`.github/scripts/upsert_release_pr.py`).
@@ -37,23 +46,58 @@ a stale title misleads reviewers rather than mis-tagging a release.
 **The branch is only re-pushed when the release would change** (FND-3322,
 `.github/scripts/release_bump_debounce.py`). Each force-push is a `synchronize` that re-runs
 all PR CI on the bump PR, and most merges change nothing it would ship: Renovate commits are
-forced to `chore`, which neither moves the version past the first patch bump nor appears in
-the rendered notes (only Features and Bug Fixes do). The push is skipped when the open branch
+forced to `chore`, which does not move the version past the first patch bump. Since FND-3748
+chores do appear in the rendered notes of a repo whose bump-PR CI is gated, so there a Renovate
+merge changes the CHANGELOG section and is pushed — affordable only because that CI is opt-in
+(next section). An ungated app repo keeps the old notes, so Renovate merges still don't push. The push is
+skipped when the open branch
 already carries the computed version (in every version file) and the same CHANGELOG section,
 date aside, **and** still merges cleanly onto the new tip. Anything the script cannot establish
 resolves to a push. A skipped branch stays on an older base; that is safe because it only edits
 version lines, the lock's own-package version and the top of the CHANGELOG, and the merge — and
-the `e2e`-label test run, which tests the PR's merge ref — combine it with the current target.
+the opted-in (`gate-check`) test run, which tests the PR's merge ref — combine it with the current target.
 The PR upsert still runs on a skipped push. Bump runs are also serialised per repo and target
 (`concurrency`, queued not cancelled), so a burst of merges coalesces into the newest run.
+
+**CI on a bump PR is opt-in via the `gate-check` label** (FND-3748). Nothing heavy runs on a
+`bump-version-*` PR until a reviewer adds `gate-check`, which means "run this lane's full
+release gate":
+
+| Lane | `gate-check` runs |
+|---|---|
+| App repo `bump-version-main` | every CI workflow, including tenant e2e |
+| SDK `bump-version-main` | SDK Gate (SDK area), PR Checks including connector e2e / SDR / storage, CodeQL |
+| SDK `bump-version-conformance` / `-contract-toolkit` | SDK Gate for that area only — never tenant e2e |
+
+`e2e` stays the opt-in for ordinary PRs, and is still honoured on bump PRs while the fleet
+resyncs. The opt-in is one-shot: every bump workflow removes `gate-check` *before* it pushes a
+new bump commit (`.github/scripts/bump_pr_opt_in.py clear`) — the `synchronize` a push fires
+carries the PR's labels as they are at that instant, so removing it afterwards would start a
+full run anyway. The same call creates the label in a repo that lacks it.
+
+*App repos* gate the **caller** job of every bootstrap shim (`tests.yaml`, `checks.yml`,
+`conformance.yaml`, `vulnerability-scan.yml`) on the same `if:`. A caller skipped by its `if:`
+gets no runner and creates no `<caller> / <job>` context, so an un-opted bump commit's required
+checks sit at "Expected" — Release Gate is the visible red check explaining why — rather than
+reading `skipped` as a pass. `checks.yml`, `conformance.yaml` and `vulnerability-scan.yml`
+subscribe to `labeled` for this, and skip every label event on an ordinary PR. The shims roll
+out through `bootstrap --resync`; a repo that has not resynced behaves exactly as before.
+
+*The SDK repo* cannot use caller skips: SDK Gate and Connector Tests Gate are inline required
+jobs, and a skipped inline job files `skipped`, which reads as a pass. So both gates run and
+**fail fast** on an un-opted bump PR, and every job they compose skips. SDK Gate does not
+subscribe to `labeled` (an unrelated label on an ordinary PR would skip its inline gate over an
+earlier failure); instead `bump-pr-gate-check.yaml` re-runs the head's SDK Gate run when
+`gate-check` is added, and the re-run reads the PR's *live* labels, since a re-run replays the
+original, label-less payload.
 
 Release Gate deliberately still runs on every `labeled`/`unlabeled` event. It cannot be skipped
 for unrelated labels: a skipped job files a `skipped` check, a required check reads that as a
 pass, and the newest run wins — so an unrelated label would clear a real "missing `e2e`" failure.
 The job is a two-minute `ubuntu-slim` check.
 
-Release Gate passes a release PR on the `e2e` label **or** on a successful `e2e` commit
-status on the PR head (`.github/scripts/release_gate.py`, vendored by bootstrap). The status
+Release Gate passes a release PR on the `gate-check` or `e2e` label **or** on a successful
+`e2e` commit status on the PR head (`.github/scripts/release_gate.py`, vendored by bootstrap). The status
 is needed because the label is consumed: the Tests Gate removes it once the run finishes and
 records the verdict as that status first (FND-3411). The removal uses `github.token`, so it
 starts no new Release Gate run. A later run — an unrelated label, a human removing `e2e` —

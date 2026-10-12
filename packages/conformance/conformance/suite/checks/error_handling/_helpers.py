@@ -1074,27 +1074,31 @@ def _function_binds_name(
 def module_helpers(tree: ast.Module) -> dict[str, ast.FunctionDef]:
     """Top-level synchronous functions whose name nothing else in the module rebinds.
 
-    A helper reassigned at module level, or declared ``global`` by any function
-    (which may then rebind it), is not proven to be the function whose body was
-    summarized.
+    A helper rebound anywhere at module scope — including under a module-level
+    ``if``/``try``/``for``/``with``, by a second ``def``/``class`` or an import —
+    or declared ``global`` by any function (which may then rebind it), is not
+    proven to be the function whose body was summarized.
     """
     rebound: set[str] = set()
-    for stmt in tree.body:
-        if isinstance(stmt, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            for target in (
-                stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-            ):
-                rebound |= _rebound_names(target)
+    definitions: dict[str, int] = {}
+    for node in _iter_shallow(tree):
+        if isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            rebound.add(node.id)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            definitions[node.name] = definitions.get(node.name, 0) + 1
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                rebound.add(alias.asname or alias.name.split(".")[0])
     for node in ast.walk(tree):
         if isinstance(node, ast.Global):
             rebound |= set(node.names)
-    helpers: dict[str, ast.FunctionDef] = {}
-    for stmt in tree.body:
-        if isinstance(stmt, ast.FunctionDef) and stmt.name not in rebound:
-            helpers[stmt.name] = stmt
-        elif isinstance(stmt, (ast.AsyncFunctionDef, ast.ClassDef)):
-            helpers.pop(stmt.name, None)
-    return helpers
+    return {
+        stmt.name: stmt
+        for stmt in tree.body
+        if isinstance(stmt, ast.FunctionDef)
+        and stmt.name not in rebound
+        and definitions.get(stmt.name) == 1
+    }
 
 
 def visible_helpers(
@@ -1112,21 +1116,33 @@ def visible_helpers(
 def _call_argument_for_parameter(
     call: ast.Call, function: ast.FunctionDef, parameter: str
 ) -> ast.expr | None:
-    """Resolve a directly supplied helper argument; reject unpacked calls."""
+    """Resolve a directly supplied helper argument; reject calls that do not bind.
+
+    Unpacked arguments, too many positionals, a keyword naming a positional-only
+    or unknown parameter (absent ``**kwargs``), and a duplicate binding all
+    leave the mapping unproven.
+    """
     if any(isinstance(arg, ast.Starred) for arg in call.args) or any(
         keyword.arg is None for keyword in call.keywords
     ):
         return None
-    positional = [*function.args.posonlyargs, *function.args.args]
+    args = function.args
+    positional = [*args.posonlyargs, *args.args]
     if len(call.args) > len(positional):
         return None
     supplied = {
         arg.arg: value for arg, value in zip(positional, call.args, strict=False)
     }
+    positional_only = {arg.arg for arg in args.posonlyargs}
+    keyword_parameters = {arg.arg for arg in [*args.args, *args.kwonlyargs]}
     for keyword in call.keywords:
         assert keyword.arg is not None
-        if keyword.arg in supplied:
+        if keyword.arg in supplied or keyword.arg in positional_only:
             return None
+        if keyword.arg not in keyword_parameters:
+            if args.kwarg is None:
+                return None
+            continue  # collected by **kwargs, not bound to a named parameter
         supplied[keyword.arg] = keyword.value
     return supplied.get(parameter)
 

@@ -8,8 +8,12 @@ conformance, tests, vulnerability scan, release gate — on a diff that is only 
 version string and a changelog section. In a Renovate-automerge fleet almost all
 of those merges change nothing a release would ship: Renovate commits are forced
 to ``chore`` (``renovate-config/default.json``), so they never move the computed
-version past the first patch bump, and ``update_changelog.py`` renders only the
-Features and Bug Fixes sections, so they never change the notes either.
+version past the first patch bump. Since FND-3748 ``update_changelog.py`` renders
+every conventional type except ``ci`` — chores included — in any repo whose
+bump-PR CI is gated on the ``gate-check`` opt-in, so there a Renovate merge does
+change the notes and does push (cheaply: nothing heavy runs until opted in).
+An app repo that has not resynced onto the gated shims keeps the old Features
+and Bug Fixes notes, so the reasoning above still holds for it.
 
 So: push only when the open branch would release something different from what
 this run built. The branch is left alone when, against what is already on
