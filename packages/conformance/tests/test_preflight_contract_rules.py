@@ -1,3 +1,6 @@
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -666,19 +669,37 @@ def test_sdk_error_category_matches_runtime():
         ), name
 
 
+_MONOREPO_ROOT = Path(__file__).resolve().parents[3]
+
+# Reads the gate policy from the monorepo's SDK source, not the installed
+# package: this venv pins a published SDK that can predate the policy the
+# mirror tracks, and the mirror must match the SDK it ships beside.
+_GATE_POLICY_PROBE = """
+from application_sdk.execution._temporal.preflight_gate import (
+    DEPRECATED_FAIL_OPEN_CATEGORIES,
+    GATE_NEVER_BLOCKING_CATEGORIES,
+    GATE_RETRIED_CATEGORIES,
+)
+print(",".join(sorted(
+    c.name
+    for c in GATE_RETRIED_CATEGORIES
+    | (GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES)
+)))
+"""
+
+
 def test_raisable_transient_categories_match_the_gate():
     from conformance.suite.checks.preflight._contracts import (
         RAISABLE_TRANSIENT_CATEGORIES,
     )
 
-    from application_sdk.execution._temporal.preflight_gate import (
-        DEPRECATED_FAIL_OPEN_CATEGORIES,
-        GATE_NEVER_BLOCKING_CATEGORIES,
-        GATE_RETRIED_CATEGORIES,
+    env = {**os.environ, "PYTHONPATH": str(_MONOREPO_ROOT)}
+    probe = subprocess.run(
+        [sys.executable, "-c", _GATE_POLICY_PROBE],
+        cwd=_MONOREPO_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=True,
     )
-
-    assert RAISABLE_TRANSIENT_CATEGORIES == {
-        c.name
-        for c in GATE_RETRIED_CATEGORIES
-        | (GATE_NEVER_BLOCKING_CATEGORIES - DEPRECATED_FAIL_OPEN_CATEGORIES)
-    }
+    assert RAISABLE_TRANSIENT_CATEGORIES == set(probe.stdout.strip().split(","))
