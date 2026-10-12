@@ -18,7 +18,12 @@ Fails when:
   entry-point name (the host routes on it);
 * the host matrix fails: ``/health`` is not 200, a malformed body on
   ``/workflows/v1/auth`` is not 422, or an empty-credentials auth call answers a
-  bare 500 instead of a JSON envelope.
+  bare 500 instead of a JSON envelope;
+* ``/workflows/v1/check`` or ``/workflows/v1/metadata``, called with empty
+  credentials, reaches a worker-only import. Those calls are expected to fail
+  (there is no source), so the probe judges them by what the handler raised,
+  not by the status: an ``ImportError`` (``ModuleNotFoundError`` included) is a
+  code path that only breaks on the host.
 
 The same checks gate the host's own pin bump, so an app PR that would break the
 host fails in the app's CI first.
@@ -27,10 +32,18 @@ host fails in the app's CI first.
 from __future__ import annotations
 
 import argparse
+import functools
 import importlib
 import importlib.util
 import sys
 from dataclasses import dataclass, field
+from typing import Any
+
+#: Handler methods the host serves that the probe calls with empty credentials.
+_PROBED = {
+    "preflight_check": "/workflows/v1/check",
+    "fetch_metadata": "/workflows/v1/metadata",
+}
 
 
 @dataclass
@@ -65,6 +78,26 @@ def check_response(
         result.fail(f"{label}: answered a bare 500 instead of a JSON envelope")
 
 
+def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
+    """Wrap the probed handler methods so an ImportError they raise is recorded.
+
+    The error still propagates, so the route answers exactly as it would on
+    the host.
+    """
+    for method in _PROBED:
+        original = getattr(handler, method)
+
+        @functools.wraps(original)
+        async def wrapped(*args: Any, _m: str = method, _f: Any = original) -> Any:
+            try:
+                return await _f(*args)
+            except ImportError as exc:
+                seen.setdefault(_m, exc)
+                raise
+
+        setattr(handler, method, wrapped)
+
+
 def run(name: str, package: str, obj: str) -> Result:
     result = Result()
     module = importlib.import_module(package)
@@ -82,6 +115,8 @@ def run(name: str, package: str, obj: str) -> Result:
         )
         return result
 
+    import_failures: dict[str, ImportError] = {}
+    record_import_failures(handler, import_failures)
     app = build_asgi_app(handler, app_name=name, app_package=package)
     if getattr(app.state, "app_name", None) != name:
         result.fail(
@@ -117,6 +152,20 @@ def run(name: str, package: str, obj: str) -> Result:
         result,
         not_500_json=True,
     )
+    for method, path in _PROBED.items():
+        response = client.post(path, json={"credentials": [], "metadata": {}})
+        try:
+            body = response.json()
+        except ValueError:
+            body = None
+        label = f"POST {path} (empty credentials)"
+        check_response(label, response.status_code, body, result, not_500_json=True)
+        if method in import_failures:
+            exc = import_failures[method]
+            result.fail(
+                f"{label}: reached a worker-only import "
+                f"({type(exc).__name__}: {exc})"
+            )
     return result
 
 
