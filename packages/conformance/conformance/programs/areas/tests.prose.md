@@ -361,21 +361,33 @@ residue for a human to apply, not an applied edit:
   `remediate-finding.prose.md`); route to residue with the suggested
   destination for a human to apply.
 
-- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
-  `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's
-  own coverage report (or read the most recent CI coverage artifact) to find
-  the *current* measured percentage, then set `fail_under` to that value (or
-  the nearest whole number at or below it — never above, or the fix itself
-  would fail the gate it's setting). Do not jump straight to the 90-100%
-  target in one step; that is a follow-up ratchet, not this fix.
+- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured, but the
+  *effective* coverage floor is absent or `0`. First read the current coverage
+  report (or the most recent CI coverage artifact) and inspect the workflow
+  that runs that suite. `coverage.py`'s CLI `--cov-fail-under=N` always
+  overrides `[tool.coverage.report].fail_under`: if the workflow's
+  `pytest-args` passes `--cov-fail-under=0`, changing only `pyproject.toml`
+  will not enforce coverage in CI.
 
-  ```toml
-  [tool.coverage.report]
-  fail_under = 60  # current measured percentage; ratchet up in follow-ups
-  ```
+  Remove that zero CLI option to let the positive TOML fallback apply, or
+  replace it with a positive floor no higher than the current measured
+  percentage. Before removing the override, check that the existing TOML value
+  is not above current coverage; lower it to the measured floor if necessary.
+  A `tests-reusable.yaml` caller can also use its positive
+  `unit-coverage-fail-under` input (as the MySQL reference does); ensure no
+  explicit `--cov-fail-under=0` remains in custom `pytest-args`, because that
+  CLI option still takes precedence. For `connector-unit-tests`, set its
+  `fail-under:` input to a positive floor.
 
-  `classification` is `"judgment"` — the specific number requires knowing
-  the repo's actual current coverage, which isn't in the finding.
+  Only when no CI override controls the run should the fix be to set
+  `[tool.coverage.report].fail_under` to the repo's current measured percentage
+  (or the nearest whole number at or below it — never above). Keep a positive
+  TOML fallback for local runs and ratchet it up in follow-up PRs; do not jump
+  straight to the 90-100% target.
+
+  `classification` is `"judgment"` — selecting a safe floor requires the
+  repo's actual current coverage, and a CI zero override must be corrected at
+  the workflow setting rather than by changing TOML alone.
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
   real product code under `app/`, or `source` is configured but excludes the
