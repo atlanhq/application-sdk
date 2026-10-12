@@ -10,8 +10,9 @@ import contextlib
 import contextvars
 import functools
 import hashlib
+import re
 import threading
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, TypeVar, Union, cast
 from urllib.parse import quote, quote_plus
@@ -28,6 +29,7 @@ from application_sdk.clients.sql_errors import (
     InvalidSqlEngineTypeError,
     MissingSqlParamError,
     SqlAwsCredentialsError,
+    SqlBindParameterError,
     SqlClientAuthFailedError,
     SqlClientConfigError,
     SqlCredentialsParseError,
@@ -49,18 +51,65 @@ logger = get_logger(__name__)
 T = TypeVar("T")
 
 
-def _escape_colons_for_text(query: str) -> str:
-    """Backslash-escape *every* literal colon so SQLAlchemy ``text()`` does not treat them as bind params.
+_BIND_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
-    Callers pass fully-rendered SQL (all values inlined; no bind params to supply). ``text()``
-    reads any ``:name`` as a required bind parameter and raises at compile time on colon-bearing
-    SQL — a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal. SQLAlchemy strips the
-    backslash before the driver, so the DB receives the original literal colon.
 
-    Note: this escapes *all* colons. Any future call site that genuinely needs ``:name`` bind
-    parameters must not route through this helper.
+def _escape_colons_for_text(
+    query: str, bind_names: "frozenset[str]" = frozenset()
+) -> str:
+    """Backslash-escape literal colons so SQLAlchemy ``text()`` does not treat them as bind params.
+
+    ``text()`` reads any ``:name`` as a required bind parameter and raises at compile time on
+    colon-bearing SQL -- a regex ``(?:...)``, a ``::text`` cast, a ``'12:30:00'`` literal.
+    SQLAlchemy strips the backslash before the driver, so the DB receives the literal colon.
+
+    Every colon is escaped except a ``:name`` placeholder whose name is in ``bind_names``,
+    the parameters the caller is binding. A colon that is part of ``::`` is always escaped,
+    so a ``x::name`` cast is never taken for the bind ``:name``.
     """
-    return query.replace(":", "\\:")
+    if not bind_names:
+        return query.replace(":", "\\:")
+    out: list[str] = []
+    for index, char in enumerate(query):
+        if char != ":":
+            out.append(char)
+            continue
+        previous = query[index - 1] if index else ""
+        following = query[index + 1 : index + 2]
+        name = _BIND_NAME.match(query, index + 1)
+        if (
+            previous != ":"
+            and following != ":"
+            and name
+            and name.group(0) in bind_names
+        ):
+            out.append(":")
+        else:
+            out.append("\\:")
+    return "".join(out)
+
+
+def _bound_params(
+    query: str, params: "Mapping[str, Any] | None"
+) -> "dict[str, Any] | None":
+    """``params`` checked against ``query``, or None when nothing is bound.
+
+    Raises :class:`SqlBindParameterError` for a name that is not an identifier
+    or that ``query`` never references as ``:name``: executing anyway would run
+    the query without that value, so a filter would silently not apply.
+    """
+    if not params:
+        return None
+    for name in params:
+        if not isinstance(name, str) or not _BIND_NAME.fullmatch(name):
+            raise SqlBindParameterError(
+                message=f"Bind parameter name {name!r} is not an identifier"
+            )
+        if not re.search(rf"(?<![:\w]):{name}\b(?!:)", query):
+            raise SqlBindParameterError(
+                message=f"Bind parameter {name!r} is not referenced as :{name} in the query"
+            )
+    return dict(params)
 
 
 if TYPE_CHECKING:
@@ -491,7 +540,12 @@ class BaseSQLClient(ClientInterface):
 
         return conn_str
 
-    async def run_query(self, query: str, batch_size: int = 100000):
+    async def run_query(
+        self,
+        query: str,
+        batch_size: int = 100000,
+        params: "Mapping[str, Any] | None" = None,
+    ):
         """Execute a SQL query and return results in batches using lazy connections.
 
         This method creates a connection on-demand, executes the query in batches,
@@ -502,6 +556,10 @@ class BaseSQLClient(ClientInterface):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
+            params (Mapping[str, Any], optional): Values to bind to ``:name``
+                placeholders in ``query``. The driver receives them as bound
+                values, never as SQL text, so a user-supplied filter value cannot
+                change the statement. Every name must appear in ``query``.
 
         Yields:
             List[Dict[str, Any]]: Batches of query results, where each result is
@@ -509,14 +567,17 @@ class BaseSQLClient(ClientInterface):
 
         Raises:
             EngineNotInitializedError: If engine is not initialized.
+            SqlBindParameterError: If ``params`` does not match the query.
         """
         if not self.engine:
             raise EngineNotInitializedError()
+        bound = _bound_params(query, params)
 
         logger.debug(
-            "Running query (sha=%s, len=%d)",
+            "Running query (sha=%s, len=%d, bound=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
+            len(bound or {}),
         )
 
         _install_cursor_cancel_listener(self.engine)
@@ -560,9 +621,12 @@ class BaseSQLClient(ClientInterface):
 
             from sqlalchemy import text  # noqa: PLC0415 — optional dep: sqlalchemy
 
-            cursor = await run_in_thread(
-                handle.bind(_holding_connection(connection.execute)),
-                text(_escape_colons_for_text(query)),
+            statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
+            execute = handle.bind(_holding_connection(connection.execute))
+            cursor = (
+                await run_in_thread(execute, statement, bound)
+                if bound
+                else await run_in_thread(execute, statement)
             )
             if not cursor or not cursor.cursor:
                 raise UnsupportedSqlCursorError()
@@ -836,7 +900,12 @@ class AsyncBaseSQLClient(BaseSQLClient):
             self.engine = None
         self.connection = None
 
-    async def run_query(self, query: str, batch_size: int = 100000):
+    async def run_query(
+        self,
+        query: str,
+        batch_size: int = 100000,
+        params: "Mapping[str, Any] | None" = None,
+    ):
         """Execute a SQL query asynchronously and return results in batches using lazy connections.
 
         This method creates an async connection on-demand, executes the query in batches,
@@ -847,6 +916,8 @@ class AsyncBaseSQLClient(BaseSQLClient):
             query (str): SQL query to execute.
             batch_size (int, optional): Number of records to fetch in each batch.
                 Defaults to 100000.
+            params (Mapping[str, Any], optional): Values to bind to ``:name``
+                placeholders in ``query``, as for :meth:`BaseSQLClient.run_query`.
 
         Yields:
             List[Dict[str, Any]]: Batches of query results, where each result is
@@ -857,11 +928,13 @@ class AsyncBaseSQLClient(BaseSQLClient):
         """
         if not self.engine:
             raise EngineNotInitializedError()
+        bound = _bound_params(query, params)
 
         logger.debug(
-            "Running query (sha=%s, len=%d)",
+            "Running query (sha=%s, len=%d, bound=%d)",
             hashlib.sha256(query.encode("utf-8", errors="replace")).hexdigest()[:16],
             len(query),
+            len(bound or {}),
         )
         use_server_side_cursor = self.use_server_side_cursor
 
@@ -875,12 +948,19 @@ class AsyncBaseSQLClient(BaseSQLClient):
                         yield_per=batch_size
                     )
 
-                escaped_query = _escape_colons_for_text(query)
-                result = (
-                    await connection.stream(text(escaped_query))
-                    if use_server_side_cursor
-                    else await connection.execute(text(escaped_query))
-                )
+                statement = text(_escape_colons_for_text(query, frozenset(bound or ())))
+                if use_server_side_cursor:
+                    result = (
+                        await connection.stream(statement, bound)
+                        if bound
+                        else await connection.stream(statement)
+                    )
+                else:
+                    result = (
+                        await connection.execute(statement, bound)
+                        if bound
+                        else await connection.execute(statement)
+                    )
 
                 column_names = list(result.keys())
 
