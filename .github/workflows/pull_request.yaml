@@ -27,6 +27,9 @@ jobs:
       #          harness itself (the unit/integration deps + docstring-coverage
       #          wrappers), so changing *how* those checks run still re-runs them.
       sdk: ${{ steps.sdk-refine.outputs.sdk }}
+      # 'false' only on a bump-version PR not yet opted in with `gate-check`
+      # (FND-3748): the remaining jobs skip and Connector Tests Gate fails fast.
+      opted_in: ${{ steps.opt-in.outputs.opted_in }}
       # 'ci'   — pull_request.yaml itself changed. Self-referential entry
       #          (mirrors sdk-gate.yaml's own self-test pattern) so that editing
       #          the connector / sdr-k8s-e2e dispatch glue re-runs those jobs
@@ -34,6 +37,17 @@ jobs:
       ci: ${{ steps.filter.outputs.ci }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Read from the PR's live labels (bump_pr_opt_in.py), so the answer is
+      # the label STATE: an unrelated label event on an opted-in bump PR still
+      # re-runs these cheap jobs as it always did, and never fails the gate.
+      - name: Check the bump-PR CI opt-in
+        id: opt-in
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: python3 .github/scripts/bump_pr_opt_in.py check --head-ref "$HEAD_REF" --pr "$PR_NUMBER"
       # No explicit `base`: for pull_request, paths-filter diffs against the PR
       # base automatically; for merge_group it diffs the queued merge ref against
       # the default branch (the same proven setup the conformance jobs use).
@@ -110,7 +124,7 @@ jobs:
   docstr:
     name: Docstring Coverage
     needs: changes
-    if: needs.changes.outputs.sdk == 'true'
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,7 +136,7 @@ jobs:
   trivy-container:
     name: Trivy Container Scan
     needs: changes
-    if: needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
+    if: needs.changes.outputs.opted_in != 'false' && needs.changes.outputs.container == 'true' && github.event.pull_request.head.repo.fork != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -209,8 +223,13 @@ jobs:
     if: |
       (needs.changes.outputs.sdk == 'true' || needs.changes.outputs.container == 'true') &&
       github.event_name == 'pull_request' &&
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      (
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( github.head_ref == 'bump-version-main' &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+      ) &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     # One architecture per job, each on a runner native to it — the same shape
@@ -414,8 +433,13 @@ jobs:
         ) ||
         (
           github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+          (
+            ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+            ( github.head_ref == 'bump-version-main' &&
+              contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+          ) &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -530,8 +554,13 @@ jobs:
       ) ||
       (
         github.event_name == 'pull_request' &&
-        contains(github.event.pull_request.labels.*.name, 'e2e') &&
-        (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+        (
+          ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+            (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+          ( github.head_ref == 'bump-version-main' &&
+            contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+            (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+        ) &&
         github.event.pull_request.head.repo.fork != true &&
         github.event.pull_request.user.login != 'dependabot[bot]'
       )
@@ -627,6 +656,14 @@ jobs:
       # never notice.
       pull-requests: read
     steps:
+      # An un-opted bump-version PR (FND-3748) skipped every upstream job; fail
+      # here, before the upstream check would read those skips as a pass.
+      - name: Require the bump-PR CI opt-in
+        if: needs.changes.result == 'success' && needs.changes.outputs.opted_in != 'true'
+        run: |
+          echo "::error::Bump-version PR CI is opt-in (FND-3748). Add the 'gate-check' label to run it."
+          exit 1
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       # connector-tests now only dispatches (e2e-apps wait-mode: callback) —
@@ -716,8 +753,13 @@ jobs:
     # remove the label) — and a consumer that still fired would re-run on every
     # push to a Dependabot PR carrying `e2e`.
     if: |
-      contains(github.event.pull_request.labels.*.name, 'e2e') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+      (
+        ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( github.head_ref == 'bump-version-main' &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') )
+      ) &&
       github.event.pull_request.head.repo.fork != true &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-latest

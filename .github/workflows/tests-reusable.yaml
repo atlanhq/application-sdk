@@ -770,7 +770,10 @@ jobs:
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( startsWith(github.head_ref, 'bump-version') &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
     runs-on: ubuntu-slim
     timeout-minutes: 5
     outputs:
@@ -817,7 +820,10 @@ jobs:
       ( github.event_name != 'pull_request' ||
         needs.detect-merge-queue.outputs.enabled == 'false' ||
         ( contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) )
+          (github.event.action != 'labeled' || github.event.label.name == 'e2e') ) ||
+        ( startsWith(github.head_ref, 'bump-version') &&
+          contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+          (github.event.action != 'labeled' || github.event.label.name == 'gate-check') ) )
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.timeout-minutes }}
     concurrency:
@@ -1105,6 +1111,9 @@ jobs:
     # Just a checkout + a seconds-long glob; cap it so a wedged runner can't
     # hold the required check pending for GitHub's 6-hour default.
     timeout-minutes: 10
+    # On a bump-version PR, `gate-check` opts in to the full release gate
+    # (FND-3748) and so implies e2e; elsewhere only `e2e` does.
+    #
     # The `contains(...labels...)` term asks "does the PR carry `e2e` right now",
     # which is the right question for `opened`/`synchronize`/`reopened` but the
     # wrong one for `labeled`: on a PR that already carries `e2e`, adding ANY
@@ -1122,8 +1131,17 @@ jobs:
         (github.event_name == 'workflow_dispatch' && inputs.run-e2e == 'true') ||
         (
           github.event_name == 'pull_request' &&
-          contains(github.event.pull_request.labels.*.name, 'e2e') &&
-          (github.event.action != 'labeled' || github.event.label.name == 'e2e') &&
+          (
+            (
+              contains(github.event.pull_request.labels.*.name, 'e2e') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'e2e')
+            ) ||
+            (
+              startsWith(github.head_ref, 'bump-version') &&
+              contains(github.event.pull_request.labels.*.name, 'gate-check') &&
+              (github.event.action != 'labeled' || github.event.label.name == 'gate-check')
+            )
+          ) &&
           github.event.pull_request.head.repo.fork != true &&
           github.event.pull_request.user.login != 'dependabot[bot]'
         )
@@ -3349,7 +3367,9 @@ jobs:
           # `labeled` filter: true means this run skipped e2e only because the
           # event was an unrelated label.
           AWAITING_LABEL_RUN: >-
-            ${{ contains(github.event.pull_request.labels.*.name, 'e2e') &&
+            ${{ (contains(github.event.pull_request.labels.*.name, 'e2e') ||
+            (startsWith(github.head_ref, 'bump-version') &&
+            contains(github.event.pull_request.labels.*.name, 'gate-check'))) &&
             github.event.pull_request.head.repo.fork != true &&
             github.event.pull_request.user.login != 'dependabot[bot]' }}
         run: |

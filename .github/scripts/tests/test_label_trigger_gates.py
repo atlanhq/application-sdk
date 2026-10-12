@@ -31,6 +31,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Iterator
+from unittest import mock
 
 import pytest
 import yaml
@@ -38,9 +39,11 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from _gha_expr import evaluate  # noqa: E402
+from conformance.bootstrap import render as bootstrap_render  # noqa: E402
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _WORKFLOW_DIR = _REPO_ROOT / ".github/workflows"
+_TEMPLATE_DIR = _REPO_ROOT / "packages/conformance/conformance/bootstrap/templates"
 
 #: The state check that is only half a gate on a `labeled`-triggered workflow.
 _LABEL_STATE_CHECK = re.compile(
@@ -122,11 +125,39 @@ def _can_receive_a_labeled_event(workflow: dict[str, Any]) -> bool:
     return bool(types) and "labeled" in types
 
 
+def _rendered_template(path: Path) -> dict[str, Any] | None:
+    """A bootstrap shim as a fresh connector repo receives it (default slots).
+
+    The shims ship to every connector, and since FND-3748 several subscribe to
+    `labeled` for the bump-PR `gate-check` opt-in, so they need the same guard.
+    Template text comes from this checkout: the installed conformance package
+    is a non-editable copy that can lag the source.
+    """
+    with mock.patch.object(
+        bootstrap_render,
+        "_load_template",
+        lambda name: (_TEMPLATE_DIR / name).read_text(encoding="utf-8"),
+    ):
+        try:
+            return yaml.safe_load(bootstrap_render.render(path.name)) or {}
+        except yaml.YAMLError:
+            return None
+
+
+def _sweep_targets() -> Iterator[tuple[Path, dict[str, Any] | None]]:
+    for path in sorted(_WORKFLOW_DIR.glob("*.y*ml")):
+        yield path, _load_or_skip(path)
+    for path in sorted(_TEMPLATE_DIR.glob("*.y*ml")):
+        workflow = _rendered_template(path)
+        # Only the GitHub workflow shims; the dir also holds action.yaml copies.
+        if workflow and "jobs" in workflow:
+            yield path, workflow
+
+
 def test_every_label_gate_reachable_by_a_labeled_event_is_event_aware() -> None:
     offenders: list[str] = []
     checked = 0
-    for path in sorted(_WORKFLOW_DIR.glob("*.y*ml")):
-        workflow = _load_or_skip(path)
+    for path, workflow in _sweep_targets():
         if workflow is None or not _can_receive_a_labeled_event(workflow):
             continue
         for where, expression in _conditions(workflow):

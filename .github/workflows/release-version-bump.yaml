@@ -197,7 +197,11 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
           GITHUB_REPOSITORY: ${{ github.repository }}
-        run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}"
+        # `auto` (FND-3748): full notes — every type but `ci` — only once this
+        # repo's shims gate bump-PR CI on `gate-check`; until its resync lands,
+        # the old Features/Bug Fixes notes, so Renovate merges keep not moving
+        # the bump PR and its still-ungated CI does not re-run on each one.
+        run: python3 .sdk-scripts/.github/scripts/update_changelog.py "${{ steps.versions.outputs.current }}" "${{ steps.bump.outputs.new }}" --sections auto
 
       # Restore the pristine push path — see the rewrite step above. Runs on the
       # same guard so it is a no-op for every caller that did not opt in.
@@ -226,6 +230,21 @@ jobs:
             --version-file pyproject.toml \
             --changelog CHANGELOG.md \
             --new-version "${NEW_VERSION}"
+
+      # CI on a bump PR is opt-in via the `gate-check` label and covers only the
+      # commit it was given for (FND-3748). Clear it BEFORE the push: the
+      # `synchronize` the push fires carries the PR's labels at that instant, so
+      # a stale opt-in would start a full CI run on the new commit. Also creates
+      # the label if the repo lacks it. Fails open (warns, push proceeds).
+      - name: Reset the bump PR's CI opt-in
+        if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false' && hashFiles('.sdk-scripts/.github/scripts/bump_pr_opt_in.py') != ''
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token || secrets.ORG_PAT_GITHUB }}
+          TARGET_BRANCH: ${{ inputs.target_branch }}
+        run: |
+          python3 .sdk-scripts/.github/scripts/bump_pr_opt_in.py clear \
+            --base "${TARGET_BRANCH}" \
+            --head "bump-version-${TARGET_BRANCH}"
 
       - name: Commit and push bump branch
         if: steps.bump.outputs.skip != 'true' && steps.debounce.outputs.push != 'false'
