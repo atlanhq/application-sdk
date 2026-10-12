@@ -3570,6 +3570,84 @@ def poll():
     )
 
 
+def test_e020_no_finding_on_bounded_2xx_success_return() -> None:
+    # The return is guarded by the success range; a non-2xx response raises.
+    _none(
+        """\
+def publish(response):
+    if 200 <= response.status_code < 300:
+        return
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_bounded_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if 200 <= response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_no_finding_on_and_joined_2xx_success_return() -> None:
+    _none(
+        """\
+def publish(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return []
+    raise UpstreamError("publish failed")
+"""
+    )
+
+
+def test_e020_fires_on_empty_else_of_and_joined_2xx_success_check() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code >= 200 and response.status_code < 300:
+        return response.json()
+    else:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_chained_bounds_span_different_responses() -> None:
+    # a.status_code == 200, b.status_code == 500 satisfies the test.
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code <= 200 <= b.status_code:
+        return []
+"""
+    )
+
+
+def test_e020_fires_when_and_joined_bounds_span_different_responses() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(a, b):
+    if a.status_code >= 200 and b.status_code < 300:
+        return []
+"""
+    )
+
+
+def test_e020_fires_on_status_code_not_200_return_none() -> None:
+    assert "E020" in _findings(
+        """\
+def fetch(response):
+    if response.status_code != 200:
+        return None
+"""
+    )
+
+
 def test_e020_no_finding_on_plain_none_guard() -> None:
     # No HTTP-response marker — an ordinary guard clause, not the hazard.
     _none(
