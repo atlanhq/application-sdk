@@ -139,6 +139,12 @@ class TestResolveMetadataValue:
     def test_null_value_resolves_to_empty(self):
         assert _resolve_metadata_value({"name": "accessKey", "value": None}) == ""
 
+    def test_null_value_falls_through_to_secret_ref(self, monkeypatch):
+        # Dapr drops a null ``value`` on decode, so ``secretKeyRef`` still applies.
+        monkeypatch.setenv("MY_SECRET", "from-env")
+        item = {"name": "x", "value": None, "secretKeyRef": {"key": "MY_SECRET"}}
+        assert _resolve_metadata_value(item) == "from-env"
+
     @pytest.mark.parametrize(
         ("value", "expected"),
         [("AKIAEXAMPLE", "AKIAEXAMPLE"), (True, "True"), (5432, "5432")],
@@ -1535,6 +1541,17 @@ class TestFindBrokenMetadataFields:
         items = [
             {
                 "name": "accessKey",
+                "secretKeyRef": {"name": "MISSING_VAR", "key": "MISSING_VAR"},
+            }
+        ]
+        assert _find_broken_metadata_fields(items) == ["accessKey"]
+
+    def test_null_value_does_not_hide_unresolved_secret_ref(self, monkeypatch) -> None:
+        monkeypatch.delenv("MISSING_VAR", raising=False)
+        items = [
+            {
+                "name": "accessKey",
+                "value": None,
                 "secretKeyRef": {"name": "MISSING_VAR", "key": "MISSING_VAR"},
             }
         ]

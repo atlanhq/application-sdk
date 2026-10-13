@@ -207,11 +207,20 @@ def _resolve_secret_ref(ref: dict, secrets: SecretMap | None) -> str | None:
     return os.environ.get(key)
 
 
+def _has_value(item: dict) -> bool:
+    """Return True when a Dapr metadata item carries a ``value``.
+
+    Mirrors Dapr's ``NameValuePair.HasValue``: a bare YAML ``value:`` is null,
+    which Dapr drops on decode, so it counts as absent — not as the string
+    ``"None"``, and not as a value that shadows ``secretKeyRef``.
+    """
+    return item.get("value") is not None
+
+
 def _resolve_metadata_value(item: dict, secrets: SecretMap | None = None) -> str:
     """Resolve a single Dapr metadata item to its string value."""
-    if "value" in item:
-        # A bare YAML ``value:`` is null and means unset, not the string "None".
-        return "" if item["value"] is None else str(item["value"])
+    if _has_value(item):
+        return str(item["value"])
 
     secret_ref = item.get("secretKeyRef")
     if secret_ref:
@@ -242,7 +251,7 @@ def _find_broken_metadata_fields(
     broken: list[str] = []
     for item in metadata_list or []:
         field_name = item.get("name", "<unknown>")
-        if "value" in item:
+        if _has_value(item):
             if _TEMPLATE_PLACEHOLDER_RE.search(str(item["value"])):
                 broken.append(field_name)
         elif "secretKeyRef" in item:
