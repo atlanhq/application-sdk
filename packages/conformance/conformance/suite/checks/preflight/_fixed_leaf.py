@@ -43,7 +43,9 @@ from ._contracts import _Checker, _qualified, _sdk
 
 _F021 = "F021"
 
-_BROAD = frozenset({"Exception", "BaseException"})
+_BROAD = frozenset(
+    {"Exception", "BaseException", "builtins.Exception", "builtins.BaseException"}
+)
 _CUSTOMER_ROOTS = frozenset({"AuthError", "AppPermissionDeniedError"})
 _SDK_CUSTOMER_LEAVES = frozenset(
     {
@@ -96,7 +98,7 @@ def _is_broad(src: Source, handler: ast.ExceptHandler) -> bool:
     if handler.type is None:
         return True
     kinds = handler.type.elts if isinstance(handler.type, ast.Tuple) else [handler.type]
-    return any(_qualified(src, kind).rsplit(".", 1)[-1] in _BROAD for kind in kinds)
+    return any(_qualified(src, kind) in _BROAD for kind in kinds)
 
 
 def _customer_rooted(
@@ -193,13 +195,10 @@ def _report_site(leaf: ast.Call, src: Source, parents: _Parents) -> ast.AST | No
     return None
 
 
-def _always_reported(
-    leaf: ast.Call, src: Source, parents: _Parents, handler: ast.ExceptHandler
+def _always_runs(
+    site: ast.AST, src: Source, parents: _Parents, handler: ast.ExceptHandler
 ) -> bool:
-    """Whether every path through ``handler`` reports ``leaf``."""
-    site = _report_site(leaf, src, parents)
-    if site is None:
-        return False
+    """Whether every path through ``handler`` reaches the report ``site``."""
     for parent, field, index in _ancestry(site, parents, handler):
         if field not in _ALWAYS_RUNS.get(type(parent), ()):
             return False
@@ -218,15 +217,27 @@ def _always_reported(
 
 def _fixed_leaf(
     checker: _Checker, src: Source, handler: ast.ExceptHandler
-) -> ast.Call | None:
+) -> ast.expr | None:
+    """The auth or permission class ``handler`` reports on every path, if any.
+
+    A leaf is a constructor call reported through ``_report_site``, or a class
+    raised bare (``raise AuthError``), whose report site is the ``raise``.
+    """
     parents = _parents(handler)
     for node in _own_nodes(handler):
-        if not isinstance(node, ast.Call):
+        if isinstance(node, ast.Raise) and isinstance(
+            node.exc, ast.Name | ast.Attribute
+        ):
+            leaf_class: ast.expr = node.exc
+        elif isinstance(node, ast.Call):
+            leaf_class = node.func
+        else:
             continue
-        if not _customer_rooted(checker, src, node.func):
+        if not _customer_rooted(checker, src, leaf_class):
             continue
-        if _always_reported(node, src, parents, handler):
-            return node
+        site = node if isinstance(node, ast.Raise) else _report_site(node, src, parents)
+        if site is not None and _always_runs(site, src, parents, handler):
+            return leaf_class
     return None
 
 
@@ -247,7 +258,7 @@ def scan(reg: Registry) -> list[Finding]:
                     node=handler,
                     message=(
                         f"Broad except in preflight_check reports a fixed "
-                        f"{ast.unparse(leaf.func)} for every failure it catches, so "
+                        f"{ast.unparse(leaf)} for every failure it catches, so "
                         "an empty credential or an unreachable host reads as a "
                         "customer credential or grant problem. Classify the caught "
                         "exception first (application_sdk.errors."

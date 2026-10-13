@@ -174,10 +174,21 @@ def test_fires_on_every_broad_clause(tmp_path: Path, clause: str) -> None:
     assert len(_f021(tmp_path, src)) == 1
 
 
-def test_silent_on_a_narrow_except(tmp_path: Path) -> None:
+def test_fires_on_a_qualified_builtin_exception(tmp_path: Path) -> None:
     src = _handler(
-        _broad("except httpx.HTTPStatusError as exc:", _failed_row("AuthError"))
+        _broad("except builtins.Exception as exc:", _failed_row("AuthError")),
+        "import builtins\n",
     )
+    assert len(_f021(tmp_path, src)) == 1
+
+
+@pytest.mark.parametrize(
+    "clause",
+    ["except httpx.HTTPStatusError as exc:", "except pyodbc.Exception as exc:"],
+    ids=["driver-error", "driver-class-named-exception"],
+)
+def test_silent_on_a_narrow_except(tmp_path: Path, clause: str) -> None:
+    src = _handler(_broad(clause, _failed_row("AuthError")), "import pyodbc\n")
     assert _f021(tmp_path, src) == []
 
 
@@ -201,6 +212,8 @@ def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path, leaf: str) -> None:
         f"            return (PreflightCheck(name='a', passed=False, error={_AUTH}), None)\n",
         f"            with self.lock:\n                raise {_AUTH}\n",
         f"            try:\n                raise {_AUTH}\n            finally:\n                self.close()\n",
+        "            raise AppPermissionDeniedError\n",
+        "            raise AuthError from exc\n",
     ],
     ids=[
         "raise-from",
@@ -213,6 +226,8 @@ def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path, leaf: str) -> None:
         "tuple-return",
         "with-body",
         "try-finally",
+        "bare-class-raise",
+        "bare-class-raise-from",
     ],
 )
 def test_supported_reporting_shapes_fire(tmp_path: Path, row: str) -> None:
