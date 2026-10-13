@@ -231,8 +231,8 @@ jobs:
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: >-
-          python3 .github/scripts/bump_pr_opt_in.py e2e-requested
-          --repo "$REPO" --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
+          python3 .github/scripts/bump_pr_opt_in.py --repo "$REPO" e2e-requested
+          --head-ref "$HEAD_REF" --sha "$HEAD_SHA"
           --fork "$IS_FORK" --author "$PR_AUTHOR"
 
   # Build a PR-scoped SDK runtime base image so the connector e2e tests can

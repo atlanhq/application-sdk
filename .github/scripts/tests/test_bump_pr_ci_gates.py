@@ -373,7 +373,7 @@ def test_sdk_e2e_request_reads_the_head_commit() -> None:
     assert evaluate(job["if"], _ctx("", event="merge_group")) is False
     assert job["permissions"]["statuses"] == "read"
     step = _step(path, "e2e-request", "Read the e2e request on the head commit")
-    assert "bump_pr_opt_in.py e2e-requested" in step["run"]
+    assert 'bump_pr_opt_in.py --repo "$REPO" e2e-requested' in step["run"]
     assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
     assert step["env"]["HEAD_REF"] == "${{ github.head_ref }}"
 
