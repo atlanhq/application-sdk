@@ -987,6 +987,83 @@ def test_p001_fires_on_a_contract_inheriting_the_attribute_from_a_mixin() -> Non
     assert "items: `dict[...]` without MaxItems" in findings[0].message
 
 
+_KEYWORD_PARENT = (
+    "class ArgsInput(Input, allow_unbounded_fields=True):\n"
+    "    args: dict[str, Any] = {}\n"
+)
+
+
+def _p001_by_line(src: str) -> dict[int, str]:
+    return {f.line: f.message for f in scan_text(src, "x.py") if f.rule_id == "P001"}
+
+
+def test_p001_fires_on_a_subclass_inheriting_the_class_keyword_opt_out() -> None:
+    # The keyword sets _allow_unbounded_fields on the class, so a subclass that does
+    # not repeat it is still opted out at runtime.
+    src = _KEYWORD_PARENT + (
+        "class TagsInput(ArgsInput):\n    refs: list[FileReference] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "inherited from ArgsInput" in found[3]
+    assert "refs: `list[...]` without MaxItems" in found[3]
+    assert "args:" not in found[3]
+    assert "remove it from ArgsInput" in found[3]
+
+
+def test_p001_follows_the_inherited_opt_out_through_every_same_file_level() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Mid(ArgsInput):\n    a: int = 0\n"
+        "class Leaf(Mid):\n    refs: list[str] = []\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3, 5]
+    assert "inherited from ArgsInput" in found[5]
+
+
+def test_p001_a_falsy_keyword_does_not_opt_a_subclass_back_in() -> None:
+    # Input.__init_subclass__ only ever sets the attribute to True, so
+    # allow_unbounded_fields=False leaves the parent's opt-out in force: the
+    # subclass imports fine, and is still exempt.
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput, allow_unbounded_fields=False):\n    extra: Any = None\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [1, 3]
+    assert "inherited from ArgsInput" in found[3]
+    assert "does NOT set" not in found[3]
+
+
+def test_p001_a_falsy_attribute_on_the_subclass_ends_the_inherited_opt_out() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Sub(ArgsInput):\n    _allow_unbounded_fields = False\n    n: int = 0\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_the_first_base_that_sets_the_attribute_decides_like_the_mro() -> None:
+    src = _KEYWORD_PARENT + (
+        "class Off(Input):\n    _allow_unbounded_fields = False\n"
+        "class C(Off, ArgsInput):\n    n: int = 0\n"
+    )
+    assert sorted(_p001_by_line(src)) == [1]
+
+
+def test_p001_inverse_fires_on_an_any_field_in_an_indirect_contract() -> None:
+    src = (
+        "class Base(Input):\n    n: int = 0\n"
+        "class Sub(Base):\n    extra: dict[str, Any] = {}\n"
+    )
+    found = _p001_by_line(src)
+    assert sorted(found) == [3]
+    assert "does NOT set" in found[3]
+
+
+def test_p001_is_silent_on_a_safe_subclass_of_an_enforced_contract() -> None:
+    src = "class Base(Input):\n    n: int = 0\nclass Sub(Base):\n    s: str = ''\n"
+    assert _p001_by_line(src) == {}
+
+
 # ── P002 CategoryFieldOverride ─────────────────────────────────────────────────
 
 
