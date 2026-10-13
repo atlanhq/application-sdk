@@ -17,6 +17,7 @@ def make_finding(
     message: str,
     directives: dict[int, _IgnoreDirective],
     cleared_by: frozenset[str] = frozenset(),
+    case: str | None = None,
 ) -> Finding:
     """Build a :class:`Finding` for *node*, honouring inline suppression directives.
 
@@ -52,4 +53,5 @@ def make_finding(
         suppressed=suppressed,
         suppression_justification=justification,
         cleared_by=cleared_by,
+        case=case,
     )

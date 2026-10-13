@@ -30,6 +30,7 @@ so a class in that state is dead code that no detector used to notice, and
 from __future__ import annotations
 
 import ast
+from pathlib import PurePath
 
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
@@ -279,6 +280,28 @@ def _listed(items: list[tuple[str, str]]) -> str:
     return text
 
 
+def has_generated_banner(text: str) -> bool:
+    """The contract toolkit's provenance banner: a comment in the first lines that says both
+    "generated" and "do not edit" (the invariant K005 checks, across both banner variants)."""
+    head = [ln.lower() for ln in text.splitlines()[:5] if ln.lstrip().startswith("#")]
+    return any("generated" in ln for ln in head) and any(
+        "do not edit" in ln for ln in head
+    )
+
+
+def _case(
+    filename: str, groups: dict[str, list[tuple[str, str]]] | None, generated: bool
+) -> str | None:
+    """The ``cases/P001.md`` entry this site provably matches, if any."""
+    if generated or "generated" in PurePath(filename).parts:
+        return "generated"
+    if groups is not None and not (
+        groups[_REFUSED] or groups[_OPEN] or groups[_UNKNOWN]
+    ):
+        return "remove-opt-out"
+    return None
+
+
 def _optout_message(
     name: str, via: str, groups: dict[str, list[tuple[str, str]]]
 ) -> str:
@@ -402,9 +425,11 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
         self,
         filename: str,
         directives: dict[int, _IgnoreDirective],
+        generated: bool = False,
     ) -> None:
         self._filename = filename
         self._directives = directives
+        self._generated = generated
         self._findings: list[Finding] = []
         self._types = _Types({}, set())
         #: Classes that set a truthy _allow_unbounded_fields themselves.
@@ -482,15 +507,17 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             # is a genuine opt-back-in and must NOT be flagged as an opt-out.
             if isinstance(kw.value, ast.Constant) and not kw.value.value:
                 break
+            groups = self._types.fields(node)
             self._findings.append(
                 make_finding(
                     filename=self._filename,
                     rule_id="P001",
                     node=node,
                     message=_optout_message(
-                        node.name, "allow_unbounded_fields", self._types.fields(node)
+                        node.name, "allow_unbounded_fields", groups
                     ),
                     directives=self._directives,
+                    case=_case(self._filename, groups, self._generated),
                 )
             )
             opted_out = True
@@ -510,13 +537,15 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
             via = f"the {_OPTOUT_ATTR} attribute inherited from {self._inherited[node.name]}"
             opted_out = True
         if via:
+            groups = self._types.fields(node)
             self._findings.append(
                 make_finding(
                     filename=self._filename,
                     rule_id="P001",
                     node=node,
-                    message=_optout_message(node.name, via, self._types.fields(node)),
+                    message=_optout_message(node.name, via, groups),
                     directives=self._directives,
+                    case=_case(self._filename, groups, self._generated),
                 )
             )
         if not opted_out:
@@ -546,5 +575,6 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     "'# conformance: ignore[P001] <reason>' directive."
                 ),
                 directives=self._directives,
+                case=_case(self._filename, None, self._generated),
             )
         )

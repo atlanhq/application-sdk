@@ -105,6 +105,12 @@ class AtlanRuleProperties(BaseModel):
     ``atlan/remediationReference`` so ``/remediate`` in a connector repo can
     hand a migration finding to its skill without the Python catalog."""
 
+    cases_ref: str | None = None
+    """``catalog.RuleDefinition.cases_ref``, carried as ``atlan/casesRef``."""
+
+    owner: str | None = None
+    """``catalog.RuleDefinition.owner``, carried as ``atlan/owner``."""
+
     def to_properties(self) -> dict[str, Any]:
         """Return a ``properties`` dict ready to merge into a SARIF node."""
         out: dict[str, Any] = {
@@ -132,6 +138,10 @@ class AtlanRuleProperties(BaseModel):
             out["atlan/remediationReference"] = self.remediation_reference.model_dump(
                 mode="json"
             )
+        if self.cases_ref is not None:
+            out["atlan/casesRef"] = self.cases_ref
+        if self.owner is not None:
+            out["atlan/owner"] = self.owner
         return out
 
     @classmethod
@@ -155,6 +165,8 @@ class AtlanRuleProperties(BaseModel):
             remediation_reference=RemediationReference.model_validate(ref)
             if (ref := props.get("atlan/remediationReference")) is not None
             else None,
+            cases_ref=props.get("atlan/casesRef"),
+            owner=props.get("atlan/owner"),
         )
 
 
@@ -178,10 +190,17 @@ class AtlanResultProperties(BaseModel):
     status.
     """
 
+    case: str | None = None
+    """The entry in the rule's cases file whose condition the checker proved
+    for this finding.  Absent when the checker cannot tell; the remediator
+    then checks the cases file's index."""
+
     def to_properties(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
         if self.hint is not None:
             out["atlan/hint"] = self.hint
+        if self.case is not None:
+            out["atlan/case"] = self.case
         if self.external_influence:
             out["atlan/externalInfluence"] = True
         return out
@@ -191,6 +210,7 @@ class AtlanResultProperties(BaseModel):
         return cls(
             hint=props.get("atlan/hint"),
             external_influence=bool(props.get("atlan/externalInfluence", False)),
+            case=props.get("atlan/case"),
         )
 
 

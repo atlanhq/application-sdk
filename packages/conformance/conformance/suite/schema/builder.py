@@ -171,6 +171,7 @@ class ReportBuilder:
         snippet: str | None = None,
         extra_properties: dict[str, Any] | None = None,
         discriminator: str | None = None,
+        case: str | None = None,
     ) -> ReportBuilder:
         """Record a rule violation (``kind="fail"``).
 
@@ -198,6 +199,9 @@ class ReportBuilder:
             Optional per-subject key mixed into the result's fingerprint, for
             rules that emit several findings at one location (see
             :func:`_fingerprint`). ``None`` keeps the legacy fingerprint.
+        case:
+            The rule's cases-file entry the checker proved for this site
+            (stored in ``atlan/case``).  Not part of the fingerprint.
         """
         from conformance.suite.schema.extensions import AtlanResultProperties
 
@@ -215,7 +219,9 @@ class ReportBuilder:
             )
         )
         fingerprint = _fingerprint(rule_id, file_uri, start_line, discriminator)
-        props: dict[str, Any] = AtlanResultProperties(hint=hint).to_properties()
+        props: dict[str, Any] = AtlanResultProperties(
+            hint=hint, case=case
+        ).to_properties()
         if extra_properties:
             props.update(extra_properties)
 

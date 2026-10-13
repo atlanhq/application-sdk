@@ -112,7 +112,7 @@ from ._qualified_name import check_p028
 from ._relationship_direction import check_p055
 from ._store_construction import check_p009
 from ._typed_boundaries import check_p013_p014
-from ._unbounded_fields import UnboundedContractFieldsChecker
+from ._unbounded_fields import UnboundedContractFieldsChecker, has_generated_banner
 
 SERIES = "P"
 
@@ -134,7 +134,9 @@ def scan_text(text: str, file: str) -> list[Finding]:
 
     directives = _parse_directives(text)
 
-    p001 = UnboundedContractFieldsChecker(filename=file, directives=directives)
+    p001 = UnboundedContractFieldsChecker(
+        filename=file, directives=directives, generated=has_generated_banner(text)
+    )
     p001.visit(tree)
 
     apperror_subclasses = _collect_apperror_subclasses(tree, _CANONICAL_ERROR_CLASSES)
@@ -245,7 +247,9 @@ def scan_all(paths: list[Path], root: Path) -> list[Finding]:
 
         # P001 (per-file)
         checker = UnboundedContractFieldsChecker(
-            filename=rel_str, directives=directives
+            filename=rel_str,
+            directives=directives,
+            generated=has_generated_banner(text),
         )
         checker.visit(tree)
         findings.extend(checker._findings)

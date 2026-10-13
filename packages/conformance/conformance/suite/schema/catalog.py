@@ -167,6 +167,19 @@ class RuleDefinition(BaseModel):
     (``test_every_migration_rule_names_a_remediation_reference``); the kind must
     match ``autofixable`` (:meth:`_reference_kind_matches_classification`)."""
 
+    cases_ref: str | None = None
+    """The rule's cases file, a path relative to the ``conformance`` package
+    (``cases/P001.md``).  It lists every known case as *condition → action*:
+    a header with the done-bar, an index with one row per case (condition,
+    evidence to cite, route), and one section per case.  A site that matches
+    no case, or whose condition the remediator cannot cite evidence for, goes
+    to ``owner``.  Migration rules only; the file's structure is checked by
+    ``tests/test_cases_files.py``."""
+
+    owner: str | None = None
+    """Who decides a site that matches no case in ``cases_ref``: a role such
+    as ``"app-owner"``, or a team.  Required when ``cases_ref`` is set."""
+
     short_description: str = ""
     full_description: str = ""
     help_uri: str | None = None
@@ -316,6 +329,23 @@ class RuleDefinition(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _cases_name_an_owner(self) -> RuleDefinition:
+        """A cases file routes unmatched sites to ``owner``, so it needs one;
+        an auto-fixable rule is applied by the lane and has no cases."""
+        if self.cases_ref is None:
+            return self
+        if self.autofixable:
+            raise ValueError(
+                f"{self.id}: cases_ref is for migration rules; an auto-fixable "
+                f"rule names a prescription or command instead."
+            )
+        if not self.owner:
+            raise ValueError(
+                f"{self.id}: cases_ref needs an owner for the sites no case covers."
+            )
+        return self
+
     def to_reporting_descriptor(self) -> ReportingDescriptor:  # type: ignore[name-defined]  # noqa: F821
         """Return the SARIF ``ReportingDescriptor`` wire form for this rule."""
         from conformance.suite.schema.extensions import AtlanRuleProperties
@@ -338,6 +368,8 @@ class RuleDefinition(BaseModel):
             forces_external_influence=self.forces_external_influence,
             canonical_reference=self.canonical_reference or None,
             remediation_reference=self.remediation_reference,
+            cases_ref=self.cases_ref,
+            owner=self.owner,
         )
         return ReportingDescriptor(
             id=self.id,

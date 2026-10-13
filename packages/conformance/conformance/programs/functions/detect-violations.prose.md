@@ -86,7 +86,14 @@ description: >
     performed. Present on every migration rule (`autofixable = false`); it is
     what `/remediate` hands the finding to — see `remediate-finding`'s
     *Auto-fixable vs migration*.
+  - `cases_ref` — string or null (from `atlan/casesRef`). The rule's cases
+    file, relative to the conformance package: every known case as
+    *condition → action* (layout in `cases/README.md`).
+  - `owner` — string or null (from `atlan/owner`). Who decides a site that
+    matches no case in `cases_ref`.
   - `hint` — string or null (from `atlan/hint`).
+  - `case` — string or null (from the result's `atlan/case`). The entry in
+    `cases_ref` the checker proved for this site; null when it cannot tell.
   - `message` — human-readable violation message from the runner.
 
 ### Implementation
@@ -133,6 +140,7 @@ complete mapping (JSON alias → Pydantic attribute):
 | Start column | `result.locations[0].physical_location.region.start_column` |
 | Rule properties | `run.tool.driver.rules[result.rule_index].properties` |
 | Result hint | `result.properties.get("atlan/hint", None)` |
+| Result case | `result.properties.get("atlan/case", None)` |
 
 For each result in `run.results`, call `derive_disposition(result)` from
 `conformance.suite.schema.disposition`.  Keep only results whose disposition matches the
@@ -165,10 +173,10 @@ Tag each result's area by reading the first letter of `result.rule_id`:
 
 Extract `atlan/mechanism`, `atlan/autofixable`, `atlan/orthogonalGate`,
 `atlan/forcesExternalInfluence` (default `false` if absent),
-`atlan/canonicalReference` and `atlan/remediationReference` (each default
-`null` if absent) from
-`run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` from
-`result.properties`.  Return `sarif_path` and the structured `findings` list.
+`atlan/canonicalReference`, `atlan/remediationReference`, `atlan/casesRef`
+and `atlan/owner` (each default `null` if absent) from
+`run.tool.driver.rules[result.rule_index].properties`, and `atlan/hint` and
+`atlan/case` from `result.properties`.  Return `sarif_path` and the structured `findings` list.
 
 Return `sarif_path` and an empty `findings` list (not an error) if the runner
 exits 0 or if no results match the requested dispositions.

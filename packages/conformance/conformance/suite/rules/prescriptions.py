@@ -181,6 +181,8 @@ RULES: tuple[RuleDefinition, ...] = (
             kind=RemediationKind.GUIDE,
             target="programs/areas/prescriptions.prose.md",
         ),
+        cases_ref="cases/P001.md",
+        owner="app-owner",
     ),
     RuleDefinition(
         id="P002",

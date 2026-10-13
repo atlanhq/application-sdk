@@ -33,6 +33,13 @@ class Finding:
     matrix is defined.  Nothing is executed: the test gate is what proves the
     scenarios pass.  The empty default means no scenario can close the gap —
     the analysis never found the code to begin with — so the finding stands.
+
+    ``case`` names the entry in the rule's cases file
+    (``RuleDefinition.cases_ref``) whose condition the checker proved for this
+    site, e.g. ``"remove-opt-out"``.  ``None`` means the checker cannot tell
+    which case applies, so the remediator checks the cases file's index.  It is
+    not part of equality or the fingerprint, so setting it never changes which
+    findings exist or how they are counted.
     """
 
     rule_id: str
@@ -49,6 +56,7 @@ class Finding:
     cleared_by: frozenset[str] = field(
         default_factory=frozenset, compare=False, hash=False
     )
+    case: str | None = field(default=None, compare=False, hash=False)
 
 
 def findings_to_report(
@@ -102,5 +110,6 @@ def findings_to_report(
             snippet=f.snippet,
             suppressions=suppressions,
             discriminator=f.discriminator,
+            case=f.case,
         )
     return builder.build(excluded_paths=excluded_paths)
