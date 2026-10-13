@@ -23,7 +23,13 @@ Fails when:
   credentials, reaches a worker-only import. Those calls are expected to fail
   (there is no source), so the probe judges them by what the handler raised,
   not by the status: an ``ImportError`` (``ModuleNotFoundError`` included) is a
-  code path that only breaks on the host.
+  code path that only breaks on the host;
+* for an app that ships generated contract files, the metadata routes fail:
+  ``/workflows/v1/configmaps`` is not 200, ``POST /manifest`` (what Heracles
+  calls on every run submit) is not 200 JSON or still carries an unresolved
+  ``{app_name}`` / ``{deployment_name}`` token, or ``/workflows/v1/input-contract``
+  answers a 5xx;
+* the config route, with no object store configured, does not answer 503.
 
 The same checks gate the host's own pin bump, so an app PR that would break the
 host fails in the app's CI first.
@@ -98,6 +104,31 @@ def record_import_failures(handler: Any, seen: dict[str, ImportError]) -> None:
         setattr(handler, method, wrapped)
 
 
+def check_metadata_routes(client: Any, result: Result) -> None:
+    """The routes Heracles serves setup forms and run submits from."""
+    listing = client.get("/workflows/v1/configmaps")
+    if listing.status_code == 404:
+        return  # the app ships no generated contract files
+    check_response(
+        "GET /workflows/v1/configmaps", listing.status_code, None, result, want=200
+    )
+    manifest = client.post("/manifest", json={})
+    check_response("POST /manifest", manifest.status_code, None, result, want=200)
+    if manifest.status_code == 200:
+        text = manifest.text
+        for token in ("{app_name}", "{deployment_name}"):
+            if token in text:
+                result.fail(
+                    f"POST /manifest: the served manifest still carries {token}; "
+                    "a run submitted from it would target no worker"
+                )
+    contract = client.get("/workflows/v1/input-contract")
+    if contract.status_code >= 500:
+        result.fail(
+            f"GET /workflows/v1/input-contract: answered {contract.status_code}"
+        )
+
+
 def run(name: str, package: str, obj: str) -> Result:
     result = Result()
     module = importlib.import_module(package)
@@ -157,6 +188,15 @@ def run(name: str, package: str, obj: str) -> Result:
         body,
         result,
         not_500_json=True,
+    )
+    check_metadata_routes(client, result)
+    config = client.get("/workflows/v1/config/probe-guid?type=credentials")
+    check_response(
+        "GET /workflows/v1/config (no object store)",
+        config.status_code,
+        None,
+        result,
+        want=503,
     )
     for method, path in _PROBED.items():
         response = client.post(path, json={"credentials": [], "metadata": {}})
