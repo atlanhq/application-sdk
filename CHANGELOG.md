@@ -1,5 +1,44 @@
 # Changelog
 
+## v3.46.0 (October 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.45.0...v3.46.0
+
+### Features
+
+- hand off directory FileReferences by manifest and honour a pinned prefix (FND-3762) (#4318) (by @cmgrote in [87f0bfa](https://github.com/atlanhq/application-sdk/commit/87f0bfa))
+- bind parameters in BaseSQLClient.run_query (#4310) (by @AtMrun in [63c9b34](https://github.com/atlanhq/application-sdk/commit/63c9b34))
+
+### Bug Fixes
+
+- confirm connection-delete purged the seed root instead of deleting it from the runner [FND-3572] (#4300) (by @cmgrote in [90ab880](https://github.com/atlanhq/application-sdk/commit/90ab880))
+- import correlation at module level so DEBUG boots don't deadlock (ARUN-1328) (#4313) (by @Lalit3716-atlan in [fa6e4a9](https://github.com/atlanhq/application-sdk/commit/fa6e4a9))
+- concurrent requests on one BaseClient no longer close each other's connections; clients support `async with` (#4309) (by @connectivity-ai[bot] in [82644a5](https://github.com/atlanhq/application-sdk/commit/82644a5))
+- terminate orphaned AE runs at teardown (#4305) (by @Dexters-Hub in [f50c050](https://github.com/atlanhq/application-sdk/commit/f50c050))
+- hard gate blocks on a source that stays unavailable or rate-limited at its final attempt, a behaviour change (FND-3774) (#4324) (by @cmgrote in [b4e845b](https://github.com/atlanhq/application-sdk/commit/b4e845b))
+- materialize download()/upload() refs from the store that holds them (FND-3795) (#4331) (by @cmgrote in [e6b3290](https://github.com/atlanhq/application-sdk/commit/e6b3290))
+
+### Refactoring
+
+- run App.upload through the persist engine — manifest, local markers, shared path guard (FND-3796) (#4332) (by @cmgrote in [f7db8f8](https://github.com/atlanhq/application-sdk/commit/f7db8f8))
+
+### Chores
+
+- lock file maintenance (#4287) (by @renovate[bot] in [d392ad4](https://github.com/atlanhq/application-sdk/commit/d392ad4))
+- update atlanhq/application-sdk action to v3.45.0 (#4288) (by @renovate[bot] in [c4e8597](https://github.com/atlanhq/application-sdk/commit/c4e8597))
+- lock file maintenance (#4290) (by @renovate[bot] in [94a2ad3](https://github.com/atlanhq/application-sdk/commit/94a2ad3))
+- allowlist CVE-2026-78669, CVE-2026-97031 (HIGH 30d SLA) (#4294) (by @atlan-app-fleet[bot] in [bca3d6f](https://github.com/atlanhq/application-sdk/commit/bca3d6f))
+- lock file maintenance (#4296) (by @renovate[bot] in [67d4824](https://github.com/atlanhq/application-sdk/commit/67d4824))
+- lock file maintenance (#4299) (by @renovate[bot] in [74bef3b](https://github.com/atlanhq/application-sdk/commit/74bef3b))
+- lock file maintenance (#4301) (by @renovate[bot] in [6a60f0d](https://github.com/atlanhq/application-sdk/commit/6a60f0d))
+- lock file maintenance (#4311) (by @renovate[bot] in [81e19c5](https://github.com/atlanhq/application-sdk/commit/81e19c5))
+- update non-critical python dependencies (#4251) (by @renovate[bot] in [4a51c25](https://github.com/atlanhq/application-sdk/commit/4a51c25))
+- update non-critical python dependencies (#4326) (by @renovate[bot] in [c45afae](https://github.com/atlanhq/application-sdk/commit/c45afae))
+- lock file maintenance (#4321) (by @renovate[bot] in [e7f6420](https://github.com/atlanhq/application-sdk/commit/e7f6420))
+- lock file maintenance (#4327) (by @renovate[bot] in [ebb17d3](https://github.com/atlanhq/application-sdk/commit/ebb17d3))
+- lock file maintenance (#4330) (by @renovate[bot] in [c41cdb6](https://github.com/atlanhq/application-sdk/commit/c41cdb6))
+
+
 ## v3.45.0 (October 09, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.44.0...v3.45.0
