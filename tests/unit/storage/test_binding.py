@@ -290,6 +290,40 @@ class TestS3StaticCredentials:
         assert "aws_secret_access_key" not in config
 
     @patch("obstore.store.S3Store")
+    def test_blank_value_and_blank_secret_ref_fall_back_to_ambient_credentials(
+        self, mock_s3_cls: MagicMock, tmp_path: Path
+    ) -> None:
+        # A bare ``secretKeyRef:`` is null too; Dapr skips it, so it must not be
+        # dereferenced as a ref once a null ``value`` stops shadowing it.
+        components_dir = tmp_path / "components"
+        components_dir.mkdir()
+        (components_dir / "objectstore.yaml").write_text(
+            "apiVersion: dapr.io/v1alpha1\n"
+            "kind: Component\n"
+            "metadata:\n"
+            "  name: objectstore\n"
+            "spec:\n"
+            "  type: bindings.aws.s3\n"
+            "  metadata:\n"
+            "    - name: bucket\n"
+            "      value: b\n"
+            "    - name: region\n"
+            "      value: us-east-1\n"
+            "    - name: accessKey\n"
+            "      value:\n"
+            "      secretKeyRef:\n"
+            "    - name: secretKey\n"
+            "      value:\n"
+            "      secretKeyRef:\n"
+        )
+        mock_s3_cls.return_value = MagicMock()
+        create_store_from_binding("objectstore", components_dir=components_dir)
+
+        config = mock_s3_cls.call_args.kwargs["config"] or {}
+        assert "aws_access_key_id" not in config
+        assert "aws_secret_access_key" not in config
+
+    @patch("obstore.store.S3Store")
     def test_access_key_only_warns_and_omits_credentials(
         self, mock_s3_cls: MagicMock, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
