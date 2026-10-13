@@ -287,12 +287,23 @@ def _connect_error(exc: BaseException, port: int) -> AppError:
         )
     return SourceUnreachableError(
         port=port,
-        network_error=errno.errorcode.get(code, type(exc).__name__)
-        if isinstance(code, int)
-        else type(exc).__name__,
+        network_error=_errno_name(exc),
         suggested_action="There is no network route to the source. Check the "
         "network path (VPN, PrivateLink, peering) between Atlan and the source.",
     )
+
+
+def _errno_name(exc: BaseException) -> str:
+    """The POSIX name of *exc*'s errno, the same on every platform.
+
+    Windows names the Winsock codes with a ``WSA`` prefix (``WSAEHOSTUNREACH``);
+    stripping it keeps one value per fault in the outcome rows, whatever OS the
+    worker runs on.
+    """
+    code = getattr(exc, "errno", None)
+    if not isinstance(code, int):
+        return type(exc).__name__
+    return errno.errorcode.get(code, type(exc).__name__).removeprefix("WSA")
 
 
 async def _close(writer: asyncio.StreamWriter) -> None:
@@ -327,9 +338,7 @@ async def _probe_tcp(
                 await _close(writer)
                 state.connected = address
                 return _row(SOURCE_TCP_CHECK, endpoint, started, None)
-    except (
-        TimeoutError
-    ) as exc:  # conformance: ignore[E009] not hidden: reported as the TCP timeout row
+    except TimeoutError as exc:  # conformance: ignore[E009] becomes the timeout row
         first_error = first_error or exc
     assert first_error is not None  # the loop ran at least once: DNS passed
     return _row(

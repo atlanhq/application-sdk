@@ -295,6 +295,16 @@ async def test_tcp_failures_are_told_apart(
     assert report.skipped == [SOURCE_TLS_CHECK]
 
 
+async def test_errno_names_are_the_same_on_every_platform(
+    connections: _Connections, monkeypatch: pytest.MonkeyPatch
+):
+    # Windows names Winsock codes with a WSA prefix; the row must not.
+    monkeypatch.setitem(errno.errorcode, errno.EHOSTUNREACH, "WSAEHOSTUNREACH")
+    connections.plain = OSError(errno.EHOSTUNREACH, "no route")
+    report = await _probe()
+    assert report.failed[0].error.evidence["network_error"] == "EHOSTUNREACH"  # type: ignore[union-attr]
+
+
 async def test_tcp_tries_the_next_address_when_one_fails(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
