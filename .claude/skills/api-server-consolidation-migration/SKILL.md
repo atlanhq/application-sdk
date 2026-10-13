@@ -34,9 +34,17 @@ The reference migration is atlan-mysql-app#778.
    `application_sdk.common.logger`, and deletes logging statements from the
    handler module only: a hosted handler does not log (conformance rule P058).
    The other files (a shared client, say) also run on the worker, so they keep
-   their logs. Review the removals; where a log line was the only report of a
-   failure, raise a typed `AppError` instead. Nothing else is committed: there
-   is no `api/` folder.
+   their logs. It prints each removal as `file:line`; review them. Where a log
+   line was the only report of a failure, raise a typed `AppError` instead.
+
+   `fix` refuses, changing nothing, when a deletion would be unsafe: a log call
+   sharing its line with other code, a `get_logger` import mixed with other
+   names, a logger stored on an attribute (`self.logger`), or an `except`
+   block that would be left as `pass`. Fix those by hand (for the `except`,
+   raise a typed `AppError` or return a failed result), then rerun. It also
+   fails if it left an unused import, unused variable or undefined name (ruff
+   F401/F841/F821). It needs Python 3.11+. Nothing else is committed: there is
+   no `api/` folder.
 
 3. Check it the way CI will:
 

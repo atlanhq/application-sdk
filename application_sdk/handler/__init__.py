@@ -89,7 +89,12 @@ __all__ = [
 def __getattr__(name: str) -> Any:
     target = _LAZY.get(name)
     if target is None:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        from application_sdk._install import import_submodule  # noqa: PLC0415
+
+        module = import_submodule(__name__, name)
+        if module is None:
+            raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+        return module
     value = getattr(importlib.import_module(target[0]), target[1])
     globals()[name] = value
     return value

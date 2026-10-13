@@ -12,7 +12,9 @@ the full SDK installed, a missing module is still a real error and still raises.
 from __future__ import annotations
 
 import functools
+import importlib
 import importlib.util
+from types import ModuleType
 
 #: A module the full SDK always ships and the api distribution never does.
 _WORKER_SENTINEL = "application_sdk.main"
@@ -32,3 +34,21 @@ def worker_only_missing(exc: ModuleNotFoundError) -> bool:
     propagates exactly as it did before the split.
     """
     return api_only_install()
+
+
+def import_submodule(package: str, name: str) -> ModuleType | None:
+    """``package.name`` when it names an existing submodule, else ``None``.
+
+    A package whose ``__init__`` imports lazily (a ``__getattr__`` over a
+    ``_LAZY`` map) no longer has its submodules as attributes until something
+    imports them. Calling this from that ``__getattr__`` keeps
+    ``import pkg; pkg.sub`` working as it did when the imports were eager.
+    """
+    if not name.isidentifier() or name.startswith("__"):
+        return None
+    full = f"{package}.{name}"
+    try:
+        spec = importlib.util.find_spec(full)
+    except (ImportError, ValueError):
+        return None
+    return importlib.import_module(full) if spec is not None else None

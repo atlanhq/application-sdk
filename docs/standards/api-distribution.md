@@ -19,12 +19,20 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
 - `packages/api/hatch_build.py` copies those files into the sdist and the wheel.
   An editable build copies nothing, so the SDK's dev env keeps importing the
   source tree.
-- `atlan-application-sdk` also ships every listed file, byte for byte, and pins
-  `atlan-application-sdk-api==<its own version>`. The overlap is deliberate.
-  With disjoint wheels, `pip install -U` from a release older than the split
-  deletes the files the api wheel has just written, and nothing reports it.
+- **The two wheels are disjoint.** The listed files ship only in the api wheel;
+  `atlan-application-sdk` excludes them (a generated `exclude` block in the root
+  `pyproject.toml`, written by `gen_api_files.py` from the same list) and gets
+  them through its `atlan-application-sdk-api==<its own version>` dependency.
+  Two wheels owning one file would mean uninstalling either deletes it while
+  the other still reports installed.
+- **Upgrading from a release older than the split:** uv (the fleet image and the
+  host) keeps every file. pip's uninstall of the old release deletes the files
+  the api wheel just wrote; recover with
+  `pip install --force-reinstall atlan-application-sdk-api`.
 - `release.py` moves the api version and the pin together, and
-  `tag-and-publish` publishes the api package first.
+  `tag-and-publish` publishes the api package first. The release fails before
+  tagging when the api package's PyPI token is unset, so neither is ever
+  published alone.
 
 ## Rules for a listed file
 
@@ -50,8 +58,10 @@ distribution is installed. Nothing is copied, shimmed or deprecated.
 
 `probe_api_wheels.py` then checks the **built** wheels:
 
-- identical bytes in both wheels;
-- a pip upgrade from the last release keeps every listed file;
+- every file under `application_sdk/` ships in exactly one wheel, and every
+  tracked source file in one of them;
+- a uv upgrade from the last release keeps every listed file, and after a pip
+  upgrade the `--force-reinstall` recovery restores a working install;
 - an api-only venv imports every listed module within 120 MB RSS, loads nothing
   unlisted, and serves auth, check, metadata and an `AppError` path without
   leaking a DSN.
@@ -65,15 +75,18 @@ that needs a declared dependency or a guarded fallback.
 
 ## Dependencies
 
-- **core** (always installed): fastapi, pydantic, orjson. It covers the handler
-  surface, errors, credential specs, the shared routes and `run_in_thread`.
-  Measured at 57 MB on an api-only install.
+- **core** (always installed): fastapi, pydantic, orjson, python-multipart. It
+  covers the handler surface, errors, credential specs, the shared routes and
+  `run_in_thread`. Measured at 62 MB on an api-only install.
 - **extras**, one per seed group, with the same pins as `atlan-application-sdk`:
   - `sql`: the SQL client base and credential utils;
   - `aws`: the AWS helpers;
   - `pandas`: for SQL result frames.
 
-  Measured at 60 MB with every extra installed.
+  - `pyatlan`: only for `ConnectionRef`'s Atlas helpers, which the host never
+    calls.
+
+  Measured at 66 MB with every extra installed.
 - The structured logger (loguru and OpenTelemetry) is **not** in the api
   distribution. SDK files in the set log through `application_sdk._logging`:
   the SDK's structured logger on the worker, stdlib logging on the host.
@@ -103,17 +116,26 @@ extras = ["sql", "aws"]
   `application_sdk.common.concurrency` (its usual path loads Temporal) and
   `get_logger` to `application_sdk.common.logger`. It deletes logging
   statements from the handler module only (P058); the other files also run on
-  the worker and keep their logs. Review what it removed: a log line was
-  sometimes the only report of a failure the handler should raise as a typed
-  `AppError`.
+  the worker and keep their logs. It **refuses, changing nothing,** where a
+  deletion would be unsafe: a log call sharing a line with other code, a
+  `get_logger` import mixed with other names, a logger stored on an attribute
+  (`self.logger`), or an `except` block that would be left as `pass` (raise a
+  typed `AppError` there instead). It prints each deletion as `file:line` and
+  fails on any unused import, unused variable or undefined name it introduced
+  (ruff F401/F841/F821). Needs Python 3.11+.
 - `check` runs in CI and fails, in those files, on an absolute `from app`
   import, a worker-only import `fix` would move, or a read of
   `APPLICATION_NAME` / `ATLAN_APPLICATION_NAME`. On the host that names the
-  host itself; a handler uses `self.context.app_name`. It also fails for an app
-  with a `compute_manifest` hook, which the host cannot serve.
-- `build --out DIR` stages the files as `<app>_api/*`, generates
-  `pyproject.toml` (deps and the `atlan.app_api` entry point) and
-  `__init__.py`, then builds the wheel the host installs.
+  host itself; a handler uses `self.context.app_name`. It also fails on logging
+  left in the handler module (P058), and for an app with a `compute_manifest`
+  hook, which the host cannot serve.
+- `stage` / `build --out DIR` write the handler's files, its data files and
+  `app/generated/` as `<app>_api/*`, with a generated `pyproject.toml` (its
+  dependencies, and the `atlan.app_api` and `atlan.app_server` entry points)
+  and `__init__.py`. The api requirement is floored at the SDK version the app
+  locks in its `uv.lock`, keeping the app's upper bound.
+- `hash` prints the content hash of that package; a worker-only change leaves
+  it unchanged.
 
 The tests-reusable `api-member` job runs `check`, builds the wheel, installs it
 alone, and mounts it with `application_sdk.handler.asgi.build_asgi_app`, exactly
@@ -129,12 +151,31 @@ service does for it, from one shared implementation each:
 | Routes | Module | On the host |
 |---|---|---|
 | `auth`, `check`, `warmup`, `metadata` | `handler/routes.py` | The app's handler. |
-| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is `derive_task_queue(app, deployment)`, with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` before `ATLAN_DEPLOYMENT_NAME`: the queue the app's worker polls. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
-| `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `S3_BUCKET` / `S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. 503 without `S3_BUCKET`. |
+| `configmap/{id}`, `configmaps`, `manifest` (GET/POST, also the unversioned `/manifest`), `input-contract` | `handler/metadata_routes.py` | Read from the `generated/` folder `gen_app_api.py` ships in the app's package (`*.json` and `_input.py` only). The manifest's task queue is the one the app's worker polls: its `ATLAN_TASK_QUEUE` override when the host's app-env sync carries one (`ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE`), else `derive_task_queue(app, deployment)` with the deployment read as `ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME` before `ATLAN_DEPLOYMENT_NAME`. Static manifests only: `check` refuses an app with a `compute_manifest` hook. |
+| `config/{id}` (GET/POST), `file` | `handler/object_routes.py` | One S3 bucket from `S3_BUCKET` / `S3_REGION` (the `aws` extra, ambient AWS identity). A config is keyed `persistent-artifacts/apps/<app>/<type>/<id>/config.json` with the hosted app's name, the key its worker reads. An upload's `prefix` must be relative path segments with no `..`, and on the host every upload lands under the app's own `persistent-artifacts/apps/<app>/uploads/`. 503 without `S3_BUCKET`. |
 
 The worker registers the same modules with its own lookups (the app registry,
 its Dapr-configured store), and `test_metadata_route_parity.py` /
 `test_object_routes_host.py` pin that the two answer alike.
+
+## Trust model on the host
+
+The host runs many apps in one process. That is only acceptable because every
+hosted app is **trusted first-party code**:
+
+- **No secret isolation between apps.** Every hosted app's environment
+  (`ATLAN_APPENV__<APP>__*`, the host's own env) is in one `os.environ`,
+  readable by every app's code.
+- **The host trusts the request's `Host` / `X-Original-Host` to pick the app**
+  and does not authenticate the caller; it relies on only Heracles and the
+  ingress being able to reach the host pod (a NetworkPolicy, owned by App
+  Runtime).
+- **Shared capacity.** Each app has its own `run_in_thread` / `submit_in_thread`
+  pool, but the event loop, FastAPI's thread pool and the host's request
+  concurrency limit are shared.
+- **One AWS identity** writes the shared bucket for every app; uploads are
+  contained to each app's namespace by the shared route, and config keys use
+  the mounted app's name, never request input.
 
 ## App routes
 
@@ -145,18 +186,21 @@ any app. A router that redefines an SDK path is refused at startup. Keep router
 code in the handler's own files (imported relatively), so it ships with the
 handler.
 
-## Versions
+## Versions and how the host gets an app
 
 | Artifact | Version | Built and published by |
 |---|---|---|
 | `atlan-application-sdk` | the SDK release, N | `tag-and-publish` |
 | `atlan-application-sdk-api` | always N too (same commit) | `tag-and-publish`, published first |
-| `<app>_api` (for example `atlan_mysql_api`) | the app's release, Y (its root `pyproject.toml` version) | `gen_app_api.py build` in the app's release |
+| `<app>_api` (for example `atlan_mysql_api`) | the app's release | staged from source by the host's image build |
 
-- The SDK pins `atlan-application-sdk-api==N`, so the files the worker gets from
-  both packages are byte-identical.
-- An app's wheel requires `atlan-application-sdk-api[<extras>]` with the range
-  the app already declares for `atlan-application-sdk` (for example
-  `>=3.40,<4`). Before an SDK release it carries the app's git pin instead.
-- The host pins each hosted app's wheel version, resolves one api version that
-  satisfies every app's range, and fails its own lock in CI when it can't.
+- The SDK depends on `atlan-application-sdk-api==N` and ships none of its files.
+- An app's package requires `atlan-application-sdk-api[<extras>]`, floored at
+  the SDK version the app locks and capped by the app's declared upper bound.
+  Before an SDK release it carries the app's git pin instead.
+- **The host pulls released versions; nothing pushes to it.** common-app-server
+  pins each hosted app, and the SDK whose `gen_app_api.py` stages them, by
+  **release tag plus commit SHA**, and Renovate opens the bump PRs. The SDK's
+  release workflow knows nothing about the host. The host resolves one api
+  version for every app and fails its own lock in CI when it can't, and probes
+  every staged app in its locked environment before a pin moves.

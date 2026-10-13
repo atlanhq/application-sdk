@@ -11,6 +11,8 @@ import re
 import tomllib
 from pathlib import Path
 
+import pytest
+
 import application_sdk
 from application_sdk._install import api_only_install
 
@@ -115,3 +117,16 @@ def test_moved_classes_keep_their_old_import_paths() -> None:
     assert MaxItems is types_max
     assert parse_credentials_extra is utils_pce
     assert run_in_thread is heartbeat_rit
+
+
+def test_a_lazy_package_still_exposes_its_submodules_as_attributes() -> None:
+    """``import pkg; pkg.sub`` keeps working after the package's imports went lazy."""
+    import application_sdk.contracts as contracts
+    import application_sdk.credentials as credentials
+    import application_sdk.handler as handler
+
+    assert contracts.storage.__name__ == "application_sdk.contracts.storage"
+    assert handler.contracts.__name__ == "application_sdk.handler.contracts"
+    assert credentials.spec.__name__ == "application_sdk.credentials.spec"
+    with pytest.raises(AttributeError):
+        contracts.no_such_submodule  # noqa: B018
