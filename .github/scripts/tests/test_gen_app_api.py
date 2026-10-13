@@ -243,3 +243,12 @@ def test_stage_command_writes_the_package(tmp_path: Path) -> None:
     assert gen.main(["stage", "--root", str(root), "--out", str(out)]) == 0
     assert (out / "pyproject.toml").is_file()
     assert (out / "atlan_demo_api" / "handler.py").is_file()
+
+
+def test_check_refuses_the_app_name_env_var(tmp_path: Path) -> None:
+    root = _app(
+        tmp_path,
+        'import os\nQUEUE = os.environ["ATLAN_APPLICATION_NAME"]\nfrom .client import C\n',
+    )
+    problems = gen.check(root, gen.load(root))
+    assert len(problems) == 1 and problems[0].startswith("app/handler.py:2:")

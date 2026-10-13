@@ -452,8 +452,9 @@ def build(root: Path, out: Path, member: str | None = None) -> Path:
     return wheel
 
 
-#: A read of the process-wide app name (``application_sdk.constants``).
-_APPLICATION_NAME = re.compile(r"\bAPPLICATION_NAME\b")
+#: A read of the process-wide app name: ``application_sdk.constants``'s
+#: ``APPLICATION_NAME`` or the ``ATLAN_APPLICATION_NAME`` env var it comes from.
+_APPLICATION_NAME = re.compile(r"\b(?:ATLAN_)?APPLICATION_NAME\b")
 
 
 def handler_file(root: Path, config: Config) -> str:
