@@ -343,8 +343,9 @@ def _track_carried(
     that is live at that point — and dropped the moment it is reassigned,
     augmented, deleted, unpacked, or rebound by a ``for`` target, ``with ... as``,
     ``:=``, import, ``def``/``class`` or ``match`` capture.  When explicitly
-    enabled for typed-failure analysis, a proven local list also carries the
-    failure after a typed row is appended to it.
+    enabled for typed-failure analysis, a staged local list
+    (:func:`_staged_list_names`) also carries the failure after a typed row is
+    appended to it.
 
     ``out`` records the live set at each ``raise`` and ``return``, keyed by node
     identity, so a caller can ask what a specific exit carries.
@@ -369,56 +370,17 @@ def _track_carried(
                 and isinstance(call.func.value, ast.Name)
                 and call.func.value.id in appendable_names
             ):
-                container = call.func.value.id
-                if call.func.attr == "append":
-                    if (
-                        len(call.args) == 1
-                        and not isinstance(call.args[0], ast.Starred)
-                        and not call.keywords
-                        and derives(call.args[0], exc_name, live)
-                    ):
-                        live.add(container)
-                elif call.func.attr not in {
-                    "clear",
-                    "pop",
-                    "remove",
-                    "__delitem__",
-                    "__setitem__",
-                    "__imul__",
-                    "append",
-                    "extend",
-                    "insert",
-                    "reverse",
-                    "sort",
-                    "copy",
-                    "count",
-                    "index",
-                }:
-                    # The list is local and literal, so only known built-in list
-                    # operations have a proven effect on its contents. An
-                    # unrecognised method might discard the staged row.
-                    live.discard(container)
-                elif call.func.attr in {
-                    "clear",
-                    "pop",
-                    "remove",
-                    "__delitem__",
-                    "__setitem__",
-                    "__imul__",
-                }:
-                    live.discard(container)
-                continue
-
-        if appendable_names and isinstance(stmt, (ast.Assign, ast.AnnAssign)):
-            targets = stmt.targets if isinstance(stmt, ast.Assign) else [stmt.target]
-            for target in targets:
+                # Eligibility (_staged_list_names) admits only methods that keep
+                # every existing row, so an append is the one call that matters.
                 if (
-                    isinstance(target, ast.Subscript)
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id in appendable_names
+                    call.func.attr == "append"
+                    and len(call.args) == 1
+                    and not isinstance(call.args[0], ast.Starred)
+                    and not call.keywords
+                    and derives(call.args[0], exc_name, live)
                 ):
-                    # Replacing a list slot may replace the only staged row.
-                    live.discard(target.value.id)
+                    live.add(call.func.value.id)
+                continue
 
         if isinstance(stmt, (ast.Raise, ast.Return)):
             # An exit: record what is carried at it, then stop — statements
@@ -451,12 +413,6 @@ def _track_carried(
 
         if isinstance(stmt, ast.Delete):
             for target in stmt.targets:
-                if (
-                    isinstance(target, ast.Subscript)
-                    and isinstance(target.value, ast.Name)
-                    and target.value.id in appendable_names
-                ):
-                    live.discard(target.value.id)
                 live -= _rebound_names(target)
             continue
 
@@ -602,44 +558,159 @@ def _track_carried(
     return live
 
 
-def _local_list_names_before_handler(
+#: List methods that keep every row already in the list.
+_ROW_PRESERVING_LIST_METHODS = frozenset(
+    {"append", "extend", "insert", "sort", "reverse"}
+)
+
+
+def _staged_list_names(
     function: ast.FunctionDef | ast.AsyncFunctionDef | None,
     handler: ast.ExceptHandler,
 ) -> frozenset[str]:
-    """Return local names initialized to a list before *handler*.
+    """Return the local lists a typed row appended in *handler* provably stays in.
 
-    The staged-row proof only treats ``name.append(row)`` as a typed hand-off
-    when the name is a local literal list. A custom object's ``append`` method
-    is an opaque call and proves nothing about whether it retains the row.
+    The staged-row proof only treats ``rows.append(row)`` as a typed hand-off
+    when nothing in the function can remove or rewrite that row.  ``rows`` must
+    be bound exactly once, to a list literal, in a top-level statement before
+    *handler* — so a rebinding to a custom ``append`` sink disqualifies it — and
+    every other use must be one of:
+
+    - a statement call to a method in ``_ROW_PRESERVING_LIST_METHODS``;
+    - an argument of the call a ``return`` hands back
+      (``return PreflightOutput(checks=rows)``) or of ``len``;
+    - the source of a comprehension that only reads attributes of each row
+      (``any(not row.passed for row in rows)``).
+
+    Anything else — an alias, an assigned ``pop``, a slot or element write, a
+    pass to an opaque call, a use inside a nested scope — could drop or erase
+    the staged row, so the list is not eligible at all.
     """
     if function is None:
         return frozenset()
 
-    list_names: set[str] = set()
+    bindings: dict[str, ast.Name] = {}
     for statement in function.body:
-        if getattr(statement, "lineno", handler.lineno) >= handler.lineno:
+        if statement.lineno >= handler.lineno:
             break
-        for node in _iter_shallow(statement):
-            if (
-                isinstance(node, ast.Name)
-                and node.id in list_names
-                and isinstance(node.ctx, (ast.Store, ast.Del))
-                and node.lineno < handler.lineno
-            ):
-                list_names.discard(node.id)
-        if isinstance(statement, ast.Assign) and isinstance(statement.value, ast.List):
-            list_names.update(
-                target.id
-                for target in statement.targets
-                if isinstance(target, ast.Name)
-            )
+        if (
+            isinstance(statement, ast.Assign)
+            and len(statement.targets) == 1
+            and isinstance(statement.targets[0], ast.Name)
+            and isinstance(statement.value, ast.List)
+        ):
+            bindings[statement.targets[0].id] = statement.targets[0]
         elif (
             isinstance(statement, ast.AnnAssign)
             and isinstance(statement.target, ast.Name)
             and isinstance(statement.value, ast.List)
         ):
-            list_names.add(statement.target.id)
-    return frozenset(list_names)
+            bindings[statement.target.id] = statement.target
+    if not bindings:
+        return frozenset()
+
+    parents = {
+        child: node
+        for node in ast.walk(function)
+        for child in ast.iter_child_nodes(node)
+    }
+    eligible = set(bindings)
+    for node in ast.walk(function):
+        if (
+            isinstance(node, ast.Name)
+            and node.id in eligible
+            and node is not bindings[node.id]
+            and not _is_row_preserving_use(node, parents, function)
+        ):
+            eligible.discard(node.id)
+    return frozenset(eligible)
+
+
+def _is_row_preserving_use(
+    name: ast.Name,
+    parents: Mapping[ast.AST, ast.AST],
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """True when this use of a staged list cannot drop or rewrite its rows."""
+    if not isinstance(name.ctx, ast.Load):
+        return False
+    ancestor = parents.get(name)
+    while ancestor is not None and ancestor is not function:
+        if isinstance(
+            ancestor,
+            (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef),
+        ):
+            return False
+        ancestor = parents.get(ancestor)
+
+    parent = parents.get(name)
+    if isinstance(parent, ast.Attribute):
+        call = parents.get(parent)
+        return (
+            parent.attr in _ROW_PRESERVING_LIST_METHODS
+            and isinstance(call, ast.Call)
+            and call.func is parent
+            and isinstance(parents.get(call), ast.Expr)
+            and _appended_row_is_not_rewritten(call, parents, function)
+        )
+    if isinstance(parent, ast.comprehension):
+        return parent.iter is name and _comprehension_only_reads_rows(parent, parents)
+    holder = parents.get(parent) if isinstance(parent, ast.keyword) else parent
+    if not isinstance(holder, ast.Call) or holder.func is name:
+        return False
+    if isinstance(holder.func, ast.Name) and holder.func.id == "len":
+        return holder.args == [name] and not holder.keywords
+    return isinstance(parents.get(holder), ast.Return)
+
+
+def _appended_row_is_not_rewritten(
+    call: ast.Call,
+    parents: Mapping[ast.AST, ast.AST],
+    function: ast.FunctionDef | ast.AsyncFunctionDef,
+) -> bool:
+    """False when ``rows.append(row)`` hands over a local the function later edits.
+
+    ``row.error = None`` after the append erases the typed failure from the row
+    the list still holds, so a bare-name argument must never be written through.
+    """
+    if len(call.args) != 1 or not isinstance(call.args[0], ast.Name):
+        return True
+    row = call.args[0].id
+    for node in ast.walk(function):
+        if (
+            isinstance(node, (ast.Attribute, ast.Subscript))
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            and isinstance(node.value, ast.Name)
+            and node.value.id == row
+        ):
+            return False
+    return True
+
+
+def _comprehension_only_reads_rows(
+    generator: ast.comprehension, parents: Mapping[ast.AST, ast.AST]
+) -> bool:
+    """True when each row the comprehension binds is only read through attributes."""
+    if not isinstance(generator.target, ast.Name):
+        return False
+    row = generator.target.id
+    comprehension = parents.get(generator)
+    if comprehension is None:
+        return False
+    for node in ast.walk(comprehension):
+        if not isinstance(node, ast.Name) or node.id != row:
+            continue
+        if node is generator.target:
+            continue
+        attribute = parents.get(node)
+        if not (
+            isinstance(attribute, ast.Attribute) and isinstance(attribute.ctx, ast.Load)
+        ):
+            return False
+        call = parents.get(attribute)
+        if isinstance(call, ast.Call) and call.func is attribute:
+            return False
+    return True
 
 
 def redaction_scope(
@@ -1489,7 +1560,7 @@ def typed_failure_scope(
     helper_context = local_helpers if not _handler_rebinds_exception(handler) else None
     guarded_calls = _none_guarded_calls(handler.body)
     appendable_names = (
-        _local_list_names_before_handler(enclosing_function, handler)
+        _staged_list_names(enclosing_function, handler)
         if track_staged_lists
         else frozenset()
     )
@@ -1784,7 +1855,7 @@ def _staged_row_is_returned(
             enclosing_function=scope.enclosing_function,
             guarded_calls=scope.guarded_calls,
         ),
-        appendable_names=_local_list_names_before_handler(function, handler),
+        appendable_names=_staged_list_names(function, handler),
     )
     below = TypedFailureScope(
         scope.exc_name,

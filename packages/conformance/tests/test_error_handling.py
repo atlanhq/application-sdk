@@ -1128,6 +1128,92 @@ async def probe():
     )
 
 
+def test_p004_no_finding_when_returned_checks_are_summarised_first() -> None:
+    # Reading row attributes to pick a status keeps every staged row intact.
+    assert "E004" not in _findings(
+        """\
+async def probe():
+    checks: list[PreflightCheck] = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        row = PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details())
+        checks.append(row)
+    failed = any(not check.passed for check in checks)
+    return PreflightOutput(status=failed, checks=checks, count=len(checks))
+"""
+    )
+
+
+@pytest.mark.parametrize(
+    "after_append",
+    [
+        pytest.param("removed = checks.pop()", id="assigned-pop"),
+        pytest.param("rows = checks\n        rows.clear()", id="alias-cleared"),
+        pytest.param("checks[0].error = None", id="slot-row-erased"),
+        pytest.param(
+            "checks[0] = PreflightCheck(name='ok', passed=True)", id="slot-replaced"
+        ),
+        pytest.param("del checks[0]", id="slot-deleted"),
+        pytest.param("discard(checks)", id="opaque-call"),
+        pytest.param(
+            "for check in checks:\n            check.error = None", id="loop-row-erased"
+        ),
+    ],
+)
+def test_p004_still_flags_staged_row_that_may_be_dropped(after_append: str) -> None:
+    # Any use that can remove or rewrite the staged row voids the list proof.
+    assert "E004" in _findings(
+        f"""\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+        {after_append}
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_staged_list_rebound_to_a_dropping_sink() -> None:
+    # Rebinding the list in the handler means `append` is no longer list.append.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        checks = DropAppendList()
+        error = SourceUnavailableError(cause=exc)
+        checks.append(PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details()))
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
+def test_p004_still_flags_appended_row_erased_through_its_local() -> None:
+    # The list holds the same object, so erasing it via `row` erases the staged row.
+    assert "E004" in _findings(
+        """\
+async def probe():
+    checks = []
+    try:
+        await connect()
+    except Exception as exc:
+        error = SourceUnavailableError(cause=exc)
+        row = PreflightCheck(name="connectivity", passed=False, error=error.to_failure_details())
+        checks.append(row)
+        row.error = None
+    return PreflightOutput(checks=checks)
+"""
+    )
+
+
 def test_p004_still_flags_unbound_broad_catch_that_only_debug_logs() -> None:
     # A best-effort missing prefix is still a broad swallow without typed data.
     assert "E004" in _findings(
