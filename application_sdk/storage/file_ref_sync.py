@@ -201,6 +201,13 @@ def _resolve_ref_store(
 
     ``UPSTREAM`` refs read *upstream_store*; with no upstream bound they fall
     back to *store*, mirroring ``App.download``'s own routing.
+
+    The tag is trusted here because a payload from outside the run cannot
+    carry it: the workflow boundary (``_validate_workflow_input``) and the
+    ``@update`` relay in ``app/base.py`` demote ``UPSTREAM`` to ``DEPLOYMENT``
+    on every ref they admit. Inside a run, only ``App.download`` /
+    ``App.upload`` set it, and app code that builds a ref by hand is
+    trusted code, like a hand-written ``storage_path``.
     """
     if ref.store is StoreTarget.UPSTREAM and upstream_store is not None:
         return upstream_store

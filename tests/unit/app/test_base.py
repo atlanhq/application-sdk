@@ -45,6 +45,7 @@ from application_sdk.app.entrypoint import (
 from application_sdk.app.registry import AppNotFoundError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference, StoreTarget
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
 from application_sdk.handler.contracts import PreflightGateMode
 
@@ -356,6 +357,12 @@ class _BLDXInput(Input, allow_unbounded_fields=True):
 
 class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
+
+
+class _RefInput(Input):
+    """An @update payload carrying a ref (FND-3795)."""
+
+    ref: FileReference
 
 
 class _GateEligibleInput(Input, allow_unbounded_fields=True):
@@ -1702,6 +1709,42 @@ class TestWorkflowInteractionRelay:
         # _run will later read from.
         await wf_cls.set_state(wf_inst, _BLDXInput(value="paused"))
         assert wf_inst._app_instance.state == "paused"
+
+    async def test_update_payload_cannot_carry_an_upstream_store_tag(self) -> None:
+        """FND-3795: an @update argument comes from outside the run.
+
+        ``FileReference.store`` picks the bucket the interceptor reads, so the
+        relay demotes ``UPSTREAM`` before app code can hand the ref to a task.
+        """
+        seen: list[FileReference] = []
+
+        class _RefApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="")
+
+            @update
+            async def take_ref(self, input: _RefInput) -> _BLDXOutput:
+                seen.append(input.ref)
+                return _BLDXOutput(result="")
+
+        wf_cls = generate_workflow_class(
+            _RefApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        wf_inst = wf_cls()
+        payload = _RefInput(
+            ref=FileReference(
+                storage_path="artifacts/other-run/",
+                is_durable=True,
+                store=StoreTarget.UPSTREAM,
+            )
+        )
+
+        with mock.patch("application_sdk.app.base._safe_log") as log:
+            await wf_cls.take_ref(wf_inst, payload)
+
+        assert seen[0].store is StoreTarget.DEPLOYMENT
+        assert seen[0].storage_path == "artifacts/other-run/"
+        log.assert_called_once()
 
     def test_validator_is_preserved_through_relay(self) -> None:
         class _ValidatedApp(App):

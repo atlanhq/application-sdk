@@ -2718,12 +2718,21 @@ def _collect_interaction_relays(
     """
     relays: dict[str, Callable[..., Any]] = {}
 
-    def _build_relay(method_name: str, is_coroutine: bool) -> Callable[..., Any]:
-        """Construct a wf_cls-level method that delegates to self._app_instance."""
+    def _build_relay(
+        method_name: str, is_coroutine: bool, *, external_payload: bool = False
+    ) -> Callable[..., Any]:
+        """Construct a wf_cls-level method that delegates to self._app_instance.
+
+        ``external_payload`` marks an ``@update``: its argument comes from
+        outside the run, like a start payload, so any ``store=UPSTREAM`` ref in
+        it is demoted before app code sees it (see ``_demote_upstream_refs``).
+        """
         if is_coroutine:
 
             async def _async_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
                 bound = getattr(wf_self._app_instance, method_name)
+                if external_payload:
+                    args, kwargs = _demote_args(args, kwargs)
                 return await bound(*args, **kwargs)
 
             _async_relay.__name__ = method_name
@@ -2733,6 +2742,8 @@ def _collect_interaction_relays(
 
         def _sync_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
             bound = getattr(wf_self._app_instance, method_name)
+            if external_payload:
+                args, kwargs = _demote_args(args, kwargs)
             return bound(*args, **kwargs)
 
         _sync_relay.__name__ = method_name
@@ -2774,7 +2785,9 @@ def _collect_interaction_relays(
         elif is_update and update_defn is not None and update_defn.name is not None:
             _validate_interaction_signature(update_defn.fn, "update", member_name)
 
-        relay = _build_relay(member_name, inspect.iscoroutinefunction(member))
+        relay = _build_relay(
+            member_name, inspect.iscoroutinefunction(member), external_payload=is_update
+        )
 
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
@@ -3314,7 +3327,12 @@ _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
 
 def _demote_upstream_refs(model: _ModelT) -> _ModelT:
-    """Reset ``store=UPSTREAM`` to ``DEPLOYMENT`` on every ref in a start payload.
+    """Reset ``store=UPSTREAM`` to ``DEPLOYMENT`` on every ref in an external payload.
+
+    Applied at both places a payload enters a run from outside it: the start
+    input (``_validate_workflow_input``, which also covers ``continue_with``)
+    and every ``@update`` argument (the interaction relay). Signals and queries
+    carry no payload.
 
     ``FileReference.store`` decides which bucket the interceptor reads a ref
     from, so it is only trusted when this run set it: ``App.download`` /
@@ -3325,6 +3343,13 @@ def _demote_upstream_refs(model: _ModelT) -> _ModelT:
     they are read from the deployment store, as every ref was before.
     """
     return cast("_ModelT", _demote(model))
+
+
+def _demote_args(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Apply :func:`_demote` to an ``@update`` relay's call arguments."""
+    return tuple(_demote(a) for a in args), {k: _demote(v) for k, v in kwargs.items()}
 
 
 def _demote(node: object) -> object:
