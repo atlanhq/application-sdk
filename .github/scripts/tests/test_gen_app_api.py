@@ -81,6 +81,11 @@ def test_stage_ships_the_app_files_as_the_package(tmp_path: Path) -> None:
     assert '"atlan-application-sdk-api[sql]>=3.40.0,<4.0.0",' in pyproject
     assert '"pymysql>=1.1",' in pyproject
     assert 'demo = "atlan_demo_api:handler"' in pyproject
+    assert (
+        '[project.entry-points."atlan.app_server"]\ndemo = "atlan_demo_api:get_asgi_app"'
+        in pyproject
+    )
+    assert "def get_asgi_app()" in init and 'app_name="demo"' in init
 
 
 def test_stage_refuses_absolute_app_imports(tmp_path: Path) -> None:
@@ -219,3 +224,22 @@ def test_check_refuses_the_process_wide_app_name(tmp_path: Path) -> None:
         "app/handler.py:1: APPLICATION_NAME is the host's own name on the "
         "consolidated host; use `self.context.app_name`"
     ]
+
+
+def test_the_name_override_sets_the_routing_name(tmp_path: Path) -> None:
+    pyproject = _PYPROJECT.replace(
+        'handler = "app.handler:DemoHandler"',
+        'handler = "app.handler:DemoHandler"\nname = "ai-demo"',
+    )
+    root = _app(tmp_path, "from .client import C\n", pyproject)
+    config = gen.load(root)
+    assert config.name == "ai-demo"
+    assert config.package == "atlan_demo_api"
+
+
+def test_stage_command_writes_the_package(tmp_path: Path) -> None:
+    root = _app(tmp_path / "repo", "from .client import C\n")
+    out = tmp_path / "staged"
+    assert gen.main(["stage", "--root", str(root), "--out", str(out)]) == 0
+    assert (out / "pyproject.toml").is_file()
+    assert (out / "atlan_demo_api" / "handler.py").is_file()

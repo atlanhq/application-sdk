@@ -78,7 +78,15 @@ from .{module} import {cls}
 #: The instance the host serves (entry point ``atlan.app_api: {name}``).
 handler = {cls}()
 
-__all__ = ["{cls}", "handler"]
+
+def get_asgi_app():  # noqa: ANN201 — FastAPI is imported lazily
+    """The ASGI app the host mounts (entry point ``atlan.app_server: {name}``)."""
+    from application_sdk.handler.asgi import build_asgi_app
+
+    return build_asgi_app(handler, app_name="{name}", app_package=__name__)
+
+
+__all__ = ["{cls}", "get_asgi_app", "handler"]
 '''
 
 
@@ -93,10 +101,11 @@ class Config:
     version: str
     sdk_spec: str  # the root's atlan-application-sdk specifier, e.g. >=3.40,<4
     api_source: dict | None  # root [tool.uv.sources] atlan-application-sdk-api
+    service: str = ""  # [tool.atlan-app-api].name, when the Service is not <project>
 
     @property
-    def name(self) -> str:  # mysql
-        return re.sub(r"^atlan-|-app$", "", self.project)
+    def name(self) -> str:  # mysql: the app's Service name, which the host routes on
+        return self.service or re.sub(r"^atlan-|-app$", "", self.project)
 
     @property
     def distribution(self) -> str:  # atlan-mysql-api
@@ -132,6 +141,7 @@ def load(root: Path) -> Config | None:
         version=project["version"],
         sdk_spec=sdk_spec,
         api_source=sources.get("atlan-application-sdk-api"),
+        service=str(section.get("name", "")),
     )
 
 
@@ -385,6 +395,8 @@ def _pyproject(config: Config) -> str:
         "dependencies = [\n" + "".join(f'    "{d}",\n' for d in deps) + "]\n\n"
         '[project.entry-points."atlan.app_api"]\n'
         f'{config.name} = "{config.package}:handler"\n\n'
+        '[project.entry-points."atlan.app_server"]\n'
+        f'{config.name} = "{config.package}:get_asgi_app"\n\n'
         "[build-system]\n"
         'requires = ["hatchling"]\n'
         'build-backend = "hatchling.build"\n\n'
@@ -480,13 +492,24 @@ def check(root: Path, config: Config) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["fix", "check", "build"])
+    parser.add_argument("command", choices=["fix", "check", "build", "stage"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--out", type=Path, default=Path("dist-api"))
     parser.add_argument("--member", help="build this directory when there is no config")
     args = parser.parse_args(argv)
 
     config = load(args.root)
+    if args.command == "stage":
+        if config is None:
+            print(f"::error::no [tool.{SECTION}] config to stage")
+            return 1
+        try:
+            stage(args.root, config, args.out)
+        except ValueError as exc:
+            print(f"::error::{exc}")
+            return 1
+        print(f"gen_app_api: staged {config.package} in {args.out}")
+        return 0
     if args.command == "build":
         try:
             print(f"gen_app_api: built {build(args.root, args.out, args.member)}")

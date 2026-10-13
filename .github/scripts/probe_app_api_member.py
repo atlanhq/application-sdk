@@ -117,7 +117,13 @@ def run(name: str, package: str, obj: str) -> Result:
 
     import_failures: dict[str, ImportError] = {}
     record_import_failures(handler, import_failures)
-    app = build_asgi_app(handler, app_name=name, app_package=package)
+    factory = getattr(module, "get_asgi_app", None)
+    if callable(factory):
+        # What the host calls (entry point atlan.app_server); it serves the same
+        # handler instance, so the import-failure wrapping above applies.
+        app = factory()
+    else:
+        app = build_asgi_app(handler, app_name=name, app_package=package)
     if getattr(app.state, "app_name", None) != name:
         result.fail(
             f"app.state.app_name is {getattr(app.state, 'app_name', None)!r}, expected {name!r}"
