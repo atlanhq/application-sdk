@@ -14,6 +14,9 @@ REPO = Path(__file__).resolve().parents[3]
 
 def _tree(tmp_path: Path, files: dict[str, str], seeds: list[str]) -> Path:
     (tmp_path / "packages/api").mkdir(parents=True)
+    (tmp_path / "pyproject.toml").write_text(
+        '[project]\nname = "sdk"\n\n[tool.hatch.build.targets.wheel]\npackages = ["application_sdk"]\n'
+    )
     (tmp_path / "packages/api/pyproject.toml").write_text(
         '[project]\nname = "x"\nversion = "0"\ndependencies = []\n\n'
         "[tool.atlan-api.seeds]\ncore = [" + ", ".join(f'"{s}"' for s in seeds) + "]\n"
@@ -73,3 +76,20 @@ def test_check_fails_when_the_list_is_hand_edited(tmp_path: Path) -> None:
 
 def test_the_committed_list_is_current() -> None:
     assert gen.main(["--root", str(REPO), "--check"]) == 0
+
+
+def test_the_sdk_wheel_excludes_exactly_the_listed_files() -> None:
+    files = ["application_sdk/__init__.py", "application_sdk/errors.py"]
+    text = '[tool.hatch.build.targets.wheel]\npackages = ["application_sdk"]\n\n[tool.other]\nx = 1\n'
+    once = gen.sync_pyproject(text, files)
+    assert 'packages = ["application_sdk"]\n' + gen.EXCLUDE_START in once
+    assert '    "application_sdk/errors.py",\n' in once and "[tool.other]" in once
+    assert gen.sync_pyproject(once, files) == once  # idempotent
+    fewer = gen.sync_pyproject(once, files[:1])
+    assert "errors.py" not in fewer and fewer.count(gen.EXCLUDE_START) == 1
+
+
+def test_the_committed_exclude_matches_the_list() -> None:
+    files = gen.closure(REPO, gen.seeds(REPO))
+    text = (REPO / "pyproject.toml").read_text()
+    assert gen.sync_pyproject(text, files) == text

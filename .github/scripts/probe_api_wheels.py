@@ -5,15 +5,18 @@
 clean venvs, because an editable or path install exposes the whole
 ``application_sdk/`` tree and would pass every check without testing anything.
 
-1. **Same bytes.** Every file in the api wheel is in the SDK wheel with identical
-   content. The files ship in both so an upgrade never leaves them missing (2),
-   and the SDK pins the api distribution to its own version, so both copies are
-   always the same file.
+1. **Disjoint wheels.** Every file under ``application_sdk/`` ships in exactly
+   one wheel: the listed files in the api wheel only, the rest in the SDK wheel,
+   and every tracked source file in one of the two. (Two wheels owning one file
+   means uninstalling either deletes it while the other still reports installed.)
 2. **Upgrade from a release.** Starting from ``--from-release`` of
-   ``atlan-application-sdk`` (which owned these files alone), ``pip install -U``
-   the new wheels and assert every listed file is still on disk. With disjoint
-   wheels pip's uninstall of the old release deletes the files the api wheel has
-   just written, and nothing reports it.
+   ``atlan-application-sdk`` (which owned these files alone):
+
+   * ``uv pip install -U`` the new wheels — how the fleet and the host install —
+     and assert every listed file is on disk and the worker imports;
+   * pip's uninstall of the old release deletes the files the api wheel has just
+     written, so assert the documented recovery works:
+     ``pip install --force-reinstall atlan-application-sdk-api``.
 3. **Api alone.** Install only the api wheel (core dependencies), import every
    core module, and fail if any unlisted ``application_sdk`` module loads or the
    process exceeds ``--max-rss-mb``. Again with every extra installed, importing
@@ -155,13 +158,30 @@ def _digests(wheel: Path) -> dict[str, str]:
         }
 
 
-def same_bytes(api: Path, sdk: Path) -> list[str]:
-    a, s = _digests(api), _digests(sdk)
-    return [
-        f"{n}: {'missing from' if n not in s else 'differs in'} the SDK wheel"
-        for n in sorted(a)
-        if s.get(n) != a[n]
+def partition(api: Path, sdk: Path, listed: list[str], tracked: set[str]) -> list[str]:
+    """Each ``application_sdk/`` file in exactly one wheel, and the right one."""
+    a, s = set(_digests(api)), set(_digests(sdk))
+    problems = [f"{n}: ships in both wheels" for n in sorted(a & s)]
+    problems += [
+        f"{n}: listed but not in the api wheel" for n in sorted(set(listed) - a)
     ]
+    problems += [
+        f"{n}: in the api wheel but not listed" for n in sorted(a - set(listed))
+    ]
+    problems += [f"{n}: in neither wheel" for n in sorted(tracked - a - s)]
+    return problems
+
+
+def tracked_files(root: Path) -> set[str]:
+    """Source files under ``application_sdk/`` that git tracks."""
+    out = subprocess.run(
+        ["git", "ls-files", "application_sdk"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    return {line for line in out.splitlines() if line}
 
 
 def _venv(where: Path) -> Path:
@@ -186,23 +206,50 @@ def main(argv: list[str] | None = None) -> int:
     api = _wheel(args.dist, "atlan_application_sdk_api")
     sdk = _wheel(args.dist, "atlan_application_sdk")
     listed = check_api_surface.listed_files(args.root)
-    failures = same_bytes(api, sdk)
+    failures = partition(api, sdk, listed, tracked_files(args.root))
 
     with tempfile.TemporaryDirectory() as tmp:
-        py = _venv(Path(tmp) / "upgrade")
         built = sdk.name.split("-")[1]
         release = resolve_release(args.from_release, args.root, below=built)
+
+        # uv: how the fleet image and the host install. Must just work.
+        py = _venv(Path(tmp) / "upgrade-uv")
+        _pip(py, f"atlan-application-sdk=={release}")
+        _pip(py, "-U", str(api), str(sdk))
+        done = subprocess.run([str(py), "-c", _PRESENT, ",".join(listed)], cwd=tmp)
+        if done.returncode:
+            failures.append(
+                f"uv upgrade from {release} left a broken install (listed files "
+                "missing, or the worker does not import)"
+            )
+
+        # pip: its uninstall of the old release deletes the files the api wheel
+        # just wrote. The release note gives the recovery; assert it works.
+        py = _venv(Path(tmp) / "upgrade-pip")
         _pip(py, f"atlan-application-sdk=={release}")
         _pip(py, "pip")
         subprocess.run(
             [str(py), "-m", "pip", "install", "-q", "-U", str(api), str(sdk)],
             check=True,
         )
+        subprocess.run(
+            [
+                str(py),
+                "-m",
+                "pip",
+                "install",
+                "-q",
+                "--force-reinstall",
+                "--no-deps",
+                str(api),
+            ],
+            check=True,
+        )
         done = subprocess.run([str(py), "-c", _PRESENT, ",".join(listed)], cwd=tmp)
         if done.returncode:
             failures.append(
-                f"upgrade from {release} left a broken install (listed files "
-                "missing, or the worker does not import)"
+                f"pip upgrade from {release} plus `pip install --force-reinstall "
+                "atlan-application-sdk-api` did not restore a working install"
             )
 
         every = ",".join(check_api_surface.module_of(f) for f in listed)

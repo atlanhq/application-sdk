@@ -19,25 +19,35 @@ def _wheel(path: Path, files: dict[str, bytes]) -> Path:
     return path
 
 
-def test_identical_files_pass(tmp_path: Path) -> None:
-    files = {
-        "application_sdk/__init__.py": b"x",
-        "application_sdk/errors/base.py": b"y",
-    }
-    api = _wheel(tmp_path / "api.whl", files)
-    sdk = _wheel(tmp_path / "sdk.whl", {**files, "application_sdk/main.py": b"z"})
-    assert probe.same_bytes(api, sdk) == []
+def test_disjoint_wheels_pass(tmp_path: Path) -> None:
+    api = _wheel(tmp_path / "api.whl", {"application_sdk/__init__.py": b"x"})
+    sdk = _wheel(tmp_path / "sdk.whl", {"application_sdk/main.py": b"z"})
+    tracked = {"application_sdk/__init__.py", "application_sdk/main.py"}
+    assert probe.partition(api, sdk, ["application_sdk/__init__.py"], tracked) == []
 
 
-def test_a_differing_or_missing_file_fails(tmp_path: Path) -> None:
+def test_overlap_misplacement_and_gaps_fail(tmp_path: Path) -> None:
     api = _wheel(
         tmp_path / "api.whl",
-        {"application_sdk/a.py": b"new", "application_sdk/b.py": b"only here"},
+        {"application_sdk/a.py": b"1", "application_sdk/stray.py": b"2"},
     )
-    sdk = _wheel(tmp_path / "sdk.whl", {"application_sdk/a.py": b"old"})
-    assert probe.same_bytes(api, sdk) == [
-        "application_sdk/a.py: differs in the SDK wheel",
-        "application_sdk/b.py: missing from the SDK wheel",
+    sdk = _wheel(
+        tmp_path / "sdk.whl",
+        {"application_sdk/a.py": b"1", "application_sdk/main.py": b"3"},
+    )
+    listed = ["application_sdk/a.py", "application_sdk/b.py"]
+    tracked = {
+        "application_sdk/a.py",
+        "application_sdk/b.py",
+        "application_sdk/main.py",
+        "application_sdk/lost.py",
+    }
+    assert probe.partition(api, sdk, listed, tracked) == [
+        "application_sdk/a.py: ships in both wheels",
+        "application_sdk/b.py: listed but not in the api wheel",
+        "application_sdk/stray.py: in the api wheel but not listed",
+        "application_sdk/b.py: in neither wheel",
+        "application_sdk/lost.py: in neither wheel",
     ]
 
 
