@@ -118,9 +118,6 @@ jobs:
                   packages/conformance/CHANGELOG.md \
                   uv.lock
           git commit -m "chore(conformance): release v${new_version}"
-          # Clear the `gate-check` CI opt-in before the push moves the branch
-          # (FND-3748; see bump_pr_opt_in.py). Fails open.
-          python3 .github/scripts/bump_pr_opt_in.py clear --base main --head "${BUMP_BRANCH}"
           git push origin "${BUMP_BRANCH}" --force-with-lease
 
           body_file="$(mktemp)"

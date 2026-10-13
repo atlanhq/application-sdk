@@ -1,9 +1,11 @@
 """Guard: automation must not add labels to PRs (FND-3832, FND-2201).
 
-Connector ``tests.yaml`` triggers on ``pull_request: labeled`` because that is
-the only way the human ``e2e`` label can start a run, and GitHub has no
-trigger-level filter for *which* label fired. So every label a bot adds to a PR
-is one more Tests run on the same head SHA. The unit job's ``cancel-in-progress``
+Connector ``tests.yaml`` triggered on ``pull_request: labeled`` because that was
+the only way the human ``e2e`` label could start a run, and GitHub has no
+trigger-level filter for *which* label fired. Since FND-3839 e2e is a ``/e2e``
+comment and the scaffold no longer subscribes to ``labeled``, but every repo not
+yet resynced still does — and there every label a bot adds to a PR is one more
+Tests run on the same head SHA. The unit job's ``cancel-in-progress``
 concurrency group evicts all but one, each evicted run publishes FAILURE on the
 required ``tests / Tests Gate`` context, and the PR sits BLOCKED with auto-merge
 armed and never enqueued. This has happened twice: Renovate's ``update:<type>``

@@ -1,0 +1,123 @@
+name: Test commands (reusable)
+
+# The `/e2e` and `/gate-check` PR comment commands for connector repos
+# (FND-3839), and the aggregator that turns a `/gate-check` into one verdict.
+# Called by the scaffolded `test-commands.yaml` in each connector repo
+# (packages/conformance/conformance/bootstrap/templates/test-commands.yaml),
+# because `issue_comment` and `workflow_run` only fire in the repository the PR
+# lives in.
+#
+# Comments replace the `e2e` / `gate-check` labels. A label add is a
+# `pull_request` `labeled` event, which started another run on the same commit
+# for every label any bot added; that run's concurrency group cancelled the
+# first run's jobs and the cancelled gate blocked the PR. A comment creates no
+# `pull_request` event, and each request is bound to the commit it was made on:
+# the verdict lands as a commit status (`e2e`, `gate-check`) on that SHA.
+#
+# Security shape (review this before changing it):
+#   * `issue_comment` and `workflow_run` both run the DEFAULT-BRANCH caller with
+#     its secrets. That is safe only because no job here checks out, installs
+#     or runs PR code. The only checkout is application-sdk's own scripts at
+#     this workflow's pinned SHA. Do not add a step that checks out the PR.
+#   * Who may trigger is decided in .github/scripts/pr_test_command.py (tested),
+#     not in shell: Write, Maintain or Admin role on the repo only (read
+#     live from the permissions API), no bots, no forks.
+#   * The work is a `workflow_dispatch` on the PR branch, which runs that
+#     branch's own workflow with exactly the trust a same-repo `pull_request`
+#     run already has. Nothing here passes a secret to it.
+#   * Everything uses the caller's GITHUB_TOKEN, scoped by the caller's
+#     `permissions:`. Comments posted with it start no workflow, so the bot's
+#     replies cannot re-trigger this file.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  command:
+    name: Test command
+    # Cheap pre-filter so ordinary comments never start a runner; the real
+    # gate is pr_test_command.py.
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/e2e') ||
+      startsWith(github.event.comment.body, '/gate-check'))
+    runs-on: ubuntu-slim
+    timeout-minutes: 10
+    permissions:
+      contents: read # read the PR branch's workflow files through the API
+      actions: write # workflow_dispatch, and reading runs on the head commit
+      statuses: write # the pending `gate-check` status
+      issues: write # the reply comment and the reaction
+      pull-requests: write # the PR's head SHA, branch, fork status; the sticky comment
+    steps:
+      - name: Check out application-sdk's command scripts (trusted code only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Acknowledge the comment
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          REACTION: eyes
+        run: python3 .github/scripts/react_to_comment.py
+
+      - name: Run the command
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_PATH: ${{ github.event_path }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: >-
+          python3 .github/scripts/pr_test_command.py
+          --repo "$REPO"
+          --event-name "$EVENT_NAME"
+          --event-path "$EVENT_PATH"
+          --mode dispatch
+          --run-url "$RUN_URL"
+
+  gate-check-verdict:
+    name: Gate-check verdict
+    # Only runs a `/gate-check` dispatched can settle anything; every ordinary
+    # PR run's completion skips here at job level, which bills no runner.
+    if: >-
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      startsWith(github.event.workflow_run.head_branch, 'bump-version')
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: write # read the dispatched runs; re-run Release Gate
+      statuses: write # the final `gate-check` status
+      pull-requests: write # find the PR; edit its sticky `/gate-check` comment
+    steps:
+      - name: Check out application-sdk's command scripts (trusted code only)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: ${{ job.workflow_sha }}
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Settle the gate-check verdict
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: >-
+          python3 .github/scripts/gate_check_verdict.py
+          --repo "$REPO" --head-sha "$HEAD_SHA" --branch "$HEAD_BRANCH"

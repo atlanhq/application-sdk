@@ -422,16 +422,14 @@ After the tests pass locally, deploy them to CI. Below are complete, copy-paste 
 # .github/workflows/integration-tests.yaml
 name: Integration Tests
 
+# Never `types: [labeled]`: a label add starts a duplicate run on the same
+# commit (docs/standards/ci.md, FND-3839). Run on pushes, or on demand.
 on:
   pull_request:
-    types: [labeled]
   workflow_dispatch:
 
 jobs:
   integration-test:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      github.event.label.name == 'int-test'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     concurrency:

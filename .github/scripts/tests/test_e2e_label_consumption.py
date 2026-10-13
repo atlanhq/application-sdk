@@ -1,20 +1,29 @@
-"""Guards for consuming the `e2e` label once its run finishes (FND-3411).
+"""Guards for recording the e2e verdict and consuming the `e2e` label (FND-3411).
 
 The label used to be a standing setting: left on a PR or a release, every
 later push re-ran the live-tenant suite, usually days after anyone wanted
-it. Now the run that acted on the label removes it.
+it. So the run that acted on the label removed it.
 
-Three properties carry the design, and each is pinned here:
+FND-3839 replaced the label with a `/e2e` PR comment, which dispatches the
+connector's tests.yaml on the head commit: a one-shot request by
+construction, with nothing to consume. Label consumption survives only for
+callers that predate the resync and still subscribe to `labeled`
+(`e2e-label-trigger: true`), and application-sdk's own PR Checks no longer
+reads the label at all, so its consume job is gone.
 
-* The removal uses `github.token`, never the PAT. GitHub starts no workflow
-  run for an event the run's own GITHUB_TOKEN caused, so the `unlabeled`
-  event re-fires nothing — in particular not a consumer's Release Gate that
-  predates the status check, which would otherwise go red.
-* The consumer Tests Gate records the verdict as an `e2e` commit status
-  before removing the label, because the label was the Release Gate's only
-  evidence. A real verdict is recorded as success / failure; a run that
-  acted on the label without one records `error`, replacing the `pending`
-  its discover-e2e job posted (FND-3650).
+The properties pinned here:
+
+* The consumer Tests Gate records the verdict as an `e2e` commit status —
+  the Tests Gate hold and the Release Gate read it. A real verdict is
+  recorded as success / failure; a run that acted on a request without one
+  records `error`, replacing the `pending` its discover-e2e job posted
+  (FND-3650). That holds for a labelled PR run AND for a connector-local
+  dispatch (no `application-sdk-ref`), which owns the commit it tested; the
+  SDK's cross-repo dispatch tests this repo's main against an SDK commit and
+  writes nothing here.
+* The label removal (legacy callers only) uses `github.token`, never the
+  PAT. GitHub starts no workflow run for an event the run's own GITHUB_TOKEN
+  caused, so the `unlabeled` event re-fires nothing.
 * Every step is fail-open. The Tests Gate job IS the required check; a 404
   (label already gone) must not redden it.
 
@@ -46,24 +55,6 @@ def _step(job: dict[str, Any], name: str) -> dict[str, Any]:
     return next(s for s in job["steps"] if s.get("name") == name)
 
 
-def _pr_event(
-    labels: list[str],
-    action: str = "synchronize",
-    author: str = "someone",
-    **extra: Any,
-) -> dict:
-    event: dict[str, Any] = {
-        "action": action,
-        "pull_request": {
-            "labels": [{"name": n} for n in labels],
-            "head": {"repo": {"fork": False}},
-            "user": {"login": author},
-        },
-    }
-    event.update(extra)
-    return {"event_name": "pull_request", "event": event}
-
-
 # ── Consumer Tests Gate (tests-reusable.yaml) ─────────────────────────────────
 
 
@@ -77,30 +68,43 @@ def _needs(discover: str, e2e: str) -> dict[str, Any]:
 
 
 @pytest.mark.parametrize(
-    ("event_name", "discover", "e2e", "expected"),
+    ("event_name", "sdk_ref", "discover", "e2e", "expected"),
     [
-        ("pull_request", "success", "success", True),
-        ("pull_request", "success", "failure", True),
-        # Acted on the label but produced no verdict: still recorded (as
+        ("pull_request", "", "success", "success", True),
+        ("pull_request", "", "success", "failure", True),
+        # Acted on the request but produced no verdict: still recorded (as
         # `error`), so the `pending` discover-e2e posted never lingers.
-        ("pull_request", "success", "skipped", True),
-        ("pull_request", "success", "cancelled", True),
-        ("pull_request", "failure", "skipped", True),
-        # Did not act on the label: this run owns no verdict.
-        ("pull_request", "skipped", "skipped", False),
-        # Dispatched runs (the SDK's connector fan-out) have no PR head.
-        ("workflow_dispatch", "success", "success", False),
+        ("pull_request", "", "success", "skipped", True),
+        ("pull_request", "", "success", "cancelled", True),
+        ("pull_request", "", "failure", "skipped", True),
+        # Did not act on a request: this run owns no verdict.
+        ("pull_request", "", "skipped", "skipped", False),
+        # A `/e2e` or `/gate-check` dispatch on the connector's own branch
+        # owns the verdict for the commit it tested (FND-3839)…
+        ("workflow_dispatch", "", "success", "success", True),
+        ("workflow_dispatch", "", "success", "cancelled", True),
+        # …unless it stood e2e down (the branch moved past the commented-on
+        # commit), in which case it tested nothing.
+        ("workflow_dispatch", "", "skipped", "skipped", False),
+        # The SDK's cross-repo fan-out tests main against an SDK commit; a
+        # verdict on this repo's commit would be about the wrong change.
+        ("workflow_dispatch", "abc123", "success", "success", False),
     ],
 )
-def test_verdict_is_recorded_whenever_this_run_acted_on_the_label(
+def test_verdict_is_recorded_whenever_this_run_acted_on_a_request(
     gate_job: dict[str, Any],
     event_name: str,
+    sdk_ref: str,
     discover: str,
     e2e: str,
     expected: bool,
 ) -> None:
     step = _step(gate_job, "Record the e2e verdict on the head commit")
-    contexts = {"github": {"event_name": event_name}, "needs": _needs(discover, e2e)}
+    contexts = {
+        "github": {"event_name": event_name},
+        "inputs": {"application-sdk-ref": sdk_ref},
+        "needs": _needs(discover, e2e),
+    }
     assert evaluate(step["if"], contexts) is expected
 
 
@@ -134,21 +138,39 @@ def test_only_a_real_verdict_is_recorded_as_one(
         ("pull_request", "cancelled", True),
         # Not requested on this event — an unrelated label add, or no label.
         ("pull_request", "skipped", False),
+        # A dispatch was requested by a comment; there is no label to consume.
         ("workflow_dispatch", "success", False),
     ],
 )
-def test_label_is_removed_whenever_this_run_consumed_it(
+def test_a_legacy_caller_removes_the_label_whenever_this_run_consumed_it(
     gate_job: dict[str, Any],
     event_name: str,
     discover: str,
     expected: bool,
 ) -> None:
+    """Callers that predate FND-3839 still request e2e with the label."""
     step = _step(gate_job, "Remove the e2e label")
     contexts = {
         "github": {"event_name": event_name},
+        "inputs": {"e2e-label-trigger": True},
         "needs": _needs(discover, "skipped"),
     }
     assert evaluate(step["if"], contexts) is expected
+
+
+@pytest.mark.parametrize("discover", ["success", "failure", "skipped"])
+def test_the_resynced_scaffold_never_touches_labels(
+    gate_job: dict[str, Any], discover: str
+) -> None:
+    """With `e2e-label-trigger: false` a label requested nothing, so removing
+    one would strip a label someone added for another reason."""
+    step = _step(gate_job, "Remove the e2e label")
+    contexts = {
+        "github": {"event_name": "pull_request"},
+        "inputs": {"e2e-label-trigger": False},
+        "needs": _needs(discover, "skipped"),
+    }
+    assert evaluate(step["if"], contexts) is False
 
 
 def test_verdict_lands_before_the_label_goes(gate_job: dict[str, Any]) -> None:
@@ -159,10 +181,33 @@ def test_verdict_lands_before_the_label_goes(gate_job: dict[str, Any]) -> None:
     )
 
 
-def test_verdict_targets_the_pr_head(gate_job: dict[str, Any]) -> None:
-    """`github.sha` is the merge ref; the Release Gate reads the head."""
+@pytest.mark.parametrize(
+    ("github", "sha"),
+    [
+        # `github.sha` is the merge ref on a PR run; the Release Gate reads
+        # the head.
+        (
+            {
+                "event_name": "pull_request",
+                "sha": "merge-ref",
+                "event": {"pull_request": {"head": {"sha": "pr-head"}}},
+            },
+            "pr-head",
+        ),
+        # A dispatch on the PR branch checks out its tip, which is the
+        # commented-on head (discover-e2e stands down otherwise).
+        (
+            {"event_name": "workflow_dispatch", "sha": "branch-tip", "event": {}},
+            "branch-tip",
+        ),
+    ],
+    ids=["pull_request", "workflow_dispatch"],
+)
+def test_verdict_targets_the_tested_head(
+    gate_job: dict[str, Any], github: dict[str, Any], sha: str
+) -> None:
     step = _step(gate_job, "Record the e2e verdict on the head commit")
-    assert step["env"]["HEAD_SHA"] == "${{ github.event.pull_request.head.sha }}"
+    assert evaluate_operand(step["env"]["HEAD_SHA"], {"github": github}) == sha
     assert "record_e2e_verdict.py" in step["run"]
 
 
@@ -191,91 +236,20 @@ def test_gate_steps_precede_enforcement(gate_job: dict[str, Any]) -> None:
 # ── application-sdk's own PR Checks (pull_request.yaml) ──────────────────────
 
 
-@pytest.fixture(scope="module")
-def consume_job() -> dict[str, Any]:
-    return _load("pull_request.yaml")["jobs"]["consume-e2e-label"]
+def test_sdk_pr_checks_reads_no_labels_so_has_nothing_to_consume() -> None:
+    """e2e there follows the `e2e-request` commit status (FND-3839).
 
-
-@pytest.mark.parametrize(
-    ("github", "expected"),
-    [
-        (_pr_event(["e2e"], "synchronize"), True),
-        (_pr_event(["e2e"], "labeled", label={"name": "e2e"}), True),
-        # An unrelated label add did not request a run, so consumes nothing.
-        (_pr_event(["e2e", "size/S"], "labeled", label={"name": "size/S"}), False),
-        (_pr_event([], "synchronize"), False),
-        ({"event_name": "merge_group", "event": {}}, False),
-    ],
-)
-def test_sdk_job_fires_exactly_when_the_e2e_jobs_could(
-    consume_job: dict[str, Any], github: dict[str, Any], expected: bool
-) -> None:
-    assert evaluate(consume_job["if"], {"github": github}) is expected
-
-
-def test_sdk_job_waits_for_every_label_consuming_job(
-    consume_job: dict[str, Any],
-) -> None:
-    """Removing before connector-gate settles would be removing mid-run."""
+    The consume job existed only because a job gated on the `e2e` label would
+    re-fire on every later push while the label stayed. With no job reading a
+    label, a stale label is inert — and a returning label read would bring
+    back that re-fire with nothing left to stop it.
+    """
     workflow = _load("pull_request.yaml")
-    consumers = {
+    assert "consume-e2e-label" not in workflow["jobs"]
+    readers = [
         job_id
         for job_id, job in workflow["jobs"].items()
-        if job_id != "consume-e2e-label"
-        and "labels.*.name, 'e2e'" in str(job.get("if", ""))
-    }
-    assert consumers, "no label-gated jobs found; the sweep is broken"
-    assert consumers | {"connector-gate"} <= set(consume_job["needs"])
-
-
-def test_sdk_job_uses_github_token_and_fails_open(
-    consume_job: dict[str, Any],
-) -> None:
-    step = _step(consume_job, "Remove the e2e label")
-    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
-    assert step["continue-on-error"] is True
-    assert consume_job["permissions"] == {"pull-requests": "write"}
-
-
-def _all_green_needs(workflow: dict[str, Any]) -> dict[str, Any]:
-    """Every upstream succeeded and every path filter matched.
-
-    The most permissive `needs`, so a consumer's gate reduces to its event
-    terms — the part the consume job has to mirror.
-    """
-    outputs = {"sdk": "true", "container": "true", "ci": "true"}
-    return {
-        job_id: {"result": "success", "outputs": outputs} for job_id in workflow["jobs"]
-    }
-
-
-@pytest.mark.parametrize(
-    "github",
-    [
-        _pr_event(["e2e"], "synchronize"),
-        _pr_event(["e2e"], "labeled", label={"name": "e2e"}),
-        _pr_event(["e2e", "size/S"], "labeled", label={"name": "size/S"}),
-        _pr_event(["e2e"], "synchronize", author="dependabot[bot]"),
-        _pr_event([], "synchronize"),
-    ],
-    ids=["push", "label-added", "unrelated-label", "dependabot", "no-label"],
-)
-def test_every_label_consumer_is_covered_by_the_consume_job(
-    consume_job: dict[str, Any], github: dict[str, Any]
-) -> None:
-    """Whenever any job consumes the label, the consume job must remove it.
-
-    Otherwise the label survives that run and the consumer re-fires on the
-    next push — the exact behaviour FND-3411 removes. A Dependabot PR is the
-    case this caught: storage-integration had no Dependabot exclusion, while
-    the consume job skips Dependabot.
-    """
-    workflow = _load("pull_request.yaml")
-    contexts = {"github": github, "needs": _all_green_needs(workflow)}
-    consumes = evaluate(consume_job["if"], {"github": github})
-    for job_id, job in workflow["jobs"].items():
-        gate = str(job.get("if", ""))
-        if job_id == "consume-e2e-label" or "labels.*.name, 'e2e'" not in gate:
-            continue
-        if evaluate(gate, contexts):
-            assert consumes, f"{job_id} consumes the label but it is never removed"
+        if "labels.*.name" in str(job.get("if", ""))
+        or "github.event.label" in str(job.get("if", ""))
+    ]
+    assert not readers, f"these PR Checks jobs read PR labels again: {readers}"

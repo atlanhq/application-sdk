@@ -1,0 +1,76 @@
+# This file is scaffolded by `atlan-application-sdk-conformance bootstrap`
+# and drift-tracked at WARN by conformance check C002.
+#
+# Edit it freely — drift NEVER blocks CI (C002 is WARN-only, not BLOCK).
+# To pull structural updates from canonical, re-run bootstrap with --resync:
+#   atlan-application-sdk-conformance bootstrap --resync
+name: Test Commands
+
+# PR comment commands that request the expensive test legs (FND-3839):
+#
+#   /e2e              run the live-tenant e2e suite on the PR's head commit.
+#                     The verdict lands as the `e2e` status on that commit,
+#                     which Tests Gate and Release Gate read.
+#   /gate-check       on a bump-version PR, run its full release gate (tests
+#                     with e2e, pre-commit, conformance, vulnerability scan).
+#                     The verdict lands as the `gate-check` status, and
+#                     Release Gate re-evaluates when it does.
+#   … force           run again even though the commit already passed.
+#
+# They replace the `e2e` / `gate-check` labels. A label add starts a new
+# `pull_request` run on the same commit, which cancelled the first run's jobs
+# and left a failed required check on the PR. A comment starts nothing until
+# it is checked, and a commit already green or already running is not run
+# twice. A push makes a new commit with no verdict, so request again on the
+# new head.
+#
+# The logic lives in application-sdk (test-commands-reusable.yaml,
+# pr_test_command.py, gate_check_verdict.py). This file only subscribes to the
+# events — they fire in this repository only — and grants the permissions.
+# Nothing here checks out PR code.
+
+on:
+  issue_comment:
+    types: [created]
+  # A `/gate-check` resolves when the last run it started finishes. The names
+  # are each workflow's `name:`, not its file.
+  workflow_run:
+    workflows: [Tests, Pre-commit Checks, Conformance, Vulnerability Scan]
+    types: [completed]
+
+permissions:
+  contents: read
+
+jobs:
+  commands:
+    # Pre-filtered here as well as in the reusable, so an ordinary comment or
+    # an ordinary PR run's completion never instantiates the call.
+    if: >-
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+      (startsWith(github.event.comment.body, '/e2e') ||
+      startsWith(github.event.comment.body, '/gate-check'))) ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      startsWith(github.event.workflow_run.head_branch, 'bump-version'))
+    # One run per PR AND command at a time, so two identical comments cannot
+    # both pass the "already running?" check. Not cancelled: the first request
+    # finishes and the second sees it. A group holds ONE pending run (a third
+    # arrival evicts the waiting one), so it is keyed on the command — the
+    # newest identical request supersedes an older one, but an `/e2e` never
+    # evicts a waiting `/gate-check` (lens F-dbdbf2). Verdict callbacks are
+    # keyed on the commit: any later completion settles what an evicted one
+    # would have. JOB-level, not workflow-level: a job's group is entered only
+    # once its `if:` passes, so ordinary comments and ordinary PR-run
+    # completions never occupy (or evict from) the pending slot.
+    concurrency:
+      group: test-commands-${{ github.event_name == 'workflow_run' && format('verdict-{0}', github.event.workflow_run.head_sha) || format('{0}-{1}', github.event.issue.number, startsWith(github.event.comment.body, '/gate-check') && 'gate-check' || 'e2e') }}
+      cancel-in-progress: false
+    # Exhaustive, not additive: every scope omitted is `none`, and the
+    # reusable's jobs can only narrow this.
+    permissions:
+      contents: read # the PR branch's workflow files, through the API
+      actions: write # dispatch the requested runs; re-run Release Gate
+      statuses: write # the `gate-check` status
+      issues: write # reply to the comment
+      pull-requests: write # the PR's head commit and branch; the sticky comment
+    uses: atlanhq/application-sdk/.github/workflows/test-commands-reusable.yaml@main
