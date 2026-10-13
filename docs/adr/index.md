@@ -24,3 +24,4 @@ ADRs capture the architectural decisions behind the Application SDK — what was
 | [ADR-0018](0018-progress-aware-heartbeat.md) | Progress-Aware Stall Watchdog and Duration-Backstop Timeouts (in-process no-progress watchdog; heartbeat_timeout unchanged; start_to_close = backstop) |
 | [ADR-0019](0019-runtime-substrate-layer.md) | A Dependency-Neutral Runtime Substrate (`application_sdk._runtime`: offload + progress seams importable at module scope from any layer; kills the storage ↔ execution cycle) |
 | [ADR-0020](0020-artifact-validation.md) | Artifact Validation (one wrapper, per-format validators with their own dependency floors, app-owned declarations; mandatory at the public boundary, optional internally) |
+| [ADR-0021](0021-source-validation.md) | Source Validation (Proposed: canonical probe names, network → identity → SQL ordering with skipped probes omitted from rows, app-declared endpoints and dialect facts, warn-only until precision/recall are measured) |
