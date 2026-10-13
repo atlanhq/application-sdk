@@ -158,6 +158,19 @@ it is read instead of listing the prefix.
   `VerifyRefsInput.store` shares them.
 - **An `upstream` ref with no upstream store bound reads the deployment store.**
   This mirrors `App.download()`'s own `upstream_storage or storage` routing.
+- **The tag works only inside one run, so it does not cross app boundaries.**
+  `_validate_workflow_input` resets `store=upstream` to `deployment` on every
+  ref in a workflow's start payload. A start payload comes from outside the
+  run, and honouring the tag there would let whoever starts the workflow
+  materialise any key in the upstream bucket. A ref that one app outputs and
+  another app takes as input therefore reads the deployment store, as before
+  this field existed. That consumer should go through `App.download(ref=...)`,
+  which routes to upstream itself.
+- **The fix needs the consuming worker on an SDK that knows the field.** Within
+  one app, `download()`/`upload()` and the task they hand off to run on the
+  same worker build, so one SDK bump covers both sides. Do not rely on an older
+  worker honouring the tag during a rolling deploy: it drops the field and
+  reads the deployment store.
 
 ## The connection-scoped `persistent-artifacts` layout
 

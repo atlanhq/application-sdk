@@ -91,6 +91,9 @@ Without that field the next task would list an empty prefix in the wrong bucket
 and fail with AAF-STR-009. Every other ref, including those from a single-store
 deployment where both names alias one store, has `store=DEPLOYMENT`. Do not set
 the field by hand. It records where the bytes are, and the SDK sets it.
+The tag is honoured only for refs produced inside the run. A workflow's start
+input has any `store=UPSTREAM` reset to `DEPLOYMENT`, so to consume another
+app's upstream output, call `App.download()` on it.
 
 **Consequence for connector authors:** if your connector produces artifacts that
 Atlan's publish app must consume, you must call `App.upload()` explicitly from

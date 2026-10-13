@@ -965,6 +965,7 @@ async def _materialize_single_file(
         is_durable=True,
         storage_path=ref.storage_path,
         tier=ref.tier,
+        store=ref.store,
     )
 
 
@@ -1137,6 +1138,7 @@ async def _materialize_directory(
         file_count=len(data_keys),
         tier=ref.tier,
         manifest_path=ref.manifest_path,
+        store=ref.store,
     )
 
 

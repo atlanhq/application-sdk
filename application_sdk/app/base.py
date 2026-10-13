@@ -29,6 +29,7 @@ from typing import (
 )
 from uuid import UUID
 
+from pydantic import BaseModel
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -3309,6 +3310,55 @@ def _set_health_line(text: str) -> None:
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _demote_upstream_refs(model: _ModelT) -> _ModelT:
+    """Reset ``store=UPSTREAM`` to ``DEPLOYMENT`` on every ref in a start payload.
+
+    ``FileReference.store`` decides which bucket the interceptor reads a ref
+    from, so it is only trusted when this run set it: ``App.download`` /
+    ``App.upload`` tag the refs they return. A workflow's start payload comes
+    from outside the run, and honouring the tag there would let whoever
+    starts the workflow aim a materialise at any key in the upstream bucket
+    (FND-3795). Demoting restores exactly the pre-tag behaviour for those refs:
+    they are read from the deployment store, as every ref was before.
+    """
+    return cast("_ModelT", _demote(model))
+
+
+def _demote(node: object) -> object:
+    """Tree walk for :func:`_demote_upstream_refs`; returns *node* itself if unchanged."""
+    if isinstance(node, FileReference):
+        if node.store is not StoreTarget.UPSTREAM:
+            return node
+        _safe_log(
+            "warning",
+            "Ignoring store=upstream on a FileReference in the workflow input; "
+            "only refs App.download/App.upload return in this run read the "
+            "upstream store",
+            storage_path=node.storage_path,
+        )
+        return node.model_copy(update={"store": StoreTarget.DEPLOYMENT})
+    if isinstance(node, BaseModel):
+        changes: dict[str, object] = {}
+        for name in type(node).model_fields:
+            old = getattr(node, name)
+            new = _demote(old)
+            if new is not old:
+                changes[name] = new
+        return node.model_copy(update=changes) if changes else node
+    if isinstance(node, (list, tuple)):
+        items = [_demote(v) for v in node]
+        if all(a is b for a, b in zip(items, node)):
+            return node
+        return items if isinstance(node, list) else tuple(items)
+    if isinstance(node, dict):
+        mapped = {k: _demote(v) for k, v in node.items()}
+        return node if all(mapped[k] is node[k] for k in node) else mapped
+    return node
+
+
 def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     """Validate a decoded workflow payload against the entry point's typed contract.
 
@@ -3352,13 +3402,13 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     if isinstance(raw_input, input_type):
         # Already the typed model (constructed by the SDK /start path or a test);
         # it was validated at construction, so re-validation would be redundant.
-        return raw_input
+        return _demote_upstream_refs(raw_input)
 
     # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
 
     try:
-        return input_type.model_validate(raw_input)
+        return _demote_upstream_refs(input_type.model_validate(raw_input))
     # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
     except Exception as e:
         _safe_log(
