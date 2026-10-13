@@ -30,6 +30,7 @@ Usage, from the app repo root::
 listed files also run on the worker, so their logging stays; only their logger
 import moves to a path the host has (:data:`KNOWN_MOVES`).
     python3 <sdk>/.github/scripts/gen_app_api.py build --out dist-api [--member api]
+    python3 <sdk>/.github/scripts/gen_app_api.py hash    # content hash; the host's pin-bump gate
 
 ``check`` is a no-op for an app without ``[tool.atlan-app-api]``. ``build`` with
 ``--member`` and no config builds that directory as-is (an app that keeps its
@@ -41,6 +42,7 @@ from __future__ import annotations
 import argparse
 import ast
 import glob
+import hashlib
 import re
 import shutil
 import subprocess
@@ -483,6 +485,26 @@ def stage(root: Path, config: Config, where: Path) -> list[str]:
     return files + generated_files(root)
 
 
+def content_hash(root: Path, config: Config) -> str:
+    """sha256 of the package the host would install: every staged file (path and
+    bytes, in path order), the generated ``pyproject.toml`` (its dependencies)
+    included.
+
+    A release that changes only worker code leaves it unchanged, so the host's
+    pin bump can skip it instead of rolling every hosted app for nothing.
+    """
+    digest = hashlib.sha256()
+    with tempfile.TemporaryDirectory() as tmp:
+        where = Path(tmp) / "src"
+        stage(root, config, where)
+        for path in sorted(p for p in where.rglob("*") if p.is_file()):
+            digest.update(path.relative_to(where).as_posix().encode())
+            digest.update(b"\0")
+            digest.update(path.read_bytes())
+            digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def build(root: Path, out: Path, member: str | None = None) -> Path:
     """Build the host wheel into ``out`` and return its path."""
     out.mkdir(parents=True, exist_ok=True)
@@ -550,13 +572,19 @@ def check(root: Path, config: Config) -> list[str]:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=["fix", "check", "build", "stage"])
+    parser.add_argument("command", choices=["fix", "check", "build", "stage", "hash"])
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--out", type=Path, default=Path("dist-api"))
     parser.add_argument("--member", help="build this directory when there is no config")
     args = parser.parse_args(argv)
 
     config = load(args.root)
+    if args.command == "hash":
+        if config is None:
+            print(f"::error::no [tool.{SECTION}] config to hash")
+            return 1
+        print(content_hash(args.root, config))
+        return 0
     if args.command == "stage":
         if config is None:
             print(f"::error::no [tool.{SECTION}] config to stage")

@@ -305,3 +305,16 @@ def test_a_relative_import_in_a_package_init_ships_its_sibling(tmp_path: Path) -
     files, absolute = gen.closure(root, gen.load(root))
     assert "app/errors/mapping.py" in files
     assert absolute == []
+
+
+def test_the_content_hash_moves_only_with_what_the_host_installs(
+    tmp_path: Path,
+) -> None:
+    root = _app(tmp_path, "from .client import C\n")
+    config = gen.load(root)
+    before = gen.content_hash(root, config)
+    assert before == gen.content_hash(root, config)  # deterministic
+    (root / "app/worker.py").write_text("import temporalio  # a worker-only change\n")
+    assert gen.content_hash(root, config) == before
+    (root / "app/client.py").write_text("from .failures import Boom\nX = 1\n")
+    assert gen.content_hash(root, config) != before
