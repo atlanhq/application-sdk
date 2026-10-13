@@ -559,14 +559,19 @@ class SilentSwallowMixin:
                 and is_parameter(expression.args[0])
             ):
                 return True
-            if is_sanitizer_call(expression):
-                return any(
-                    is_parameter(node)
-                    for argument in [
-                        *expression.args,
-                        *(keyword.value for keyword in expression.keywords),
-                    ]
-                    for node in ast.walk(argument)
+            # The input must be the sanitizer's value: its first positional
+            # argument, bare or as ``str()`` / ``repr()``. A keyword such as
+            # ``max_len=problem`` or a derived value like ``problem.args[0]``
+            # does not put the exception's text in the log.
+            if is_sanitizer_call(expression) and expression.args:
+                value = expression.args[0]
+                return is_parameter(value) or (
+                    isinstance(value, ast.Call)
+                    and isinstance(value.func, ast.Name)
+                    and value.func.id in {"str", "repr"}
+                    and len(value.args) == 1
+                    and not value.keywords
+                    and is_parameter(value.args[0])
                 )
             return False
         if isinstance(expression, ast.JoinedStr):
@@ -686,20 +691,13 @@ class SilentSwallowMixin:
             return False
         local_helpers = visible_helpers(self._local_helpers, self._function_stack)
         for index, statement in enumerate(statements):
-            if not isinstance(statement, ast.Expr) or not isinstance(
-                statement.value, ast.Call
-            ):
+            # Same statement forms as the same-class path: a bare call, or one
+            # whose result is assigned (``result = _report(problem)``).
+            if isinstance(statement, (ast.Expr, ast.Assign, ast.AnnAssign)):
+                expression = statement.value
+            else:
                 continue
-            call = statement.value
-            if not isinstance(call.func, ast.Name):
-                continue
-            helper = local_helpers.get(call.func.id)
-            if (
-                helper is None
-                or helper.decorator_list
-                or helper.args.vararg is not None
-                or helper.args.kwarg is not None
-            ):
+            if expression is None:
                 continue
             prefix = statements[:index]
             if any(
@@ -715,19 +713,32 @@ class SilentSwallowMixin:
                 for previous in prefix
             ):
                 continue
-            parameters = [
-                *helper.args.posonlyargs,
-                *helper.args.args,
-                *helper.args.kwonlyargs,
-            ]
-            for parameter in parameters:
-                passed = _call_argument_for_parameter(call, helper, parameter.arg)
+            for call in self._eager_calls(expression):
+                if not isinstance(call.func, ast.Name):
+                    continue
+                helper = local_helpers.get(call.func.id)
                 if (
-                    isinstance(passed, ast.Name)
-                    and passed.id == handler.name
-                    and self._helper_logs_parameter_before_return(helper, parameter.arg)
+                    helper is None
+                    or helper.decorator_list
+                    or helper.args.vararg is not None
+                    or helper.args.kwarg is not None
                 ):
-                    return True
+                    continue
+                parameters = [
+                    *helper.args.posonlyargs,
+                    *helper.args.args,
+                    *helper.args.kwonlyargs,
+                ]
+                for parameter in parameters:
+                    passed = _call_argument_for_parameter(call, helper, parameter.arg)
+                    if (
+                        isinstance(passed, ast.Name)
+                        and passed.id == handler.name
+                        and self._helper_logs_parameter_before_return(
+                            helper, parameter.arg
+                        )
+                    ):
+                        return True
         return False
 
     def _helper_logs_caught_exception(

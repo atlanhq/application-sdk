@@ -2020,6 +2020,47 @@ def run():
     _none(src)
 
 
+def test_p007_no_finding_when_assigned_module_helper_logs_exception() -> None:
+    src = """\
+def _report(problem):
+    logger.error("lookup failed: %s", safe_traceback(problem))
+    return True
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        reported = _report(problem)
+        return None
+"""
+    _none(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        "safe_traceback(None, max_len=problem)",
+        "redact(problem.__class__.__name__)",
+        "redact(len(problem.args))",
+    ],
+)
+def test_p007_still_flags_when_sanitizer_value_is_not_the_exception(
+    logged: str,
+) -> None:
+    src = f"""\
+def _report(problem):
+    logger.error("lookup failed: %s", {logged})
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_still_flags_when_helper_rebinds_input_inside_branch() -> None:
     src = """\
 def _log(problem, hide):
