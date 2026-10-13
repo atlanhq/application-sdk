@@ -210,7 +210,8 @@ def _resolve_secret_ref(ref: dict, secrets: SecretMap | None) -> str | None:
 def _resolve_metadata_value(item: dict, secrets: SecretMap | None = None) -> str:
     """Resolve a single Dapr metadata item to its string value."""
     if "value" in item:
-        return str(item["value"])
+        # A bare YAML ``value:`` is null and means unset, not the string "None".
+        return "" if item["value"] is None else str(item["value"])
 
     secret_ref = item.get("secretKeyRef")
     if secret_ref:
