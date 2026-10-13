@@ -4,8 +4,9 @@ Atlan's ``qualifiedName`` is the identity primitive for every asset (dedup,
 lineage, linking).  Building it by hand with an f-string — ``f"{connection_qualified_name}/{db}"``
 — at each call site scatters the grammar (segments, order, separator), so an
 identity and the references to it can drift apart.  Keep each grammar in one
-helper in ``app/qualified_names.py``, derived from the pyatlan asset
-``.creator()`` when that gives the identical string.
+helper (by convention in ``app/qualified_names.py``; this check does not look
+at the location), derived from the pyatlan asset ``.creator()`` when that
+gives the identical string.
 
 Per-file.  Heuristic, WARN-tier: flag an f-string that both (a) interpolates a
 ``*qualified_name`` / ``*_qn`` value and (b) contains a ``/`` path separator —

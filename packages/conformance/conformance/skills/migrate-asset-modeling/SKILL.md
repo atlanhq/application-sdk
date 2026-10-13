@@ -71,7 +71,7 @@ so the skill proves parity before it finishes.
 
 | Rule | Fires on | Stops when |
 |---|---|---|
-| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the site calls a helper that returns `X.creator(...).qualified_name`, or the helper keeps the f-string with a justified ignore (the detector does not check where the helper lives; `app/qualified_names.py` is the convention) |
+| P028 | an f-string that interpolates a name matching `qualified_name`, `*_qn` or `qn` **and** has a `/` literal (an object-store key, with a `/` literal before the name, is exempt) | the site calls a helper that returns `X.creator(...).qualified_name`, or the helper keeps the f-string with a justified ignore, or (Process / ColumnProcess) calls `generate_qualified_name(process_id=...)` and gives the qualifiedName the app emits today (the detector does not check where the helper lives; `app/qualified_names.py` is the convention) |
 | P052 | `.to_nested_bytes()`, `.to_nested_dict()`, pyatlan_v9 `to_atlas_format`, or `to_atlas_format_dict`, in `app/` (not `app/generated/`) | the entity goes through `entity_bytes` |
 | P055 | a pyatlan_v9 mapper populating the list end of a 1-to-N relationship — `Table(columns=...)`, `process.fabric_activities = [...]`, `schema.tables.append(...)` | each child sets its single reference to the parent (`column.table = RelatedTable(...)`) and the parent's list is left unset |
 | O002 | any `.dict()` call in a module that imports pyatlan asset models | `.dict()` is gone, or the module no longer imports asset models |
@@ -127,7 +127,8 @@ Process identity — `atlan-metabase-app` `app/qualified_names.py`
 `process_qn` / `column_process_qn` call
 `Process.generate_qualified_name(..., process_id=...)` with placeholder
 inputs. Such a helper clears P028 and stays, unless its `process_id` is
-itself an f-string that interpolates a qualifiedName.
+itself an f-string that interpolates a qualifiedName and contains a `/`
+literal; that one takes the same ignore.
 
 1-to-N link from the child side — the parent's list stays unset
 (`atlan-metabase-app` `app/asset_mapper.py`):
@@ -138,7 +139,7 @@ asset.metabase_collection = RelatedMetabaseCollection(qualified_name=collection_
 
 A process helper may instead keep the f-string with an ignore that names
 `Process.generate_qualified_name`, the same shape as `report_qn` above; both
-shapes are accepted when they produce the same string.
+shapes are accepted when they produce the qualifiedName the app emits today.
 `Process.generate_qualified_name(..., process_id=...)` returns
 `f"{connection_qualified_name}/{process_id}"` after it checks that `name`,
 `connection_qualified_name`, `inputs` and `outputs` are non-empty
@@ -216,13 +217,15 @@ helper and lists their lines.
 - **process** — an f-string that builds a Process or ColumnProcess identity
   (`{connection_qn}/{process_id}`, a suffix on the output qn, or a hash the
   app computes such as `f"{connection_qn}/{sha1}"`). The app owns the
-  grammar, so it is centralised like **centralise** below. Do not move it to
-  `Process.generate_qualified_name`: with `process_id` it only prefixes the
-  connection, and without it pyatlan's own hash changes every existing
-  process qualifiedName. A helper that already calls
-  `generate_qualified_name(process_id=...)` and produces the same string
-  stays; it is not a finding unless its `process_id` is itself an f-string
-  that interpolates a qualifiedName, which takes the same ignore.
+  grammar. Keep it in one helper per process shape, in either accepted
+  shape: the f-string with an ignore that names
+  `Process.generate_qualified_name`, or a helper that calls
+  `generate_qualified_name(process_id=...)` with placeholder inputs. Both
+  are correct when they give the qualifiedName the app emits today. Never
+  call it without `process_id`: pyatlan's own hash changes every existing
+  process qualifiedName. A `process_id` f-string is itself a finding only
+  when it interpolates a qualifiedName and contains a `/` literal
+  (`f"{model_qn}@allmodule"` is not); it takes the same ignore.
 - **decode** — code that takes a qualifiedName apart (`split("/")`,
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
@@ -250,8 +253,8 @@ helper and lists their lines.
     reference that would disappear. If the developer accepts, skip those
     rows before the helper is called, use the creator, and compare the
     published asset counts before and after.
-  - **centralise** — keep the f-string in the helper with an ignore that
-    names the creator and the input it would change. This keeps identity
+  - **keep the f-string** — keep the f-string in the helper with an ignore
+    that names the creator and the input it would change. This keeps identity
     parity and is the default when the developer does not accept a change.
   - **leave open** — the site stays unsuppressed and is listed in the PR
     description.
@@ -305,8 +308,9 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 ## Step 3 — Prove it
 
 1. `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004 --exit-zero --output <file>`
-   — no finding left except the agreed ignores, the **decode** sites and the
-   **identity change** sites left open (expected, unsuppressed). The checker
+   — no finding left except the agreed ignores and the **identity change**
+   sites left open (expected, unsuppressed). **decode** sites are not P028
+   findings, so they do not appear here. The checker
    does not see the hand-built helpers from Step 1 (for example a
    `_qn(*parts)` join): grep their call sites and confirm each is migrated or
    listed in the PR description as left open.
