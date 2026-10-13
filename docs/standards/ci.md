@@ -189,8 +189,18 @@ enqueues it, even though the second run is green. FND-3832 found this on most
 open resync PRs.
 
 If a human-readable cue is wanted, put it in the PR title (resync PRs already
-start with `chore(conformance): resync`). Enforced by the label tests in
-[`test_conformance_resync.py`](../../.github/scripts/tests/test_conformance_resync.py).
+start with `chore(conformance): resync`).
+
+The same rule covers Renovate: the fleet preset applies no labels (FND-2201),
+and classifies its PRs by branch slug instead.
+
+Enforced by
+[`test_no_bot_pr_labels.py`](../../.github/scripts/tests/test_no_bot_pr_labels.py),
+which sweeps `.github/`, `renovate-config/` and the conformance bootstrap
+templates for every way code adds a PR label, and parses each Renovate config
+for `labels` / `addLabels` / `:label` presets. Sites that predate it are
+grandfathered by exact count, each with its reason. A new site fails, and so
+does a removed one until its count is updated.
 
 ## CI cost
 
