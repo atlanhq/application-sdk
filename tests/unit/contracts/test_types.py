@@ -158,6 +158,35 @@ class TestFileReference:
         ref = FileReference.from_local(d)
         assert ref.file_count == 3
 
+    def test_from_local_skips_local_sha256_markers(self, tmp_path: Path) -> None:
+        """FND-3406: persist and verify skip ``.sha256`` markers, so the count must."""
+        d = tmp_path / "tree"
+        (d / "sub").mkdir(parents=True)
+        (d / "a.json").write_text("a")
+        (d / "a.json.sha256").write_text("0" * 64)
+        (d / "sub" / "b.json").write_text("b")
+        (d / "sub" / "b.json.sha256").write_text("0" * 64)
+        ref = FileReference.from_local(d)
+        assert ref.file_count == 2
+
+    async def test_from_local_after_download_matches_the_download(
+        self, tmp_path: Path
+    ) -> None:
+        """The reported path: a directory ref built from a download's output."""
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.transfer import download
+
+        store = create_memory_store()
+        for name in ("0.json", "1.json"):
+            await _put(f"artifacts/x/{name}", b"{}\n", store)
+        dl = await download("artifacts/x/", str(tmp_path / "out"), store=store)
+
+        ref = FileReference.from_local(tmp_path / "out")
+
+        assert any(p.name.endswith(".sha256") for p in (tmp_path / "out").iterdir())
+        assert ref.file_count == dl.ref.file_count == 2
+
     def test_from_local_empty_directory_counts_zero(self, tmp_path: Path) -> None:
         d = tmp_path / "empty"
         d.mkdir()
