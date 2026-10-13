@@ -110,8 +110,9 @@ def check_p028(
                         "qualifiedName built by hand with an f-string — keep each "
                         "qualifiedName grammar in one helper in app/qualified_names.py; "
                         "derive it from the pyatlan asset .creator() when that gives "
-                        "the identical string, else keep the f-string there with a "
-                        "justified ignore."
+                        "the identical string, else keep the f-string there with an "
+                        "ignore whose reason says which case applies (no identical "
+                        "creator, or not an identity)."
                     ),
                     directives=directives,
                 )

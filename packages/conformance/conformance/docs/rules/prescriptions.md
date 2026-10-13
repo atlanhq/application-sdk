@@ -1417,23 +1417,22 @@ helper derives it from the creator, which also rejects blank segments.
 ### What correct looks like
 
 - **Compliant example:** atlan-openapi-app app/asset_mapper.py — qualifiedName comes from `APISpec.creator()` /
-  `APIPath.creator()`, so the grammar is pyatlan's. Where a caller genuinely needs the
-  string and not the asset, atlan-metabase-app app/qualified_names.py carries a
-  per-function ignore[P028] naming the creator whose grammar it mirrors.
+  `APIPath.creator()`, so the grammar is pyatlan's. Where a caller needs the string and
+  not the asset, atlan-metabase-app app/qualified_names.py keeps one memoized helper per
+  name shape that returns the creator's `.qualified_name`, and one per process shape.
 - **Migrate with:** the `migrate-asset-modeling` skill (`skills-dir`)
 - **Already correct when:** A justified per-function inline `# conformance: ignore[P028] <reason>` IS the correct
-  end state in three cases, and the reason must say which. Either the caller needs the
-  qualifiedName STRING and not the asset, and the f-string mirrors a pyatlan creator's
-  grammar — the reason then names that creator and the module it lives in, so a drift in
-  pyatlan can be traced here. Or no pyatlan creator produces the identical string for
-  every input the app can receive (an asset family without creators, a Process /
-  ColumnProcess identity, a content-hashed ARS key, or a creator that derives a segment
-  differently or raises on a reachable blank input), in which case the reason says so
-  and the site is centralised in app/qualified_names.py as the single source of truth
-  rather than repeated. Or the f-string is not an identity at all (an object-store key
-  or prefix starting with the qn, a trailing-`/` match prefix, a log/exception message
-  or display text), and the reason names what the string is. A directive on a site that
-  could simply call the creator is unremediated.
+  end state in two cases, and the reason must say which. Either no pyatlan creator
+  produces the identical string for every input the app can receive (an asset family
+  without creators, a Process / ColumnProcess identity, a content-hashed ARS key, or a
+  creator that derives a segment differently or raises on a reachable blank input), in
+  which case the reason names the creator or says none exists, and the f-string lives in
+  one helper per name shape (by convention in app/qualified_names.py; the detector does
+  not check the location) rather than being repeated. Or the f-string is not an identity
+  at all (an object-store key or prefix starting with the qn, a trailing-`/` match
+  prefix, a log/exception message or display text), and the reason names what the string
+  is. A directive on a site whose creator produces the identical string for every
+  reachable input is unremediated: that helper returns the creator's `.qualified_name`.
 
 An f-string composes a slash-delimited `qualifiedName` — it both interpolates a
 `*qualified_name` / `*_qn` value and contains a `/` separator (e.g.
@@ -1451,9 +1450,10 @@ Fix: move every qualifiedName grammar into one `app/qualified_names.py`, one hel
 name shape, and call the helpers from every site.  A helper returns
 `X.creator(...).qualified_name` when that creator produces the identical string for
 every input the app can receive; otherwise it keeps the f-string with `# conformance:
-ignore[P028] <reason>`.  Process and ColumnProcess identities keep the f-string:
+ignore[P028] <reason>`.  A new Process / ColumnProcess helper keeps the f-string:
 `generate_qualified_name` with `process_id` only prefixes the connection, needs
-placeholder inputs, and returns a hash instead when `process_id` is blank.
+placeholder inputs, and returns a hash instead when `process_id` is blank.  A helper
+already built on it clears the rule and stays.
 
 Not an identity — suppress with a reason: an f-string that embeds a qualifiedName but
 does not build an asset identity is a false positive of this name-and-`/` heuristic.
