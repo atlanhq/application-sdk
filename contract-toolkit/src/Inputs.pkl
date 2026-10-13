@@ -112,6 +112,9 @@ abstract class InputField {
   /// Nested object classes this field needs, dependencies first.
   hidden nestedClasses: List<ObjectField> = List()
 
+  /// Trailing `# ...` comment on the field line, or empty for none.
+  hidden pyLineComment: String = ""
+
   /// Whether `value` is a valid element for this field (lists only).
   function accepts(value: ScalarValue): Boolean = false
 }
@@ -196,9 +199,12 @@ class FileReferenceField extends InputField {
 
 /// An SDK `TreeSelection`: the payload-safe shape of a tree widget's selection.
 class TreeSelectionField extends InputField {
-  pyType = "TreeSelection"
-  pyDefaultIsFactory = true
-  pyNaturalDefault = "dict"
+  /// Also accept a plain string: renders `TreeSelection | str`, default `""`.
+  hidden orString: Boolean = false
+
+  pyType = if (orString) "TreeSelection | str" else "TreeSelection"
+  pyDefaultIsFactory = !orString
+  pyNaturalDefault = if (orString) "\"\"" else "dict"
 }
 
 /// A free-form JSON object: `Annotated[dict[str, Any], MaxItems(n)]`. The
@@ -321,7 +327,7 @@ function renderFieldLine(name: String, f: InputField): String =
 
 /// One rendered field: the annotation line plus its docstring, at `indent`.
 function renderField(name: String, f: InputField, indent: String): String =
-  "\(indent)\(renderFieldLine(name, f))\n" +
+  "\(indent)\(renderFieldLine(name, f))\(if (f.pyLineComment.isEmpty) "" else "  # \(f.pyLineComment)")\n" +
     (if (f.doc != "") "\(indent)\"\"\"\(pyDoc(f.doc))\"\"\"\n" else "")
 
 /// One nested object's class definition.

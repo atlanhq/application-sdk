@@ -308,8 +308,8 @@ def _optout_message(
     if refused or open_ended:
         parts.append(
             "Fix each, then remove the opt-out: drop an override of a field the SDK base already types "
-            "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or TreeSelection | str "
-            "for a tree widget read below its first level); model passthrough data "
+            "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or treeSelection = true "
+            "on a tree widget read below its first level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
             "CredentialRef, never inline); bound a dict or list of safe values with "
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "

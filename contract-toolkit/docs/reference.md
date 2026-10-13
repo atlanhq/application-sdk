@@ -3950,6 +3950,13 @@ from application_sdk.contracts.types import TreeSelection
 - On a `ConditionalInput`, evaluation fails unless `baseWidgetType = "apitree"`.
 - **Minimum SDK: the first release after 3.43.0.** The generated `_input.py` imports `application_sdk.contracts.types.TreeSelection`, which 3.43.0 and earlier do not have, so an app pinned to `atlan-application-sdk<=3.43.0` generates the file and then fails to import it. Raise the app's SDK floor (e.g. `atlan-application-sdk>3.43.0`) in the same change that sets `treeSelection = true`. The toolkit's own SDK-import check runs against SDK HEAD, so it does not catch an older pin.
 - For flat database/schema filters use the SDK's `FilterMap`, which `ExtractionInput`'s `include_filter` already uses.
+- **`include-filter` / `exclude-filter` on an extraction app.** `ExtractionInput` already declares `include_filter` / `exclude_filter` as `FilterMap | str`, so these widgets generate no field by default. `FilterMap` keeps two levels of a tree: deeper selections are dropped. With `treeSelection = true` the toolkit re-declares the field instead:
+
+  ```python
+      include_filter: TreeSelection | str = ""  # pyright: ignore[reportIncompatibleVariableOverride]
+  ```
+
+  The tree keeps every level. `str` keeps the regex and JSON-string inputs the base accepts (a JSON object string is parsed into the tree). `ExtractionInput`'s SQL-injection check still applies to the value. Its `FilterMap` normalisation does not, so a `{"db": ["schema"]}` list value is refused. Use this instead of hand-overriding the field in `app/contracts.py`.
 
 ---
 

@@ -3554,6 +3554,25 @@ local function toPyFieldName(k: String): String =
 ///
 /// Widgets that a setup form posts as a JSON-encoded string set
 /// `coerceJsonString`, which adds them to the generated `field_validator`.
+/// An extraction app's `include-filter` / `exclude-filter` tree widget with
+/// `treeSelection = true`. `ExtractionInput` declares these fields as
+/// `FilterMap | str`, which keeps two levels of the tree, so they are re-declared
+/// as `TreeSelection | str` instead of skipped. `str` keeps the regex and
+/// JSON-string inputs the base accepts.
+local function isTreeFilterOverride(pyName: String, u: Widgets.UIElement): Boolean =
+  !isSystemApp
+    && (pyName == "include_filter" || pyName == "exclude_filter")
+    && ((u is Widgets.ConditionalInput
+          && (u as Widgets.ConditionalInput).treeSelection
+          && (u as Widgets.ConditionalInput).baseWidgetType == "apitree")
+      || (u is Widgets.APITree && (u as Widgets.APITree).treeSelection))
+
+local treeFilterOverrideField: InputsPkg.TreeSelectionField = new InputsPkg.TreeSelectionField {
+  orString = true
+  coerceJsonString = true
+  pyLineComment = "pyright: ignore[reportIncompatibleVariableOverride]"
+}
+
 local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
   let (base =
     if (u is Widgets.BooleanInput)
@@ -3659,8 +3678,12 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // Every class field, in order: widget-derived first, then `inputs`.
   local classFields: List<Pair<String, InputsPkg.InputField>> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
-        Pair(toPyFieldName(k), widgetInputField(u))
+      when (u.includeInInput && isTreeFilterOverride(toPyFieldName(k), u)) {
+        Pair(toPyFieldName(k), treeFilterOverrideField)
+      } else {
+        when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+          Pair(toPyFieldName(k), widgetInputField(u))
+        }
       }
     }
   }).toList() + inputs.toMap().entries.toList()
@@ -3706,7 +3729,7 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
   local uiPyNames: Set<String> = (new Listing {
     for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+      when (u.includeInInput && (isTreeFilterOverride(toPyFieldName(k), u) || !skipFields.contains(toPyFieldName(k)))) {
         toPyFieldName(k)
       }
     }

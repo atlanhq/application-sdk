@@ -154,15 +154,17 @@ sends never justify it.
 Any]` over `ConnectionRef`, or filters as `dict[str, Any]` over `FilterMap | str`, is
 how most `Any` arrives.  Deleting the override inherits the safe type and keeps the wire
 shape.  `FilterMap` keeps two levels, so a tree widget the app reads deeper loses those
-levels: type it `TreeSelection | str` instead (step 3).
+levels: set `treeSelection = true` on the widget instead (step 3).
 
 3. *Use the SDK's types in the same outer shape.*  `ConnectionRef`; `CredentialRef` or
 `credential_guid` (credentials cross tasks by reference, never inline);
 `AgentCredentialSpec` for `agent_json`; a `BaseMetadataConfig` subclass for wizard
 metadata; `FilterMap` for flat filter maps; `TreeSelection`
 (`application_sdk.contracts.types`) for a tree-widget selection (`APITree` and similar)
-read at any depth; a small `BaseModel` for a dict whose keys are known.  Absorb legacy
-wire shapes with a `mode='before'` validator.
+read at any depth, which a generated contract gets from `treeSelection = true` on the
+widget (an extraction app's include/exclude filters become `TreeSelection | str`); a
+small `BaseModel` for a dict whose keys are known.  Absorb legacy wire shapes with a
+`mode='before'` validator.
 
 4. *Bound a collection of safe values* with `Annotated[..., MaxItems(n)]`, `n` taken
 from the field's real cardinality.  Every nested `dict` or `list` needs its own bound.
@@ -186,8 +188,8 @@ the `Any`.
 
 **Generated contracts** (`app/generated/`) are fixed at their source: the
 `contract/*.pkl` widget, or the toolkit when it emits `dict[str, Any]` for a widget
-(`APITree` and similar).  Never hand-edit the generated file, and never let a
-post-generate hook re-insert the opt-out.
+(`APITree` and similar; set `treeSelection = true`).  Never hand-edit the generated
+file, and never let a post-generate hook re-insert the opt-out.
 
 **Narrowing changes what the app accepts.**  Before narrowing, list the shapes the field
 really carries (its normaliser, its producers, the next task's contract) and confirm

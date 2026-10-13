@@ -54,6 +54,19 @@ local function apiTree(tree: Boolean) = new App.APITree {
   treeSelection = tree
 }
 
+local function filterApp(include: App.UIElement, exclude: App.UIElement) = (treeApp(include)) {
+  uiConfig {
+    tasks {
+      ["Metadata"] {
+        inputs {
+          ["include-filter"] = include
+          ["exclude-filter"] = exclude
+        }
+      }
+    }
+  }
+}
+
 local function inputPy(app) = app.output.files["app/generated/_input.py"].text
 local function configJson(app) = app.output.files["app/generated/tree-selection-test.json"].text
 
@@ -61,6 +74,10 @@ local conditionalOn = treeApp(conditional(true, "apitree"))
 local conditionalOff = treeApp(conditional(false, "apitree"))
 local apiTreeOn = treeApp(apiTree(true))
 local apiTreeOff = treeApp(apiTree(false))
+local filterOn = filterApp(conditional(true, "apitree"), conditional(true, "apitree"))
+local filterOff = filterApp(conditional(false, "apitree"), conditional(false, "apitree"))
+local filterApiTreeOn = filterApp(apiTree(true), apiTree(true))
+local filterOverrideLine = ": TreeSelection | str = \"\"  # pyright: ignore[reportIncompatibleVariableOverride]\n"
 
 facts {
   ["Default: tree widgets keep the existing dict[str, Any] type"] {
@@ -90,6 +107,28 @@ facts {
     configJson(apiTreeOn) == configJson(apiTreeOff)
     conditionalOn.output.files["app/generated/manifest.json"].text
       == conditionalOff.output.files["app/generated/manifest.json"].text
+  }
+
+  // ExtractionInput declares include_filter / exclude_filter as FilterMap | str,
+  // which keeps two levels of a tree. Without the flag the base field is kept.
+  ["Filter widgets without treeSelection keep the base FilterMap field"] {
+    !inputPy(filterOff).contains("include_filter:")
+    !inputPy(filterOff).contains("exclude_filter:")
+  }
+
+  ["Filter widgets with treeSelection re-declare the base field as TreeSelection | str"] {
+    inputPy(filterOn).contains("    include_filter\(filterOverrideLine)")
+    inputPy(filterOn).contains("    exclude_filter\(filterOverrideLine)")
+    inputPy(filterApiTreeOn).contains("    include_filter\(filterOverrideLine)")
+    inputPy(filterOn).split("\n").any((l) -> l.startsWith("    @field_validator(")
+      && l.contains("\"include_filter\"") && l.contains("\"exclude_filter\""))
+    inputPy(filterOn).contains("from application_sdk.contracts.types import TreeSelection\n")
+  }
+
+  ["Filter override: workflow config and manifest are identical"] {
+    configJson(filterOn) == configJson(filterOff)
+    filterOn.output.files["app/generated/manifest.json"].text
+      == filterOff.output.files["app/generated/manifest.json"].text
   }
 
   ["treeSelection is refused on a non-apitree ConditionalInput"] {

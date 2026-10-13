@@ -318,8 +318,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      inherits the safe type, keeps the wire shape, and is compatible under
      B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
      legacy string, and a one-level `APITree` tree.  It keeps two levels, so
-     a tree the app reads deeper loses those levels: override with
-     `TreeSelection | str` instead (step 3).
+     a tree the app reads deeper loses those levels: set
+     `treeSelection = true` on the widget instead, which re-declares the field
+     as `TreeSelection | str` (step 7).
 
   3. **Use the SDK's own types, in the same outer shape.**
      | Field carries | Type it as |
@@ -365,7 +366,10 @@ above.  `classification` is always `"judgment"` for all P-series rules.
 
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
-     `dict[str, Any]` for widgets such as `APITree`.  Change the widget, or
+     `dict[str, Any]` for widgets such as `APITree`.  For a tree widget, set
+     `treeSelection = true`: the field generates as `TreeSelection`, or as
+     `TreeSelection | str` on an extraction app's `include-filter` /
+     `exclude-filter`.  Change the widget, or
      fix the toolkit's emission, and regenerate.  Do not hand-edit
      `app/generated/`, and do not keep a `post-generate` hook that re-inserts
      the opt-out.  When only the toolkit can fix it, say so in the proposal:
