@@ -18,8 +18,17 @@ event, and this driver runs on every one of them:
 
 Only runs on the status's own commit count, and only runs created after the
 request: an older run on the same commit (an earlier `/gate-check force`)
-cannot answer for this one. A status that is not `pending` is left alone, so a
-late duplicate event cannot flip a recorded verdict.
+cannot answer for this one. When the request time cannot be read, nothing
+settles — older runs never stand in for it. A recorded verdict is never
+re-decided, so a late duplicate event cannot flip it.
+
+The Release Gate re-run is idempotent and retried by every later callback:
+a Release Gate whose latest attempt started after the verdict was written has
+read it, and is left alone; any other is re-run. So a re-run that failed, or a
+Release Gate still running past the wait, is repaired by the next completion
+instead of staying red. Callbacks for one commit are serialised by the
+caller's `concurrency:` group (test-commands.yaml); two that overlap anyway
+both see the same re-run and the second stands down.
 
 Re-runs and status writes need `actions: write` and `statuses: write`, which the
 calling workflow grants its GITHUB_TOKEN. The workflow runs from the default
@@ -68,14 +77,17 @@ def resolve(expected: list, runs: dict, requested_at: datetime | None) -> Verdic
     """
     if not expected:
         return Verdict(False, reason="the pending status lists no workflows")
+    if requested_at is None:
+        # Without the request time, a run from an earlier request on this
+        # commit is indistinguishable from this request's own (lens F-3dd6c5).
+        return Verdict(False, reason="the request time could not be read")
     failed = []
     first_url = ""
     for workflow in expected:
         candidates = [
             r
             for r in runs.get(workflow, [])
-            if requested_at is None
-            or (_ts(r.get("created_at")) or requested_at) >= requested_at
+            if (_ts(r.get("created_at")) or requested_at) >= requested_at
         ]
         if not candidates:
             return Verdict(False, reason=f"{workflow} has not started yet")
@@ -93,61 +105,105 @@ def resolve(expected: list, runs: dict, requested_at: datetime | None) -> Verdic
     return Verdict(True, "success", f"passed: {' '.join(expected)}", first_url)
 
 
-def settle(github: GitHub, sha: str) -> Verdict:
+def settle(
+    github: GitHub, sha: str, *, sleep: Callable[[float], None] = time.sleep
+) -> Verdict:
     statuses = github.statuses(sha)
     state, description = statuses.get(GATE_CHECK_CONTEXT, ("", ""))
-    if state != "pending":
-        return Verdict(
-            False, reason=f"`gate-check` is {state or 'absent'}, not pending"
+    if state == "pending":
+        expected = parse_gate_check_runs(description)
+        requested_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
+        runs = {
+            workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
+            for workflow in expected
+        }
+        verdict = resolve(expected, runs, requested_at)
+        if not verdict.final:
+            return verdict
+        github.status(
+            sha,
+            GATE_CHECK_CONTEXT,
+            verdict.state,
+            verdict.description,
+            verdict.target_url,
         )
-    expected = parse_gate_check_runs(description)
-    requested_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
-    runs = {
-        workflow: github.runs(sha, event="workflow_dispatch", workflow=workflow)
-        for workflow in expected
-    }
-    verdict = resolve(expected, runs, requested_at)
-    if not verdict.final:
-        return verdict
-    github.status(
-        sha, GATE_CHECK_CONTEXT, verdict.state, verdict.description, verdict.target_url
-    )
-    rerun_release_gate(github, sha)
+    elif state in FINAL_STATES:
+        # Already recorded — possibly by a callback whose Release Gate re-run
+        # failed. Re-check the Release Gate rather than exiting (F-76a87b).
+        verdict = Verdict(True, state, description, reason="already recorded")
+    else:
+        return Verdict(False, reason="no `gate-check` request on this commit")
+    verdict_at = github.status_created_at(sha, GATE_CHECK_CONTEXT)
+    rerun_release_gate(github, sha, verdict_at, sleep=sleep)
     return verdict
+
+
+FINAL_STATES = ("success", "failure", "error")
+
+
+def _read_verdict(run: dict, verdict_at: datetime | None) -> bool:
+    """Whether this Release Gate run's latest attempt started after the
+    verdict was written, i.e. read it."""
+    started = _ts(run.get("run_started_at"))
+    return verdict_at is not None and started is not None and started >= verdict_at
+
+
+def _newest_release_gate(github: GitHub, sha: str) -> dict | None:
+    runs = [
+        r
+        for r in github.runs(sha, workflow=RELEASE_GATE_WORKFLOW)
+        if r.get("event") == "pull_request"
+    ]
+    return max(runs, key=lambda r: r["id"]) if runs else None
 
 
 def rerun_release_gate(
     github: GitHub,
     sha: str,
+    verdict_at: datetime | None,
     *,
     attempts: int = 7,
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
-    """Re-run the newest Release Gate run on ``sha`` once it has completed.
+    """Bring the newest Release Gate run on ``sha`` up to the verdict.
 
-    A Release Gate still running when the verdict lands may already have read
-    `pending`, so it is waited for (it takes seconds) rather than trusted.
+    Idempotent: a run whose latest attempt started after the verdict has read
+    it and is left alone, so every callback may call this. A run still in
+    progress is waited for (it takes seconds): it may have read `pending`.
+    Returns whether it re-ran anything; raises when the run cannot be brought
+    up to date, so the callback fails visibly and the next one retries.
     """
-    newest: dict = {}
+    newest: dict | None = None
     for attempt in range(max(attempts, 1)):
-        runs = [
-            r
-            for r in github.runs(sha, workflow=RELEASE_GATE_WORKFLOW)
-            if r.get("event") == "pull_request"
-        ]
-        if not runs:
+        newest = _newest_release_gate(github, sha)
+        if newest is None:
             _notice("no Release Gate run on this commit; nothing to re-run")
             return False
-        newest = max(runs, key=lambda r: r["id"])
-        if newest.get("status") == "completed":
-            github.rerun(int(newest["id"]))
+        if _read_verdict(newest, verdict_at):
+            if newest.get("status") == "completed":
+                _notice(f"Release Gate run {newest['id']} already read the verdict")
+                return False
+        elif newest.get("status") == "completed":
+            try:
+                github.rerun(int(newest["id"]))
+            except GitHubError:
+                # A concurrent callback may have re-run it a moment ago; that
+                # is success too. Anything else is a real failure.
+                again = _newest_release_gate(github, sha)
+                if again is not None and (
+                    again.get("status") != "completed"
+                    or _read_verdict(again, verdict_at)
+                ):
+                    _notice(f"Release Gate run {newest['id']} is already re-running")
+                    return False
+                raise
             _notice(f"re-ran Release Gate run {newest['id']}")
             return True
         if attempt < attempts - 1:
             sleep(20)
     raise GitHubError(
-        f"Release Gate run {newest.get('id')} did not finish; re-run it by hand to "
-        "pick up the gate-check verdict"
+        f"Release Gate run {(newest or {}).get('id')} did not finish; the next "
+        "gate-check callback retries, or re-run it by hand"
     )
 
 

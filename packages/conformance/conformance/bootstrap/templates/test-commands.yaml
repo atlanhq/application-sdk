@@ -41,14 +41,6 @@ on:
 permissions:
   contents: read
 
-# One command per PR at a time, so two comments cannot both pass the
-# "already running?" check before either has started its run. Not cancelled:
-# the first request finishes and the second sees it. The verdict job is keyed
-# on the commit for the same reason.
-concurrency:
-  group: test-commands-${{ github.event.issue.number || github.event.workflow_run.head_sha }}
-  cancel-in-progress: false
-
 jobs:
   commands:
     # Pre-filtered here as well as in the reusable, so an ordinary comment or
@@ -58,7 +50,21 @@ jobs:
       (startsWith(github.event.comment.body, '/e2e') ||
       startsWith(github.event.comment.body, '/gate-check'))) ||
       (github.event_name == 'workflow_run' &&
-      github.event.workflow_run.event == 'workflow_dispatch')
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      startsWith(github.event.workflow_run.head_branch, 'bump-version'))
+    # One run per PR AND command at a time, so two identical comments cannot
+    # both pass the "already running?" check. Not cancelled: the first request
+    # finishes and the second sees it. A group holds ONE pending run (a third
+    # arrival evicts the waiting one), so it is keyed on the command — the
+    # newest identical request supersedes an older one, but an `/e2e` never
+    # evicts a waiting `/gate-check` (lens F-dbdbf2). Verdict callbacks are
+    # keyed on the commit: any later completion settles what an evicted one
+    # would have. JOB-level, not workflow-level: a job's group is entered only
+    # once its `if:` passes, so ordinary comments and ordinary PR-run
+    # completions never occupy (or evict from) the pending slot.
+    concurrency:
+      group: test-commands-${{ github.event_name == 'workflow_run' && format('verdict-{0}', github.event.workflow_run.head_sha) || format('{0}-{1}', github.event.issue.number, startsWith(github.event.comment.body, '/gate-check') && 'gate-check' || 'e2e') }}
+      cancel-in-progress: false
     # Exhaustive, not additive: every scope omitted is `none`, and the
     # reusable's jobs can only narrow this.
     permissions:

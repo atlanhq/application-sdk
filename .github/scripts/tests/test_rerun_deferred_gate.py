@@ -266,7 +266,11 @@ def _reconcile_stub(
             job_reruns.append(path)
             return "{}" if rerun_ok else ""
         if "/jobs?" in path:
-            return json.dumps({"jobs": jobs})
+            assert "--paginate" in args and "--slurp" in args
+            return json.dumps(
+                [{"jobs": jobs[i : i + 100]} for i in range(0, len(jobs), 100)]
+                or [{"jobs": []}]
+            )
         if path.endswith(f"/actions/runs/{DISPATCHED}"):
             return json.dumps({"workflow_id": WORKFLOW_ID})
         listing = polls.pop(0) if len(polls) > 1 else polls[0]
@@ -303,6 +307,20 @@ def test_a_green_pr_gate_is_rerun_when_dispatched_e2e_failed() -> None:
             ]
         ],
         jobs=[_pr_gate("success")],
+        job_reruns=job_reruns,
+    )
+    assert reconcile(REPO, SHA, DISPATCHED, "failure", run=run)
+    assert job_reruns == [f"repos/{REPO}/actions/jobs/7/rerun"]
+
+
+def test_a_pr_gate_past_the_first_page_is_found() -> None:
+    """Not finding the gate leaves a disagreeing verdict unrepaired, so the
+    job lookup must read every page (lens F-c69d2f)."""
+    job_reruns: list = []
+    filler = [{"id": 1000 + i, "name": f"tests / E2E leg {i}"} for i in range(150)]
+    run = _reconcile_stub(
+        listings=[[_run(SELF, conclusion="success")]],
+        jobs=[*filler, _pr_gate("success", job_id=7)],
         job_reruns=job_reruns,
     )
     assert reconcile(REPO, SHA, DISPATCHED, "failure", run=run)

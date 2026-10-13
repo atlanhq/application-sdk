@@ -36,9 +36,14 @@ from urllib.parse import quote
 GhFn = Callable[[list], subprocess.CompletedProcess]
 
 
+#: The process runner behind :func:`_gh`. A module attribute so a test can
+#: replace it here without touching the shared stdlib ``subprocess`` module.
+_RUNNER: Callable[..., subprocess.CompletedProcess] = subprocess.run
+
+
 def _gh(args: list) -> subprocess.CompletedProcess:
     try:
-        return subprocess.run(["gh", *args], capture_output=True, text=True, timeout=60)
+        return _RUNNER(["gh", *args], capture_output=True, text=True, timeout=60)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(["gh", *args], 124, "", "timed out")
 

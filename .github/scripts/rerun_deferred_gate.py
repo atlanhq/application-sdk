@@ -193,19 +193,26 @@ PR_GATE_JOB_NAME = "tests / Tests Gate"
 
 
 def _pr_gate_job(repo: str, run_id: int, run: RunFn) -> dict | None:
+    # Every page: a large e2e matrix can push the gate past the first 100 jobs,
+    # and "not found" would leave a disagreeing gate unrepaired.
     payload = _load(
         run(
             [
                 "api",
                 f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100&filter=latest",
+                "--paginate",
+                "--slurp",
             ]
         )
     )
-    if not isinstance(payload, dict) or not isinstance(payload.get("jobs"), list):
-        return None
-    for job in payload["jobs"]:
-        if isinstance(job, dict) and job.get("name") == PR_GATE_JOB_NAME:
-            return job
+    pages = payload if isinstance(payload, list) else [payload]
+    for page in pages:
+        jobs = page.get("jobs") if isinstance(page, dict) else None
+        if not isinstance(jobs, list):
+            return None
+        for job in jobs:
+            if isinstance(job, dict) and job.get("name") == PR_GATE_JOB_NAME:
+                return job
     return None
 
 

@@ -566,7 +566,7 @@ class FakeApi:
             workflow = args[-1].split("/workflows/")[1].split("?")[0]
             text = self.texts.get(workflow)
             return self._done(args, "", 1) if text is None else self._done(args, text)
-        path = args[1]
+        path = next(a for a in args[1:] if a.startswith("repos/"))
         if "/pulls/" in path:
             return self._done(args, self.pull)
         if "/collaborators/" in path and path.endswith("/permission"):
@@ -595,7 +595,7 @@ class FakeApi:
             return self._done(args, self.status_rows)
         if "/jobs" in path:
             run_id = int(path.split("/runs/")[1].split("/")[0])
-            return self._done(args, {"jobs": self.jobs.get(run_id, [])})
+            return self._paged(args, {"jobs": self.jobs.get(run_id, [])})
         if "/runs" in path:
             if "/workflows/" in path:
                 workflow = path.split("/workflows/")[1].split("/")[0]
@@ -607,11 +607,22 @@ class FakeApi:
                     for source in self.runs.values()
                     for r in (source() if callable(source) else source)
                 ]
+            # Like GitHub: the listing is scoped to the queried head SHA, so a
+            # run on another commit can never block or answer this one.
+            if "head_sha=" in path:
+                sha = path.split("head_sha=")[1].split("&")[0]
+                rows = [r for r in rows if r.get("head_sha", sha) == sha]
             if "event=" in path:
                 event = path.split("event=")[1].split("&")[0]
                 rows = [r for r in rows if r.get("event") == event]
-            return self._done(args, {"workflow_runs": rows})
+            return self._paged(args, {"workflow_runs": rows})
         raise AssertionError(f"unexpected gh call: {args}")
+
+    def _paged(
+        self, args: list[str], page: dict[str, Any]
+    ) -> subprocess.CompletedProcess:
+        """`--paginate --slurp` answers with a list of pages."""
+        return self._done(args, [page] if "--paginate" in args else page)
 
     def dispatches(self) -> list[tuple[str, dict[str, str]]]:
         return [(p, f) for p, f in self.writes if p.endswith("/dispatches")]
@@ -637,11 +648,13 @@ def _run(
     status: str = "completed",
     event: str = "pull_request",
     started: int = 10,
+    head_sha: str = SHA,
 ) -> dict[str, Any]:
     return {
         "id": run_id,
         "status": status,
         "event": event,
+        "head_sha": head_sha,
         "run_started_at": _iso(started),
         "html_url": f"https://example.invalid/runs/{run_id}",
     }
@@ -659,9 +672,12 @@ class TestGitHub:
         assert ptc.GitHub(REPO, api).behind_by("main", SHA) == 3
         assert api.calls == [["api", f"repos/{REPO}/compare/main...{SHA}"]]
 
-    @pytest.mark.parametrize("value", [None, "3", 2.0])
-    def test_behind_by_unknown_reads_as_zero(self, value: Any) -> None:
-        assert ptc.GitHub(REPO, FakeApi(behind_by=value)).behind_by("main", SHA) == 0
+    @pytest.mark.parametrize("value", [None, "3", 2.0, True])
+    def test_behind_by_unknown_fails_closed(self, value: Any) -> None:
+        """Unknown is not "up to date": a malformed compare must not let
+        `/gate-check` run on an unestablished base (lens F-bb5064)."""
+        with pytest.raises(ptc.GitHubError, match="behind_by"):
+            ptc.GitHub(REPO, FakeApi(behind_by=value)).behind_by("main", SHA)
 
     def test_behind_by_without_a_base_ref_asks_nothing(self) -> None:
         api = FakeApi(behind_by=3)
@@ -732,7 +748,7 @@ class TestGitHub:
             assert kwargs["timeout"] == ptc.GH_TIMEOUT_S
             raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
 
-        monkeypatch.setattr(ptc.subprocess, "run", hang)
+        monkeypatch.setattr(ptc, "_RUNNER", hang)
         result = ptc.gh(["api", "x"])
         assert result.returncode == 124
         assert "timed out" in result.stderr
@@ -776,6 +792,26 @@ class TestRunDispatch:
         assert reads == [
             f"repos/{REPO}/contents/.github/workflows/tests.yaml?ref={SHA}"
         ]
+
+    def test_an_active_run_on_another_commit_does_not_block(self) -> None:
+        """Duplicate suppression is per commit: a dispatch still running for
+        the previous head must not refuse a request for the new one."""
+        api = FakeApi(
+            texts=_texts(),
+            runs={
+                "tests.yaml": [
+                    _run(
+                        1,
+                        status="in_progress",
+                        event="workflow_dispatch",
+                        head_sha="b" * 40,
+                    )
+                ]
+            },
+        )
+        plan = ptc.run_dispatch(ptc.GitHub(REPO, api), _request(), RUN_URL)
+        assert plan.act is True
+        assert len(api.dispatches()) == 1
 
     def test_active_dispatch_run_blocks(self) -> None:
         api = FakeApi(
@@ -1354,3 +1390,83 @@ class TestContracts:
         assert ptc.E2E_REQUEST_CONTEXT == bump_pr_opt_in.E2E_REQUEST_CONTEXT
         assert ptc.GATE_CHECK_CONTEXT == bump_pr_opt_in.GATE_CHECK_CONTEXT
         assert ptc.BUMP_BRANCH_PREFIX == bump_pr_opt_in.BUMP_BRANCH_PREFIX
+
+
+# ── lens round 1 ───────────────────────────────────────────────────────────
+
+
+class TestDispatchInputs:
+    """Dispatchability is read from the `on:` structure (lens F-795032)."""
+
+    def test_the_scaffold_declares_its_inputs(self) -> None:
+        inputs = ptc.dispatch_inputs(_render("tests.yaml"))
+        assert inputs is not None
+        assert {"run_e2e", "head_sha", "application_sdk_ref"} <= inputs
+
+    @pytest.mark.parametrize(
+        "name", ["checks.yml", "conformance.yaml", "vulnerability-scan.yml"]
+    )
+    def test_gated_shims_are_dispatchable(self, name: str) -> None:
+        assert ptc.dispatch_inputs(_render(name)) == frozenset()
+
+    def test_release_gate_is_not(self) -> None:
+        assert ptc.dispatch_inputs(_render("release-gate.yaml")) is None
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "on:\n  pull_request:\n# workflow_dispatch is mentioned here\njobs: {}\n",
+            "on:\n  pull_request:\n    # workflow_dispatch:\njobs: {}\n",
+            "name: workflow_dispatch\non:\n  push:\njobs: {}\n",
+            "on:\n  pull_request:\njobs:\n  workflow_dispatch:\n    runs-on: x\n",
+        ],
+    )
+    def test_a_mention_is_not_a_trigger(self, text: str) -> None:
+        """Dispatching a workflow without the trigger 422s after the pending
+        `gate-check` is posted, and the status would never settle."""
+        assert ptc.dispatch_inputs(text) is None
+
+    @pytest.mark.parametrize(
+        ("text", "expected"),
+        [
+            ("on: [push, workflow_dispatch]\n", frozenset()),
+            ("on: workflow_dispatch\n", frozenset()),
+            ("'on':\n  workflow_dispatch: {}\n", frozenset()),
+            (
+                "on:\n  workflow_dispatch:\n    inputs:\n      a:\n        type: string\n"
+                "      b: {}\n  push:\n",
+                frozenset({"a", "b"}),
+            ),
+        ],
+    )
+    def test_trigger_forms(self, text: str, expected: frozenset) -> None:
+        assert ptc.dispatch_inputs(text) == expected
+
+    def test_a_workflow_mentioning_the_trigger_is_not_dispatched(self) -> None:
+        texts = _texts({name: None for name in ptc.GATE_CHECK_WORKFLOWS})
+        texts["checks.yml"] = "on:\n  pull_request:\n# add workflow_dispatch later\n"
+        plan = ptc.plan_dispatch(_request(ptc.GATE_CHECK), _pr(BUMP), {}, [], texts)
+        assert plan.act is False
+        assert plan.pending_status == ()
+
+
+class TestPagination:
+    def test_runs_reads_every_page(self) -> None:
+        """An in-flight run on page 2 must still block a duplicate
+        (lens F-d8c707)."""
+        pages = [
+            {"workflow_runs": [_run(i, event="workflow_dispatch") for i in range(100)]},
+            {
+                "workflow_runs": [
+                    _run(500, status="in_progress", event="workflow_dispatch")
+                ]
+            },
+        ]
+
+        def run(args: list[str]) -> subprocess.CompletedProcess:
+            assert "--paginate" in args and "--slurp" in args
+            return subprocess.CompletedProcess(args, 0, json.dumps(pages), "")
+
+        rows = ptc.GitHub(REPO, run).runs(SHA, event="workflow_dispatch")
+        assert len(rows) == 101
+        assert rows[-1]["id"] == 500

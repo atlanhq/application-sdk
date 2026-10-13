@@ -11,8 +11,11 @@ completions. What has to hold:
   each failed workflow;
 * a status that is no longer `pending` is never overwritten, so a late
   duplicate event cannot flip a recorded verdict;
-* once final, the newest Release Gate run is re-run (after waiting out one
-  still in flight), so the required check reads the verdict.
+* an unknown request time settles nothing (lens F-3dd6c5, F-387afb);
+* once final, the newest Release Gate run is re-run unless its latest attempt
+  started after the verdict — idempotent, so every later callback retries a
+  failed or overdue re-run (lens F-76a87b) and overlapping callbacks re-run it
+  once (lens F-f4188f).
 """
 
 from __future__ import annotations
@@ -109,9 +112,13 @@ class TestResolve:
         )
         assert verdict.final is True
 
-    def test_unknown_request_time_counts_every_run(self) -> None:
+    def test_unknown_request_time_settles_nothing(self) -> None:
+        """An earlier `/gate-check force`'s green runs must not settle a new
+        request whose own time cannot be read."""
         runs = {"tests.yaml": [_run(1, created=1)], "checks.yml": [_run(2, created=1)]}
-        assert gcv.resolve(EXPECTED, runs, None).state == "success"
+        verdict = gcv.resolve(EXPECTED, runs, None)
+        assert verdict.final is False
+        assert "request time" in verdict.reason
 
     def test_all_success(self) -> None:
         runs = {"tests.yaml": [_run(1)], "checks.yml": [_run(2)]}
@@ -156,9 +163,13 @@ class FakeApi:
         status: tuple[str, str] | None,
         status_created_at: str = _iso(30),
         runs: dict[str, list[list[dict[str, Any]]]] | None = None,
+        written_at: str = _iso(40),
+        rerun_fails: bool = False,
     ) -> None:
         self.status = status
         self.status_created_at = status_created_at
+        self.written_at = written_at
+        self.rerun_fails = rerun_fails
         # workflow → successive listings; the last one sticks.
         self.runs = runs or {}
         self.writes: list[tuple[str, dict[str, str]]] = []
@@ -171,8 +182,14 @@ class FakeApi:
                 args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-f"
             )
             self.writes.append((path, fields))
+            if "/statuses/" in path:
+                # Read back like GitHub: the newest row wins.
+                self.status = (fields["state"], fields["description"])
+                self.status_created_at = self.written_at
+            if path.endswith("/rerun") and self.rerun_fails:
+                return subprocess.CompletedProcess(args, 1, "", "409 already running")
             return subprocess.CompletedProcess(args, 0, "{}", "")
-        path = args[1]
+        path = next(a for a in args[1:] if a.startswith("repos/"))
         self.paths.append(path)
         rows: list[dict[str, Any]] = []
         if self.status is not None:
@@ -195,29 +212,69 @@ class FakeApi:
             if "event=" in path:
                 event = path.split("event=")[1].split("&")[0]
                 listing = [r for r in listing if r.get("event") == event]
-            body = {"workflow_runs": listing}
+            body = (
+                [{"workflow_runs": listing}]
+                if "--paginate" in args
+                else {"workflow_runs": listing}
+            )
         else:
             raise AssertionError(f"unexpected gh call: {args}")
         return subprocess.CompletedProcess(args, 0, json.dumps(body), "")
 
 
-def _gate(run_id: int, status: str = "completed") -> dict[str, Any]:
-    return _run(run_id, status=status, event="pull_request", created=5)
+def _gate(
+    run_id: int,
+    status: str = "completed",
+    *,
+    started: int = 5,
+    conclusion: str = "failure",
+) -> dict[str, Any]:
+    """A Release Gate run whose latest attempt started at ``started``."""
+    run = _run(
+        run_id, status=status, event="pull_request", created=5, conclusion=conclusion
+    )
+    run["run_started_at"] = _iso(started)
+    return run
+
+
+VERDICT_AT = datetime(2026, 10, 13, 12, 40, tzinfo=timezone.utc)
 
 
 class TestSettle:
-    @pytest.mark.parametrize(
-        "status", [None, ("success", "passed: tests.yaml"), ("failure", "failed: x")]
-    )
-    def test_non_pending_status_is_left_alone(
-        self, status: tuple[str, str] | None
-    ) -> None:
-        """A late duplicate completion must not flip a recorded verdict."""
-        api = FakeApi(status=status, runs={"tests.yaml": [[_run(1)]]})
+    def test_no_request_is_left_alone(self) -> None:
+        api = FakeApi(status=None, runs={"tests.yaml": [[_run(1)]]})
         verdict = gcv.settle(GitHub(REPO, api), SHA)
         assert verdict.final is False
-        assert "not pending" in verdict.reason
         assert api.writes == []
+
+    @pytest.mark.parametrize(
+        "status", [("success", "passed: tests.yaml"), ("failure", "failed: x")]
+    )
+    def test_a_recorded_verdict_is_never_rewritten(
+        self, status: tuple[str, str]
+    ) -> None:
+        """A late duplicate completion must not flip a recorded verdict; it
+        only re-checks the Release Gate (here already up to date)."""
+        api = FakeApi(
+            status=status,
+            status_created_at=_iso(40),
+            runs={gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=41)]]},
+        )
+        verdict = gcv.settle(GitHub(REPO, api), SHA)
+        assert (verdict.final, verdict.state) == (True, status[0])
+        assert api.writes == []
+
+    def test_a_failed_rerun_is_retried_by_the_next_callback(self) -> None:
+        """lens F-76a87b: the status went final but the Release Gate re-run
+        did not happen, so the gate still shows the red it read from
+        `pending`. The next callback must re-run it, not exit."""
+        api = FakeApi(
+            status=("success", "passed: tests.yaml"),
+            status_created_at=_iso(40),
+            runs={gcv.RELEASE_GATE_WORKFLOW: [[_gate(8, started=35)]]},
+        )
+        gcv.settle(GitHub(REPO, api), SHA)
+        assert [p for p, _ in api.writes] == [f"repos/{REPO}/actions/runs/8/rerun"]
 
     def test_unsettled_writes_nothing(self) -> None:
         api = FakeApi(
@@ -271,9 +328,50 @@ class TestRerunReleaseGate:
             },
         )
         sleeps: list[float] = []
-        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, sleep=sleeps.append)
+        assert gcv.rerun_release_gate(
+            GitHub(REPO, api), SHA, VERDICT_AT, sleep=sleeps.append
+        )
         assert sleeps == [20, 20]
         assert [p for p, _ in api.writes] == [f"repos/{REPO}/actions/runs/8/rerun"]
+
+    def test_a_gate_that_read_the_verdict_is_left_alone(self) -> None:
+        """Idempotence: the second of two overlapping callbacks finds the
+        re-run already started after the verdict and does nothing."""
+        api = FakeApi(
+            status=None,
+            runs={
+                gcv.RELEASE_GATE_WORKFLOW: [
+                    [_gate(8, started=41, conclusion="success")]
+                ]
+            },
+        )
+        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT) is False
+        assert api.writes == []
+
+    def test_a_rerun_rejected_because_it_is_already_running_is_fine(self) -> None:
+        """lens F-f4188f: two callbacks race to re-run; the loser's 409 is
+        the winner's success, not a failure."""
+        api = FakeApi(
+            status=None,
+            rerun_fails=True,
+            runs={
+                gcv.RELEASE_GATE_WORKFLOW: [
+                    [_gate(8)],
+                    [_gate(8, "queued", started=41)],
+                ]
+            },
+        )
+        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT) is False
+
+    def test_a_rerun_that_really_failed_raises(self) -> None:
+        """So the callback fails visibly and the next one retries."""
+        api = FakeApi(
+            status=None,
+            rerun_fails=True,
+            runs={gcv.RELEASE_GATE_WORKFLOW: [[_gate(8)]]},
+        )
+        with pytest.raises(GitHubError):
+            gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT)
 
     def test_raises_after_the_attempts(self) -> None:
         api = FakeApi(
@@ -283,7 +381,7 @@ class TestRerunReleaseGate:
         sleeps: list[float] = []
         with pytest.raises(GitHubError, match="Release Gate run 8 did not finish"):
             gcv.rerun_release_gate(
-                GitHub(REPO, api), SHA, attempts=3, sleep=sleeps.append
+                GitHub(REPO, api), SHA, VERDICT_AT, attempts=3, sleep=sleeps.append
             )
         # No pointless sleep after the last look.
         assert sleeps == [20, 20]
@@ -294,13 +392,13 @@ class TestRerunReleaseGate:
             status=None,
             runs={gcv.RELEASE_GATE_WORKFLOW: [[_run(3, event="workflow_dispatch")]]},
         )
-        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA) is False
+        assert gcv.rerun_release_gate(GitHub(REPO, api), SHA, VERDICT_AT) is False
         assert api.writes == []
 
 
 class TestMain:
     def test_github_error_fails(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-        def boom(github: GitHub, sha: str) -> gcv.Verdict:
+        def boom(github: GitHub, sha: str, **_kwargs: Any) -> gcv.Verdict:
             raise GitHubError("nope")
 
         monkeypatch.setattr(gcv, "settle", boom)
@@ -317,6 +415,6 @@ class TestMain:
     def test_reports_and_succeeds(
         self, monkeypatch: pytest.MonkeyPatch, capsys, verdict: gcv.Verdict, needle: str
     ) -> None:
-        monkeypatch.setattr(gcv, "settle", lambda github, sha: verdict)
+        monkeypatch.setattr(gcv, "settle", lambda github, sha, **_kwargs: verdict)
         assert gcv.main(["--repo", REPO, "--head-sha", SHA]) == 0
         assert needle in capsys.readouterr().err

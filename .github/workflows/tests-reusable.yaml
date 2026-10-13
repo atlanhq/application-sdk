@@ -3662,6 +3662,7 @@ jobs:
             ${{ (needs.e2e.result == 'success' || needs.e2e.result == 'failure')
             && needs.e2e.result || 'error' }}
         run: |
+          set -euo pipefail
           python3 .github/scripts/rerun_deferred_gate.py \
             --repo "$REPO" \
             --head-sha "$HEAD_SHA" \

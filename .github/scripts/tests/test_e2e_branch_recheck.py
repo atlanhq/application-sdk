@@ -110,7 +110,7 @@ class TestMain:
             assert cmd[0] == "gh" and "timeout" in kwargs
             return subprocess.CompletedProcess(cmd, 0, _branch(tip), "")
 
-        monkeypatch.setattr(recheck.subprocess, "run", run)
+        monkeypatch.setattr(recheck, "_RUNNER", run)
         rc = recheck.main(
             [
                 "--repo",
@@ -132,7 +132,7 @@ class TestMain:
         def hang(cmd: list[str], **kwargs: Any) -> None:
             raise subprocess.TimeoutExpired(cmd, kwargs["timeout"])
 
-        monkeypatch.setattr(recheck.subprocess, "run", hang)
+        monkeypatch.setattr(recheck, "_RUNNER", hang)
         rc = recheck.main(
             [
                 "--repo",
@@ -152,7 +152,7 @@ class TestMain:
         self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         monkeypatch.setattr(
-            recheck.subprocess, "run", lambda *a, **k: pytest.fail("must not call gh")
+            recheck, "_RUNNER", lambda *a, **k: pytest.fail("must not call gh")
         )
         rc = recheck.main(
             [

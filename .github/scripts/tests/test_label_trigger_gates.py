@@ -328,12 +328,14 @@ _SDK_E2E_JOBS: dict[str, dict[str, Any]] = {
 }
 
 
-def _sdk_needs(job: str, *, requested: str, storage: str = "false") -> dict[str, Any]:
+def _sdk_needs(
+    job: str, *, requested: str, storage: str = "false", sdk: str = "true"
+) -> dict[str, Any]:
     return {
         "changes": {
             "result": "success",
             "outputs": {
-                "sdk": "true",
+                "sdk": sdk,
                 "container": "false",
                 "ci": "false",
                 "storage": storage,
@@ -402,6 +404,19 @@ def test_storage_integration_runs_on_a_storage_change_or_an_e2e_request(
     needs = _sdk_needs("storage-integration", requested=requested, storage=storage)
     github = _pull_request("synchronize", ())
     assert evaluate(expression, {"github": github, "needs": needs}) is runs
+
+
+def test_storage_integration_runs_on_a_storage_change_with_no_sdk_change() -> None:
+    """A Markdown-only change under application_sdk/storage/ matches the
+    storage filter while sdk_changes_non_md.py turns `sdk` false. A gate that
+    regressed to also require `sdk` would pass every case above (they all set
+    sdk=true) and silently skip the suite here (lens F-55f377)."""
+    expression = _gate("pull_request.yaml", "storage-integration")
+    needs = _sdk_needs(
+        "storage-integration", requested="false", storage="true", sdk="false"
+    )
+    github = _pull_request("synchronize", ())
+    assert evaluate(expression, {"github": github, "needs": needs}) is True
 
 
 def test_storage_integration_stays_off_the_merge_queue() -> None:

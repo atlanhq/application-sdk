@@ -312,11 +312,12 @@ def plan_dispatch(
     dispatches = []
     for workflow in GATE_CHECK_WORKFLOWS:
         text = branch_workflows.get(workflow)
-        if text is None or "workflow_dispatch" not in text:
+        declared = dispatch_inputs(text) if text is not None else None
+        if declared is None:
             continue
         if workflow == TESTS_WORKFLOW:
             inputs = {"run_e2e": "true"}
-            if _DECLARES_HEAD_SHA.search(text):
+            if "head_sha" in declared:
                 inputs["head_sha"] = pr.head_sha
             dispatches.append(Dispatch(workflow, inputs))
         else:
@@ -341,10 +342,78 @@ def plan_dispatch(
     )
 
 
-#: A `head_sha:` key at the depth of a `workflow_dispatch` input. Dispatching
-#: an input the file does not declare is a 422 for the whole dispatch, so a
-#: mere mention of the name (a comment) must not count.
-_DECLARES_HEAD_SHA = re.compile(r"^      head_sha:", re.MULTILINE)
+def dispatch_inputs(text: str) -> frozenset | None:
+    """The ``workflow_dispatch`` input names a workflow declares; None when it
+    has no ``workflow_dispatch`` trigger at all.
+
+    Read from the structure of the ``on:`` block, not by searching the text: a
+    workflow that merely mentions the word in a comment is not dispatchable,
+    and dispatching it is a 422 that would leave a pending ``gate-check`` that
+    never settles. Equally, sending an undeclared input 422s the whole dispatch.
+    Line-based rather than a YAML load because the command runs on a bare
+    runner with no third-party packages; it understands the block form every
+    scaffold uses plus the inline ``on: [a, b]`` / ``on: a`` forms.
+    """
+    lines = [
+        line.rstrip()
+        for line in text.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    for index, line in enumerate(lines):
+        match = re.match(r"""^["']?on["']?\s*:\s*(.*)$""", line)
+        if not match:
+            continue
+        inline = match.group(1).split("#")[0].strip()
+        if inline:
+            names = {n.strip() for n in inline.strip("[]").split(",")}
+            return frozenset() if "workflow_dispatch" in names else None
+        return _dispatch_block(lines[index + 1 :])
+    return None
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
+
+
+def _dispatch_block(lines: list) -> frozenset | None:
+    """Scan the body of a block-form ``on:`` for ``workflow_dispatch``."""
+    body = []
+    for line in lines:
+        if _indent(line) == 0:
+            break
+        body.append(line)
+    if not body:
+        return None
+    trigger_indent = _indent(body[0])
+    for index, line in enumerate(body):
+        if _indent(line) != trigger_indent:
+            continue
+        if not re.match(r"^\s*workflow_dispatch\s*:", line):
+            continue
+        children = []
+        for child in body[index + 1 :]:
+            if _indent(child) <= trigger_indent:
+                break
+            children.append(child)
+        for position, child in enumerate(children):
+            if not re.match(r"^\s*inputs\s*:\s*$", child):
+                continue
+            under = []
+            for entry in children[position + 1 :]:
+                if _indent(entry) <= _indent(child):
+                    break
+                under.append(entry)
+            if not under:
+                return frozenset()
+            name_indent = _indent(under[0])
+            return frozenset(
+                match.group(1)
+                for entry in under
+                if _indent(entry) == name_indent
+                and (match := re.match(r"^\s*([A-Za-z0-9_-]+)\s*:", entry))
+            )
+        return frozenset()
+    return None
 
 
 #: Prefix of the pending `gate-check` description that lists the dispatched
@@ -437,10 +506,15 @@ def _refusal(request: Request, pr: PullRequest) -> Plan | None:
 GhFn = Callable[[list], subprocess.CompletedProcess]
 
 
+#: The process runner behind :func:`gh`. A module attribute so a test can
+#: replace it here without touching the shared stdlib ``subprocess`` module.
+_RUNNER: Callable[..., subprocess.CompletedProcess] = subprocess.run
+
+
 def gh(args: list) -> subprocess.CompletedProcess:
     """Single seam so tests can stub the `gh` CLI. Bounded by GH_TIMEOUT_S."""
     try:
-        return subprocess.run(
+        return _RUNNER(
             ["gh", *args], capture_output=True, text=True, timeout=GH_TIMEOUT_S
         )
     except subprocess.TimeoutExpired:
@@ -478,14 +552,18 @@ class GitHub:
     def behind_by(self, base_ref: str, head_sha: str) -> int:
         """How many base-branch commits ``head_sha`` lacks.
 
-        0 when there is no base ref or the count is missing; raises
-        GitHubError when the comparison cannot be read.
+        0 when there is no base ref; raises GitHubError when the comparison
+        cannot be read or carries no count.
         """
         if not base_ref:
             return 0
         body = self._json([f"repos/{self.repo}/compare/{base_ref}...{head_sha}"])
         value = (body or {}).get("behind_by")
-        return value if isinstance(value, int) else 0
+        if not isinstance(value, int) or isinstance(value, bool):
+            # Unknown is not "up to date": the release gate must not run on a
+            # comparison it could not establish. /e2e catches this and goes on.
+            raise GitHubError("the compare response carried no integer behind_by")
+        return value
 
     def can_push(self, login: str) -> bool:
         """Whether ``login`` holds Write, Maintain or Admin on this repository.
@@ -527,8 +605,7 @@ class GitHub:
             else f"repos/{self.repo}/actions/runs"
         )
         query = f"head_sha={sha}&per_page=100" + (f"&event={event}" if event else "")
-        body = self._json([f"{path}?{query}"])
-        return body.get("workflow_runs") or []
+        return self._paged(f"{path}?{query}", "workflow_runs")
 
     def workflow_text(self, workflow: str, ref: str) -> str | None:
         result = self._run(
@@ -544,10 +621,21 @@ class GitHub:
         return result.stdout
 
     def run_jobs(self, run_id: int) -> list:
-        body = self._json(
-            [f"repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100&filter=latest"]
+        return self._paged(
+            f"repos/{self.repo}/actions/runs/{run_id}/jobs?per_page=100&filter=latest",
+            "jobs",
         )
-        return body.get("jobs") or []
+
+    def _paged(self, path: str, key: str) -> list:
+        """Every page of a list endpoint. A decision such as "nothing is in
+        flight" must not rest on whichever 100 rows came first."""
+        pages = self._json(["--paginate", "--slurp", path])
+        if isinstance(pages, dict):
+            pages = [pages]
+        rows: list = []
+        for page in pages or []:
+            rows.extend((page or {}).get(key) or [])
+        return rows
 
     def post(self, path: str, fields: dict) -> None:
         args = ["-X", "POST", path]
