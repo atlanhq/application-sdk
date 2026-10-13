@@ -17,9 +17,11 @@ from ._helpers import (
     _filter_body_wrapped,
     _find_filter_method,
     _get_name,
+    _handler_rebinds_exception,
     _has_exc_info,
     _inherits_logging_filter,
     _is_gather_call,
+    _is_log_call_stmt,
     _iter_shallow,
     _return_carries_typed_failure,
     redaction_scope,
@@ -369,12 +371,332 @@ class SilentSwallowMixin:
 
     # ── E007 ─────────────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _eager_calls(expression: ast.expr) -> list[ast.Call]:
+        """Calls evaluated unconditionally by a simple expression."""
+        if isinstance(expression, ast.Call):
+            if any(isinstance(arg, ast.Starred) for arg in expression.args) or any(
+                keyword.arg is None for keyword in expression.keywords
+            ):
+                return []
+            children = [
+                *expression.args,
+                *(keyword.value for keyword in expression.keywords),
+            ]
+            return [
+                expression,
+                *(
+                    call
+                    for child in children
+                    for call in SilentSwallowMixin._eager_calls(child)
+                ),
+            ]
+        if isinstance(expression, (ast.List, ast.Tuple, ast.Set)):
+            return [
+                call
+                for element in expression.elts
+                if not isinstance(element, ast.Starred)
+                for call in SilentSwallowMixin._eager_calls(element)
+            ]
+        if isinstance(expression, ast.Dict):
+            return [
+                call
+                for element in (*expression.keys, *expression.values)
+                if element is not None
+                for call in SilentSwallowMixin._eager_calls(element)
+            ]
+        return []
+
+    @staticmethod
+    def _supported_method_decorators(
+        method: ast.FunctionDef | ast.AsyncFunctionDef,
+    ) -> bool:
+        """Whether a method keeps the ordinary bound-method call shape."""
+        return not method.decorator_list or (
+            len(method.decorator_list) == 1
+            and _get_name(method.decorator_list[0]) == "classmethod"
+        )
+
+    @staticmethod
+    def _class_statement_binds_name(statement: ast.stmt, name: str) -> bool:
+        """Whether a class-body statement can replace a method binding."""
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return statement.name == name
+        nodes = [statement, *_iter_shallow(statement)]
+        for node in nodes:
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound == name:
+                        return True
+        return False
+
+    def _class_helper(
+        self, class_node: ast.ClassDef, name: str
+    ) -> ast.FunctionDef | None:
+        """Resolve one unshadowed, synchronous helper declared on this class."""
+        methods = [
+            statement
+            for statement in class_node.body
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and statement.name == name
+        ]
+        if len(methods) != 1 or not isinstance(methods[0], ast.FunctionDef):
+            return None
+        helper = methods[0]
+        if not self._supported_method_decorators(helper):
+            return None
+        if any(
+            statement is not helper
+            and self._class_statement_binds_name(statement, name)
+            for statement in class_node.body
+        ):
+            return None
+        # ``self._helper = other`` anywhere in the class shadows the method on
+        # instances, so the lexical definition no longer proves the callee.
+        if any(
+            isinstance(node, ast.Attribute)
+            and node.attr == name
+            and isinstance(node.ctx, (ast.Store, ast.Del))
+            for node in ast.walk(class_node)
+        ):
+            return None
+        return helper
+
+    @staticmethod
+    def _bound_method_argument(
+        call: ast.Call, helper: ast.FunctionDef, parameter: str
+    ) -> ast.expr | None:
+        """Map an explicit call argument to a bound method parameter."""
+        if (
+            helper.args.vararg is not None
+            or helper.args.kwarg is not None
+            or any(isinstance(arg, ast.Starred) for arg in call.args)
+            or any(keyword.arg is None for keyword in call.keywords)
+        ):
+            return None
+        positional = [*helper.args.posonlyargs, *helper.args.args]
+        if len(positional) < 2 or len(call.args) > len(positional) - 1:
+            return None
+        supplied = {
+            formal.arg: value
+            for formal, value in zip(positional[1:], call.args, strict=False)
+        }
+        positional_only = {formal.arg for formal in helper.args.posonlyargs[1:]}
+        keywordable = {formal.arg for formal in helper.args.args[1:]} | {
+            formal.arg for formal in helper.args.kwonlyargs
+        }
+        for keyword in call.keywords:
+            assert keyword.arg is not None
+            if (
+                keyword.arg in positional_only
+                or keyword.arg not in keywordable
+                or keyword.arg in supplied
+            ):
+                return None
+            supplied[keyword.arg] = keyword.value
+        return supplied.get(parameter)
+
+    @staticmethod
+    def _statement_rebinds_name(statement: ast.stmt, name: str) -> bool:
+        """Whether a helper statement shadows or overwrites one of its inputs."""
+        if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            return statement.name == name
+        for node in [statement, *_iter_shallow(statement)]:
+            if (
+                isinstance(node, ast.Name)
+                and node.id == name
+                and isinstance(node.ctx, (ast.Store, ast.Del))
+            ):
+                return True
+            if isinstance(node, ast.ExceptHandler) and node.name == name:
+                return True
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                for alias in node.names:
+                    bound = alias.asname or alias.name.split(".")[0]
+                    if bound == name:
+                        return True
+            if isinstance(node, (ast.Global, ast.Nonlocal)) and name in node.names:
+                return True
+            if isinstance(node, (ast.MatchAs, ast.MatchStar)) and node.name == name:
+                return True
+            if isinstance(node, ast.MatchMapping) and node.rest == name:
+                return True
+        return False
+
+    @staticmethod
+    def _expression_represents_parameter(expression: ast.expr, parameter: str) -> bool:
+        """Whether a value passed to a log carries its input's identity or text.
+
+        Allowlisted shapes only: the bare name (``%s`` / ``exc_info=``),
+        ``str()`` / ``repr()`` of it, an f-string field of it, or ``%``
+        formatting with it as an operand. Lossy derivations such as
+        ``bool(problem)`` or ``type(problem)`` do not surface the exception.
+        """
+
+        def is_parameter(node: ast.AST) -> bool:
+            return (
+                isinstance(node, ast.Name)
+                and node.id == parameter
+                and isinstance(node.ctx, ast.Load)
+            )
+
+        if is_parameter(expression):
+            return True
+        if isinstance(expression, ast.Call):
+            return (
+                isinstance(expression.func, ast.Name)
+                and expression.func.id in {"str", "repr"}
+                and len(expression.args) == 1
+                and not expression.keywords
+                and is_parameter(expression.args[0])
+            )
+        if isinstance(expression, ast.JoinedStr):
+            return any(
+                isinstance(value, ast.FormattedValue)
+                and value.format_spec is None
+                and is_parameter(value.value)
+                for value in expression.values
+            )
+        if isinstance(expression, ast.BinOp) and isinstance(expression.op, ast.Mod):
+            if not (
+                isinstance(expression.left, ast.Constant)
+                and isinstance(expression.left.value, str)
+            ):
+                return False
+            operands = (
+                expression.right.elts
+                if isinstance(expression.right, ast.Tuple)
+                else [expression.right]
+            )
+            return any(is_parameter(operand) for operand in operands)
+        return False
+
+    def _helper_logs_parameter_before_return(
+        self, helper: ast.FunctionDef, parameter: str
+    ) -> bool:
+        """Prove a straight-line helper logs its un-rebound input before returning."""
+        if any(
+            isinstance(node, (ast.Yield, ast.YieldFrom))
+            for node in _iter_shallow(helper)
+        ):
+            return False
+        control_flow = (
+            ast.If,
+            ast.For,
+            ast.AsyncFor,
+            ast.While,
+            ast.Try,
+            ast.TryStar,
+            ast.With,
+            ast.AsyncWith,
+            ast.Match,
+            ast.Return,
+            ast.Raise,
+            ast.Break,
+            ast.Continue,
+        )
+        for statement in helper.body:
+            if (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and isinstance(statement.value.value, str)
+            ):
+                continue
+            if isinstance(statement, control_flow):
+                return False
+            if self._statement_rebinds_name(statement, parameter):
+                return False
+            if not _is_log_call_stmt(statement):
+                continue
+            call = statement.value
+            if isinstance(call, ast.Await):
+                call = call.value
+            if isinstance(call, ast.Call) and any(
+                self._expression_represents_parameter(value, parameter)
+                for value in [*call.args, *(keyword.value for keyword in call.keywords)]
+            ):
+                return True
+        return False
+
+    def _helper_logs_caught_exception(
+        self, handler: ast.ExceptHandler, statements: list[ast.stmt]
+    ) -> bool:
+        """True when a prior same-class call logs the handler's actual exception."""
+        if (
+            handler.name is None
+            or _handler_rebinds_exception(handler)
+            or not self._function_stack
+            or not self._class_stack
+        ):
+            return False
+        caller = self._function_stack[-1]
+        class_node = self._class_stack[-1]
+        caller_parameters = [*caller.args.posonlyargs, *caller.args.args]
+        if (
+            caller not in class_node.body
+            or not caller_parameters
+            or not self._supported_method_decorators(caller)
+        ):
+            return False
+        receiver = caller_parameters[0].arg
+        # A rebound receiver (``self = proxy``) no longer resolves to this class.
+        if any(
+            self._statement_rebinds_name(statement, receiver)
+            for statement in caller.body
+        ) or any(
+            isinstance(node, ast.Nonlocal) and receiver in node.names
+            for node in ast.walk(caller)
+        ):
+            return False
+        caller_is_classmethod = bool(caller.decorator_list)
+        for statement in statements:
+            if isinstance(statement, ast.Expr):
+                expression = statement.value
+            elif isinstance(statement, ast.Assign | ast.AnnAssign):
+                expression = statement.value
+            else:
+                continue
+            if expression is None:
+                continue
+            for call in self._eager_calls(expression):
+                if not (
+                    isinstance(call.func, ast.Attribute)
+                    and isinstance(call.func.value, ast.Name)
+                    and call.func.value.id == receiver
+                ):
+                    continue
+                helper = self._class_helper(class_node, call.func.attr)
+                if helper is None:
+                    continue
+                # ``cls.method(x)`` on a plain method is unbound: ``x`` lands in
+                # ``self``, so the descriptor-binding argument shift is wrong.
+                if caller_is_classmethod and not helper.decorator_list:
+                    continue
+                argument = self._bound_method_argument(call, helper, handler.name)
+                if (
+                    isinstance(argument, ast.Name)
+                    and argument.id == handler.name
+                    and self._helper_logs_parameter_before_return(helper, handler.name)
+                ):
+                    return True
+        return False
+
     def _check_p007(self, node: ast.ExceptHandler) -> None:
         # A return that hands the caught exception back as typed data hides
         # nothing: the failure leaves the frame for the caller to report. This
         # is the same predicate E004 uses for its typed-failure exemption, so
         # the two rules never disagree about one shape. It is applied per
         # return, because E007 judges each return on its own.
+        # A prior same-class helper call also counts as logging only when its
+        # straight-line body demonstrably logs the caught binding; opaque calls
+        # remain unproven.
         scope = typed_failure_scope(
             node,
             local_helpers=visible_helpers(self._local_helpers, self._function_stack),
@@ -385,7 +707,9 @@ class SilentSwallowMixin:
         for i, stmt in enumerate(node.body):
             if not isinstance(stmt, ast.Return) or stmt.value is None:
                 continue
-            if _any_logging_in(node.body[:i]):
+            if _any_logging_in(node.body[:i]) or self._helper_logs_caught_exception(
+                node, node.body[:i]
+            ):
                 continue
             if scope is not None and _return_carries_typed_failure(stmt, scope):
                 continue
@@ -529,6 +853,13 @@ class SilentSwallowMixin:
                     ):
                         inspected = True
                         break
+                # A comprehension checks per-item values under its bound name;
+                # connect that name back to the gather result before counting it.
+                if isinstance(
+                    node, (ast.ListComp, ast.SetComp, ast.GeneratorExp, ast.DictComp)
+                ) and _comprehension_checks_exceptions(node, names):
+                    inspected = True
+                    break
                 # for r in var: ... — iteration counts as inspection
                 if isinstance(node, ast.For):
                     # `for r in var:` — iterating the result list directly.
@@ -632,8 +963,8 @@ def _inspection_aliases(
                 ...
 
     Only whole-list copies are tracked -- ``dest.extend(var)``,
-    ``dest.append(var)`` and ``dest += var`` -- and transitively, so a chain of
-    copies resolves too. Element-wise copies are deliberately excluded: those
+    ``dest.append(var)``, ``dest += var`` and ``dest = var`` -- and
+    transitively, so a chain of copies resolves too. Element-wise copies are deliberately excluded: those
     require the caller to have touched each element already.
     """
     names = {var_name}
@@ -664,10 +995,169 @@ def _inspection_aliases(
             ):
                 dest = node.target.id
                 src = node.value.id
+            # `dest = var` / `dest: list = var` — a plain rebinding
+            elif (
+                isinstance(node, (ast.Assign, ast.AnnAssign))
+                and isinstance(node.value, ast.Name)
+                and len(targets := _assign_targets(node)) == 1
+                and isinstance(targets[0], ast.Name)
+            ):
+                dest = targets[0].id
+                src = node.value.id
             if src in names and dest is not None and dest not in names:
                 names.add(dest)
                 changed = True
     return names
+
+
+def _assign_targets(node: ast.Assign | ast.AnnAssign) -> list[ast.expr]:
+    """Targets of an assignment; chained ``a = b = x`` yields several."""
+    return node.targets if isinstance(node, ast.Assign) else [node.target]
+
+
+def _is_exception_class_name(name: str) -> bool:
+    """Whether *name* reads as an exception class (``AppError``, ``FooException``).
+
+    Types cannot be resolved from the AST, so this leans on the PEP 8
+    convention that exception class names end in ``Error`` or ``Exception``.
+    """
+    return name == "BaseException" or name.endswith(("Error", "Exception"))
+
+
+def _is_exception_type(node: ast.AST) -> bool:
+    """Whether an isinstance type expression names an exception class."""
+    if isinstance(node, ast.Name):
+        return _is_exception_class_name(node.id)
+    if isinstance(node, ast.Attribute):
+        # `builtins.Exception`, `errors.AppError`, `pkg.errors.AppError`
+        return _is_exception_class_name(node.attr)
+    if isinstance(node, ast.Tuple):
+        return any(_is_exception_type(element) for element in node.elts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+        return _is_exception_type(node.left) or _is_exception_type(node.right)
+    return False
+
+
+def _condition_checks_exception(node: ast.AST, item_names: set[str]) -> bool:
+    """Whether *node* positively tests a bound comprehension item as an exception.
+
+    Negations (``not isinstance(r, Exception)``) and comparisons
+    (``isinstance(r, Exception) == False``) are deliberately not followed: they
+    select the successes and drop the failures, which is the silent swallow
+    E010 exists to catch.
+    """
+    if isinstance(node, ast.Call):
+        return (
+            isinstance(node.func, ast.Name)
+            and node.func.id == "isinstance"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id in item_names
+            and _is_exception_type(node.args[1])
+        )
+    if isinstance(node, ast.BoolOp):
+        return any(
+            _condition_checks_exception(value, item_names)
+            for value in _reachable_operands(node)
+        )
+    if isinstance(node, ast.IfExp):
+        return _condition_checks_exception(node.test, item_names)
+    return False
+
+
+def _reachable_operands(node: ast.BoolOp) -> list[ast.expr]:
+    """Operands of *node* up to a literal that short-circuits the rest.
+
+    ``False and isinstance(r, Exception)`` never evaluates the test, so it must
+    not count as one. Only literal constants are folded; any other operand may
+    take either value at runtime.
+    """
+    stop_on = isinstance(node.op, ast.Or)
+    operands: list[ast.expr] = []
+    for value in node.values:
+        operands.append(value)
+        if isinstance(value, ast.Constant) and bool(value.value) is stop_on:
+            break
+    return operands
+
+
+def _result_item_names(
+    iterable: ast.expr, target: ast.expr, result_names: set[str]
+) -> set[str]:
+    """Names in a comprehension *target* that bind one gathered result each.
+
+    ``for r in rs`` binds ``r``. Through ``enumerate`` and ``zip`` only the
+    target position fed by the result list counts, so the index in
+    ``for i, r in enumerate(rs)`` or the partner in ``zip(keys, rs)`` is never
+    mistaken for a result. Other calls may ignore their argument and are not
+    followed.
+    """
+    if isinstance(iterable, ast.Name):
+        if iterable.id in result_names and isinstance(target, ast.Name):
+            return {target.id}
+        return set()
+    if not (
+        isinstance(iterable, ast.Call)
+        and isinstance(iterable.func, ast.Name)
+        and iterable.func.id in {"enumerate", "zip"}
+        and not iterable.keywords
+        and isinstance(target, (ast.Tuple, ast.List))
+        # `zip(*cols, rs)` / `for *a, r in ...` hide the width, so positions
+        # cannot be lined up.
+        and not any(isinstance(arg, ast.Starred) for arg in iterable.args)
+        and not any(isinstance(element, ast.Starred) for element in target.elts)
+    ):
+        return set()
+    if iterable.func.id == "enumerate":
+        # enumerate(rs) / enumerate(rs, start) yields (index, result)
+        positions = [1] if _is_result_name(iterable.args[:1], result_names) else []
+        width = 2
+    else:
+        positions = [
+            index
+            for index, arg in enumerate(iterable.args)
+            if _is_result_name([arg], result_names)
+        ]
+        width = len(iterable.args)
+    if len(target.elts) != width:
+        return set()
+    return {
+        element.id
+        for position in positions
+        if isinstance(element := target.elts[position], ast.Name)
+    }
+
+
+def _is_result_name(args: list[ast.expr], result_names: set[str]) -> bool:
+    """Whether *args* is exactly one plain reference to the gather results."""
+    return (
+        len(args) == 1 and isinstance(args[0], ast.Name) and args[0].id in result_names
+    )
+
+
+def _comprehension_checks_exceptions(
+    node: ast.ListComp | ast.SetComp | ast.GeneratorExp | ast.DictComp,
+    result_names: set[str],
+) -> bool:
+    """Whether a comprehension over the gather results tests each item as an exception.
+
+    The test may sit in a filter (``[r for r in rs if isinstance(r, Exception)]``)
+    or in the element itself (``any(isinstance(r, Exception) for r in rs)``).
+    """
+    item_names: set[str] = set()
+    for generator in node.generators:
+        item_names |= _result_item_names(generator.iter, generator.target, result_names)
+    if not item_names:
+        return False
+    if isinstance(node, ast.DictComp):
+        elements: list[ast.expr] = [node.key, node.value]
+    else:
+        elements = [node.elt]
+    conditions = [c for generator in node.generators for c in generator.ifs]
+    return any(
+        _condition_checks_exception(expression, item_names)
+        for expression in (*conditions, *elements)
+    )
 
 
 def _cancelled_task_names(

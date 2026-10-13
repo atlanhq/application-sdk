@@ -46,9 +46,18 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   Creates the SQLAlchemy engine (`self.engine`) and connection (`self.connection`).
 
 3.  **Executing Queries (`run_query` method):**
-    *   Takes a SQL query string and optional `batch_size`.
+    *   Takes a SQL query string, an optional `batch_size` and optional `params`.
     *   Executes the query using the established connection.
     *   Yields results in batches (lists of dictionaries).
+    *   **Bind user-supplied values with `params`, don't splice them into the SQL.** Write a `:name` placeholder in the query and pass `params={"name": value}`: the driver receives the value as a bound parameter, so text in it (a quote, a semicolon) cannot change the statement.
+
+        ```python
+        sql = "SELECT TABLE_NAME FROM ALL_TABLES WHERE REGEXP_LIKE(TABLE_NAME, :pattern)"
+        async for batch in client.run_query(sql, params={"pattern": include_regex}):
+            ...
+        ```
+
+        Every name in `params` must appear in the query as `:name`. A name the query never references raises `SqlBindParameterError` rather than running the query without that value. Without `params`, every colon in the query is treated as literal text, as before. Values are scalars (`SqlBindValue`: str, int, float, bool, Decimal, date/time, bytes or None). A placeholder may carry a cast, as in `:since::timestamp`; any other colon, such as `x::text` or `'12:30'`, stays literal, as does a `:name` inside quoted text or a comment. Quoting follows standard SQL (`''` doubles a quote, a backslash is literal), plus backtick identifiers and Postgres dollar quotes.
 
 ### Example `DB_CONFIG`
 

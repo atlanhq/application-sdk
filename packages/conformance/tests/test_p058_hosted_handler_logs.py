@@ -1,4 +1,4 @@
-"""P056 HostedHandlerLogs — hosted handler code does not log."""
+"""P058 HostedHandlerLogs — hosted handler code does not log."""
 
 from __future__ import annotations
 
@@ -87,14 +87,14 @@ def test_suppression(tmp_path: Path) -> None:
     root = _app(
         tmp_path,
         {
-            "app/handler.py": "import logging  # conformance: ignore[P056] vendored shim\n"
+            "app/handler.py": "import logging  # conformance: ignore[P058] vendored shim\n"
         },
     )
     assert _ids(root) == []
 
 
 def test_rule_metadata() -> None:
-    rule = get_rule("P056")
+    rule = get_rule("P058")
     assert rule.scope is RuleScope.APP
     assert rule.tier is EnforcementTier.BLOCK
     assert not rule.autofixable

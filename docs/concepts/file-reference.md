@@ -53,10 +53,11 @@ for *durable outbound* delivery.
 >    `atlan-objectstore`. Intermediate pipeline data (raw SQL rows, partial
 >    transforms) pollutes Atlan's bucket with artifacts that the publish app treats
 >    as connector output.
-> 2. **Bypasses SHA-256 dedup.** The `FileReference` interceptor maintains a
->    `.sha256` sidecar so re-transfers across workers are skipped automatically.
->    `App.upload()` performs a full upload on every call — no dedup, no sidecar,
->    no skip.
+> 2. **Re-uploads by default.** `App.upload()` runs on the same upload engine as
+>    the interceptor's persist, so it writes the same sidecars, local markers and
+>    directory manifest. But it is a separate `@task` call that uploads every file
+>    again unless you pass `skip_if_exists=True`, and its destination is a
+>    durable outbound prefix, not a run-scoped hand-off.
 > 3. **No cross-worker auto-materialization.** `FileReference` input fields are
 >    automatically re-downloaded before a task runs when the local file is absent
 >    (cross-worker fault tolerance). `App.upload()` produces a bare `FileReference`
@@ -82,6 +83,34 @@ infrastructure unless the connector explicitly decides to hand them off.
 `App.upload()` uses `upstream_storage or storage`. In SDR deployments
 `upstream_storage` is the `atlan-objectstore` Dapr binding (pointing to
 `{tenant}/api/blobstorage`), so `App.upload()` routes to Atlan's S3.
+
+`App.download()` reads from the same place. A ref that `App.upload()` or
+`App.download()` returns from a **distinct** upstream store carries
+`store=StoreTarget.UPSTREAM`. When you pass it into another `@task`, the
+interceptor materialises it from the upstream store, not the deployment store.
+Without that field the next task would list an empty prefix in the wrong bucket
+and fail with AAF-STR-009. Every other ref, including those from a single-store
+deployment where both names alias one store, has `store=DEPLOYMENT`. Do not set
+the field by hand. It records where the bytes are, and the SDK sets it.
+`App.download()` and the interceptor share one transfer engine. Passing
+`dl.ref` to a task on the same worker therefore costs one listing and a local
+re-hash, not a second download, because `download()` leaves the same local
+`.sha256` markers that materialise does. `App.upload()` and the interceptor's
+persist also share one upload engine. A directory `up.ref` carries a
+`manifest_path` and leaves a local `.sha256` marker beside each file, so a task
+on the same worker reuses the files instead of downloading them back, and never
+reads a stray object under the prefix as part of the hand-off. Both refuse the
+same sensitive local paths: a protected system directory itself or anything
+under it (`/etc`, `/proc`, `/sys`, `/dev`, `/root`), and any path through a
+credential directory (`.ssh`, `.aws`, `.gnupg`, `.kube`, `.vault`), an
+`.env*` name, or a match for `ATLAN_UPLOAD_FILE_BLOCKED_PATHS`. For a directory
+that applies to every file in it: one `.env` inside an output directory refuses
+the whole upload, naming the file, rather than shipping it or dropping it
+silently. The tag is honoured only for refs
+produced inside the run. A workflow's start
+input (including `continue_with`) and every `@update` argument have any
+`store=UPSTREAM` reset to `DEPLOYMENT`, so to consume another
+app's upstream output, call `App.download()` on it.
 
 **Consequence for connector authors:** if your connector produces artifacts that
 Atlan's publish app must consume, you must call `App.upload()` explicitly from

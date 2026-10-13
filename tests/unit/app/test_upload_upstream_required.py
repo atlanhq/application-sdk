@@ -242,10 +242,13 @@ class TestAliasedStoreMovesNoBytes:
                 "application_sdk.app.base._warn_on_invalid_transformed_assets",
                 new_callable=mock.AsyncMock,
             ),
-            # The reconcile branch's real call site. Patched as a spy so a
-            # regression shows up as "it listed the source" rather than as a
-            # slow test.
-            mock.patch("application_sdk.storage.transfer.list_data_keys") as list_spy,
+            # The reconcile branch's real call site (``list_data_objects``
+            # since FND-3796 needed sizes for the manifest). Patched as a spy
+            # so a regression shows up as "it listed the source" rather than
+            # as a slow test.
+            mock.patch(
+                "application_sdk.storage.transfer.list_data_objects"
+            ) as list_spy,
         ):
             await app.upload(
                 UploadInput(

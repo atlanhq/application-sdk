@@ -145,6 +145,7 @@ _SERIES_META: list[SeriesMeta] = [
             "conformance/suite/rules/entrypoint_alignment.py, "
             "conformance/suite/rules/entrypoint.py, "
             "conformance/suite/rules/client_seam.py, "
+            "conformance/suite/rules/client_lifecycle.py, "
             "conformance/suite/rules/credential_seam.py, "
             "conformance/suite/rules/error_seam.py, "
             "conformance/suite/rules/determinism.py, "
@@ -167,7 +168,8 @@ _SERIES_META: list[SeriesMeta] = [
             "`suite.checks.transform_templates` (P040, scans template YAML), "
             "`suite.checks.text_io_encoding` (P046), "
             "`suite.checks.atomic_publish` (P050), "
-            "`suite.checks.credential_seam` (P053, gated on the app's locked SDK) "
+            "`suite.checks.credential_seam` (P053, gated on the app's locked SDK), "
+            "`suite.checks.client_lifecycle` (P056/P057, gated on the app's locked SDK) "
             "(all AST-based / cross-artifact)"
         ),
         suppression_example="# conformance: ignore[P001] intentional: generic cleanup payload",

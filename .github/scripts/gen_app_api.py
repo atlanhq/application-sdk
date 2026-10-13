@@ -26,7 +26,7 @@ Usage, from the app repo root::
     python3 <sdk>/.github/scripts/gen_app_api.py fix     # relative imports, host-safe paths
     python3 <sdk>/.github/scripts/gen_app_api.py check   # CI: config valid, imports relative
 
-``fix`` deletes logging only from the handler module itself (P056). The other
+``fix`` deletes logging only from the handler module itself (P058). The other
 listed files also run on the worker, so their logging stays; only their logger
 import moves to a path the host has (:data:`KNOWN_MOVES`).
     python3 <sdk>/.github/scripts/gen_app_api.py build --out dist-api [--member api]

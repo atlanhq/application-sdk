@@ -178,15 +178,20 @@ class Handler(ABC):
 
         Raising is not equivalent, and what it means depends on the error's type:
 
-        - A **typed plumbing** error (``RateLimitedError``,
-          ``DependencyUnavailableError``, ``ResourceExhaustedError``) means "I could
-          not determine readiness". The gate fails open on it in both postures.
-          This is the right way to report a transient — returning ``NOT_READY``
-          for a 429 makes a hard-mode gate fail *closed* on a blip.
-        - Anything else — an untyped crash, a typed source error, or overrunning
-          ``input.timeout_seconds`` — is treated as an unverifiable source and is
-          subject to the app's ``preflight_gate_mode``. In hard mode it aborts the
-          run, attributed to preflight.
+        - A retryable ``SourceUnavailableError`` (the source did not answer) or
+          ``RateLimitedError`` (it answered 429) means "I could not ask this
+          time". A hard gate retries it and blocks only if it persists to the
+          final attempt, under its own category; soft mode reports and proceeds.
+          Compute that is cold, warming or queued is not this: report it from
+          :meth:`warmup`.
+        - A ``DependencyUnavailableError``, ``ResourceExhaustedError`` or
+          ``CancelledError`` is the deprecated fail-open idiom: the gate fails
+          open on it in both postures, with a ``DeprecationWarning``.
+        - Anything else — an untyped crash, another typed source error, or
+          overrunning ``input.timeout_seconds`` — is treated as an unverifiable
+          source and is subject to the app's ``preflight_gate_mode``. In hard
+          mode it aborts the run when its category is one the customer can act
+          on (``TIMEOUT`` and an untyped crash's ``INTERNAL`` never do).
 
         Keep probes awaitable: the gate cancels this method at the budget, and
         cancellation only lands at an ``await``. Blocking synchronous I/O on the

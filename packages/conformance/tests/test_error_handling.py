@@ -1945,6 +1945,59 @@ def get_value():
     )
 
 
+def test_p007_no_finding_when_same_class_helper_logs_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _failed_check(self, label, problem, started):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+        return FailedCheck(label=label, error=problem)
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._failed_check("keys", problem, started))
+            return Verdict(checks=checks)
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
+    src = """\
+class Probe:
+    def _empty_check(self, problem):
+        return EmptyCheck()
+
+    def inspect(self):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._empty_check(problem))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_logs_unrelated_data() -> None:
+    src = """\
+class Probe:
+    def _report(self, detail):
+        logger.warning("other operation failed: %s", detail, exc_info=detail)
+        return EmptyCheck()
+
+    def inspect(self, unrelated):
+        checks = []
+        try:
+            list_keys()
+        except LookupError as problem:
+            checks.append(self._report(unrelated))
+            return Verdict(checks=checks)
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_no_finding_log_before_return() -> None:
     _none(
         """\
@@ -1955,6 +2008,142 @@ def get_value():
         logger.warning("key missing", exc_info=True)
         return None
 """
+    )
+
+
+def test_p007_still_flags_classmethod_calling_unbound_plain_helper() -> None:
+    # ``cls._report(problem)`` binds ``problem`` to ``self``; the logged
+    # ``problem`` parameter is its ``None`` default.
+    src = """\
+class Probe:
+    def _report(self, problem=None):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_no_finding_classmethod_calling_classmethod_helper() -> None:
+    src = """\
+class Probe:
+    @classmethod
+    def _report(cls, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    @classmethod
+    def inspect(cls):
+        try:
+            list_keys()
+        except LookupError as problem:
+            cls._report(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_when_receiver_rebound_before_helper_call() -> None:
+    src = """\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self, silent_proxy):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self = silent_proxy
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_instance_attribute_shadows_helper() -> None:
+    src = """\
+class Probe:
+    def __init__(self, silent):
+        self._failed = silent
+
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", problem, exc_info=problem)
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    ["bool(problem)", "type(problem)", "problem is None", "len(str(problem))"],
+)
+def test_p007_still_flags_when_helper_logs_lossy_derivation(logged: str) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning("probe failed: %s", {logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" in _findings(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        '"failed: %s", problem',
+        '"failed: %s", str(problem)',
+        '"failed: %r", repr(problem)',
+        'f"failed: {problem}"',
+        '"failed: %s" % problem',
+        '"failed", exc_info=problem',
+    ],
+)
+def test_p007_no_finding_when_helper_logs_exception_representation(
+    logged: str,
+) -> None:
+    src = f"""\
+class Probe:
+    def _failed(self, problem):
+        logger.warning({logged})
+
+    def inspect(self):
+        try:
+            list_keys()
+        except LookupError as problem:
+            self._failed(problem)
+            return Verdict()
+"""
+    assert "E007" not in _findings(src)
+
+
+def test_p007_still_flags_json_parse_failure_returning_original_value() -> None:
+    _single(
+        """\
+def decode_setting(value):
+    if isinstance(value, str):
+        try:
+            json.loads(value)
+        except ValueError:
+            return value
+""",
+        "E007",
     )
 
 
@@ -2336,6 +2525,264 @@ async def run():
         if isinstance(r, Exception):
             logger.error("task failed", exc_info=True)
 """
+    )
+
+
+def test_p010_no_finding_base_exception_list_comprehension() -> None:
+    """Classifying every gathered value in a comprehension handles failures too."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, BaseException)]
+    if errors:
+        for error in errors:
+            logger.error("job failed: %s", error)
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_any_over_gathered_results() -> None:
+    """An exception test in the element, not a filter, still inspects each item."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    if any(isinstance(item, Exception) for item in gathered):
+        return None
+    return gathered
+"""
+    )
+
+
+def test_p010_no_finding_enumerate_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for i, item in enumerate(gathered) if isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_zip_dict_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = {key: item for key, item in zip(keys, gathered) if isinstance(item, Exception)}
+    return errors
+"""
+    )
+
+
+def test_p010_no_finding_custom_exception_type_comprehension() -> None:
+    """A typed error class (by the Error/Exception naming convention) counts."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, AppError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_dotted_custom_exception_type_comprehension() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if isinstance(item, errors_mod.FetchError)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_no_finding_plain_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_no_finding_annotated_alias_iterated() -> None:
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes: list = gathered
+    for outcome in outcomes:
+        if isinstance(outcome, Exception):
+            raise outcome
+"""
+    )
+
+
+def test_p010_plain_alias_not_inspected_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    outcomes = gathered
+    return outcomes
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_enumerate_index_still_fires() -> None:
+    """Only the enumerate position holding the result is a gathered value."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for index, item in enumerate(gathered) if isinstance(index, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_zip_partner_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for key, item in zip(keys, gathered) if isinstance(key, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_arbitrary_call_still_fires() -> None:
+    """A call that merely receives the results may return something unrelated."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in to_unrelated_items(gathered) if isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_short_circuited_check_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if False and isinstance(item, Exception)]
+    return errors
+""",
+        "E010",
+    )
+
+
+def test_p010_no_finding_guarded_exception_check() -> None:
+    """A non-literal guard before the exception test leaves the test reachable."""
+    _none(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in gathered if item is not None and isinstance(item, Exception)]
+    if errors:
+        raise errors[0]
+"""
+    )
+
+
+def test_p010_comprehension_dropping_exceptions_still_fires() -> None:
+    """Keeping only the successes is the silent swallow, not an inspection."""
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if not isinstance(item, Exception)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_comparing_exception_test_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, Exception) == False]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_without_exception_classification_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    values = [item for item in gathered if isinstance(item, int)]
+    return values
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_over_unrelated_iterable_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    errors = [item for item in other_values if isinstance(item, BaseException)]
+    return gathered
+""",
+        "E010",
+    )
+
+
+def test_p010_comprehension_checking_unrelated_value_still_fires() -> None:
+    _single(
+        """\
+import asyncio
+async def run():
+    gathered = await asyncio.gather(*jobs, return_exceptions=True)
+    unrelated = None
+    errors = [item for item in gathered if isinstance(unrelated, BaseException)]
+    return errors
+""",
+        "E010",
     )
 
 
@@ -3111,6 +3558,100 @@ def fail():
     raise {leaf}(message="something went wrong")
 """
     _single(src, "E018")
+
+
+def test_p018_no_finding_for_external_precondition_translated_to_domain_error() -> None:
+    src = """\
+from backend_store.exceptions import PreconditionError
+from application_sdk.errors import DependencyUnavailableError
+
+class CheckpointConflict(DependencyUnavailableError):
+    code = "DEPENDENCY_UNAVAILABLE_SYNTHETIC_CHECKPOINT_CONFLICT"
+
+def update_local():
+    raise PreconditionError("concurrent update")
+
+def write_checkpoint():
+    try:
+        update_local()
+    except PreconditionError:
+        raise CheckpointConflict(message="retry")
+"""
+    assert "E018" not in _findings(src)
+
+
+@pytest.mark.parametrize(
+    ("imports", "raised_type"),
+    [
+        (
+            "from application_sdk.errors import PreconditionError",
+            "PreconditionError",
+        ),
+        (
+            "import application_sdk.errors as sdk_errors",
+            "sdk_errors.PreconditionError",
+        ),
+    ],
+)
+def test_p018_sdk_precondition_leaf_still_flagged(
+    imports: str, raised_type: str
+) -> None:
+    _single(
+        f"""\\
+{imports}
+
+def fail():
+    raise {raised_type}(message="state conflict")
+""",
+        "E018",
+    )
+
+
+def test_p018_non_exception_module_import_still_flagged() -> None:
+    _single(
+        """
+from domain_errors import PreconditionError
+
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
+
+
+@pytest.mark.parametrize("local_first", [True, False])
+def test_p018_function_local_import_does_not_mask_module_sdk_leaf(
+    local_first: bool,
+) -> None:
+    local = """\
+def translate():
+    from backend_store.exceptions import PreconditionError
+    raise PreconditionError("concurrent update")
+"""
+    sdk = """\
+def fail():
+    raise PreconditionError(message="state conflict")
+"""
+    body = local + "\n" + sdk if local_first else sdk + "\n" + local
+    src = "from application_sdk.errors import PreconditionError\n\n" + body
+    # The module-level SDK leaf raise must still be flagged; the name's
+    # provenance is ambiguous, so the local raise is flagged conservatively too.
+    sdk_line = (
+        src.splitlines().index('    raise PreconditionError(message="state conflict")')
+        + 1
+    )
+    e018_lines = [f.line for f in scan_text(src, "fake.py") if f.rule_id == "E018"]
+    assert sdk_line in e018_lines
+
+
+def test_p018_unresolved_precondition_leaf_still_flagged() -> None:
+    _single(
+        """\\
+def fail():
+    raise PreconditionError(message="state conflict")
+""",
+        "E018",
+    )
 
 
 @pytest.mark.parametrize(

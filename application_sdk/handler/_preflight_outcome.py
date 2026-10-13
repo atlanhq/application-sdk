@@ -57,6 +57,46 @@ PREFLIGHT_FALLBACK_CODE = "PREFLIGHT_CHECK_FAILED"
 # reached a verdict vanishes from the numerator it belongs in.
 EMPTY_CHECK_MATRIX = "[]"
 
+# What a hard gate blocks on (FND-3040): failures that are deterministic, or that
+# outlasted the gate's retry, and that the customer can act on. Waiting will not
+# fix a wrong password or a missing grant, and a source still unreachable, or a
+# rate limit still exhausted, on the gate's final attempt (FND-3774) would fail
+# the run on that same fault later.
+# An allowlist, so a category added to FailureCategory later proceeds until
+# someone decides it should block. Defined here rather than in the gate because
+# :func:`_primary_failure` ranks by it on every surface; the gate re-exports it.
+GATE_BLOCKING_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {
+        FailureCategory.AUTH,
+        FailureCategory.PERMISSION,
+        FailureCategory.INVALID_INPUT,
+        FailureCategory.PRECONDITION,
+        FailureCategory.NOT_FOUND,
+        FailureCategory.SOURCE_UNAVAILABLE,
+        FailureCategory.RATE_LIMITED,
+    }
+)
+
+# The blocking categories a hard gate retries before it blocks (FND-3774): an
+# unreachable source or a 429 can be a blip, so only the final attempt's verdict
+# counts. Both block then, under their own category, because they send the
+# customer to different people: an outage to the source's operator, an
+# exhausted limit to whoever is spending it. A source that is cold rather than
+# unreachable reports that through ``Handler.warmup``, which the gate polls and
+# which never reaches here.
+GATE_RETRIED_CATEGORIES: frozenset[FailureCategory] = frozenset(
+    {FailureCategory.SOURCE_UNAVAILABLE, FailureCategory.RATE_LIMITED}
+)
+
+# The order :func:`_primary_failure` ranks failed checks' errors in when the
+# verdict has no aggregate: deterministic blocks, then retried blocks, then the
+# rest.
+_PRIMARY_CHECK_RANKS: tuple[frozenset[FailureCategory], ...] = (
+    GATE_BLOCKING_CATEGORIES - GATE_RETRIED_CATEGORIES,
+    GATE_RETRIED_CATEGORIES,
+    frozenset(FailureCategory),
+)
+
 
 # Who must act, stamped on the outcome row (FND-901). Same key and values the log
 # interceptor projects from raised AppErrors, riding the OTel ``failure.``
@@ -119,17 +159,31 @@ def _check_matrix_json(checks: list[PreflightCheck]) -> str:
 def _primary_failure(result: PreflightOutput, app_name: str) -> FailureDetails:
     """The ``FailureDetails`` a NOT_READY-shaped verdict is attributed to.
 
-    The handler's typed aggregate ``result.error`` when present, else the first
-    failed check's typed ``error``, else the first failed check's message wrapped
-    in ``PreconditionError`` and stamped with the ``PREFLIGHT_FALLBACK_CODE``
-    sentinel ``code`` (so the outcome event's ``reason`` marks an un-migrated
-    block). Prefers the aggregate because it is the reason the verdict is
-    NOT_READY and stays pinned to the real cause even when a non-fatal row is
-    inserted ahead of it in ``checks``.
+    The handler's typed aggregate ``result.error`` when present. Otherwise the
+    most decisive failed check's typed ``error``: the first in a blocking
+    category the gate does not retry (AUTH, PERMISSION, ...), else the first in
+    :data:`GATE_RETRIED_CATEGORIES` (SOURCE_UNAVAILABLE, RATE_LIMITED), else the
+    first at all. With nothing typed,
+    the first failed check's message wrapped in ``PreconditionError`` and
+    stamped with the ``PREFLIGHT_FALLBACK_CODE`` sentinel ``code`` (so the
+    outcome event's ``reason`` marks an un-migrated block).
+
+    The aggregate wins outright because it is the reason the verdict is
+    NOT_READY: it stays pinned to the real cause when a non-fatal row is
+    inserted ahead of it (SDR), or when a READY verdict carrying a failed
+    advisory row is downgraded by the storage probe. Ranking it against the
+    rows would let that advisory row block a hard run. The rows are ranked
+    because, with no aggregate, the gate decides on whichever row this picks
+    (FND-3774): an unreachable or timed-out row listed ahead of a failed AUTH
+    check must not let a run proceed on bad credentials, nor spend a retry on a
+    fault waiting cannot fix. One function for every surface, so the row's
+    ``reason``, the block decision, HTTP ``/check`` and SDR name the same
+    failure.
     """
-    failed = [c for c in result.checks if not c.passed]
+    errors = [c.error for c in result.checks if not c.passed and c.error is not None]
     primary_error = result.error or next(
-        (c.error for c in failed if c.error is not None), None
+        (e for rank in _PRIMARY_CHECK_RANKS for e in errors if e.category in rank),
+        None,
     )
     if primary_error is not None:
         return _stamped(primary_error, app_name)

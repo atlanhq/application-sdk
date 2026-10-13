@@ -36,19 +36,19 @@ identically for single files and directories.
 
 from __future__ import annotations
 
-import asyncio
 import contextlib
 import os
 import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from typing_extensions import deprecated
+
 from application_sdk._runtime.offload import run_in_thread
 from application_sdk._runtime.progress import current_progress_tracker
-from application_sdk.common._listing import safe_list_directory
 from application_sdk.constants import MAX_CONCURRENT_STORAGE_TRANSFERS
 from application_sdk.contracts.types import FileReference, StorageTier
-from application_sdk.errors import InternalError
+from application_sdk.errors import InternalError as _InternalError
 from application_sdk.observability.logger_adaptor import get_logger
 
 # The batch key listers are imported at top level, unlike the other
@@ -56,22 +56,13 @@ from application_sdk.observability.logger_adaptor import get_logger
 # on ``storage.ops`` / ``storage.integrity`` and never on ``transfer``, so
 # ``transfer → batch`` is unconditionally acyclic — the import is safe
 # regardless of module load order.
-from application_sdk.storage.batch import (
-    DataObject,
-    list_data_keys,
-    list_data_objects,
-    list_keys,
-)
+from application_sdk.storage.batch import DataObject, list_data_objects, list_keys
 
 # Sidecar naming, digest computation and the read/write of ``{key}.sha256`` all
 # live in ``storage.integrity``, which ``ops`` calls on every transfer. This
 # module holds no copy of them: a second implementation of the digest protocol
 # is how the reader and the writer drift apart.
-from application_sdk.storage.integrity import (
-    is_sidecar_key,
-    read_expected_digest,
-    sha256_file,
-)
+from application_sdk.storage.integrity import read_expected_digest, sha256_file
 
 _logger = get_logger(__name__)
 
@@ -81,62 +72,106 @@ if TYPE_CHECKING:
     from obstore.store import ObjectStore
 
     from application_sdk.contracts.storage import DownloadOutput, UploadOutput
+    from application_sdk.storage.ops import BoundStore
 
 
-async def _upload_one(
-    store: ObjectStore,
-    local_file: Path,
-    store_key: str,
-    *,
-    skip_if_exists: bool,
-    data_present: bool | None = None,
-    sidecar_present: bool | None = None,
-) -> tuple[bool, str]:
-    """Upload a single file.  Returns ``(transferred, reason)``.
+# ── Deprecated names ─────────────────────────────────────────────────────────
+# These four were this module's own imports, and so importable from it, until
+# FND-3796 moved the upload loop into the persist engine and left them unused.
+# A consumer audit across the atlanhq fleet found no app importing any of them
+# from here, so rather than keep working aliases that new code could pick up,
+# each is a deprecated no-op that keeps the name importable until v4.0.
 
-    The ``{key}.sha256`` sidecar is written by ``upload_file`` itself, after it
-    has validated that what landed in the store is what was sent — so it is not
-    written here (FND-306).
 
-    A matching sidecar only skips the upload when the data object itself is
-    also in the store. A sidecar can outlive or precede its data (a local
-    sidecar uploaded as data in 3.42.x, a deleted data object), and trusting
-    it alone would skip a file the store does not hold.
+@deprecated(
+    "application_sdk.storage.transfer.InternalError is deprecated, matches no "
+    "error the SDK raises, and will be removed in v4.0. Use "
+    "application_sdk.errors.InternalError instead."
+)
+class InternalError(_InternalError):
+    """Deprecated inert subclass kept only so the name stays importable until v4.0.
 
-    *data_present* and *sidecar_present* carry what a prior listing of the
-    target already established, so a directory upload pays no per-file probe.
-    ``None`` means unknown: the sidecar is probed before it is read, and the
-    data object only once the digests match.
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :class:`application_sdk.errors.InternalError`. The SDK raises the
+        real class, never this subclass, so ``except`` on it catches nothing
+        the SDK raises — use :class:`application_sdk.errors.InternalError`.
     """
-    from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        exists,
-        upload_file,
-    )
 
-    # data_present=False: nothing to dedup against, so skip the local hash too.
-    if skip_if_exists and data_present is not False:
-        local_digest = await sha256_file(local_file)
-        remote_digest = await read_expected_digest(
-            store, store_key, sidecar_present=sidecar_present
-        )
-        if remote_digest == local_digest and (
-            data_present or await exists(store_key, store, normalize=False)
-        ):
-            # A skip is still one file resolved. Directory uploads that skip
-            # thousands of hash-matching files on an idempotent retry are doing
-            # real work (a digest and a sidecar GET each) and must not read as
-            # a stall.
-            current_progress_tracker().mark_progress("storage.upload_file")
-            return False, "skipped:hash_match"
 
-    await upload_file(store_key, local_file, store, normalize=False)
-    # Per-file boundary, on top of the per-part marks inside upload_file: this
-    # is the label an operator wants in a stall message, since it says the
-    # attempt was moving whole files rather than stuck mid-transfer on one.
-    # (The sidecar write that used to sit here is upload_file's job now — see
-    # the docstring above.)
-    current_progress_tracker().mark_progress("storage.upload_file")
-    return True, "uploaded"
+@deprecated(
+    "application_sdk.storage.transfer.is_sidecar_key is deprecated, does "
+    "nothing, and will be removed in v4.0. Use "
+    "application_sdk.storage.integrity.is_sidecar_key instead."
+)
+def is_sidecar_key(key: str) -> bool:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :func:`application_sdk.storage.integrity.is_sidecar_key`, which FND-3796
+        left unused — call that instead.
+
+    Args:
+        key: Ignored.
+
+    Returns:
+        Always ``False``.
+    """
+    del key
+    return False
+
+
+@deprecated(
+    "application_sdk.storage.transfer.list_data_keys is deprecated, does "
+    "nothing, and will be removed in v4.0. Use "
+    "application_sdk.storage.batch.list_data_keys instead."
+)
+async def list_data_keys(
+    prefix: str = "",
+    store: BoundStore | ObjectStore | None = None,
+    *,
+    normalize: bool = True,
+) -> list[str]:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of
+        :func:`application_sdk.storage.batch.list_data_keys`, which FND-3796
+        left unused — call that instead.
+
+    Args:
+        prefix: Ignored.
+        store: Ignored.
+        normalize: Ignored.
+
+    Returns:
+        Always an empty list: nothing is listed.
+    """
+    del prefix, store, normalize
+    return []
+
+
+@deprecated(
+    "application_sdk.storage.transfer.safe_list_directory is deprecated, does "
+    "nothing, and will be removed in v4.0. Use os.walk instead; the SDK's "
+    "own walker is private."
+)
+def safe_list_directory(path: Path) -> list[Path]:
+    """Deprecated no-op kept only so the name stays importable until v4.0.
+
+    .. deprecated:: 3.46
+        Removed in v4.0. This name was ``transfer``'s import of the SDK's
+        private directory walker, which FND-3796 left unused here.
+
+    Args:
+        path: Ignored.
+
+    Returns:
+        Always an empty list: nothing is listed.
+    """
+    del path
+    return []
 
 
 async def _cross_store_sha256_match(
@@ -144,18 +179,18 @@ async def _cross_store_sha256_match(
     source_key: str,
     target_store: ObjectStore,
     target_key: str,
-) -> bool:
-    """Return ``True`` if both stores have identical non-``None`` SHA-256 sidecars.
+) -> str | None:
+    """Return the digest both stores' SHA-256 sidecars agree on, else ``None``.
 
     Used as step 1 of the three-step upload strategy to avoid transferring bytes
     that are already current in the target store (idempotent retry support).
-    Returns ``False`` when either sidecar is absent so the upload proceeds.
+    Returns ``None`` when either sidecar is absent so the upload proceeds.
     """
     source_digest = await read_expected_digest(source_store, source_key)
     if source_digest is None:
-        return False
+        return None
     target_digest = await read_expected_digest(target_store, target_key)
-    return source_digest == target_digest
+    return source_digest if source_digest == target_digest else None
 
 
 async def _upload_from_store(
@@ -165,7 +200,7 @@ async def _upload_from_store(
     target_key: str,
     *,
     source_listed: bool = False,
-) -> tuple[bool, str]:
+) -> tuple[bool, str, str | None]:
     """Upload a single file from *source_store* to *target_store*.
 
     Implements steps 1 and 3 of the three-step upload strategy:
@@ -197,7 +232,9 @@ async def _upload_from_store(
             same-object guard skip its existence HEAD; leave ``False`` whenever
             the key came from a caller-supplied ``FileReference``.
 
-    Returns ``(transferred, reason)``.
+    Returns ``(transferred, reason, sha256)``. *sha256* is the object's digest
+    — what the directory engine's manifest records — or ``None`` for the
+    same-object skip, which deliberately reads no sidecar.
     """
     from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _discard_transfer_state,
@@ -219,15 +256,16 @@ async def _upload_from_store(
         if source_listed or await exists(source_key, source_store, normalize=False):
             # Still progress for the heartbeat — one key resolved.
             current_progress_tracker().mark_progress("storage.copy_file")
-            return False, "skipped:same_object"
+            return False, "skipped:same_object", None
 
-    if await _cross_store_sha256_match(
+    matched = await _cross_store_sha256_match(
         source_store, source_key, target_store, target_key
-    ):
+    )
+    if matched is not None:
         # Two sidecar GETs per key: a fallback reconcile over a large prefix
         # that skips everything is still forward progress.
         current_progress_tracker().mark_progress("storage.copy_file")
-        return False, "skipped:hash_match"
+        return False, "skipped:hash_match", matched
 
     fd, tmp_path_str = tempfile.mkstemp()
     os.close(fd)
@@ -241,9 +279,9 @@ async def _upload_from_store(
         await download_file_chunked(
             source_key, tmp, source_store, normalize=False, resume=False
         )
-        await upload_file(target_key, tmp, target_store, normalize=False)
+        sha256 = await upload_file(target_key, tmp, target_store, normalize=False)
         current_progress_tracker().mark_progress("storage.copy_file")
-        return True, "uploaded"
+        return True, "uploaded", sha256
     finally:
         # Suppressed for the same reason _discard_transfer_state below is: this
         # `finally` runs after a copy that may have already succeeded, so an
@@ -321,58 +359,6 @@ async def _download_one(
     return True, "downloaded"
 
 
-# System directories that must never be uploaded.
-_SENSITIVE_SYSTEM_PREFIXES = (
-    "/etc/",
-    "/proc/",
-    "/sys/",
-    "/dev/",
-    "/root/",
-    "/private/etc/",
-)
-
-# Hidden credential/config directories that must never be uploaded.
-_SENSITIVE_DIR_NAMES = frozenset({".aws", ".ssh", ".gnupg", ".kube", ".vault"})
-
-# File name prefixes for environment/secret files.
-_SENSITIVE_FILE_PREFIXES = (".env",)
-
-
-def _parse_blocked_paths() -> list[str]:
-    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns)."""
-    val = os.environ.get("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "")
-    return [p.strip() for p in val.split(",") if p.strip()] if val else []
-
-
-def _validate_upload_path(path: Path) -> None:
-    """Block uploads from sensitive system paths, credential dirs, and env files."""
-    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-        UnsafeUploadPathError,
-    )
-
-    if ".." in path.parts:
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-    resolved = path.resolve()
-    resolved_str = str(resolved)
-
-    if resolved_str.startswith(_SENSITIVE_SYSTEM_PREFIXES):
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-    if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-    if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-    # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
-    # Each entry is matched as a substring against the full resolved path.
-    # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
-    user_blocked = _parse_blocked_paths()
-    if any(pattern in resolved_str for pattern in user_blocked):
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-
 def _derive_target_key(
     storage_path: str | None,
     _app_prefix: str,
@@ -426,6 +412,7 @@ def _make_upload_output(
     reason: str,
     *,
     is_dir: bool = False,
+    manifest_path: str | None = None,
 ) -> UploadOutput:
     """Build an ``UploadOutput`` from the common fields shared across all branches.
 
@@ -446,6 +433,7 @@ def _make_upload_output(
         reason: Human-readable transfer outcome (e.g. ``"uploaded"``).
         is_dir: When ``True``, ensures ``storage_key`` ends with ``"/"`` as
             the canonical object-store prefix convention.
+        manifest_path: The directory manifest the engine wrote, if any.
     """
     from application_sdk.contracts.storage import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
         UploadOutput,
@@ -458,8 +446,40 @@ def _make_upload_output(
         is_durable=True,
         file_count=file_count,
         tier=tier,
+        manifest_path=manifest_path,
     )
     return UploadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+
+def _manifest_path(tier: StorageTier, output_path: str) -> str | None:
+    """Where a directory upload's manifest goes: the tier's ``file_refs`` namespace.
+
+    The same place persist puts its own (``_make_storage_path``), so cleanup
+    and the gateway's path policy treat both alike. ``App.upload()``'s
+    default prefix is the run root, which contains that namespace: the
+    manifest then sits inside the data prefix, in the SDK-owned
+    ``file_refs/`` subtree that already holds persisted refs and their
+    manifests (see ``docs/standards/cross-repo-contracts.md``).
+
+    ``None`` — no manifest, the ref lists as before — when the tier needs a
+    run prefix and the caller supplied none (a direct ``transfer.upload``).
+    """
+    from application_sdk.contracts.types_errors import (  # noqa: PLC0415 — circular: storage modules are imported transitively across the SDK
+        RunPrefixRequiredError,
+    )
+    from application_sdk.storage._manifest import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        MANIFEST_SUFFIX,
+    )
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: reference imports storage siblings that import this module
+        _make_storage_path,
+    )
+
+    try:
+        return _make_storage_path(
+            FileReference(tier=tier), output_path=output_path, suffix=MANIFEST_SUFFIX
+        )
+    except RunPrefixRequiredError:
+        return None
 
 
 _FALLBACK_PREFIX_REQUIRED = (
@@ -469,10 +489,10 @@ _FALLBACK_PREFIX_REQUIRED = (
 )
 
 
-async def _list_source_data_keys(
+async def _list_source_objects(
     source_storage_path: str, source_store: ObjectStore
-) -> tuple[str, list[str]]:
-    """List non-sidecar data keys under an SDR source-store directory.
+) -> tuple[str, list[DataObject]]:
+    """List the data objects under an SDR source-store directory.
 
     Shared by the partial-local reconcile branch and the local-absent
     deployment-store fallback in :func:`upload`, so the ``..`` path-traversal
@@ -480,7 +500,8 @@ async def _list_source_data_keys(
     change to path validation can't drift between the two).
 
     Returns the normalised ``source_dir_prefix`` (trailing slash) and the data
-    keys beneath it, sidecar (``.sha256``) keys excluded.
+    objects beneath it, sidecar (``.sha256``) keys excluded. Each carries its
+    size, which the upload's manifest records for a copied object.
 
     Raises:
         UnsafeUploadPathError: If the normalised source path contains ``..``.
@@ -499,38 +520,8 @@ async def _list_source_data_keys(
 
         raise UnsafeUploadPathError(unsafe_path=source_storage_path)
     source_dir_prefix = source_norm.rstrip("/") + "/"
-    keys = await list_data_keys(source_dir_prefix, source_store, normalize=False)
-    return source_dir_prefix, keys
-
-
-async def _list_target_objects(
-    prefix: str, store: ObjectStore
-) -> dict[str, DataObject] | None:
-    """List the data objects already under an upload's target *prefix*.
-
-    One LIST answers, for every file of a ``skip_if_exists`` directory upload,
-    both whether its data object is in the store and whether its sidecar is —
-    instead of a sidecar HEAD per file, plus a data HEAD per matching file.
-
-    Returns ``None`` when the target cannot be listed (e.g. a policy that grants
-    put/get but not list), so the caller falls back to per-file probes rather
-    than failing an upload that never needed a LIST before.
-    """
-    from application_sdk.storage.errors import StorageError  # noqa: PLC0415
-
-    try:
-        objects = await list_data_objects(
-            prefix.rstrip("/") + "/", store, normalize=False
-        )
-    except StorageError:
-        _logger.warning(
-            "Could not list upload target prefix '%s' — falling back to "
-            "per-file existence checks for skip_if_exists",
-            prefix,
-            exc_info=True,
-        )
-        return None
-    return {obj.key: obj for obj in objects}
+    objects = await list_data_objects(source_dir_prefix, source_store, normalize=False)
+    return source_dir_prefix, objects
 
 
 async def upload(
@@ -545,6 +536,7 @@ async def upload(
     _source_store: ObjectStore | None = None,
     _app_prefix: str = "",
     _tier: StorageTier = StorageTier.RETAINED,
+    _output_path: str = "",
     max_concurrency: int = MAX_CONCURRENT_STORAGE_TRANSFERS,
 ) -> UploadOutput:
     """Upload a local file or directory to the object store.
@@ -557,10 +549,19 @@ async def upload(
     appended to _app_prefix so files land at ``{_app_prefix}/{storage_subdir}/...``.
     This preserves the directory name in the object store path.
 
+    The bytes move through the same engine as ``persist_file_reference``
+    (``_persist_file`` / ``_persist_directory``): each local file gets a local
+    ``{file}.sha256`` marker beside it, and a directory upload writes a
+    manifest of its exact files last and returns it as ``manifest_path``. A
+    task that receives the returned ref on the same worker reuses the files
+    instead of downloading them back, and never reads a stray object under the
+    prefix as part of the hand-off (FND-3796). Only the routing below is
+    upload's own.
+
     Two-step upload strategy (when *_source_ref* and *_source_store* are supplied):
 
     1. **Local upload** — if *local_path* exists on this pod, upload directly.
-       ``_upload_one`` handles per-file SHA-256 dedup when *skip_if_exists* is set.
+       The engine handles per-file SHA-256 dedup when *skip_if_exists* is set.
     2. **Deployment-store fallback** — if *local_path* is absent (cross-pod
        KEDA-scaled SDR worker or writer-deleted by ``use_consolidation=True``),
        stream from *_source_store* to the target.  ``_upload_from_store`` performs
@@ -607,6 +608,10 @@ async def upload(
             fallback source.  Always ``self.context.storage`` when called via
             ``App.upload()``.
         _app_prefix: Internal prefix injected by the ``App.upload`` task.
+        _output_path: Internal — the run prefix, which places a directory
+            upload's manifest under the tier's ``file_refs`` namespace, as
+            persist places its own. Without it a ``RETAINED`` directory upload
+            writes no manifest, and its ref lists the prefix as before.
         max_concurrency: Maximum parallel uploads for directory mode
             (default :data:`~application_sdk.constants.MAX_CONCURRENT_STORAGE_TRANSFERS`).
 
@@ -628,15 +633,25 @@ async def upload(
         _resolve_store,
         normalize_key,
     )
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: reference imports storage siblings that import this module
+        _Dedup,
+        _list_upload_files,
+        _persist_directory,
+        _persist_file,
+        _StoreCopy,
+        _validate_upload_path,
+    )
 
     resolved = _resolve_store(store)
     source_resolved = (
         _resolve_store(_source_store) if _source_store is not None else None
     )
     src = Path(local_path)
+    dedup = _Dedup.REMOTE_DIGEST if skip_if_exists else _Dedup.NEVER
 
-    # Block sensitive local paths (runs even when the path does not exist locally
-    # so uploads from sensitive locations are refused regardless of fallback path).
+    # Block sensitive local paths — the engine's guard, which persist applies
+    # too. Checked here, before routing, so it also refuses an absent local
+    # path whose upload would take the deployment-store fallback.
     # Guard: only validate when local_path is non-empty — Path("") resolves to
     # CWD on Python/macOS, so is_dir() returns True and would upload the tree.
     #
@@ -670,9 +685,8 @@ async def upload(
         key = _derive_target_key(
             storage_path, _app_prefix, storage_subdir, src.name, normalize_key
         )
-        transferred, reason = await _upload_one(
-            resolved, src, key, skip_if_exists=skip_if_exists
-        )
+        _, transferred = await _persist_file(resolved, src, key, dedup=dedup)
+        reason = "uploaded" if transferred else "skipped:hash_match"
         return _make_upload_output(str(src), key, 1, _tier, int(transferred), reason)
 
     elif local_path and src.is_dir():
@@ -704,35 +718,27 @@ async def upload(
         )
         # run_in_thread keeps the blocking fsync + scandir off the event loop,
         # using the dedicated pool rather than asyncio's default executor.
-        files = await run_in_thread(safe_list_directory, src)
-        # A local ``<file>.sha256`` is a materialize cache key, not data
-        # (persist_file_reference writes one beside every file it uploads).
-        # Uploading it would land on the store-side sidecar key of its own data
-        # file; with skip_if_exists the data file's dedup check can then read
-        # that sidecar, match, and skip the data upload entirely.
-        files = [fp for fp in files if not is_sidecar_key(fp.name)]
+        files = await run_in_thread(_list_upload_files, src)
         local_rels = {str(fp.relative_to(src)).replace(os.sep, "/") for fp in files}
 
-        # (source_key, target_key) pairs for files present in the source store
-        # but absent from this pod's local copy.
-        reconcile_pairs: list[tuple[str, str]] = []
+        # Files present in the source store but absent from this pod's copy.
+        copies: list[_StoreCopy] = []
         if (
             source_resolved is not None
             and source_resolved is not resolved
             and _source_ref is not None
             and _source_ref.storage_path
         ):
-            source_dir_prefix, source_keys = await _list_source_data_keys(
+            source_dir_prefix, source_objects = await _list_source_objects(
                 _source_ref.storage_path, source_resolved
             )
-            for source_key in source_keys:
-                rel = source_key.removeprefix(source_dir_prefix)
+            for obj in source_objects:
+                rel = obj.key.removeprefix(source_dir_prefix)
                 if rel in local_rels:
-                    continue  # present locally — uploaded from the fast path below
-                target_key = f"{prefix}/{rel}" if prefix else rel
-                reconcile_pairs.append((source_key, target_key))
+                    continue  # present locally — uploaded from local disk
+                copies.append(_StoreCopy(source_resolved, obj, rel))
 
-        if raise_on_empty and not files and not reconcile_pairs:
+        if raise_on_empty and not files and not copies:
             from application_sdk.storage.errors import (  # noqa: PLC0415
                 StorageEmptyUploadError,
             )
@@ -749,86 +755,34 @@ async def upload(
                 "stream-uploaded-per-file workaround pattern.",
                 local_path=local_path,
             )
-        sem = asyncio.Semaphore(max_concurrency)
-        keys = [
-            f"{prefix}/{str(fp.relative_to(src)).replace(os.sep, '/')}"
-            if prefix
-            else str(fp.relative_to(src)).replace(os.sep, "/")
-            for fp in files
-        ]
 
-        # One LIST of the target replaces the per-file sidecar HEAD and lets the
-        # dedup check confirm each data object exists. An empty prefix would
-        # list the whole store, so that case keeps the per-file probes.
-        target_objects: dict[str, DataObject] | None = None
-        if skip_if_exists and files and prefix:
-            target_objects = await _list_target_objects(prefix, resolved)
-
-        async def _bounded_upload(file_path: Path, fkey: str) -> bool:
-            data_present: bool | None = None
-            sidecar_present: bool | None = None
-            if target_objects is not None:
-                obj = target_objects.get(fkey)
-                data_present = obj is not None
-                sidecar_present = obj.has_sidecar if obj is not None else False
-            async with sem:
-                ok, _ = await _upload_one(
-                    resolved,
-                    file_path,
-                    fkey,
-                    skip_if_exists=skip_if_exists,
-                    data_present=data_present,
-                    sidecar_present=sidecar_present,
-                )
-                return ok
-
-        async def _bounded_reconcile(source_key: str, target_key: str) -> bool:
-            # source_resolved is non-None whenever reconcile_pairs is populated
-            # (guarded where reconcile_pairs is built). Explicit check rather than
-            # ``assert`` so it is not stripped under ``python -O`` and narrows the
-            # type for the ``_upload_from_store`` call below.
-            if source_resolved is None:  # pragma: no cover — structurally unreachable
-                raise InternalError(
-                    message=(
-                        "reconcile requires a resolved source store but none was set"
-                    ),
-                    component="storage.transfer",
-                    invariant="source_resolved is set whenever reconcile_pairs is populated",
-                )
-            async with sem:
-                ok, _ = await _upload_from_store(
-                    source_resolved,
-                    source_key,
-                    resolved,
-                    target_key,
-                    source_listed=True,  # came from _list_source_data_keys
-                )
-                return ok
-
-        # conformance: ignore[E010] results checked immediately below: errs filters BaseException, first is re-raised and rest are logged
-        results = await asyncio.gather(
-            *[_bounded_upload(fp, k) for fp, k in zip(files, keys)],
-            *[_bounded_reconcile(sk, tk) for sk, tk in reconcile_pairs],
-            return_exceptions=True,
+        persisted = await _persist_directory(
+            resolved,
+            src,
+            files,
+            prefix,
+            dedup=dedup,
+            manifest_path=_manifest_path(_tier, _output_path),
+            copies=copies,
+            max_concurrency=max_concurrency,
         )
-        errs = [r for r in results if isinstance(r, BaseException)]
-        if errs:
-            for extra in errs[1:]:
-                _logger.error("concurrent upload failure (suppressed)", exc_info=extra)
-            raise errs[0]
-        n = sum(1 for ok in results if ok)
-        total_files = len(files) + len(reconcile_pairs)
-        reason = "uploaded" if n > 0 else "skipped:hash_match"
-        if reconcile_pairs:
+        if copies:
             _logger.info(
                 "upload dir reconciled against source store: %d local + %d "
                 "streamed from source (prefix=%s)",
                 len(files),
-                len(reconcile_pairs),
+                len(copies),
                 prefix,
             )
         return _make_upload_output(
-            str(src), prefix, total_files, _tier, n, reason, is_dir=True
+            str(src),
+            prefix,
+            persisted.file_count,
+            _tier,
+            persisted.transferred,
+            "uploaded" if persisted.transferred else "skipped:hash_match",
+            is_dir=True,
+            manifest_path=persisted.manifest_path,
         )
 
     elif (
@@ -837,14 +791,14 @@ async def upload(
         and source_resolved is not None
     ):
         # ── Deployment-store fallback (local path absent) ──────────────────
-        source_dir_prefix, data_dir_keys = await _list_source_data_keys(
+        source_dir_prefix, source_objects = await _list_source_objects(
             _source_ref.storage_path, source_resolved
         )
         # Normalised source key for the single-file fallback below;
-        # _list_source_data_keys returns the directory prefix (trailing slash).
+        # _list_source_objects returns the directory prefix (trailing slash).
         source_norm = source_dir_prefix.rstrip("/")
 
-        if data_dir_keys:
+        if source_objects:
             # ── Directory fallback ─────────────────────────────────────────
             fallback_prefix = _derive_target_key(
                 storage_path,
@@ -856,40 +810,30 @@ async def upload(
             )
             if not fallback_prefix:
                 raise StorageError(_FALLBACK_PREFIX_REQUIRED)
-            sem = asyncio.Semaphore(max_concurrency)
-
-            async def _bounded_fallback(source_key: str) -> bool:
-                async with sem:
-                    rel = source_key.removeprefix(source_dir_prefix)
-                    ok, _ = await _upload_from_store(
-                        source_resolved,
-                        source_key,
-                        resolved,
-                        f"{fallback_prefix}/{rel}" if fallback_prefix else rel,
-                        source_listed=True,  # came from _list_source_data_keys
+            persisted = await _persist_directory(
+                resolved,
+                None,
+                [],
+                fallback_prefix,
+                dedup=dedup,
+                manifest_path=_manifest_path(_tier, _output_path),
+                copies=[
+                    _StoreCopy(
+                        source_resolved, obj, obj.key.removeprefix(source_dir_prefix)
                     )
-                    return ok
-
-            results = await asyncio.gather(
-                *[_bounded_fallback(k) for k in data_dir_keys], return_exceptions=True
+                    for obj in source_objects
+                ],
+                max_concurrency=max_concurrency,
             )
-            errs = [r for r in results if isinstance(r, BaseException)]
-            if errs:
-                for extra in errs[1:]:
-                    _logger.error(
-                        "concurrent upload failure (suppressed)", exc_info=extra
-                    )
-                raise errs[0]
-            n = sum(1 for ok in results if ok)
-            reason = "uploaded" if n > 0 else "skipped:hash_match"
             return _make_upload_output(
                 _source_ref.local_path,
                 fallback_prefix,
-                len(data_dir_keys),
+                persisted.file_count,
                 _tier,
-                n,
-                reason,
+                persisted.transferred,
+                "uploaded" if persisted.transferred else "skipped:hash_match",
                 is_dir=True,
+                manifest_path=persisted.manifest_path,
             )
 
         else:
@@ -904,7 +848,7 @@ async def upload(
             )
             if not fallback_key:
                 raise StorageError(_FALLBACK_PREFIX_REQUIRED)
-            transferred, reason = await _upload_from_store(
+            transferred, reason, _ = await _upload_from_store(
                 source_resolved, source_norm, resolved, fallback_key
             )
             return _make_upload_output(
@@ -930,6 +874,13 @@ async def download(
     download is treated as a prefix/directory operation.  Otherwise it is
     treated as a single-file download.
 
+    The bytes move through the same engine as ``materialize_file_reference``
+    — path containment, chunked range GETs, digest verification, the per-path
+    lock — and each downloaded file gets a local ``{file}.sha256`` marker
+    beside it. That marker is what lets a task that receives the returned ref
+    on the same worker reuse the files instead of downloading them again;
+    upload ignores it.
+
     Args:
         storage_path: Store key (single file) or prefix (directory) to fetch.
         local_path: Local destination.  Defaults to a temp file/directory.
@@ -944,12 +895,23 @@ async def download(
     )
     from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         _resolve_store,
-        _safe_join_under,
         normalize_key,
+    )
+    from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: reference imports storage siblings that import this module
+        _materialize_directory,
+        _materialize_guard,
+        _materialize_single_file,
+        _Reuse,
     )
 
     resolved = _resolve_store(store)
     norm_path = normalize_key(storage_path)
+    # The bytes move through the same engine the interceptor materialises
+    # with, so what this leaves on disk — files plus their local ``.sha256``
+    # sidecars — is what a later materialise of the returned ref recognises
+    # and reuses instead of downloading a second time (FND-3795). Only the
+    # routing below is download's own.
+    reuse = _Reuse.REMOTE_DIGEST if skip_if_exists else _Reuse.NEVER
 
     # Determine if this is a single-key or prefix download.
     # Heuristic: if the caller passed a trailing "/", or if listing with the
@@ -966,94 +928,52 @@ async def download(
 
     if not is_prefix:
         # ── Single file ────────────────────────────────────────────────────
-        owns_temp = False
-        if local_path is not None:
-            dest = Path(local_path)
-        else:
-            suffix = Path(norm_path).suffix or ""
-            fd, tmp = tempfile.mkstemp(suffix=suffix)
-            os.close(fd)
-            dest = Path(tmp)
-            owns_temp = True
-
-        try:
-            # resume=False for owned temps: mkstemp yields a fresh name per
-            # call, so a checkpoint sidecar could never be reused — it would
-            # only be stranded under /tmp on failure. Caller-supplied stable
-            # destinations keep the default (env-driven) resume behaviour.
-            transferred, reason = await _download_one(
-                resolved,
-                norm_path,
-                dest,
-                skip_if_exists=skip_if_exists,
-                resume=False if owns_temp else None,
-            )
-        # conformance: ignore[E004] cleanup-only handler that always re-raises; no logging needed here
-        except BaseException:
-            # Don't leave an empty temp file behind on download failure
-            # (BLDX-1155 #5).
-            if owns_temp:
-                try:
-                    from application_sdk.storage.chunked import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
-                        _discard_transfer_state,
-                    )
-
-                    dest.unlink(missing_ok=True)
-                    # Belt-and-braces: never strand either staging file for a
-                    # temp destination either — see the matching cleanup in
-                    # _upload_from_store for why this defers to the writer's
-                    # own discard rather than re-spelling the deletions.
-                    _discard_transfer_state(dest)
-                except OSError:  # conformance: ignore[E002] best-effort cleanup of partial download; original error re-raised below
-                    pass
-            raise
+        # With no local_path the engine picks a fresh temp name, and removes
+        # it (and any transfer staging) if the download fails (BLDX-1155 #5).
         ref = FileReference(
-            local_path=str(dest),
-            storage_path=norm_path,
-            is_durable=True,
-            file_count=1,
+            storage_path=norm_path, is_durable=True, local_path=local_path
         )
-        return DownloadOutput(ref=ref, synced=transferred, reason=reason)
-
-    else:
-        # ── Directory / prefix ─────────────────────────────────────────────
-        prefix = norm_path.rstrip("/") + "/"
-        # Listing carries per-object sizes, so large files chunk without a
-        # per-file HEAD (BLDX-1513); it also records which objects have a
-        # SHA-256 sidecar, so integrity verification costs no extra probe
-        # (FND-306). Sidecars themselves are excluded by the helper.
-        data_objects = await list_data_objects(prefix, resolved, normalize=False)
-
-        if local_path is not None:
-            dest_dir = Path(local_path)
-        else:
-            dest_dir = Path(tempfile.mkdtemp())
-
-        dest_dir.mkdir(parents=True, exist_ok=True)
-        strip = prefix
-
-        transferred_count = 0
-        for obj in data_objects:
-            rel = obj.key.removeprefix(strip)
-            # Reject keys whose resolved path escapes dest_dir (e.g. via ".." segments).
-            local_file = _safe_join_under(dest_dir, rel)
-            ok, _ = await _download_one(
-                resolved,
-                obj.key,
-                local_file,
-                skip_if_exists=skip_if_exists,
-                file_size=obj.size,
-                etag=obj.etag,
-                sidecar_present=obj.has_sidecar,
+        if local_path is None:
+            out, downloaded = await _materialize_single_file(
+                resolved, ref, None, reuse=reuse
             )
-            if ok:
-                transferred_count += 1
-
-        reason = "downloaded" if transferred_count > 0 else "skipped:hash_match"
-        ref = FileReference(
-            local_path=str(dest_dir),
-            storage_path=prefix,
-            is_durable=True,
-            file_count=len(data_objects),
+        else:
+            async with _materialize_guard(local_path):
+                out, downloaded = await _materialize_single_file(
+                    resolved, ref, None, reuse=reuse
+                )
+        current_progress_tracker().mark_progress("storage.download_file")
+        return DownloadOutput(
+            ref=out,
+            synced=downloaded > 0,
+            reason="downloaded" if downloaded else "skipped:hash_match",
         )
-        return DownloadOutput(ref=ref, synced=transferred_count > 0, reason=reason)
+
+    # ── Directory / prefix ─────────────────────────────────────────────────
+    prefix = norm_path.rstrip("/") + "/"
+    # Listing carries per-object sizes, so large files chunk without a
+    # per-file HEAD (BLDX-1513); it also records which objects have a
+    # SHA-256 sidecar, so integrity verification costs no extra probe
+    # (FND-306). Sidecars themselves are excluded by the helper. Unlike a
+    # materialise, a download declares no file count: an empty prefix is an
+    # empty directory, not a failed hand-off.
+    data_objects = await list_data_objects(prefix, resolved, normalize=False)
+    dest_dir = Path(local_path) if local_path is not None else Path(tempfile.mkdtemp())
+    dest_dir.mkdir(parents=True, exist_ok=True)
+
+    ref = FileReference(
+        local_path=str(dest_dir),
+        storage_path=prefix,
+        is_durable=True,
+        file_count=len(data_objects),
+    )
+    async with _materialize_guard(str(dest_dir)):
+        out, downloaded = await _materialize_directory(
+            resolved,
+            ref,
+            [(obj, None) for obj in data_objects],
+            str(dest_dir),
+            reuse=reuse,
+        )
+    reason = "downloaded" if downloaded > 0 else "skipped:hash_match"
+    return DownloadOutput(ref=out, synced=downloaded > 0, reason=reason)

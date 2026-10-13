@@ -7479,6 +7479,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `tier: StorageTier` `= StorageTier.TRANSIENT`
   - `auto_materialize: bool` `= True`
   - `manifest_path: str | None`
+  - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`

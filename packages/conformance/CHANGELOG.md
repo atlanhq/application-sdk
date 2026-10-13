@@ -2,6 +2,38 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.47.0] - 2026-10-13
+
+### Features
+
+- flag BaseClient subclasses that are never closed, and close() overrides that skip super() (FND-3778) (#4325) ([ec6cf27](https://github.com/atlanhq/application-sdk/commit/ec6cf27))
+- add E021 for a DEPENDENCY_UNAVAILABLE error overridden to USER audience (#4328) ([4c4b381](https://github.com/atlanhq/application-sdk/commit/4c4b381))
+- bind parameters in BaseSQLClient.run_query (#4310) ([63c9b34](https://github.com/atlanhq/application-sdk/commit/63c9b34))
+- render every non-ci commit type in changelogs, and make bump-version PR CI opt-in via gate-check [FND-3748] (#4306) ([7a41e84](https://github.com/atlanhq/application-sdk/commit/7a41e84))
+
+### Bug fixes
+
+- correct T014's fix guidance (1 repo) (#4323) ([bb3cc63](https://github.com/atlanhq/application-sdk/commit/bb3cc63))
+- E010 false positive on compliant code (1 repo) (#4322) ([6e55b5d](https://github.com/atlanhq/application-sdk/commit/6e55b5d))
+- hard gate blocks on a source that stays unavailable or rate-limited at its final attempt, a behaviour change (FND-3774) (#4324) ([b4e845b](https://github.com/atlanhq/application-sdk/commit/b4e845b))
+- T005 false positive on compliant code (1 repo) (#4317) ([f60319e](https://github.com/atlanhq/application-sdk/commit/f60319e))
+- E007 false positive on compliant code (1 repo) (#4319) ([0b8260e](https://github.com/atlanhq/application-sdk/commit/0b8260e))
+- L006 false positive on compliant code (1 repo) (#4315) ([85b81d4](https://github.com/atlanhq/application-sdk/commit/85b81d4))
+- E018 false positive on compliant code (1 repo) (#4314) ([316b3e8](https://github.com/atlanhq/application-sdk/commit/316b3e8))
+- correct E014's fix guidance (1 repo) (#4320) ([f6fb7eb](https://github.com/atlanhq/application-sdk/commit/f6fb7eb))
+- E004 false positive on compliant code (1 repo) (#4307) ([79f23bb](https://github.com/atlanhq/application-sdk/commit/79f23bb))
+- E020 false positive on compliant code (1 repo) (#4308) ([bd7f9f2](https://github.com/atlanhq/application-sdk/commit/bd7f9f2))
+- F008 allows retryable SOURCE_UNAVAILABLE raises; E004/E007 accept a classifier proven by its annotation and a typed cause= under from None (#4302) ([50722b6](https://github.com/atlanhq/application-sdk/commit/50722b6))
+- correct D003's fix guidance (1 repo) (#4304) ([6cc57dd](https://github.com/atlanhq/application-sdk/commit/6cc57dd))
+- confirm connection-delete purged the seed root instead of deleting it from the runner [FND-3572] (#4300) ([90ab880](https://github.com/atlanhq/application-sdk/commit/90ab880))
+- keep a repo's two-store value across bootstrap --resync [FND-3656] (#4298) ([f6738e3](https://github.com/atlanhq/application-sdk/commit/f6738e3))
+- K004 no longer requires manifest.json of system apps (#4292) ([42c47a3](https://github.com/atlanhq/application-sdk/commit/42c47a3))
+
+### Other changes
+
+- refactor(storage): run App.upload through the persist engine — manifest, local markers, shared path guard (FND-3796) (#4332) ([f7db8f8](https://github.com/atlanhq/application-sdk/commit/f7db8f8))
+- chore(deps): update non-critical python dependencies (#4326) ([c45afae](https://github.com/atlanhq/application-sdk/commit/c45afae))
+
 ## [0.46.0] - 2026-10-09
 
 ### Features

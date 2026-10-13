@@ -79,7 +79,7 @@ that needs a declared dependency or a guarded fallback.
   the SDK's structured logger on the worker, stdlib logging on the host.
 - **Handler code does not log.** It reports through its return value or a typed
   `AppError`, and the SDK's shared routes log every outcome with the request id.
-  Conformance rule **P056** blocks logging in a hosted app's handler module. The
+  Conformance rule **P058** blocks logging in a hosted app's handler module. The
   `app/` files it imports also run on the worker, so they may log, through
   `application_sdk.common.logger`.
 
@@ -102,7 +102,7 @@ extras = ["sql", "aws"]
   two imports whose usual path is worker-only: `run_in_thread` to
   `application_sdk.common.concurrency` (its usual path loads Temporal) and
   `get_logger` to `application_sdk.common.logger`. It deletes logging
-  statements from the handler module only (P056); the other files also run on
+  statements from the handler module only (P058); the other files also run on
   the worker and keep their logs. Review what it removed: a log line was
   sometimes the only report of a failure the handler should raise as a typed
   `AppError`.

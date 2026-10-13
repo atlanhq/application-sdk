@@ -162,7 +162,7 @@ async def test_run_query_client_side_cursor(
 
     # Assertions
     assert results == expected_results
-    mock_connection.execute.assert_called_once_with(query)
+    mock_connection.execute.assert_called_once_with(query, None)
     mock_result.cursor.fetchmany.assert_called()
     mock_result.keys.assert_called_once()
 
@@ -217,7 +217,7 @@ async def test_run_query_server_side_cursor(
     # Assertions
     assert results == expected_results
     mock_connection.execution_options.assert_awaited_once_with(yield_per=2)
-    mock_connection_with_options.stream.assert_called_once_with(query)
+    mock_connection_with_options.stream.assert_called_once_with(query, None)
     mock_result.fetchmany.assert_awaited()
     mock_result.keys.assert_called_once()
 
@@ -286,7 +286,7 @@ async def test_run_query_escapes_colons_client_side(
         pass
 
     mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
-    mock_connection.execute.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+    mock_connection.execute.assert_called_once_with("RLIKE '^(?\\:cdl)'", None)
 
 
 @pytest.mark.asyncio
@@ -312,7 +312,9 @@ async def test_run_query_escapes_colons_server_side(
         pass
 
     mock_text.assert_called_once_with("RLIKE '^(?\\:cdl)'")
-    mock_connection_with_options.stream.assert_called_once_with("RLIKE '^(?\\:cdl)'")
+    mock_connection_with_options.stream.assert_called_once_with(
+        "RLIKE '^(?\\:cdl)'", None
+    )
 
 
 # ---------- retryability of the unclassified-exception wrap (CONAT-747) ----------

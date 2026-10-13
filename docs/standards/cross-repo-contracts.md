@@ -111,7 +111,7 @@ route:
 
 | | |
 |---|---|
-| **Produced by** | `persist_file_reference()`'s directory branch in `application_sdk/storage/reference.py`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
+| **Produced by** | The upload engine's directory pass, `_persist_directory()` in `application_sdk/storage/reference.py`, behind both `persist_file_reference()` and `transfer.upload()` / `App.upload()`; model `DirectoryManifest` in `application_sdk/storage/_manifest.py` |
 | **Served at** | `FileReference.manifest_path` on every durable directory ref, in Temporal payloads passed between tasks — and between apps when one app's output is another's input |
 | **Format** | JSON `{"version": 1, "files": [{"path", "sha256", "size_bytes"}]}`; `path` is relative to the ref's `storage_path` prefix, `/`-separated; `sha256` is lowercase hex |
 | **Read by** | `materialize_file_reference()` and `App.verify_refs()` in consuming apps on an SDK that knows the field. An app on an older SDK drops `manifest_path` on decode and lists the data prefix instead (see below), so it never reads the manifest |
@@ -126,7 +126,14 @@ it is read instead of listing the prefix.
   and is never inside the data prefix or beside it. The suffix must never be
   `.json`: publish converters and apps glob run prefixes with `**/*.json` and
   would parse it as asset records (the same constraint as the current-state
-  `.sdk-manifest` below). A consumer must read
+  `.sdk-manifest` below). One case is unavoidable: `App.upload()`'s default
+  directory prefix is the run root itself (`RETAINED`, no `storage_subdir`),
+  and the run's `file_refs/` namespace sits under it. There the manifest is
+  inside the data prefix, in the SDK-owned `file_refs/` subtree that already
+  holds interceptor-persisted refs and their manifests, so an older SDK listing
+  that prefix already sees objects of the same kind. Without a run prefix (a
+  direct `transfer.upload()` call), a `RETAINED` upload writes no manifest and
+  its ref lists as before. A consumer must read
   `manifest_path` and never compute it from `storage_path`. Do not move the
   manifest inside the prefix: an SDK that predates manifests lists the prefix
   and would read it as a data file.
@@ -140,6 +147,42 @@ it is read instead of listing the prefix.
   `version` to `1`, so an older reader rejects a v2 manifest with
   `StorageIntegrityError` rather than misreading it. Bumping it needs a reader
   that accepts both, shipped first.
+
+## The `FileReference` store tag (`store`)
+
+| | |
+|---|---|
+| **Produced by** | `App.download()` / `App.upload()` in `application_sdk/app/base.py` (`_tag_ref_store`), which set `StoreTarget.UPSTREAM` when they read from or wrote to a distinct upstream store |
+| **Served at** | `FileReference.store` in Temporal payloads, as `"deployment"` or `"upstream"` |
+| **Read by** | `materialize_file_refs()` / `fetch()` (via `_resolve_ref_store` in `application_sdk/storage/file_ref_sync.py`), which pick the store a ref is materialised from |
+| **Pinned by** | `tests/unit/app/test_transfer_ref_store.py` |
+
+- **The field is additive and must stay optional, defaulting to `deployment`.**
+  A producer on an older SDK sends no `store`. It is read as `deployment`, which
+  is where that SDK's interceptor always read. A consumer on an older SDK drops
+  the field and reads `deployment` as before.
+- **Do not rename the two values.** They are `StoreTarget`'s string values, and
+  `VerifyRefsInput.store` shares them.
+- **An `upstream` ref with no upstream store bound reads the deployment store.**
+  This mirrors `App.download()`'s own `upstream_storage or storage` routing.
+- **The tag works only inside one run, so it does not cross app boundaries.**
+  Every payload that enters a run from outside has `store=upstream` reset to
+  `deployment` on every ref: the start input (`_validate_workflow_input`, which
+  also covers `continue_with`) and every `@update` argument (the interaction
+  relay). Signals and queries carry no payload. Honouring the tag on those
+  payloads would let any external caller materialise any key in the upstream
+  bucket. The reset reaches typed fields, model extras, and plain dicts shaped
+  like a dumped ref (`storage_path`, `is_durable` and `store` keys). The dicts
+  are covered because an app may round-trip refs through untyped state with
+  `model_dump()` and `FileReference(**raw)` across `continue_with`. A ref that one app outputs and
+  another app takes as input therefore reads the deployment store, as before
+  this field existed. That consumer should go through `App.download(ref=...)`,
+  which routes to upstream itself.
+- **The fix needs the consuming worker on an SDK that knows the field.** Within
+  one app, `download()`/`upload()` and the task they hand off to run on the
+  same worker build, so one SDK bump covers both sides. Do not rely on an older
+  worker honouring the tag during a rolling deploy: it drops the field and
+  reads the deployment store.
 
 ## The connection-scoped `persistent-artifacts` layout
 
@@ -251,6 +294,16 @@ from `checks` while the block stands on `details[0]`. `checks` may therefore be 
 than the handler's list, and it is empty on the `frame_lost` block the workflow raises for
 a killed attempt that left no evidence. A consumer must attribute from `details[0]` and
 treat `checks` as supplementary, never index `checks[0]`.
+
+`details[0]` is `_primary_failure()` in `application_sdk/handler/_preflight_outcome.py`: the
+verdict's aggregate `result.error` when set, else the most decisive failed check (a deterministic
+blocking category such as `AUTH` first, then the first `SOURCE_UNAVAILABLE` or `RATE_LIMITED`
+check, then the first typed error).
+Before FND-3774 it was the first failed check, so a verdict mixing an unreachable or timed-out row
+with a later `AUTH` row now names the `AUTH` row. Since FND-3774 a hard gate also raises
+`PreflightNoVerdict` on a non-final attempt whose `details[0]` is `SOURCE_UNAVAILABLE` or
+`RATE_LIMITED`, so that
+marker now appears on ordinary runs, not only with storage verification opted in.
 
 ## The preflight-results write route
 
