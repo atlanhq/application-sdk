@@ -119,14 +119,15 @@ apps has this case, so the shape is shown on its own):
 
 ```python
 def report_qn(connection_qn: str, report_id: str) -> str:
-    # conformance: ignore[P028] no pyatlan_v9 creator for this asset type; single source of truth for {connection_qn}/report/{id}
+    # conformance: ignore[P028] no pyatlan_v9 creator for <AssetType>; single source of truth for {connection_qn}/report/{id}
     return f"{connection_qn}/report/{report_id}"
 ```
 
 Process identity — `atlan-metabase-app` `app/qualified_names.py`
 `process_qn` / `column_process_qn` call
 `Process.generate_qualified_name(..., process_id=...)` with placeholder
-inputs. Such a helper clears P028 and stays.
+inputs. Such a helper clears P028 and stays, unless its `process_id` is
+itself an f-string that interpolates a qualifiedName.
 
 1-to-N link from the child side — the parent's list stays unset
 (`atlan-metabase-app` `app/asset_mapper.py`):
@@ -135,12 +136,14 @@ inputs. Such a helper clears P028 and stays.
 asset.metabase_collection = RelatedMetabaseCollection(qualified_name=collection_qn)
 ```
 
-For a new process helper, keep the f-string with an ignore, the same shape
-as `report_qn` above. `Process.generate_qualified_name(..., process_id=...)`
-returns `f"{connection_qualified_name}/{process_id}"` after it checks that
-`name`, `inputs` and `outputs` are non-empty: it does not own the
-`process_id` grammar, and a blank `process_id` makes it return its own hash
-instead.
+A process helper may instead keep the f-string with an ignore that names
+`Process.generate_qualified_name`, the same shape as `report_qn` above; both
+shapes are accepted when they produce the same string.
+`Process.generate_qualified_name(..., process_id=...)` returns
+`f"{connection_qualified_name}/{process_id}"` after it checks that `name`,
+`connection_qualified_name`, `inputs` and `outputs` are non-empty
+(`ColumnProcess` also checks `parent`): it does not own the `process_id`
+grammar, and a blank `process_id` makes it return its own hash instead.
 
 Serialization (`atlan-openapi-app` `app/connector.py`):
 
@@ -217,7 +220,9 @@ helper and lists their lines.
   `Process.generate_qualified_name`: with `process_id` it only prefixes the
   connection, and without it pyatlan's own hash changes every existing
   process qualifiedName. A helper that already calls
-  `generate_qualified_name(process_id=...)` is not a finding and stays.
+  `generate_qualified_name(process_id=...)` and produces the same string
+  stays; it is not a finding unless its `process_id` is itself an f-string
+  that interpolates a qualifiedName, which takes the same ignore.
 - **decode** — code that takes a qualifiedName apart (`split("/")`,
   `"/".join(parts[:-1])`). It does not build an identity, so it is not a
   P028 site. Keep it unchanged, or derive the ids from the source record
@@ -230,9 +235,10 @@ helper and lists their lines.
   `# conformance: ignore[P028] <reason>`, where the reason names what the
   string is (for example `object-store key, not a qualifiedName`). Never
   rewrite it through a creator.
-- **centralise** — no creator owns the grammar. Move every such f-string into
-  one `app/qualified_names.py` with one helper per shape and one justified
-  ignore per helper.
+- **centralise** — no `pyatlan_v9` creator exists for the asset type. Move
+  every such f-string into one `app/qualified_names.py` with one helper per
+  shape and one justified ignore per helper. A creator that exists but
+  produces a different string is an **identity change**, not this class.
 - **identity change** — a creator exists but produces a different string
   for some input the app can receive (it derives a segment differently, or
   raises on a reachable blank id). Moving that site to the creator changes
@@ -270,8 +276,9 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
    (a convention the detector does not check: it lets a reviewer see every
    grammar in one place):
    `lru_cache` helpers that return `X.creator(...).qualified_name` for the
-   **creator** sites, and f-string helpers with their ignores for the
-   **process** and **centralise** sites. Apply the choice the developer made
+   **creator** sites, f-string helpers with their ignores for the
+   **centralise** sites, and for the **process** sites that are not already
+   in a `generate_qualified_name` helper. Apply the choice the developer made
    at Stop 1 for each **identity change** site. Call sites use the helpers. In a dict-mapper app the helpers return
    strings only, and the emitted dicts keep their shape. Give each
    **not an identity** site its reasoned ignore in place. Leave **decode**
@@ -298,10 +305,11 @@ removed in v4.0); `to_atlas_format()` ⇒ `EnvelopeShape.FLATTENED`. Moving to
 ## Step 3 — Prove it
 
 1. `atlan-application-sdk-conformance detect --rule P028,P052,P055,O002,O003,O004 --exit-zero --output <file>`
-   — no finding left except the agreed ignores and the owner-decision sites
-   (expected, unsuppressed). The checker does not see the hand-built helpers
-   from Step 1 (for example a `_qn(*parts)` join): grep their call sites and
-   confirm each is migrated or listed as an owner decision.
+   — no finding left except the agreed ignores, the **decode** sites and the
+   **identity change** sites left open (expected, unsuppressed). The checker
+   does not see the hand-built helpers from Step 1 (for example a
+   `_qn(*parts)` join): grep their call sites and confirm each is migrated or
+   listed in the PR description as left open.
 2. The test suite passes, with no failure that was not in the baseline.
 3. Parity: regenerate the output from Step 0.3 and compare, as multisets
    (counts, not sets: an anonymised fixture can repeat a qualifiedName), both

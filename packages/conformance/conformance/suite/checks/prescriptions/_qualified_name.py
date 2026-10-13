@@ -108,11 +108,12 @@ def check_p028(
                     node=node,
                     message=(
                         "qualifiedName built by hand with an f-string — keep each "
-                        "qualifiedName grammar in one helper in app/qualified_names.py; "
-                        "derive it from the pyatlan asset .creator() when that gives "
-                        "the identical string, else keep the f-string there with an "
-                        "ignore whose reason says which case applies (no identical "
-                        "creator, or not an identity)."
+                        "qualifiedName grammar in one helper (by convention in "
+                        "app/qualified_names.py); derive it from the pyatlan asset "
+                        ".creator() when that gives the identical string, else keep "
+                        "the f-string there with an ignore whose reason says which "
+                        "case applies (no identical creator, a process identity, or "
+                        "not an identity)."
                     ),
                     directives=directives,
                 )

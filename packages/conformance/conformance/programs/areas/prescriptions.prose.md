@@ -132,7 +132,8 @@ every other site to residue (see its entry below).  P027 (app_state read with no
 populating writer) describes a structural fix — route the data through the typed
 entrypoint/task contract — that no local edit can perform, and the writer may be
 external to the scanned source.  P028 (hand-built qualifiedName f-string) proposes
-one helper per name shape in `app/qualified_names.py`, derived from the pyatlan
+one helper per name shape (by convention in `app/qualified_names.py`; the
+detector does not check the location), derived from the pyatlan
 `.creator()` where that gives the identical string for every reachable input and
 an f-string with a justified ignore otherwise, a rewrite performed by the
 `migrate-asset-modeling` skill (its `remediation_reference`); the SDK has no
