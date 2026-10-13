@@ -1963,6 +1963,152 @@ class Probe:
     assert "E007" not in _findings(src)
 
 
+def test_p007_no_finding_when_module_helper_logs_sanitized_exception_on_every_path() -> (
+    None
+):
+    src = """\
+def _report_problem(label, problem, internal):
+    if internal:
+        logger.error("%s failed: %s", label, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", label, sanitize_cause_repr(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        failure = classify(problem)
+        if failure is None:
+            raise
+        _report_problem("lookup", problem, failure.internal)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
+    src = """\
+class Probe:
+    def _log(self, problem):
+        message = "lookup failed"
+        metrics.increment("failures")
+        logger.error("%s: %s", message, problem)
+
+    def run(self):
+        try:
+            read_value()
+        except LookupError as problem:
+            self._log(problem)
+            return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_module_helper_has_setup_before_log() -> None:
+    src = """\
+def _log(problem):
+    message = "lookup failed"
+    logger.error("%s: %s", message, problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_assigned_module_helper_logs_exception() -> None:
+    src = """\
+def _report(problem):
+    logger.error("lookup failed: %s", safe_traceback(problem))
+    return True
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        reported = _report(problem)
+        return None
+"""
+    _none(src)
+
+
+@pytest.mark.parametrize(
+    "logged",
+    [
+        "safe_traceback(None, max_len=problem)",
+        "redact(problem.__class__.__name__)",
+        "redact(len(problem.args))",
+    ],
+)
+def test_p007_still_flags_when_sanitizer_value_is_not_the_exception(
+    logged: str,
+) -> None:
+    src = f"""\
+def _report(problem):
+    logger.error("lookup failed: %s", {logged})
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report(problem)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_helper_rebinds_input_inside_branch() -> None:
+    src = """\
+def _log(problem, hide):
+    if hide:
+        problem = "redacted"
+    logger.error("failed: %s", problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_logs_unrelated_argument() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    logger.error("operation failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated detail")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_has_a_path_without_logging() -> None:
+    src = """\
+def _maybe_report(problem, enabled):
+    if enabled:
+        logger.error("operation failed: %s", safe_traceback(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _maybe_report(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
     src = """\
 class Probe:
