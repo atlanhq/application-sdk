@@ -59,6 +59,15 @@ logger = get_logger(__name__)
 CONFIG_KEY_PATTERN = r"^[a-zA-Z0-9_\-]{1,128}$"
 _CONFIG_KEY_RE = re.compile(CONFIG_KEY_PATTERN)
 
+# An upload prefix: one or more path segments of letters, digits, '_', '-' and
+# '.', with no '..' segment and no leading, trailing or doubled '/'. It comes
+# from the browser (Heracles forwards the form field unchanged), so it is
+# untrusted input that becomes part of an object-store key.
+UPLOAD_PREFIX_RE = re.compile(
+    r"^(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)*$"
+)
+_MAX_UPLOAD_PREFIX = 256
+
 # Strips any character that is not a simple alphanumeric from file extensions
 # before they are used as mkstemp suffixes, preventing taint-flow path traversal.
 SAFE_EXT_RE = re.compile(r"[^a-zA-Z0-9]")
@@ -102,12 +111,18 @@ class ObjectRoutesSource:
         save_config: ``(config_id, body, config_type)`` → ``True`` once stored,
             ``False`` when no store is configured. Raises on a failed write.
         upload_file: ``(key, local_path)`` → stores the file at ``key``.
+        upload_namespace: When set, every upload key is placed under it. The
+            consolidated host sets the app's own
+            ``persistent-artifacts/apps/<app>/uploads``: one identity writes to
+            the shared bucket for every hosted app, so a request routed to one
+            app must not be able to write under another's prefix.
     """
 
     configured: Callable[[], bool]
     load_config: Callable[[str, str], Awaitable[dict[str, Any] | None]]
     save_config: Callable[[str, dict[str, Any], str], Awaitable[bool]]
     upload_file: Callable[[str, str], Awaitable[None]]
+    upload_namespace: str = ""
 
 
 def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
@@ -191,6 +206,16 @@ def register_object_routes(app: FastAPI, source: ObjectRoutesSource) -> None:
 
         file_id = str(uuid4())
         effective_prefix = prefix or "workflow_file_upload"
+        if len(effective_prefix) > _MAX_UPLOAD_PREFIX or not UPLOAD_PREFIX_RE.match(
+            effective_prefix
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="prefix must be relative path segments of letters, digits, "
+                "'_', '-' or '.', with no '..'",
+            )
+        if source.upload_namespace:
+            effective_prefix = f"{source.upload_namespace}/{effective_prefix}"
         stored_name = f"{file_id}.{extension}" if extension else file_id
         key = f"{effective_prefix}/{stored_name}"
 
@@ -339,4 +364,5 @@ def host_object_source(
         load_config=load_config,
         save_config=save_config,
         upload_file=upload_file,
+        upload_namespace=f"persistent-artifacts/apps/{app_name}/uploads",
     )

@@ -147,3 +147,15 @@ def test_the_host_resolves_an_app_id_to_the_single_form(
 def test_without_generated_files_the_host_serves_no_metadata_routes() -> None:
     host = TestClient(build_asgi_app(_Handler(), app_name="bare", app_package="app"))
     assert host.get("/workflows/v1/configmaps").status_code == 404
+
+
+def test_the_workers_queue_override_is_stamped_on_the_host(
+    generated: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ATLAN_DEPLOYMENT_NAME", "prod")
+    monkeypatch.setenv("ATLAN_APPENV__PARITY__ATLAN_TASK_QUEUE", "custom-queue")
+    host = TestClient(
+        build_asgi_app(_Handler(), app_name="parity", generated_dir=generated)
+    )
+    manifest = host.post("/manifest", json={}).json()
+    assert manifest["dag"]["extract"]["task_queue"] == "custom-queue"

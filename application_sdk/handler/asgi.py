@@ -16,9 +16,10 @@ shared by every app in the process; handler code is async and offloads through
 The metadata routes (configmaps, manifest, input contract) are served from the
 ``generated/`` folder ``gen_app_api.py`` ships inside the app's package
 (:mod:`application_sdk.handler.metadata_routes`). The served manifest's task
-queue is the one the app's worker polls: ``derive_task_queue`` over the app's
-name and its deployment name, read as ``ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME``
-before the bare ``ATLAN_DEPLOYMENT_NAME`` (the host's per-app env convention).
+queue is the one the app's worker polls: its ``ATLAN_TASK_QUEUE`` override when
+the host's app-env sync carries one (``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``),
+else ``derive_task_queue`` over the app's name and its deployment name, read as
+``ATLAN_APPENV__<APP>__ATLAN_DEPLOYMENT_NAME`` before ``ATLAN_DEPLOYMENT_NAME``.
 """
 
 from __future__ import annotations
@@ -82,6 +83,19 @@ def default_object_store() -> S3ObjectStore | None:
 
 #: ``build_asgi_app(object_store=...)`` default: build the store from env.
 _FROM_ENV: Any = object()
+
+
+def _task_queue(app_name: str, deployment: Any) -> str | None:
+    """The queue the app's worker polls, for the served manifest.
+
+    Stamped, not derived, wherever the host can be told: the worker's own
+    ``ATLAN_TASK_QUEUE`` override, which the host's app-env sync carries as
+    ``ATLAN_APPENV__<APP>__ATLAN_TASK_QUEUE``. Derived from the app's name and
+    deployment, as the worker derives it, only when there is no override.
+    """
+    return app_env(app_name, "ATLAN_TASK_QUEUE").strip() or derive_task_queue(
+        app_name, deployment()
+    )
 
 
 def _package_generated_dir(app_package: str) -> Path | None:
@@ -165,7 +179,7 @@ def build_asgi_app(
                 generated_dir=lambda: generated,
                 app_name=lambda: app_name,
                 app_package=app_package,
-                task_queue=lambda: derive_task_queue(app_name, _deployment()),
+                task_queue=lambda: _task_queue(app_name, _deployment),
                 deployment_name=_deployment,
             ),
         )

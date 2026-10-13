@@ -705,10 +705,9 @@ def submit_in_thread(
         never ran. Ignoring the return value is the normal case.
     """
     ctx = contextvars.copy_context()
+    executor = _BLOCKING_EXECUTOR_OVERRIDE.get() or _BLOCKING_EXECUTOR
     try:
-        future = _BLOCKING_EXECUTOR.submit(
-            ctx.run, functools.partial(func, *args, **kwargs)
-        )
+        future = executor.submit(ctx.run, functools.partial(func, *args, **kwargs))
     except RuntimeError:
         # The pool refuses work only once it has been shut down, which happens
         # at interpreter exit. Nothing is left running to clean up after, and the

@@ -115,8 +115,40 @@ def test_a_file_upload_is_stored_under_its_key(host: TestClient, s3: _FakeS3) ->
     )
     assert response.status_code == 200
     data = response.json()["data"]
-    assert data["key"].startswith("sample_data/") and data["key"].endswith(".csv")
+    # On the host every upload stays under the app's own namespace.
+    assert data["key"].startswith(
+        "persistent-artifacts/apps/mysql/uploads/sample_data/"
+    )
+    assert data["key"].endswith(".csv")
     assert s3.objects[("tenant-bucket", data["key"])] == b"a,b\n1,2\n"
+
+
+@pytest.mark.parametrize(
+    "prefix", ["../other", "a/../../b", "/absolute", "a//b", "trailing/", "x" * 300]
+)
+def test_an_unsafe_upload_prefix_is_refused(
+    host: TestClient, s3: _FakeS3, prefix: str
+) -> None:
+    response = host.post(
+        "/workflows/v1/file",
+        files={"file": ("rows.csv", b"a,b\n", "text/csv")},
+        data={"prefix": prefix},
+    )
+    assert response.status_code == 400
+    assert s3.objects == {}
+
+
+def test_a_prefix_naming_another_app_stays_in_this_apps_namespace(
+    host: TestClient, s3: _FakeS3
+) -> None:
+    response = host.post(
+        "/workflows/v1/file",
+        files={"file": ("x.csv", b"1\n", "text/csv")},
+        data={"prefix": "persistent-artifacts/apps/redshift/credentials"},
+    )
+    assert response.status_code == 200
+    ((bucket, key),) = s3.objects
+    assert key.startswith("persistent-artifacts/apps/mysql/uploads/")
 
 
 def test_the_host_key_is_the_workers_key(monkeypatch: pytest.MonkeyPatch) -> None:

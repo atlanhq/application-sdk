@@ -78,3 +78,17 @@ async def test_a_stuck_app_does_not_stall_another_app() -> None:
 async def test_outside_a_hosted_request_run_in_thread_uses_the_shared_pool() -> None:
     name = await run_in_thread(lambda: threading.current_thread().name)
     assert name.startswith("sdk-blocking-")
+
+
+async def test_submit_in_thread_uses_the_apps_pool_too() -> None:
+    import concurrent.futures
+
+    from application_sdk._runtime.offload import blocking_executor, submit_in_thread
+
+    pool = concurrent.futures.ThreadPoolExecutor(1, thread_name_prefix="api-solo-")
+    try:
+        with blocking_executor(pool):
+            future = submit_in_thread(lambda: threading.current_thread().name)
+        assert future.result(timeout=5).startswith("api-solo-")
+    finally:
+        pool.shutdown(wait=True)
