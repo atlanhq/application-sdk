@@ -3,7 +3,10 @@
 conformance version.
 
 Invoked from the shared preset's ``postUpgradeTasks`` on the conformance-package
-and lock-refresh lanes, after Renovate has already updated ``uv.lock``.
+lane, after Renovate has already updated ``uv.lock``. The lock-refresh lane ran it
+too until FND-3481, which made that lane hold conformance at the base branch's
+version — so it can no longer change the ledger's input, and only re-wrote a file
+the framework lane also writes.
 
 Why this exists (FND-607)
 -------------------------

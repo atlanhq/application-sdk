@@ -53,6 +53,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, ClassVar, TypeVar, get_type_hints
 
+# Defined in common.dispatch since FND-3280 so the handler can derive a
+# workflow type without importing the ``app`` package; same function.
+from application_sdk.common.dispatch import canonical_workflow_type
 from application_sdk.contracts.base import Input, Output
 from application_sdk.errors import CONTRACT_VALIDATION, ErrorCode
 from application_sdk.errors.leaves import InvalidInputError
@@ -170,15 +173,6 @@ def workflow_type_class_segment(workflow_type: str) -> str:
     # identifier. Test each code point in a non-leading position instead, since
     # the generated class always has the ``_Workflow_`` prefix.
     return "".join(char if f"x{char}".isidentifier() else "_" for char in workflow_type)
-
-
-def canonical_workflow_type(app_name: str, ep: EntryPointMetadata) -> str:
-    """The convention-derived Temporal workflow type for *ep*.
-
-    ``{app-name}`` for the implicit (run()-derived) entry point, and
-    ``{app-name}:{entry-point-name}`` for every explicit ``@entrypoint``.
-    """
-    return app_name if ep.implicit else f"{app_name}:{ep.name}"
 
 
 def build_workflow_type_index(

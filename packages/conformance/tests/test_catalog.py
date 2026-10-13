@@ -426,6 +426,8 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # envelope (K020), and a filter field typed as a strict dict that rejects the
     # AE's flat JSON string (K021, CONNECT-1333 / CONNECT-1389). All four need an
     # app's contract/ + app/generated/ tree, which the SDK does not have.
+    # K027: entrypoint contract classes sharing one bare class name — the SDK
+    # declares no @entrypoint contracts of its own, so nothing can collide (FND-3140).
     # E020: HTTP-failure-to-empty-return — the harm (publishing a partial crawl as
     # complete) is a connector extract/publish concern; the SDK's matching sites are
     # legitimate best-effort infra (health/metric scrapes), not crawlers (BLDX-1503).
@@ -472,6 +474,10 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
     # class that can move, or stop being the one a boundary raises, in a minor
     # release. The SDK is the publisher of that surface, so neither rule grades
     # it (CONNECT-970).
+    # P056/P057: client lifecycle — only consumer apps subclass and construct
+    # BaseClient; the SDK defines it and constructs no subclass in product code,
+    # and the version gate reads a consumed SDK version the SDK repo does not
+    # have (FND-3778).
     assert app_scoped == {
         "B001",
         "B007",
@@ -488,6 +494,9 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "P051",
         "P052",
         "P053",
+        "P055",
+        "P056",
+        "P057",
         "C002",
         "D001",
         "D002",
@@ -520,6 +529,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
         "P004",
         "P005",
         "P008",
@@ -563,6 +573,7 @@ def test_catalog_app_scoped_rules_are_the_expected_set() -> None:
         "T023",
         "T024",
         "T025",
+        "T026",
         "O002",
         "O003",
         "O004",
@@ -641,6 +652,7 @@ def test_catalog_e_series_present() -> None:
         "E018",
         "E019",
         "E020",
+        "E021",
     }
     missing = expected - e_ids
     assert not missing, f"Missing E-series rules: {missing}"
@@ -770,6 +782,12 @@ def test_catalog_p_series_present() -> None:
     CredentialRef(credential_guid=...), inline [{key, value}] flattening) or
     declaring its own CredentialValue alias, instead of the SDK's
     route_credentials; gated on an app SDK >= 3.40.0 (FND-2949).
+    P054 is ScopedExecutorJoinedOnCancel — a `with`-scoped ThreadPoolExecutor
+    whose run_in_executor call joins on cancel and freezes the worker (FND-2873).
+    P056/P057 are the client-lifecycle rules — UnclosedBaseClient (a BaseClient
+    subclass constructed in a function with no ``async with`` and no ``close()``
+    in a ``finally``) and CloseOverrideSkipsSuper (a ``close()`` override that
+    never calls ``super().close()``); gated on an app SDK >= 3.46.0 (FND-3778).
     A stray or renumbered P-id would slip past a subset check while
     breaking fleet-wide ``# conformance: ignore[Pxxx]`` suppressions.
     """
@@ -823,6 +841,10 @@ def test_catalog_p_series_present() -> None:
         "P051",
         "P052",
         "P053",
+        "P054",
+        "P055",
+        "P056",
+        "P057",
     }
     missing = expected - p_ids
     assert not missing, f"Missing P-series rules: {missing}"
@@ -868,11 +890,12 @@ def test_catalog_t_series_present() -> None:
     unset relative to a broadened fixture loop scope), T020-T022 (full-DAG e2e
     must run through the reusable Tests workflow: no bespoke sdr-e2e workflow,
     suites reachable in CI, two-store posture on SDR apps), and T023/T024 (e2e
-    harness scaffold generated from contract/app.pkl; RunMode declared), and T025
-    (every bundle entrypoint has an e2e suite, not just the default one)."""
+    harness scaffold generated from contract/app.pkl; RunMode declared), T025
+    (every bundle entrypoint has an e2e suite, not just the default one), and T026
+    (the e2e harness base matches the app's declared marketplace type)."""
     rules = load_catalog()
     t_ids = {r.id for r in rules if r.id.startswith("T")}
-    expected = {f"T{n:03d}" for n in range(1, 26)}
+    expected = {f"T{n:03d}" for n in range(1, 27)}
     missing = expected - t_ids
     assert not missing, f"Missing T-series rules: {missing}"
     extra = t_ids - expected
@@ -910,7 +933,8 @@ def test_catalog_k_series_present() -> None:
     and the legacy-alias agreement rule K015 (manifest legacy_workflow_types vs
     the SDK App declaration) (CONNECT-1081), plus the artifact-schema pair K016
     (a public hand-off with no declaration) and K017 (a declaration its own
-    writer contradicts) (ADR-0020)."""
+    writer contradicts) (ADR-0020), and K027 (two entrypoints binding different
+    contract classes under one bare class name) (FND-3140)."""
     rules = load_catalog()
     k_ids = {r.id for r in rules if r.id.startswith("K")}
     expected = {
@@ -935,6 +959,7 @@ def test_catalog_k_series_present() -> None:
         "K019",
         "K020",
         "K021",
+        "K027",
     }
     missing = expected - k_ids
     assert not missing, f"Missing K-series rules: {missing}"
@@ -1549,10 +1574,11 @@ _SDK_ONLY_REFERENCE_EXEMPT = {
         "no reference app has an `except ImportError` in the code E008 scans "
         "(app/, main.py — tests/ is excluded); verified FND-2702"
     ),
-    "T025": (
-        "no reference app is in bundle mode (each emits a single generated "
-        "manifest), so T025 inspects none of them; the positive shape is the "
-        "SDK e2e harness until a multi-mode reference app exists (FND-2702)"
+    "P057": (
+        "no reference app overrides close() on a BaseClient subclass and chains to "
+        "super(); atlan-metabase-app's MetabaseApiClient.close() is the violation "
+        "the rule was written for, so the SDK's BaseClient.close() is the only "
+        "compliant shape to cite (FND-3778)"
     ),
 }
 

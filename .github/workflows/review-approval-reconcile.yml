@@ -1,42 +1,38 @@
-# Safety net for the code-owner approvals that sdk-review and lens post as
-# `atlan-ci`: post approvals that were computed but never landed. One sweep for
-# both, because both spend the same `atlan-ci` quota whose exhaustion loses them
-# (FND-2977). Do not add a second cron for another review source; add an adapter
-# to the script instead.
+# Safety net for the code-owner approvals that lens posts as `atlan-ci`: post
+# approvals that were computed but never landed (FND-2977). Do not add a second
+# cron for another review source; add an adapter to the script instead.
 #
 # Why this exists:
-#   `sdk-review-approve-on-verdict.yml` computes the verdict and then posts the
-#   formal approval as `atlan-ci` — the CODEOWNER whose approval satisfies
-#   branch protection on `main`. When that one POST fails (the trigger has been
-#   `atlan-ci` exhausting its 5,000 req/hr primary REST quota) the run dies and
-#   nothing retries it. The PR is left with a review summary, the
-#   `sdk-review-approved` label, and no approving review — and recovery was a
-#   human noticing and running `gh run rerun --failed` by hand.
+#   lens (`lens.yml`) posts its APPROVE as `atlan-ci` — the CODEOWNER whose
+#   approval satisfies branch protection on `main` — in its last step, and only
+#   warns when that POST fails (the trigger has been `atlan-ci` exhausting its
+#   5,000 req/hr primary REST quota). The summary says ready to merge while the
+#   PR stays blocked, and the only recovery was `/lens force`. This sweep is the
+#   durable answer because it does not care why the approval was lost.
 #
-#   PR #3162 shrank that window (one `atlan-ci` request per fire instead of ~15,
-#   plus rate-limit-aware retry) but could not close it: primary quota can reset
-#   up to an hour out and the stamper deliberately fails fast rather than hold a
-#   runner that long. This sweep is the durable answer because it does not care
-#   why the stamp was lost.
-#
-#   lens (`lens.yml`) has the same shape: its last step posts the APPROVE and
-#   only warns when that fails, so the summary says ready to merge while the PR
-#   stays blocked, and the only recovery was `/lens force`.
+#   sdk-review was a second source here until its verdict path was retired
+#   (#4138) along with the workflows that invalidated its approvals.
 #
 # Guards live in .github/scripts/review_approval_reconcile.py, tested in
-# .github/scripts/tests/. In short, for sdk-review: the `sdk-review-approved`
-# label must still be on the PR (every invalidator clears it), the newest
-# mothership-ai[bot] verdict must be READY_TO_MERGE at the PR's live head, there
-# must be no existing bot approval, and the verdict must be old enough that no
-# fast-path run could still be in flight for it. For lens: lens's own `lens`
-# status on the live head must be green, its state must show nothing open at
-# that head, the status must be old enough, and no lens approval on that head
-# may exist or have been withdrawn.
+# .github/scripts/tests/. In short: lens's own `lens` status on the live head
+# must be green, its state must show nothing open at that head, and no lens
+# approval on that head may exist or have been withdrawn.
 #
-# 10-minute cadence. Per tick that is one paginated PR listing, one GraphQL
-# query for lens statuses, plus a few reads per PR that either source says may
-# be owed — negligible against the fleet App token's own
-# quota, which is the point: a reconciler polling every PR on the `atlan-ci` PAT
+# No minimum age. It used to wait 12 minutes after a verdict so it could never
+# race the source's own approval step; with cron drift that meant 20-30 minutes
+# of a reviewed PR sitting blocked. Racing is not unsafe (the approve step
+# re-reads and refuses when a signed approval exists); the worst case is a
+# harmless duplicate approval.
+#
+# Event-driven as well as scheduled: it runs as soon as a lens run completes
+# (`workflow_run`), which is exactly when an approval can have just been lost.
+# Runs that concluded `skipped` (lens skips most triggers) are filtered out by
+# the job's `if:`. The cron stays as a backstop for GitHub dropping a
+# `workflow_run` event.
+#
+# 10-minute backstop cadence. Per run that is one paginated PR listing, one GraphQL
+# query for lens statuses, plus a few reads per PR that lens says may be owed —
+# negligible against the fleet App token's own quota, which is the point: a reconciler polling every PR on the `atlan-ci` PAT
 # would become a new source of the exhaustion it exists to recover from. The PAT
 # is spent only on the APPROVE call, once per PR actually approved.
 #
@@ -53,15 +49,22 @@
 # --stale-after-minutes (90) has outlived a full reset without recovering, and
 # that does red the run.
 #
-# Manual dispatch (optionally with `pr`) skips the min-age grace: the grace is
-# for the unattended cron, and a person dispatching has already seen the
-# approval run finish. Every other guard still applies.
+# Manual dispatch (optionally with `pr`) runs the same sweep, restricted to that
+# PR when given.
 
 name: Review approvals — reconcile lost atlan-ci approvals
 
 on:
   schedule:
     - cron: "*/10 * * * *"
+  # Straight after a review source's approval step has run -- the moment an
+  # approval can have been lost. `workflow_run` always runs this file from the
+  # default branch and checks out the default branch, so no PR-controlled code
+  # or input reaches the job.
+  workflow_run:
+    workflows:
+      - lens
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -69,7 +72,7 @@ on:
         type: boolean
         default: false
       pr:
-        description: "Only this PR number (empty = every open PR). A manual run skips the min-age grace."
+        description: "Only this PR number (empty = every open PR)."
         type: string
         default: ""
 
@@ -86,6 +89,9 @@ concurrency:
 jobs:
   reconcile:
     name: Re-drive missing atlan-ci approvals
+    # A lens run that skipped (the common case: a trigger on an already-reviewed
+    # head) cannot have lost an approval, so it does not start a sweep.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion != 'skipped'
     runs-on: ubuntu-latest
     # Without an explicit ceiling this inherits GitHub's 6h default. Paired with
     # cancel-in-progress: false, a hung run would queue every subsequent tick
@@ -99,7 +105,7 @@ jobs:
 
       - name: Mint fleet App token
         # Carries its own rate-limit quota, independent of the `atlan-ci` user
-        # quota that ORG_PAT_GITHUB draws on. Same App the stamper uses.
+        # quota that ORG_PAT_GITHUB draws on. Same App lens uses.
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
         with:
@@ -110,8 +116,7 @@ jobs:
 
       - name: Reconcile lost approvals
         env:
-          # Every call the sweep makes, and every call the stamper makes except
-          # APPROVE.
+          # Every call the sweep makes except APPROVE.
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           # The APPROVE call only — atlan-ci is the CODEOWNER whose approval
           # satisfies branch protection.
@@ -124,6 +129,5 @@ jobs:
         run: |
           python3 .github/scripts/review_approval_reconcile.py \
             --repo "${{ github.repository }}" \
-            --event-name "${{ github.event_name }}" \
             --pr "$PR_INPUT" \
             ${{ inputs.dry_run && '--dry-run' || '' }}

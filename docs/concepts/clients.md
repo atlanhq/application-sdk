@@ -6,6 +6,7 @@ This module provides the necessary abstractions (clients) for interacting with v
 
 1.  **`ClientInterface` (`application_sdk.clients`)**:
     *   **Purpose:** An abstract base class defining the minimal contract for all clients. It requires implementing an `async def load()` method for connection/setup and provides an optional `async def close()` for cleanup.
+    *   **Lifecycle:** Every client is an async context manager. `async with MyClient() as client:` calls `close()` when the block exits, including on an exception. `__aenter__` does not call `load()`, so call it inside the block with credentials. A subclass that overrides `close()` must call `super().close()`.
     *   **Extensibility:** Any class interacting with an external service should ideally inherit from this interface.
 
 2.  **Specialized Clients:** The SDK provides concrete client implementations for specific services:
@@ -45,9 +46,18 @@ Both SQL client classes are typically **subclassed** for specific database types
     *   Creates the SQLAlchemy engine (`self.engine`) and connection (`self.connection`).
 
 3.  **Executing Queries (`run_query` method):**
-    *   Takes a SQL query string and optional `batch_size`.
+    *   Takes a SQL query string, an optional `batch_size` and optional `params`.
     *   Executes the query using the established connection.
     *   Yields results in batches (lists of dictionaries).
+    *   **Bind user-supplied values with `params`, don't splice them into the SQL.** Write a `:name` placeholder in the query and pass `params={"name": value}`: the driver receives the value as a bound parameter, so text in it (a quote, a semicolon) cannot change the statement.
+
+        ```python
+        sql = "SELECT TABLE_NAME FROM ALL_TABLES WHERE REGEXP_LIKE(TABLE_NAME, :pattern)"
+        async for batch in client.run_query(sql, params={"pattern": include_regex}):
+            ...
+        ```
+
+        Every name in `params` must appear in the query as `:name`. A name the query never references raises `SqlBindParameterError` rather than running the query without that value. Without `params`, every colon in the query is treated as literal text, as before. Values are scalars (`SqlBindValue`: str, int, float, bool, Decimal, date/time, bytes or None). A placeholder may carry a cast, as in `:since::timestamp`; any other colon, such as `x::text` or `'12:30'`, stays literal, as does a `:name` inside quoted text or a comment. Quoting follows standard SQL (`''` doubles a quote, a backslash is literal), plus backtick identifiers and Postgres dollar quotes.
 
 ### Example `DB_CONFIG`
 
@@ -80,6 +90,26 @@ class SnowflakeClient(BaseSQLClient):
 **Simplified Flow:**
 `@task method` → creates `BaseSQLClient` → `client.load(credentials=cred_dict)` → `client.run_query(query=...)` → yields row batches → asset mapper.
 
+### Cancelling a running query
+
+`get_results`, `get_batched_results` and `run_query` run the driver call on a worker thread through `run_in_thread(handle.bind(...), ...)` (see [Tasks](tasks.md#cancelling-a-blocking-call-at-the-driver)). When the awaiting task is cancelled:
+
+1. The read hands control back to the event loop at once.
+2. `cancel_cursor(dbapi_cursor)` is called on the `sdk-cancel-` pool with the DBAPI cursor the statement is running on. The cursor is registered by a SQLAlchemy `before_cursor_execute` listener the client attaches to its engine, from inside the worker thread.
+3. Once the driver call returns, the connection is **invalidated** instead of being returned to the pool, so a pool with `pool_pre_ping` or a connect listener never re-validates a connection left mid-statement.
+
+DBAPI has no standard cancel, so `cancel_cursor` is a no-op by default and the statement runs to completion on its thread. Override it with your driver's thread-safe cancel:
+
+```python
+class MyClient(BaseSQLClient):
+    def cancel_cursor(self, dbapi_cursor) -> None:
+        dbapi_cursor.cancel()  # must be safe to call from another thread
+```
+
+The override runs concurrently with the blocked driver call. A failure is logged at WARNING. Never stop or suspend a warehouse from it.
+
+Clients that override these read paths (or call a driver directly with `run_in_thread`) get none of this automatically; pass your own `CancelHandle` and `set()` the driver's cancel from inside the thread. `AsyncBaseSQLClient` reads run on the event loop, not a worker thread, so they are cancelled by the async driver directly.
+
 ## Base Client (`base.py`)
 
 Provides a base implementation for clients that need to connect to non-SQL data sources with methods for HTTP GET and POST requests.
@@ -107,6 +137,16 @@ The `BaseClient` class is typically **subclassed** for specific non-SQL data sou
 3.  **HTTP Request Methods:**
     *   **`execute_http_get_request()`:** Performs HTTP GET requests with configurable headers, parameters, and authentication.
     *   **`execute_http_post_request()`:** Performs HTTP POST requests with support for various data formats (JSON, form data, files, etc.).
+
+4.  **Closing (`close` method):**
+    *   All requests on one client share `http_retry_transport` and its connection pool, so concurrent requests (for example under `asyncio.gather`) do not close each other's connections.
+    *   The pool stays open until `close()`. Use the client with `async with`, or call `close()` in a `finally` block, once you are done with it.
+
+```python
+async with MyApiClient() as client:
+    await client.load(credentials=credentials)
+    results = await asyncio.gather(*(client.fetch_data(e) for e in endpoints))
+```
 
 ### Example `BaseClient` Subclass
 

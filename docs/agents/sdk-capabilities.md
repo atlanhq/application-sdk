@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.39.1
-source-sha:    5af6afb0e7c17e32c2f330c54fc34b823998a246
-source-date:   2026-09-28T15:47:54+01:00
+sdk-version:   3.45.0
+source-sha:    e294b5ed55215d531dcf1ac03428be6a29f8972d
+source-date:   2026-10-12T12:41:49+01:00
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -20,23 +20,23 @@ do-not-edit:   re-run the skill instead of hand-editing
 |---|---|---|
 | `application_sdk.app` | Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPolicy, mcp_tool | 47 |
 | `application_sdk.clients` | Connection clients (SQL, Redis, Azure) and ClientInterface ABC | 12 |
-| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 46 |
-| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 43 |
+| `application_sdk.common` | Shared utilities — SQL filters, concurrency helpers, TaskStatistics, DataframeType | 55 |
+| `application_sdk.contracts` | Typed Pydantic Input/Output base classes, payload safety, storage and type helpers | 46 |
 | `application_sdk.credentials` | Credential resolvers (Atlan, OAuth, Git, agent), registry, vault spec | 53 |
 | `application_sdk.dev` | Local-iteration helpers — embedded Dapr and Temporal daemons managed by the SDK, no host install needed | 4 |
-| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 69 |
-| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 46 |
-| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 23 |
+| `application_sdk.errors` | Structured error codes — ErrorCode dataclass and cross-component constants (APP_ERROR, HANDLER_ERROR, CONTRACT_VALIDATION, etc.) | 71 |
+| `application_sdk.execution` | Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal client | 47 |
+| `application_sdk.handler` | HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service factory | 27 |
 | `application_sdk.infrastructure` | Protocol-based infrastructure (StateStore, SecretStore, PubSub, Bindings, CapacityPool) | 38 |
 | `application_sdk.main` | Dev entry point — run_dev_combined() and AppConfig for local execution and container startup | 2 |
 | `application_sdk.observability` | Logging context — ExecutionContext, CorrelationContext, request/correlation helpers | 29 |
 | `application_sdk.outputs` | Output collectors and record models for Automation Engine | 4 |
 | `application_sdk.pkl_version` | The Pkl toolchain pin — the one version CI renders contracts with, readable by an app's own tooling so a local render predicts the freshness gate | 1 |
 | `application_sdk.server` | FastAPI server, MCP integration, middleware, health endpoint | 4 |
-| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 45 |
-| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 7 |
-| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 403 |
-| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 82 |
+| `application_sdk.storage` | Object-store abstraction — factory, formats, batch, transfer, cloud bindings | 46 |
+| `application_sdk.templates` | SQL metadata extractor templates and their contracts | 10 |
+| `application_sdk.testing` | Test infrastructure — mocks, fixtures, hypothesis strategies, integration helpers | 419 |
+| `application_sdk.validation` | Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus pyatlan_v9 .validate() wrappers, no network call | 84 |
 
 ## Subpackage Details
 
@@ -261,16 +261,16 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 #### `build_identity`
 
 - **Import:** `from application_sdk.app.build_identity import build_identity`
-- **Signature:** `build_identity() -> str`
+- **Signature:** `build_identity()`
 - **Summary:** Return this image's build identity, or ``""`` when it carries none.
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `canonical_workflow_type`
 
 - **Import:** `from application_sdk.app import canonical_workflow_type`
-- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointMetadata)`
+- **Signature:** `canonical_workflow_type(app_name: str, ep: EntryPointIdentity)`
 - **Summary:** The convention-derived Temporal workflow type for *ep*.
-- **Defined in:** `application_sdk/app/entrypoint.py`
+- **Defined in:** `application_sdk/common/dispatch.py`
 
 #### `entrypoint_module_segment`
 
@@ -314,21 +314,21 @@ Core developer abstractions — App, @task, @entrypoint, Input, Output, RetryPol
 - **Import:** `from application_sdk.app.build_identity import BUILD_ID_ENV`
 - **Signature:** `BUILD_ID_ENV`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `BUILD_IDENTITY_CONFIGMAP_ID`
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
 - **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `BUILD_INFO_BUILD_ID_KEY`
 
 - **Import:** `from application_sdk.app.build_identity import BUILD_INFO_BUILD_ID_KEY`
 - **Signature:** `BUILD_INFO_BUILD_ID_KEY`
 - **Summary:** _(no docstring)_
-- **Defined in:** `application_sdk/app/build_identity.py`
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `InteractionUnfinishedPolicy`
 
@@ -486,6 +486,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 
 ### Classes
 
+#### `ColumnExtractionAnalysis`
+
+- **Import:** `from application_sdk.common.incremental.column_extraction import ColumnExtractionAnalysis`
+- **Signature:** `class ColumnExtractionAnalysis`
+- **Summary:** What :func:`get_tables_needing_column_extraction` found.
+- **Defined in:** `application_sdk/common/incremental/column_extraction/analysis.py`
+
 #### `DataframeType`
 
 - **Import:** `from application_sdk.common import DataframeType`
@@ -535,6 +542,20 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Signature:** `class LastSyncStampable`
 - **Summary:** Any asset object that declares the three run-identity fields.
 - **Defined in:** `application_sdk/common/last_sync.py`
+
+#### `MarkerPair`
+
+- **Import:** `from application_sdk.common.incremental import MarkerPair`
+- **Signature:** `class MarkerPair(marker: str | None, next_marker: str)`
+- **Summary:** The markers a run starts with: :func:`fetch_marker`'s result.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
+#### `MarkerPersistResult`
+
+- **Import:** `from application_sdk.common.incremental import MarkerPersistResult`
+- **Signature:** `class MarkerPersistResult(marker_timestamp: str, s3_key: str)`
+- **Summary:** Where :func:`persist_marker` wrote the marker.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `ModelDumpAsset`
 
@@ -608,6 +629,13 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Yield an open handle whose contents land at *path* only if the block succeeds.
 - **Defined in:** `application_sdk/common/atomic.py`
 
+#### `build_identity`
+
+- **Import:** `from application_sdk.common.build_identity import build_identity`
+- **Signature:** `build_identity() -> str`
+- **Summary:** Return this image's build identity, or ``""`` when it carries none.
+- **Defined in:** `application_sdk/common/build_identity.py`
+
 #### `classify_unwritable_oserror`
 
 - **Import:** `from application_sdk.common.atomic import classify_unwritable_oserror`
@@ -650,11 +678,18 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Extract the connection ID (epoch) from a connection qualified name.
 - **Defined in:** `application_sdk/common/incremental/helpers.py`
 
+#### `fetch_marker`
+
+- **Import:** `from application_sdk.common.incremental import fetch_marker`
+- **Signature:** `fetch_marker(connection_qualified_name: str, ...)`
+- **Summary:** Fetch and process the incremental marker from storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `fetch_marker_from_storage`
 
 - **Import:** `from application_sdk.common.incremental import fetch_marker_from_storage`
 - **Signature:** `fetch_marker_from_storage(connection_qualified_name: str, ...)`
-- **Summary:** Fetch and process the incremental marker from storage.
+- **Summary:** Fetch the marker as a ``(marker, next_marker)`` tuple.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `filter_matches`
@@ -735,11 +770,18 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Summary:** Fallback serialiser for orjson — covers types it doesn't handle natively.
 - **Defined in:** `application_sdk/common/asset_serialization.py`
 
+#### `persist_marker`
+
+- **Import:** `from application_sdk.common.incremental import persist_marker`
+- **Signature:** `persist_marker(connection_qualified_name: str, marker_value: str, application_name: str = '')`
+- **Summary:** Persist marker timestamp to S3 storage.
+- **Defined in:** `application_sdk/common/incremental/marker.py`
+
 #### `persist_marker_to_storage`
 
 - **Import:** `from application_sdk.common.incremental import persist_marker_to_storage`
 - **Signature:** `persist_marker_to_storage(connection_qualified_name: str, marker_value: str, application_name: str = '')`
-- **Summary:** Persist marker timestamp to S3 storage.
+- **Summary:** Persist the marker and describe the write as a dict.
 - **Defined in:** `application_sdk/common/incremental/marker.py`
 
 #### `prepare_filters`
@@ -799,6 +841,27 @@ Shared utilities — SQL filters, concurrency helpers, TaskStatistics, Dataframe
 - **Defined in:** `application_sdk/common/entity_envelope.py`
 
 ### Constants and Enums
+
+#### `BUILD_ID_ENV`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_ID_ENV`
+- **Signature:** `BUILD_ID_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
+
+#### `BUILD_IDENTITY_CONFIGMAP_ID`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_IDENTITY_CONFIGMAP_ID`
+- **Signature:** `BUILD_IDENTITY_CONFIGMAP_ID`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
+
+#### `BUILD_INFO_BUILD_ID_KEY`
+
+- **Import:** `from application_sdk.common.build_identity import BUILD_INFO_BUILD_ID_KEY`
+- **Signature:** `BUILD_INFO_BUILD_ID_KEY`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/common/build_identity.py`
 
 #### `DEFAULT_ENVELOPE`
 
@@ -1067,6 +1130,13 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Summary:** Check whether *new_cls* is backwards-compatible with *old_cls*.
 - **Defined in:** `application_sdk/contracts/compat.py`
 
+#### `connection_qualified_name_defect`
+
+- **Import:** `from application_sdk.contracts import connection_qualified_name_defect`
+- **Signature:** `connection_qualified_name_defect(qualified_name: str)`
+- **Summary:** Why *qualified_name* cannot address a Connection, or ``None`` when it can.
+- **Defined in:** `application_sdk/contracts/types.py`
+
 #### `field_lifecycle`
 
 - **Import:** `from application_sdk.contracts.compat import field_lifecycle`
@@ -1123,6 +1193,20 @@ Typed Pydantic Input/Output base classes, payload safety, storage and type helpe
 - **Import:** `from application_sdk.contracts import BoundedList`
 - **Signature:** `BoundedList`
 - **Summary:** Bounded list type. Use: Annotated[list[T], MaxItems(N)]
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `CONNECTION_QN_MIN_SEGMENTS`
+
+- **Import:** `from application_sdk.contracts import CONNECTION_QN_MIN_SEGMENTS`
+- **Signature:** `CONNECTION_QN_MIN_SEGMENTS`
+- **Summary:** Segments in the shortest addressable connection QN: ``default/<connector>/<id>``.
+- **Defined in:** `application_sdk/contracts/types.py`
+
+#### `TreeSelection`
+
+- **Import:** `from application_sdk.contracts import TreeSelection`
+- **Signature:** `TreeSelection`
+- **Summary:** A selection from a tree widget, in the nested shape the widget emits.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 ## `application_sdk.credentials`
@@ -1730,6 +1814,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Customer-controlled source system is temporarily unreachable.
 - **Defined in:** `application_sdk/errors/leaves.py`
 
+#### `SourceWarmupExhaustedError`
+
+- **Import:** `from application_sdk.errors import SourceWarmupExhaustedError`
+- **Signature:** `class SourceWarmupExhaustedError(*, ...)`
+- **Summary:** The source answered but did not finish warming up within the gate's ceiling.
+- **Defined in:** `application_sdk/errors/leaves.py`
+
 #### `TaskStalledError`
 
 - **Import:** `from application_sdk.errors import TaskStalledError`
@@ -1958,6 +2049,13 @@ Structured error codes — ErrorCode dataclass and cross-component constants (AP
 - **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
 - **Defined in:** `application_sdk/errors/__init__.py`
 
+#### `STORAGE_DISK_FULL`
+
+- **Import:** `from application_sdk.errors import STORAGE_DISK_FULL`
+- **Signature:** `STORAGE_DISK_FULL`
+- **Summary:** Deprecated legacy error code — use AppError subclasses (removed in v4.0).
+- **Defined in:** `application_sdk/errors/__init__.py`
+
 #### `STORAGE_EMPTY_UPLOAD`
 
 - **Import:** `from application_sdk.errors import STORAGE_EMPTY_UPLOAD`
@@ -2067,6 +2165,13 @@ Task/workflow execution — retry, heartbeat, sandbox, AppWorker, Temporal clien
 - **Import:** `from application_sdk.execution.heartbeat import BrokenProcessPool`
 - **Signature:** `class BrokenProcessPool()`
 - **Summary:** Raised when a process in a ProcessPoolExecutor terminated abruptly _(re-exported from `concurrent.futures.process.BrokenProcessPool`)_
+
+#### `CancelHandle`
+
+- **Import:** `from application_sdk.execution.heartbeat import CancelHandle`
+- **Signature:** `class CancelHandle()`
+- **Summary:** Cancel a blocking call at the driver when its awaiting task is cancelled.
+- **Defined in:** `application_sdk/_runtime/offload.py`
 
 #### `ClosedHold`
 
@@ -2418,6 +2523,13 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Summary:** Base type for form-level metadata forwarded alongside preflight credentials.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `CheckTier`
+
+- **Import:** `from application_sdk.handler import CheckTier`
+- **Signature:** `class CheckTier`
+- **Summary:** Which tier a preflight check belongs to — what it needs in order to answer.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 #### `DefaultHandler`
 
 - **Import:** `from application_sdk.handler import DefaultHandler`
@@ -2514,6 +2626,27 @@ HTTP handler framework — Handler ABC, DefaultHandler, preflight, auth, service
 - **Import:** `from application_sdk.handler import SqlMetadataOutput`
 - **Signature:** `class SqlMetadataOutput`
 - **Summary:** Metadata output for SQL connectors (sqltree widget).
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupInput`
+
+- **Import:** `from application_sdk.handler import WarmupInput`
+- **Signature:** `class WarmupInput`
+- **Summary:** Input for the optional ``Handler.warmup`` probe: ``/check``'s body, plus
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupObservation`
+
+- **Import:** `from application_sdk.handler import WarmupObservation`
+- **Signature:** `class WarmupObservation`
+- **Summary:** What one warmup probe saw — the return type of ``Handler.warmup``.
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupState`
+
+- **Import:** `from application_sdk.handler import WarmupState`
+- **Signature:** `class WarmupState`
+- **Summary:** Where a source's compute is, as one warmup probe observed it.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 ### Functions
@@ -3203,6 +3336,13 @@ Object-store abstraction — factory, formats, batch, transfer, cloud bindings
 - **Summary:** Storage configuration is invalid (e.g., missing bucket name).
 - **Defined in:** `application_sdk/storage/errors.py`
 
+#### `StorageDiskFullError`
+
+- **Import:** `from application_sdk.storage import StorageDiskFullError`
+- **Signature:** `class StorageDiskFullError(message: str, ...)`
+- **Summary:** A download could not be written because the local volume is full.
+- **Defined in:** `application_sdk/storage/errors.py`
+
 #### `StorageError`
 
 - **Import:** `from application_sdk.storage import StorageError`
@@ -3465,6 +3605,13 @@ SQL metadata extractor templates and their contracts
 - **Summary:** Base App for all metadata extraction connectors.
 - **Defined in:** `application_sdk/templates/base_metadata_extractor.py`
 
+#### `ColumnBatchStatus`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import ColumnBatchStatus`
+- **Signature:** `class ColumnBatchStatus`
+- **Summary:** Outcome of one ``execute_single_column_batch`` task.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
 #### `IncrementalRunContext`
 
 - **Import:** `from application_sdk.templates.contracts import IncrementalRunContext`
@@ -3500,6 +3647,22 @@ SQL metadata extractor templates and their contracts
 - **Signature:** `class SqlQueryExtractor`
 - **Summary:** Abstract base class for SQL query extraction apps.
 - **Defined in:** `application_sdk/templates/sql_query_extractor.py`
+
+### Functions
+
+#### `marker_from_wire`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import marker_from_wire`
+- **Signature:** `marker_from_wire(value: str) -> str | None`
+- **Summary:** Decode a task contract's marker field: ``""`` becomes ``None``.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
+
+#### `marker_to_wire`
+
+- **Import:** `from application_sdk.templates.contracts.incremental_sql import marker_to_wire`
+- **Signature:** `marker_to_wire(marker: str | None) -> str`
+- **Summary:** Encode a Python marker for a task contract: ``None`` becomes ``""``.
+- **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 ### Constants and Enums
 
@@ -4020,6 +4183,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A route was registered with no HTTP methods.
 - **Defined in:** `application_sdk/testing/_errors.py`
 
+#### `FieldCondition`
+
+- **Import:** `from application_sdk.testing.e2e import FieldCondition`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class FieldCondition`
+- **Summary:** One test on one field of a record.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `FieldDiff`
 
 - **Import:** `from application_sdk.testing import FieldDiff`
@@ -4027,6 +4198,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class FieldDiff(field_path: str, golden_value: Any, ours_value: Any)`
 - **Summary:** One field whose value differs between the golden fixture and ours.
 - **Defined in:** `application_sdk/testing/golden.py`
+
+#### `FieldOp`
+
+- **Import:** `from application_sdk.testing.e2e import FieldOp`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class FieldOp`
+- **Summary:** How a condition tests a field.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
 
 #### `Finding`
 
@@ -4409,6 +4588,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** A workflow to dispatch straight onto a Temporal task queue.
 - **Defined in:** `application_sdk/testing/harness/starters/_specs.py`
 
+#### `RecordFormat`
+
+- **Import:** `from application_sdk.testing.e2e import RecordFormat`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class RecordFormat`
+- **Summary:** File format a ``RECORDS`` check reads.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `ReferentialFailure`
 
 - **Import:** `from application_sdk.testing.integration import ReferentialFailure`
@@ -4638,6 +4825,38 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** Work started, then stopped making observable progress.
 - **Defined in:** `application_sdk/testing/harness/outcome.py`
 
+#### `StoreAbsent`
+
+- **Import:** `from application_sdk.testing.e2e import StoreAbsent`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreAbsent`
+- **Summary:** No object of any kind under the prefix, directory markers included.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StoreCount`
+
+- **Import:** `from application_sdk.testing.e2e import StoreCount`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreCount`
+- **Summary:** Exactly ``count`` objects under the prefix, in the default listing view.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StorePresent`
+
+- **Import:** `from application_sdk.testing.e2e import StorePresent`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StorePresent`
+- **Summary:** At least one object under the prefix, in the default listing view.
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
+#### `StoreRecords`
+
+- **Import:** `from application_sdk.testing.e2e import StoreRecords`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class StoreRecords`
+- **Summary:** How many records — all, or those meeting every condition in ``where`` —
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `SubmitRetry`
 
 - **Import:** `from application_sdk.testing.harness.starters import SubmitRetry`
@@ -4666,6 +4885,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class SyncBridgeInAsyncContextError(*, ...)`
 - **Summary:** :func:`~application_sdk.testing.harness.run_sync` was called from a running loop.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `SystemAppE2ETest`
+
+- **Import:** `from application_sdk.testing.e2e import SystemAppE2ETest`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `class SystemAppE2ETest`
+- **Summary:** Pytest base for a system app's full-DAG suite, submitted straight to AE.
+- **Defined in:** `application_sdk/testing/e2e/system_app.py`
 
 #### `TableSpec`
 
@@ -4731,6 +4958,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class TenantAuth(base_url: str, ...)`
 - **Summary:** How a run authenticates against the tenant under test.
 - **Defined in:** `application_sdk/testing/harness/identity.py`
+
+#### `TenantPool`
+
+- **Import:** `from application_sdk.testing.e2e import TenantPool`
+- **Also importable from:** `application_sdk.testing.e2e.tenant_pool`
+- **Signature:** `class TenantPool`
+- **Summary:** A pool of e2e tenants.
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `TenantRoutes`
 
@@ -4826,6 +5061,22 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `class WaitStalledError(*, ...)`
 - **Summary:** Work started, then stopped making observable progress.
 - **Defined in:** `application_sdk/testing/harness/_errors.py`
+
+#### `WarmingSource`
+
+- **Import:** `from application_sdk.testing import WarmingSource`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `class WarmingSource(script: Sequence[WarmingStep])`
+- **Summary:** A source whose warmup follows a script. See the module docstring.
+- **Defined in:** `application_sdk/testing/warming.py`
+
+#### `WarmingSourceHandler`
+
+- **Import:** `from application_sdk.testing import WarmingSourceHandler`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `class WarmingSourceHandler(source: WarmingSource, ...)`
+- **Summary:** A handler around a :class:`WarmingSource`, for tests of the gate itself.
+- **Defined in:** `application_sdk/testing/warming.py`
 
 #### `WorkflowExecutionStatus`
 
@@ -5022,6 +5273,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `check_no_stale_pollers(*, *, ...)`
 - **Summary:** Require that the queue is polled, and only by the intended build.
 - **Defined in:** `application_sdk/testing/harness/preconditions.py`
+
+#### `check_tenant_pool`
+
+- **Import:** `from application_sdk.testing.e2e.tenant_pool import check_tenant_pool`
+- **Signature:** `check_tenant_pool(required: TenantPool, environ: Mapping[str, str], *, suite: str) -> TenantPool`
+- **Summary:** Return the pool *environ* names, if *suite* may run on it.
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `check_worker_health`
 
@@ -6115,7 +6373,7 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.testing.integration import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -6406,6 +6664,21 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/seed/_publish.py`
 
+#### `STORE_ASSERT_NODE_ID`
+
+- **Import:** `from application_sdk.testing.e2e.system_app import STORE_ASSERT_NODE_ID`
+- **Signature:** `STORE_ASSERT_NODE_ID`
+- **Summary:** DAG node id of the appended assertion node.
+- **Defined in:** `application_sdk/testing/e2e/system_app.py`
+
+#### `StoreExpectation`
+
+- **Import:** `from application_sdk.testing.e2e import StoreExpectation`
+- **Also importable from:** `application_sdk.testing.e2e.system_app`
+- **Signature:** `StoreExpectation`
+- **Summary:** One claim about one prefix: a model per kind, tagged by ``kind``, so a kind
+- **Defined in:** `application_sdk/execution/_temporal/store_assert.py`
+
 #### `SUPPORTED_SUFFIXES`
 
 - **Import:** `from application_sdk.testing.integration import SUPPORTED_SUFFIXES`
@@ -6413,6 +6686,13 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `SUPPORTED_SUFFIXES`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/integration/corpus.py`
+
+#### `TENANT_POOL_ENV`
+
+- **Import:** `from application_sdk.testing.e2e.tenant_pool import TENANT_POOL_ENV`
+- **Signature:** `TENANT_POOL_ENV`
+- **Summary:** _(no docstring)_
+- **Defined in:** `application_sdk/testing/e2e/tenant_pool.py`
 
 #### `TRANSFORMED_FILE_NAME`
 
@@ -6427,6 +6707,14 @@ Test infrastructure — mocks, fixtures, hypothesis strategies, integration help
 - **Signature:** `UNREADABLE`
 - **Summary:** _(no docstring)_
 - **Defined in:** `application_sdk/testing/harness/expectations.py`
+
+#### `WarmingStep`
+
+- **Import:** `from application_sdk.testing import WarmingStep`
+- **Also importable from:** `application_sdk.testing.warming`
+- **Signature:** `WarmingStep`
+- **Summary:** One entry in a :class:`WarmingSource` script.
+- **Defined in:** `application_sdk/testing/warming.py`
 
 ## `application_sdk.validation`
 
@@ -6471,6 +6759,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Import:** `from application_sdk.validation import AssetArtifactReport`
 - **Signature:** `class AssetArtifactReport(artifact_format: str = '', ...)`
 - **Summary:** The NDJSON x ``ModelSource`` cell's report: the shared shape plus asset detail.
+- **Defined in:** `application_sdk/validation/assets.py`
+
+#### `AssetBatchScope`
+
+- **Import:** `from application_sdk.validation import AssetBatchScope`
+- **Signature:** `class AssetBatchScope(upload_kind: typing.Literal['upload', 'upload_refs'], parts_validated: int, parts_not_local: int)`
+- **Summary:** How one validated hand-off was assembled — context the report cannot know.
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `AssetValidationFailure`
@@ -6630,6 +6925,13 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 - **Summary:** Compact per-failure matrix for the outcome event, as one JSON string.
 - **Defined in:** `application_sdk/validation/assets.py`
 
+#### `asset_validation_summary_json`
+
+- **Import:** `from application_sdk.validation import asset_validation_summary_json`
+- **Signature:** `asset_validation_summary_json(report: AssetValidationReport, *, max_rows: int = ASSET_VALIDATION_SUMMARY_MAX_ROWS)`
+- **Summary:** Complete per-(kind, type, detail) failure counts for the outcome event.
+- **Defined in:** `application_sdk/validation/assets.py`
+
 #### `boundary_contract_types`
 
 - **Import:** `from application_sdk.validation import boundary_contract_types`
@@ -6673,7 +6975,7 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 
 - **Import:** `from application_sdk.validation import iter_ndjson_lines`
 - **Also importable from:** `application_sdk.validation.ndjson`
-- **Signature:** `iter_ndjson_lines(path: str | Path)`
+- **Signature:** `iter_ndjson_lines(path: str | Path | Sequence[str | Path])`
 - **Summary:** Yield ``(file, 1-based line number, raw bytes)`` for every non-blank line.
 - **Defined in:** `application_sdk/validation/ndjson.py`
 
@@ -6733,14 +7035,14 @@ Offline artifact & asset validation — format-agnostic wrapper (ADR-0020) plus 
 #### `validate_assets_as_artifact`
 
 - **Import:** `from application_sdk.validation import validate_assets_as_artifact`
-- **Signature:** `validate_assets_as_artifact(path: str | Path, *, ...)`
+- **Signature:** `validate_assets_as_artifact(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** The NDJSON x ``ModelSource`` cell: :func:`validate_transformed_dir`, reported
 - **Defined in:** `application_sdk/validation/assets.py`
 
 #### `validate_transformed_dir`
 
 - **Import:** `from application_sdk.validation import validate_transformed_dir`
-- **Signature:** `validate_transformed_dir(path: str | Path, *, for_creation: bool = True, check_referential_integrity: bool = True)`
+- **Signature:** `validate_transformed_dir(path: str | Path | Sequence[str | Path], *, ...)`
 - **Summary:** Validate every transformed-output asset under ``path``.
 - **Defined in:** `application_sdk/validation/assets.py`
 
@@ -7080,6 +7382,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `type_name: str` `= Field(default='Connection')`
   - `attributes: ConnectionAttributes` `= Field(default_factory=ConnectionAttributes)`
+  - `is_unidentifiable: bool` — Whether this names a Connection but its qualified name cannot address it.
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `ContractMetadata`
@@ -7101,8 +7404,22 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import ContractValidationError`
 - **Summary:** Deprecated: use ``application_sdk.errors.InvalidInputError`` — removed in v4.0.
 - **Fields:**
-  - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
+  - `message: str`
+  - `retryable: bool | None`
+  - `cause: BaseException | None`
+  - `app_name: str | None`
+  - `run_id: str | None`
+  - `suggested_action: str | None`
+  - `category: ClassVar[FailureCategory]` `= FailureCategory.INVALID_INPUT`
+  - `default_retryable: ClassVar[bool]` `= False`
   - `code: ClassVar[str]` `= 'INVALID_INPUT_CONTRACT_VALIDATION'`
+  - `audience: ClassVar[Audience]` `= Audience.USER`
+  - `effective_retryable: bool` — Per-instance retryable, falling back to class default.
+  - `qualified_code: str` — ``CATEGORY.CODE`` string for log lines and human-readable surfaces.
+  - `field: str | None`
+  - `constraint: str | None`
+  - `value_summary: str | None`
+  - `DEFAULT_ERROR_CODE: ClassVar[ErrorCode]` `= CONTRACT_VALIDATION`
   - `error_code: ErrorCode`
 - **Defined in:** `application_sdk/contracts/base.py`
 
@@ -7120,6 +7437,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import DownloadInput`
 - **Summary:** Input for ``App.download``.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `storage_path: str` `= ''`
   - `local_path: str | None`
   - `ref: FileReference | None`
@@ -7131,6 +7452,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import DownloadOutput`
 - **Summary:** Output from ``App.download``.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `ref: FileReference` `= Field(default_factory=FileReference)`
   - `synced: bool` `= False`
   - `reason: str` `= ''`
@@ -7147,6 +7471,8 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `file_count: int` `= 1`
   - `tier: StorageTier` `= StorageTier.TRANSIENT`
   - `auto_materialize: bool` `= True`
+  - `manifest_path: str | None`
+  - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
 - **Defined in:** `application_sdk/contracts/types.py`
 
 #### `GitReference`
@@ -7219,6 +7545,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import UploadInput`
 - **Summary:** Input for ``App.upload``.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `local_path: str` `= ''`
   - `ref: FileReference | None`
   - `storage_path: str | None`
@@ -7233,6 +7563,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import UploadOutput`
 - **Summary:** Output from ``App.upload``.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `ref: FileReference` `= Field(default_factory=FileReference)`
   - `synced: bool` `= False`
   - `reason: str` `= ''`
@@ -7243,6 +7576,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import UploadRefsInput`
 - **Summary:** Input for ``App.upload_refs``.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `files: Annotated[list[DeclaredFile], MaxItems(10000)]` `= Field(default_factory=list)`
   - `prefix: str` `= ''`
   - `source_prefix: str` `= ''`
@@ -7255,6 +7592,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import UploadRefsOutput`
 - **Summary:** Output from ``App.upload_refs``.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `prefix: str` `= ''`
   - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
   - `file_count: int` `= 0`
@@ -7265,6 +7605,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import VerifyRefsInput`
 - **Summary:** Input for ``App.verify_refs``.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `refs: Annotated[list[FileReference], MaxItems(10000)]` `= Field(default_factory=list)`
   - `prefix: str` `= ''`
   - `store: StoreTarget` `= StoreTarget.DEPLOYMENT`
@@ -7275,6 +7619,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.contracts import VerifyRefsOutput`
 - **Summary:** Output from ``App.verify_refs``.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `verified_count: int` `= 0`
   - `verified_file_count: int` `= 0`
   - `prefix: str` `= ''`
@@ -7460,6 +7807,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Fields:**
   - `name: str` `= Field(..., min_length=1)` — Check name (e.g., 'connectivity', 'permissions').
   - `passed: bool` `= False` — Whether the check passed.
+  - `tier: CheckTier` `= CheckTier.PREFLIGHT` — Tier this check belongs to. ``PREFLIGHT`` (the default) is left off the
   - `message: str` `= ''` — Deprecated: prefer :attr:`error`. Human-facing line shown when ``error``
   - `error: FailureDetails | None` — Typed failure for a failed check — set only on failed checks.
   - `duration_ms: float` `= -1.0` — How long the check took in milliseconds. ``-1.0`` means not measured —
@@ -7478,9 +7826,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
   - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
   - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
-  - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
-  - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
   - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `checks_to_run: list[str]` `= []` — Specific checks to run (empty = run all).
+  - `tiers: frozenset[CheckTier]` `= ALL_CHECK_TIERS` — Run only the checks in these tiers. The default, every tier, is for
+  - `timeout_seconds: int` `= 60` — Maximum seconds the handler has to run all checks.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
 #### `PreflightOutput`
@@ -7493,6 +7842,7 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `message: str` `= ''` — Human-readable summary. Seeds the gate's abort reason when set.
   - `error: FailureDetails | None` — Typed aggregate failure — the reason the overall verdict is NOT_READY,
   - `total_duration_ms: float` `= 0.0` — Total time for all checks in milliseconds.
+  - `warmup: WarmupObservation | None` — The warmup observation behind a ``PENDING`` status, set by the SDK.
   - `resolved_message: str` — Aggregate message under the precedence rule: ``error`` wins when set.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
@@ -7528,6 +7878,32 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `dead_letter_topic: str | None` — Optional dead-letter topic for failed messages.
 - **Defined in:** `application_sdk/handler/contracts.py`
 
+#### `WarmupInput`
+
+- **Import:** `from application_sdk.handler.contracts import WarmupInput`
+- **Summary:** Input for the optional ``Handler.warmup`` probe: ``/check``'s body, plus
+- **Fields:**
+  - `credentials: list[HandlerCredential]` `= []` — Credentials to use during preflight.
+  - `credentials_by_name: dict[str, list[HandlerCredential]]` `= Field(default_factory=dict)` — Resolved credentials grouped by ref name for multi-credential apps.
+  - `entrypoint: str` `= ''` — Bare entry-point name (e.g. ``asset-export-advanced``) — authoritative
+  - `entrypoint_ref: str` `= Field(default='', validation_alias=(AliasChoices('entrypoint_ref', 'connector')), serialization_alias='connector')` — App-qualified entry-point reference (``{app_name}-{entrypoint.name}``).
+  - `connection_config: BaseConnectionConfig` `= Field(default_factory=BaseConnectionConfig)` — Connection configuration (host, port, database, etc.).
+  - `metadata: BaseMetadataConfig` `= Field(default_factory=BaseMetadataConfig)` — Form-level metadata forwarded by heracles alongside the credential.
+  - `agent_json: AgentCredentialSpec | None` `= Field(default=None, validation_alias=(AliasChoices('agent_json', 'agentJson', 'agent-json')))` — Optional agent-shape credential *reference* (SDR / customer-infra only).
+  - `probe_timeout_seconds: int` `= 10` — How long this probe may wait for the source to answer — the app's
+- **Defined in:** `application_sdk/handler/contracts.py`
+
+#### `WarmupObservation`
+
+- **Import:** `from application_sdk.handler.contracts import WarmupObservation`
+- **Summary:** What one warmup probe saw — the return type of ``Handler.warmup``.
+- **Fields:**
+  - `state: WarmupState` `= WarmupState.READY` — Where the source's compute is. Defaults to ``READY``, what
+  - `source_state: str` `= ''` — The source's own label for its state (e.g. Snowflake ``RESUMING``).
+  - `queued_queries: int | None` `= Field(default=None, ge=0)` — How many statements are waiting on the source's compute for a slot (e.g.
+  - `next_poll_seconds: int | None` `= Field(default=None, ge=0)` — The source's own suggestion for when to ask again. The gate honours it
+- **Defined in:** `application_sdk/handler/contracts.py`
+
 ### `application_sdk.templates.contracts`
 
 #### `ExecuteColumnBatchInput`
@@ -7535,6 +7911,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExecuteColumnBatchInput`
 - **Summary:** Input for executing a single incremental column batch.
 - **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
+  - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
+  - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
+  - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
+  - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
   - `batch_index: int` `= 0` — Zero-based index of this batch within the total.
   - `total_batches: int` `= 1` — Total number of batches.
   - `batches_s3_prefix: str` `= ''` — S3 prefix where the batch JSON files are stored.
@@ -7546,9 +7939,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExecuteColumnBatchOutput`
 - **Summary:** Output from executing a single incremental column batch.
 - **Fields:**
+  - `status: ColumnBatchStatus | None`
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `batch_index: int` `= 0`
   - `records: int` `= 0`
-  - `status: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `ExtractionInput`
@@ -7556,8 +7951,11 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionInput`
 - **Summary:** Top-level input for a SQL metadata extraction run.
 - **Fields:**
-  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
   - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
   - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
   - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
@@ -7577,6 +7975,19 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionOutput`
 - **Summary:** Top-level output from a SQL metadata extraction run.
 - **Fields:**
+  - `PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
+  - `STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
+  - `CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'argo-artifacts/{connection_qn}/current-state'`
+  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
+  - `output_prefix: str` `= ''` — Prefix to strip from ``output_path`` before deriving transformed prefix.
+  - `transformed_data_prefix: str` `= ''` — Object-store-relative path to transformed data files.
+  - `connection_qualified_name: str` `= ''` — Qualified name of the Atlan connection.
+  - `publish_state_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `staging_data_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `current_state_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `workflow_id: str` `= ''`
   - `success: bool` `= False`
   - `databases_extracted: int` `= 0`
@@ -7588,7 +7999,6 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `processes_extracted: int` `= 0`
   - `records_uploaded: int` `= 0`
   - `error: str` `= ''`
-  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
   - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
@@ -7598,6 +8008,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Fields shared by all per-task inputs derived from ExtractionInput.
 - **Fields:**
   - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
   - `credential_guid: str` `= ''`
   - `credential_ref: CredentialRef | None`
@@ -7614,6 +8027,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ExtractionTaskOutput`
 - **Summary:** Output from a per-entity ``extract_*`` task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `raw_file: FileReference | None` — ``FileReference`` to the extract's raw output.
@@ -7623,12 +8039,44 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchColumnsIncrementalInput`
 - **Summary:** Input for the incremental fetch_columns task.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
+  - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
+  - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
+  - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
+  - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `FetchColumnsInput`
 
 - **Import:** `from application_sdk.templates.contracts import FetchColumnsInput`
 - **Summary:** Input for fetching columns from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchColumnsOutput`
@@ -7636,6 +8084,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchColumnsOutput`
 - **Summary:** Output from fetching columns.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
@@ -7644,6 +8095,20 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchDatabasesInput`
 - **Summary:** Input for fetching databases from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchDatabasesOutput`
@@ -7651,6 +8116,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchDatabasesOutput`
 - **Summary:** Output from fetching databases.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `databases: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
@@ -7661,6 +8129,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchIncrementalMarkerInput`
 - **Summary:** Input for the fetch_incremental_marker task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `connection_qualified_name: str` `= ''` — Connection qualified name used to locate the persistent marker file.
   - `application_name: str` `= ''` — Application name for S3 path resolution.
   - `existing_marker: str | None` — Pre-existing marker value (e.g., from a manual workflow override).
@@ -7673,6 +8145,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchIncrementalMarkerOutput`
 - **Summary:** Output from the fetch_incremental_marker task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `marker_timestamp: str` `= ''` — Processed marker from the previous run; empty on the first run.
   - `next_marker_timestamp: str` `= ''` — New marker timestamp generated for the current run.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
@@ -7681,6 +8156,20 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchProceduresInput`
 - **Summary:** Input for fetching stored procedures from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchProceduresOutput`
@@ -7688,6 +8177,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchProceduresOutput`
 - **Summary:** Output from fetching stored procedures.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
@@ -7696,6 +8188,20 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchSchemasInput`
 - **Summary:** Input for fetching schemas from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchSchemasOutput`
@@ -7703,6 +8209,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchSchemasOutput`
 - **Summary:** Output from fetching schemas.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `schemas: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)`
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
@@ -7712,12 +8221,44 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchTablesIncrementalInput`
 - **Summary:** Input for the incremental fetch_tables task.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
+  - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
+  - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
+  - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
+  - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `FetchTablesInput`
 
 - **Import:** `from application_sdk.templates.contracts import FetchTablesInput`
 - **Summary:** Input for fetching tables from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchTablesOutput`
@@ -7725,6 +8266,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchTablesOutput`
 - **Summary:** Output from fetching tables.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `tables: Annotated[list[str], MaxItems(100000)]` `= Field(default_factory=list)`
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
@@ -7734,6 +8278,20 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 
 - **Import:** `from application_sdk.templates.contracts import FetchViewsInput`
 - **Summary:** Input for fetching views from the source.
+- **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `FetchViewsOutput`
@@ -7741,6 +8299,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import FetchViewsOutput`
 - **Summary:** Output from fetching views.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `chunk_count: int` `= 0`
   - `total_record_count: int` `= 0`
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
@@ -7750,6 +8311,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import IncrementalExtractionInput`
 - **Summary:** Top-level input for an incremental SQL metadata extraction run.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
+  - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
+  - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
+  - `extraction_method: str` `= ''` — ``"agent"`` or ``"direct"``. Empty defaults to direct.
+  - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
+  - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
+  - `output_path: str` `= ''` — Local or object store path for output files.
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for excluding schemas/tables.
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Filter for including schemas/tables.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern for table/view names to exclude from extraction.
+  - `exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Form-key name of :attr:`temp_table_regex` (FND-2733).
+  - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
   - `incremental_extraction: bool` `= False` — Enable incremental extraction mode.
   - `column_batch_size: int` `= 25000` — Number of tables per batch for incremental column extraction.
   - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
@@ -7764,6 +8342,31 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import IncrementalExtractionOutput`
 - **Summary:** Top-level output from an incremental SQL metadata extraction run.
 - **Fields:**
+  - `PUBLISH_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}/publish-state'`
+  - `STAGING_DATA_PREFIX_TEMPLATE: ClassVar[str]` `= 'persistent-artifacts/apps/atlan-publish-app/state/{connection_qn}'`
+  - `CURRENT_STATE_PREFIX_TEMPLATE: ClassVar[str]` `= 'argo-artifacts/{connection_qn}/current-state'`
+  - `output_path: str` `= ''` — Resolved local base path used during extraction. Subclasses that need
+  - `output_prefix: str` `= ''` — Prefix to strip from ``output_path`` before deriving transformed prefix.
+  - `transformed_data_prefix: str` `= ''` — Object-store-relative path to transformed data files.
+  - `connection_qualified_name: str` `= ''` — Qualified name of the Atlan connection.
+  - `publish_state_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `staging_data_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `current_state_prefix: str` `= ''` — Auto-derived from ``connection_qualified_name`` if not set.
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
+  - `workflow_id: str` `= ''`
+  - `success: bool` `= False`
+  - `databases_extracted: int` `= 0`
+  - `schemas_extracted: int` `= 0`
+  - `tables_extracted: int` `= 0`
+  - `views_extracted: int` `= 0`
+  - `columns_extracted: int` `= 0`
+  - `procedures_extracted: int` `= 0`
+  - `processes_extracted: int` `= 0`
+  - `records_uploaded: int` `= 0`
+  - `error: str` `= ''`
+  - `transformed_files: Annotated[list[FileReference], MaxItems(1000), AssetArtifact()]` `= Field(default_factory=list)` — The producer's declaration of what the transform step actually wrote.
   - `current_state_files: int` `= 0` — Number of files written to the current-state snapshot.
   - `incremental_diff_files: int` `= 0` — Number of files in the incremental diff (0 on first run).
   - `column_batches_executed: int` `= 0` — Number of incremental column batches executed.
@@ -7777,6 +8380,19 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import IncrementalTaskInput`
 - **Summary:** Base task input with incremental runtime state.
 - **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
   - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
   - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
   - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
@@ -7788,6 +8404,23 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import PrepareColumnQueriesInput`
 - **Summary:** Input for the prepare_column_extraction_queries task.
 - **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
+  - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
+  - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
+  - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
+  - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
   - `connection_qualified_name: str` `= ''` — Connection qualified name for persistent artifact path resolution.
   - `current_state_s3_prefix: str` `= ''` — S3 prefix of the current-state snapshot for backfill comparison.
   - `column_batch_size: int` `= 25000` — Number of tables per batch file.
@@ -7799,6 +8432,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import PrepareColumnQueriesOutput`
 - **Summary:** Output from the prepare_column_extraction_queries task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `total_batches: int` `= 0`
   - `changed_tables: int` `= 0`
   - `backfill_tables: int` `= 0`
@@ -7812,6 +8448,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import PrimeAuthOutput`
 - **Summary:** Output from the ``prime_sql_auth`` task (BLDX-1295).
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `duration_ms: float` `= 0.0` — Wall-clock time spent on the probe connection + ``SELECT 1`` + close.
   - `success: bool` `= True` — Whether the probe completed cleanly. ``False`` means the probe
   - `failure: FailureDetails | None` — Typed classification of the probe failure, produced inside
@@ -7824,6 +8463,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryBatchInput`
 - **Summary:** Input for the get_query_batches task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
 - **Defined in:** `application_sdk/templates/contracts/sql_query.py`
 
@@ -7832,6 +8475,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryBatchOutput`
 - **Summary:** Output from the get_query_batches task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `total_batches: int` `= 0`
   - `batch_size: int` `= 0`
   - `total_count: int` `= 0`
@@ -7843,6 +8489,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Summary:** Top-level input for a SQL query extraction run.
 - **Fields:**
   - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
   - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
   - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
@@ -7858,6 +8507,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryExtractionOutput`
 - **Summary:** Top-level output from a SQL query extraction run.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `workflow_id: str` `= ''`
   - `success: bool` `= False`
   - `total_batches: int` `= 0`
@@ -7871,6 +8523,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryFetchInput`
 - **Summary:** Input for the fetch_queries task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `workflow_args: Annotated[dict[str, str | int | float | bool | None], MaxItems(100)]` `= Field(default_factory=dict)`
   - `batch_number: int` `= 0`
   - `batch_size: int` `= 100000`
@@ -7881,6 +8537,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import QueryFetchOutput`
 - **Summary:** Output from the fetch_queries task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `batch_number: int` `= 0`
   - `queries_fetched: int` `= 0`
   - `chunk_count: int` `= 0`
@@ -7891,8 +8550,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ReadCurrentStateInput`
 - **Summary:** Input for the read_current_state task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `connection_qualified_name: str` `= ''`
   - `application_name: str` `= ''`
+  - `output_path: str` `= ''` — The run's output path. Only read when the snapshot is materialized on
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `ReadCurrentStateOutput`
@@ -7900,10 +8564,13 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import ReadCurrentStateOutput`
 - **Summary:** Output from the read_current_state task.
 - **Fields:**
-  - `current_state_path: str` `= ''` — Local filesystem path where the current state was downloaded.
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
+  - `current_state_path: str` `= ''` — Local path the snapshot was materialized into, or ``""`` when the read
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the current-state folder.
   - `current_state_available: bool` `= False` — Whether a non-empty current-state snapshot was found.
-  - `current_state_json_count: int` `= 0` — Number of JSON files in the downloaded current state.
+  - `current_state_json_count: int` `= 0` — Number of JSON files in the committed current state.
 - **Defined in:** `application_sdk/templates/contracts/incremental_sql.py`
 
 #### `TransformInput`
@@ -7911,6 +8578,19 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import TransformInput`
 - **Summary:** Input for transform tasks.
 - **Fields:**
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
   - `typename: str` `= ''` — **Deprecated** — kept for backward compatibility with existing
   - `file_names: Annotated[list[str], MaxItems(10000)]` `= Field(default_factory=list)` — **Deprecated and unused** — retained on the schema as a no-op
   - `chunk_start: int` `= 0` — **Deprecated** — chunk-offset hint used by the legacy
@@ -7922,6 +8602,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import TransformOutput`
 - **Summary:** Output from the v3 ``transform_*`` tasks.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `typename: str` `= ''`
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
@@ -7933,6 +8616,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import UpdateMarkerInput`
 - **Summary:** Input for the update_incremental_marker task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `connection_qualified_name: str` `= ''`
   - `next_marker_timestamp: str` `= ''`
   - `application_name: str` `= ''`
@@ -7943,6 +8630,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import UpdateMarkerOutput`
 - **Summary:** Output from the update_incremental_marker task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `marker_written: bool` `= False`
   - `marker_timestamp: str` `= ''`
   - `s3_key: str` `= ''`
@@ -7953,6 +8643,10 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import UploadInput`
 - **Summary:** Input for the deprecated ``upload_to_atlan`` task.
 - **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for the current run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
   - `output_path: str` `= ''` — Local path (file or directory) to push to the platform via App.upload.
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
 
@@ -7961,6 +8655,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import UploadOutput`
 - **Summary:** Output from the deprecated ``upload_to_atlan`` task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `migrated_files: int` `= 0` — Number of files successfully uploaded.
   - `total_files: int` `= 0` — Total number of files attempted (matches ``migrated_files`` on success).
 - **Defined in:** `application_sdk/templates/contracts/base_metadata_extraction.py`
@@ -7970,7 +8667,24 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import WriteCurrentStateInput`
 - **Summary:** Input for the write_current_state task.
 - **Fields:**
-  - `workflow_run_id: str` `= ''` — Temporal run ID used to name the incremental diff subfolder.
+  - `workflow_id: str` `= ''`
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)`
+  - `credential_guid: str` `= ''`
+  - `credential_ref: CredentialRef | None`
+  - `output_prefix: str` `= ''`
+  - `output_path: str` `= ''`
+  - `exclude_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `include_filter: FilterMap | str` `= Field(default='', json_schema_extra=_FILTER_FIELD_JSON_SCHEMA_EXTRA)`
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''`
+  - `source_tag_prefix: str` `= ''`
+  - `incremental_extraction: bool` `= False` — Whether incremental extraction is enabled for this run.
+  - `marker_timestamp: str` `= ''` — Marker timestamp from previous run; empty string means full extraction.
+  - `current_state_available: bool` `= False` — Whether a current-state snapshot from a previous run is available.
+  - `column_chunk_size: int` `= 100000` — Number of column records per output chunk file.
+  - `workflow_run_id: str` `= Field(default='', deprecated='WriteCurrentStateInput.workflow_run_id is deprecated and ignored; write_current_state reads the run ID from its own Temporal context, so stop passing it — will be removed in v4.0.0.')` — Deprecated and ignored; the task uses its own Temporal run ID instead.
   - `current_state_s3_prefix: str` `= ''` — S3 prefix for the existing current-state (for previous-state download).
   - `copy_workers: int` `= 3` — Parallel workers for file copy operations.
   - `upload_concurrency: int` `= Field(default=4, gt=0)` — Max concurrent object-store requests when uploading the current-state
@@ -7982,6 +8696,9 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
 - **Import:** `from application_sdk.templates.contracts import WriteCurrentStateOutput`
 - **Summary:** Output from the write_current_state task.
 - **Fields:**
+  - `status: OutputStatus` `= OutputStatus.SUCCESS` — Coarse-grained run outcome — see :class:`OutputStatus`. Defaults to
+  - `metrics: dict[str, Any] | None` — Metrics collected by the OutputInterceptor (e.g. assets-extracted).
+  - `artifacts: dict[str, Any] | None` — Artifact references collected by the OutputInterceptor.
   - `current_state_path: str` `= ''`
   - `current_state_s3_prefix: str` `= ''`
   - `current_state_files: int` `= 0`

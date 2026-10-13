@@ -13,7 +13,8 @@ description: >
   loop scope (T019), full-DAG e2e CI wiring (T020 bespoke sdr-e2e workflow,
   T021 suites nothing runs, T022 missing two-store posture on an SDR app), and
   the e2e harness scaffold being hand-written rather than generated from
-  contract/app.pkl (T023) or running without a declared RunMode (T024).
+  contract/app.pkl (T023) or running without a declared RunMode (T024), plus
+  e2e harness bases that disagree with the app's declared type (T026).
   Every rule in this series classifies as "judgment" — each fix requires reading
   the test's I/O intent, the app's manifest/contract, or the app's App subclass
   before a fix can be proposed with confidence.  T014/T015 are the most
@@ -244,6 +245,14 @@ residue for a human to apply, not an applied edit:
   other constant-true placeholder to make the finding go away — that
   converts a T005 into a T007 (`VacuousAssertion`), which is not a fix.
 
+  A direct same-name override of the SDK's `BaseE2ETest.test_full_dag_runs_end_to_end`
+  is already assertion-bearing: the inherited full-DAG scenario grades the run's
+  outcome. Keep that delegation rather than deleting it or adding a redundant
+  assertion. This exception is deliberately limited to that SDK scenario, reached
+  through a base imported from `application_sdk.testing.e2e` or the generated
+  `app/generated/_e2e_base.py`; an app-local intermediate base, or an arbitrary
+  call to a superclass test/helper, still needs an outcome assertion.
+
   If the test's only real purpose is confirming a call doesn't raise (rare —
   most such tests are better expressed by also asserting on the return
   value), leave it flagged and route to residue with that assessment rather
@@ -352,21 +361,33 @@ residue for a human to apply, not an applied edit:
   `remediate-finding.prose.md`); route to residue with the suggested
   destination for a human to apply.
 
-- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
-  `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's
-  own coverage report (or read the most recent CI coverage artifact) to find
-  the *current* measured percentage, then set `fail_under` to that value (or
-  the nearest whole number at or below it — never above, or the fix itself
-  would fail the gate it's setting). Do not jump straight to the 90-100%
-  target in one step; that is a follow-up ratchet, not this fix.
+- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured, but the
+  *effective* coverage floor is absent or `0`. First read the current *unit*
+  coverage (the unit job's `coverage.json` artifact, or `coverage report` after
+  `pytest tests/unit`) and take the whole number `<N>` at or below it — never
+  above, or the fix itself fails the gate it sets. Then set `<N>` on the input
+  that gates the unit tier:
 
-  ```toml
-  [tool.coverage.report]
-  fail_under = 60  # current measured percentage; ratchet up in follow-ups
-  ```
+  - **`tests-reusable.yaml` caller** — set `unit-coverage-fail-under: "<N>"`
+    in the `with:` block (the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit
+    job runs `coverage report --fail-under=<input>` (default `0`), so
+    `[tool.coverage.report].fail_under` never applies there. Write a quoted
+    whole number — `bootstrap --resync` reads it back and keeps it; a decimal
+    is not read back and makes `--resync` refuse the file.
+  - **Leave `--cov-fail-under=0` in `pytest-args` alone.** `pytest-args` only
+    reaches the integration tier. Removing the flag applies the TOML
+    `fail_under` to integration coverage — a different measurement that can
+    fail integration runs — and still leaves the unit gate at `0`.
+  - **Direct `connector-unit-tests` user** — set its `fail-under:` input to
+    `<N>`.
+  - **No CI coverage gate** — set `[tool.coverage.report].fail_under = <N>`.
 
-  `classification` is `"judgment"` — the specific number requires knowing
-  the repo's actual current coverage, which isn't in the finding.
+  Keep a positive `fail_under` in `pyproject.toml` as the local-run fallback
+  (mysql keeps `84`), and ratchet the floor up in follow-up PRs; do not jump
+  straight to the 90-100% target.
+
+  `classification` is `"judgment"` — selecting a safe floor requires the
+  repo's actual current unit coverage, which isn't in the finding.
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
   real product code under `app/`, or `source` is configured but excludes the
@@ -811,6 +832,32 @@ residue for a human to apply, not an applied edit:
   `mode`, and the entrypoint it covers — never an applied edit.  Never draft a
   suite with no assertions or a stubbed body: that trades T025 for T005/T006
   and leaves the entrypoint just as unproven.
+
+  `classification` is always `"judgment"`.
+
+- **T026 E2EHarnessTenantPoolMismatch** — `atlan.yaml`'s top-level `type`
+  (compared case-insensitively) disagrees with the base of a collectable e2e
+  test class under `tests/e2e/`: a `system` app whose suite does not reach
+  `SystemAppE2ETest`, or a `connector` whose suite does.  `utility` is never
+  flagged; any other type, or no `atlan.yaml`, is not graded.
+
+  Fix (`system`): make `SystemAppE2ETest` (from `application_sdk.testing.e2e`)
+  the first base.  When the suite subclasses the generated
+  `<Name>GeneratedE2EBase`, the base itself is stale — the toolkit emits a
+  `SystemAppE2ETest` parent for a `type = "system"` contract — so the fix is
+  regeneration (`pkl eval -m . contract/app.pkl`), never a hand edit of
+  `app/generated/`.  Then the repo must be added to the selected repositories
+  of the `E2E_SYSTEM_TENANT_MATRIX_JSON` secret; until it is, CI cannot place
+  the suite on the system-app pool and the harness refuses to run it.  That
+  step is a human onboarding decision, so say so in the residue.
+
+  Fix (`connector`): base the suite on the generated `<Name>GeneratedE2EBase`
+  (or `BaseE2ETest` / `SQLAppE2ETest`).  If the app genuinely is a system app,
+  the declared `type` in `contract/app.pkl` is what is wrong — propose that
+  change instead, and never suppress to keep a connector on the system pool.
+
+  **Route to residue.** The write scope excludes `tests/`, and the `system`
+  fix needs secret onboarding no edit can do.
 
   `classification` is always `"judgment"`.
 

@@ -10,6 +10,8 @@ lens reviews only when asked — a push never spends money on its own:
   reviews only commits since the last reviewed head). `/lens force` also
   bypasses the unchanged-head and round-cap admission rules and redoes the
   approach check (the $ cap still holds — force cannot buy more budget).
+  `/lens verify-budget` (or `/lens force verify-budget`) gives the verify call
+  its larger output budget for that run; the run itself says when it is worth it.
 - `/lens dismiss F-1a2b3c [F-…] <reason>`: close findings the team decided not to
   fix, with the reason on record. No model call. A blocking (critical/high) finding
   cannot be dismissed by the PR's own author: someone else has to agree.
@@ -39,9 +41,11 @@ class Decision:
     dismiss_reason: str = ""
     actor: str = ""  # who asked
     pr_author: str = ""
+    verify_budget: bool = False  # `/lens verify-budget`: the raised verify budget
 
 
 _FINDING_ID = re.compile(r"^F-[0-9a-f]{6}$")
+VERIFY_BUDGET = "verify-budget"
 DISMISS_USAGE = "usage: `/lens dismiss F-1a2b3c [F-…] <reason>` — at least one finding id and a reason"
 
 
@@ -83,12 +87,14 @@ def decide(event_name: str, event: dict[str, Any], repo: str) -> Decision:
                 actor=str((comment.get("user") or {}).get("login") or ""),
                 pr_author=str((issue.get("user") or {}).get("login") or ""),
             )
-        force = len(words) > 1 and words[1].lower() == "force"
+        options = [w.lower() for w in words[1:3]]
+        force = bool(options) and options[0] == "force"
         return Decision(
             True,
             int(issue["number"]),
             force=force,
             comment_id=int(comment.get("id") or 0),
+            verify_budget=VERIFY_BUDGET in options,
         )
 
     if event_name == "workflow_dispatch":

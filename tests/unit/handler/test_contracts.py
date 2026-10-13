@@ -222,7 +222,12 @@ class TestPreflightStatus:
 
     def test_status_values(self):
         # status decides the gate: NOT_READY blocks; READY/PARTIAL proceed.
-        assert {s.value for s in PreflightStatus} == {"ready", "not_ready", "partial"}
+        assert {s.value for s in PreflightStatus} == {
+            "ready",
+            "not_ready",
+            "partial",
+            "pending",
+        }
 
 
 class TestPreflightCheck:

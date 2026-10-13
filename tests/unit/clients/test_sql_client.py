@@ -160,11 +160,11 @@ def test_load_property_based(
 @pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
-    "application_sdk.clients.sql.asyncio.get_running_loop",
-    new_callable=MagicMock,
+    "application_sdk.clients.sql.run_in_thread",
+    new_callable=AsyncMock,
 )
 async def test_run_query(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+    mock_run_in_thread: AsyncMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test basic query execution with fixed data"""
     # Mock the engine to avoid "Engine is not initialized" error
@@ -216,14 +216,14 @@ async def test_run_query(
     mock_engine.connect.return_value = mock_connection
     mock_connection.execute.return_value = mock_cursor
 
-    # Mock run_in_executor to return cursor and then batches
-    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
-        side_effect=[
-            mock_cursor,  # Simulate connection.execute
-            [row1, row2],  # First batch from `fetchmany`
-            [],  # End of data from `fetchmany`
-        ]
-    )
+    # Mock run_in_thread to return cursor and then batches
+    mock_run_in_thread.side_effect = [
+        mock_connection,  # Simulate engine.connect
+        mock_cursor,  # Simulate connection.execute
+        [row1, row2],  # First batch from `fetchmany`
+        [],  # End of data from `fetchmany`
+        None,  # Simulate the close
+    ]
 
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
@@ -243,11 +243,11 @@ async def test_run_query(
 @pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
-    "application_sdk.clients.sql.asyncio.get_running_loop",
-    new_callable=MagicMock,
+    "application_sdk.clients.sql.run_in_thread",
+    new_callable=AsyncMock,
 )
 async def test_run_query_with_error(
-    mock_get_running_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+    mock_run_in_thread: AsyncMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """Test error handling in query execution"""
     # Mock the engine to avoid "Engine is not initialized" error
@@ -274,13 +274,12 @@ async def test_run_query_with_error(
     mock_engine.connect.return_value = mock_connection
     mock_connection.execute.return_value = mock_cursor
 
-    # Mock run_in_executor to return cursor and then batches
-    mock_get_running_loop.return_value.run_in_executor = AsyncMock(
-        side_effect=[
-            mock_cursor,  # Simulate connection.execute
-            Exception("Simulated query failure"),  # Simulate error from `fetchmany`
-        ]
-    )
+    # Mock run_in_thread to return cursor and then batches
+    mock_run_in_thread.side_effect = [
+        mock_connection,  # Simulate engine.connect
+        mock_cursor,  # Simulate connection.execute
+        Exception("Simulated query failure"),  # Simulate error from `fetchmany`
+    ]
 
     # Run run_query and collect all results
     results: list[dict[str, str]] = []
@@ -335,9 +334,9 @@ async def test_run_query_property_based(
     with (
         patch("sqlalchemy.text") as mock_text,
         patch(
-            "application_sdk.clients.sql.asyncio.get_running_loop",
-            new_callable=MagicMock,
-        ) as mock_get_running_loop,
+            "application_sdk.clients.sql.run_in_thread",
+            new_callable=AsyncMock,
+        ) as mock_run_in_thread,
     ):
         # Mock the query text
         query = "SELECT * FROM test_table"
@@ -353,10 +352,8 @@ async def test_run_query_property_based(
         sql_client.connection = MagicMock()
         sql_client.connection.execute.return_value = mock_cursor
 
-        # Mock run_in_executor to return cursor and then batches
-        mock_get_running_loop.return_value.run_in_executor = AsyncMock(
-            side_effect=[mock_cursor] + query_result["batches"] + [[]]
-        )
+        # Mock run_in_thread to return cursor and then batches
+        mock_run_in_thread.side_effect = [mock_cursor] + query_result["batches"] + [[]]
 
         # Run run_query and collect all results
         results: list[dict[str, Any]] = []
@@ -384,9 +381,9 @@ async def test_run_query_error_property_based(
     with (
         patch("sqlalchemy.text") as mock_text,
         patch(
-            "application_sdk.clients.sql.asyncio.get_running_loop",
-            new_callable=MagicMock,
-        ) as mock_get_running_loop,
+            "application_sdk.clients.sql.run_in_thread",
+            new_callable=AsyncMock,
+        ) as mock_run_in_thread,
     ):
         # Mock the engine to avoid "Engine is not initialized" error
         mock_engine = MagicMock()
@@ -405,10 +402,11 @@ async def test_run_query_error_property_based(
         mock_engine.connect.return_value = mock_connection
         mock_connection.execute.return_value = mock_cursor
 
-        # Mock run_in_executor to return cursor and then raise an error
-        mock_get_running_loop.return_value.run_in_executor = AsyncMock(
-            side_effect=[mock_cursor, Exception(f"Simulated {error_type}")]
-        )
+        # Mock run_in_thread to return cursor and then raise an error
+        mock_run_in_thread.side_effect = [
+            mock_cursor,
+            Exception(f"Simulated {error_type}"),
+        ]
 
         # Run run_query and expect it to raise an exception
         with pytest.raises(Exception, match=f"Simulated {error_type}"):
@@ -833,11 +831,11 @@ async def test_run_query_raises_when_engine_not_initialized(sql_client: BaseSQLC
 @pytest.mark.asyncio
 @patch("sqlalchemy.text")
 @patch(
-    "application_sdk.clients.sql.asyncio.get_running_loop",
-    new_callable=MagicMock,
+    "application_sdk.clients.sql.run_in_thread",
+    new_callable=AsyncMock,
 )
 async def test_run_query_raises_when_cursor_unsupported(
-    mock_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+    mock_run_in_thread: AsyncMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """If the dialect returns a result without a DBAPI cursor, run_query must
     raise rather than silently produce zero rows."""
@@ -848,7 +846,7 @@ async def test_run_query_raises_when_cursor_unsupported(
     # cursor evaluates falsy => "Cursor is not supported"
     bad_result = MagicMock()
     bad_result.cursor = None
-    mock_loop.return_value.run_in_executor = AsyncMock(return_value=bad_result)
+    mock_run_in_thread.return_value = bad_result
 
     with pytest.raises(UnsupportedSqlCursorError):
         async for _ in sql_client.run_query("SELECT 1"):
@@ -1068,26 +1066,26 @@ def test_execute_pandas_query_escapes_colons_before_text(sql_client: BaseSQLClie
 @pytest.mark.asyncio
 @patch("sqlalchemy.text", side_effect=lambda q: q)  # type: ignore
 @patch(
-    "application_sdk.clients.sql.asyncio.get_running_loop",
-    new_callable=MagicMock,
+    "application_sdk.clients.sql.run_in_thread",
+    new_callable=AsyncMock,
 )
 async def test_run_query_escapes_colons(
-    mock_loop: MagicMock, mock_text: Any, sql_client: BaseSQLClient
+    mock_run_in_thread: AsyncMock, mock_text: Any, sql_client: BaseSQLClient
 ):
     """The threadpool execute path escapes literal colons before text()."""
     sql_client.engine = MagicMock()
-    sql_client.engine.connect.return_value = MagicMock()
+    connection = MagicMock()
+    sql_client.engine.connect.return_value = connection
 
     cursor = MagicMock()
     col = MagicMock()
     col.name = "a"
     cursor.cursor.description = [col]
 
-    # run_in_executor is called once for execute (returns the cursor) then once
-    # per fetchmany batch — an empty batch ends the loop.
-    mock_loop.return_value.run_in_executor = AsyncMock(
-        side_effect=[cursor, [("v",)], []]
-    )
+    # run_in_thread is called once for connect, once for execute (returns the
+    # cursor), once per fetchmany batch — an empty batch ends the loop — and
+    # once for the close.
+    mock_run_in_thread.side_effect = [connection, cursor, [("v",)], [], None]
 
     async for _ in sql_client.run_query("RLIKE '^(?:cdl)'"):
         pass

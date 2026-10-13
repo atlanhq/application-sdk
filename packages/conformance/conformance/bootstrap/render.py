@@ -40,22 +40,31 @@ _ENV = jinja2.Environment(
 # ``.github/workflows/``).  The C002 drift check iterates this registry.
 MANAGED_WORKFLOWS: tuple[str, ...] = (
     "conformance.yaml",
-    "conformance-upload-sarif.yaml",
     "checks.yml",
     "commits.yaml",
     "release-gate.yaml",
     "connector-review-gate.yaml",
-    "update-dashboard.yml",
     "release.yaml",
     "tag-and-publish.yaml",
-    "renovate-auto-approve.yml",
     "vulnerability-scan.yml",
     "build-and-publish.yaml",
     "stale.yml",
-    "auto-fix.yml",
     "generated-freshness.yaml",
     "remediate-comment.yml",
 )
+
+# Opt-in managed shim (FND-3336): installed only under ``bootstrap
+# --sarif-upload true``, and removed on any other run. Uploading SARIF to a
+# private repo's Security tab needs GitHub Advanced Security, which the org
+# does not buy, so on the private fleet this workflow's five-leg matrix only
+# ever probed, skipped the upload and billed five jobs per merge to main. The
+# public repos keep it: their runners are free and their Security tab is the
+# one place the upload shows anything. Nothing else reads its output — the
+# conformance dashboard downloads the SARIF artifacts from the Conformance run
+# itself. Not a RETIRED_FILES entry because it is not retired everywhere; the
+# reusable and ``probe_code_scanning.py`` stay, the probe still guarding a
+# private repo that keeps an old copy.
+SARIF_UPLOAD_WORKFLOW = "conformance-upload-sarif.yaml"
 
 # Workflow shims bootstrap once managed and now actively removes (relative to
 # ``.github/workflows/``).  A retired name must be deleted rather than merely
@@ -72,9 +81,35 @@ MANAGED_WORKFLOWS: tuple[str, ...] = (
 # shim's shape was wrong outright.  Every call therefore failed at startup:
 # conclusion ``failure``, zero jobs, no check run, no logs.  Retired rather
 # than repointed — the check is not wanted on connectors.
+#
+# ``auto-fix.yml``: an ``issue_comment`` shim gated on a ``/fix-vulnerabilities``
+# comment. Every PR comment (mostly Renovate's) queued a run that the job-level
+# ``if`` then skipped — hundreds of skipped runs per repo, no real invocations.
+# Retired as noise; the reusable workflow it called is left in place here.
+#
+# ``update-dashboard.yml`` (FND-3337): a ``workflow_run`` shim on Vulnerability
+# Scan, Build & Publish and Conformance that pushed this repo's rows to the
+# security, conformance and test-readiness dashboards. Every merge to main
+# fired it up to three times with up to three jobs each. Those dashboards are
+# now pulled for the whole fleet by application-sdk's scheduled
+# ``update-fleet-dashboards.yaml``, so the per-repo push has nothing left to do.
+# Its reusable stays in application-sdk until resync has removed every copy.
+#
+# ``renovate-auto-approve.yml``: a ``workflow_run`` shim that posted an
+# atlan-ci approval on green Renovate and resync PRs, to satisfy a
+# code-owner review rule. No app repo's ruleset requires an approval, so it
+# unblocked nothing, and every Renovate push fired it once per required-check
+# workflow, each run spending the ``ORG_PAT_GITHUB`` rate limit. Only
+# application-sdk requires the approval; it keeps its own caller and the
+# reusable, which are not bootstrap-managed.
 # Retirements are repo-root-relative so the same mechanism can remove a
 # previously-managed hook or script, not only a workflow.
-RETIRED_FILES: tuple[str, ...] = (".github/workflows/docstring-coverage.yaml",)
+RETIRED_FILES: tuple[str, ...] = (
+    ".github/workflows/docstring-coverage.yaml",
+    ".github/workflows/auto-fix.yml",
+    ".github/workflows/update-dashboard.yml",
+    ".github/workflows/renovate-auto-approve.yml",
+)
 RETIRED_WORKFLOWS: tuple[str, ...] = tuple(
     path.removeprefix(".github/workflows/")
     for path in RETIRED_FILES
@@ -119,6 +154,7 @@ MANAGED_ACTION_FILES: tuple[tuple[str, str], ...] = (
     (".github/scripts/build_conformance_args.py", "build_conformance_args.py"),
     (".github/scripts/probe_code_scanning.py", "probe_code_scanning.py"),
     (".github/scripts/connector_review_gate.py", "connector_review_gate.py"),
+    (".github/scripts/release_gate.py", "release_gate.py"),
 )
 
 # Local connector-review kit. These paths are owned by bootstrap once a repo
@@ -205,6 +241,8 @@ def render(
     dataforge_env_tier: str = "",
     dataforge_output_prefix: str = "",
     dataforge_hermetic_fallback: str = "",
+    dataforge_lifecycle: str = "",
+    two_store: str = "true",
 ) -> str:
     """Render template *name* with the given substitution variables.
 
@@ -266,7 +304,7 @@ def render(
       ``container_health_timeout_seconds``, ``runtime_sdk_ref``,
       ``harness_sdk_ref``, ``e2e_test_path``, ``source_available``,
       ``source_available_overrides`` (FND-1865 — the per-suite overrides of
-      the repo-wide ``source-available``) and the five ``dataforge_*``
+      the repo-wide ``source-available``) and the six ``dataforge_*``
       values.  All default ``""`` — no line, so the reusable's
       own default applies — and the chain emits nothing at all when every one
       of them is empty, which is what keeps the no-override render
@@ -292,6 +330,11 @@ def render(
       new param is a single value, quoted or bare in the spelling the fleet
       hand-wrote it (bare for the numeric and boolean inputs, quoted for the
       strings).
+
+      ``two_store`` (FND-3656) is the one slot outside that chain: the line is
+      rendered on every file, so its default is ``"true"`` — ADR-0014's SDR
+      posture — and a repo's own ``false`` (an app with no SDR boundary for
+      the check to observe) is read back and re-emitted rather than reset.
     - ``.gitignore``: static template, no substitution.
 
     All other keyword arguments are accepted but unused, so callers can pass
@@ -344,4 +387,6 @@ def render(
         dataforge_env_tier=dataforge_env_tier,
         dataforge_output_prefix=dataforge_output_prefix,
         dataforge_hermetic_fallback=dataforge_hermetic_fallback,
+        dataforge_lifecycle=dataforge_lifecycle,
+        two_store=two_store,
     )

@@ -39,8 +39,9 @@ silently assumes.
   the real operation. A check that lists what extraction queries passes
   while the run fails.
 - Do not review for a handler that blocks. The handler returns an honest
-  `READY`, `PARTIAL`, or `NOT_READY` verdict; `App.preflight_gate_mode`
-  alone decides whether `NOT_READY` blocks. Requesting a raise or a block
+  `READY`, `PARTIAL`, or `NOT_READY` verdict; `App.preflight_gate_mode` and
+  the failed check's category (`GATE_BLOCKING_CATEGORIES`) decide whether
+  `NOT_READY` blocks, not the handler. Requesting a raise or a block
   inside the handler is the wrong fix; the missing check is the finding.
 - Safe path: the check exists in the same PR, or the PR names the covering
   check, or it states why the access needs no grant beyond one already

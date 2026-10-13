@@ -201,8 +201,8 @@ def scan_text(text: str, rel: str) -> list[Finding]:
                     message=(
                         f"Contract amends {module!r} — migrate to "
                         f'App.pkl (amends "@app-contract-toolkit/App.pkl").  '
-                        f"See contract-toolkit/docs/reference.md and the "
-                        f"make-contract skill for migration guidance.  "
+                        f"Follow the K001 entry in the conformance package's "
+                        f"programs/areas/contract-toolkit.prose.md.  "
                         f"Suppress with: // conformance: ignore[K001] <reason>"
                     ),
                     suppressed=suppressed,

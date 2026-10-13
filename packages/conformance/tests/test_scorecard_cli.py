@@ -200,6 +200,73 @@ def test_cli_cross_cloud_is_never_scored(tmp_path: Path) -> None:
     assert [g.id for g in with_clouds.gates] == [g.id for g in plain.gates]
 
 
+def _run_integration(tmp_path: Path, *extra: str, integration: Path) -> Scorecard:
+    out = tmp_path / "sc.json"
+    rc = main(
+        [
+            "--unit-junit",
+            str(_junit(tmp_path, "unit", passed=10)),
+            "--integration-junit",
+            str(integration),
+            "--repo",
+            "atlanhq/atlan-openapi-app",
+            "--out",
+            str(out),
+            *extra,
+        ]
+    )
+    assert rc == 0
+    return Scorecard.model_validate(json.loads(out.read_text(encoding="utf-8")))
+
+
+def test_cli_failed_integration_job_without_junit_is_present_and_failing(
+    tmp_path: Path,
+) -> None:
+    # The job crashed in setup (e.g. a toolchain download), so no junit was
+    # uploaded. That is a broken tier, not a missing one (FND-3299).
+    sc = _run_integration(
+        tmp_path,
+        "--integration-result",
+        "failure",
+        integration=tmp_path / "missing.xml",
+    )
+    it = next(t for t in sc.tiers if t.name == "integration")
+    assert it.present is True
+    assert sc.raw.tests.integration.job_failed is True
+    assert next(g for g in sc.gates if g.id == "all-green").status == "fail"
+
+
+def test_cli_without_integration_result_keeps_a_missing_junit_absent(
+    tmp_path: Path,
+) -> None:
+    sc = _run_integration(tmp_path, integration=tmp_path / "missing.xml")
+    assert next(t for t in sc.tiers if t.name == "integration").present is False
+    assert sc.raw.tests.integration.job_failed is False
+
+
+def test_cli_junit_wins_when_the_failed_job_executed_tests(tmp_path: Path) -> None:
+    # Tests ran, then a later step failed the job: the junit is the evidence,
+    # so the counts stand and job_failed is not stamped over them.
+    sc = _run_integration(
+        tmp_path,
+        "--integration-result",
+        "failure",
+        integration=_junit(tmp_path, "integration", passed=3, failed=1),
+    )
+    counts = sc.raw.tests.integration
+    assert (counts.passed, counts.failed, counts.job_failed) == (3, 1, False)
+
+
+def test_cli_rejects_an_unknown_integration_result(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit):
+        _run_integration(
+            tmp_path,
+            "--integration-result",
+            "crashed",
+            integration=tmp_path / "missing.xml",
+        )
+
+
 def test_cli_requires_unit_junit(tmp_path: Path) -> None:
     with pytest.raises(SystemExit):
         main(["--repo", "atlanhq/atlan-x-app", "--out", str(tmp_path / "x.json")])

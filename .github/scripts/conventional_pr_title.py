@@ -14,8 +14,8 @@ different layouts, so any path rule here would be wrong somewhere.
 Why the fleet needs it: connector repos release through
 `release-version-bump.yaml`, whose `release.py` derives the semver bump from
 `^feat[(!:]` / `^fix[(!:]` / `BREAKING CHANGE` in the squash-merge subjects,
-and whose `update_changelog.py` files each subject into Features/Fixes/Chores
-by the same grammar. Those repos squash-merge, so the subject *is* the PR
+and whose `update_changelog.py` files each subject into a section by its type
+(every type but `ci` is rendered) by the same grammar. Those repos squash-merge, so the subject *is* the PR
 title. A title outside the grammar silently lands in neither the version
 calculation nor a changelog section.
 

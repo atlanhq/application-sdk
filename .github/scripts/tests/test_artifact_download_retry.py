@@ -235,8 +235,10 @@ def test_the_guard_actually_finds_downloads_and_retries():
         first_attempts, retries = _classify(steps)
         total_first += len(first_attempts)
         total_retries += sum(len(v) for v in retries.values())
-    assert total_first >= 7, f"only {total_first} first-attempt downloads found"
-    assert total_retries >= 3, f"only {total_retries} retry downloads found"
+    # 6 and 1, not 7 and 3: build-and-scan.yaml's two image downloads and
+    # their retries went with the `docker-image` artifact (FND-3319).
+    assert total_first >= 6, f"only {total_first} first-attempt downloads found"
+    assert total_retries >= 1, f"only {total_retries} retry downloads found"
 
 
 def test_every_gating_download_has_a_matching_retry_download():

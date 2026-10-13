@@ -7,11 +7,57 @@ import ast
 from conformance.suite.checks._ast_common import _IgnoreDirective, make_finding
 from conformance.suite.schema.findings import Finding
 
+from .dependency_audience import DependencyAudienceMixin
 from .exception_chaining import ExceptionChainingMixin
 from .http_failure import HttpFailureMixin
 from .security import SecurityMixin
 from .silent_swallow import SilentSwallowMixin
 from .untyped_raise import UntypedRaiseMixin
+
+
+def import_bindings(tree: ast.Module) -> dict[str, str]:
+    """Each name an import binds, mapped to the module or object it names.
+
+    ``import a.b`` binds ``a`` to the package ``a`` (``a.b`` is reached through
+    it), unlike ``import a.b as c``, which binds ``c`` to ``a.b``. A name the
+    module also assigns, defines or rebinds anywhere is left out: after
+    ``asyncio = domain_errors`` the name no longer names the stdlib module.
+    Likewise a name imported from different origins (e.g. a function-local
+    import shadowing a module-level one) is left out: the map is module-wide
+    and cannot say which binding a given use sees.
+    """
+    bound: dict[str, str] = {}
+    conflicting: set[str] = set()
+
+    def _bind(name: str, origin: str) -> None:
+        if bound.setdefault(name, origin) != origin:
+            conflicting.add(name)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    _bind(alias.asname, alias.name)
+                else:
+                    root = alias.name.split(".")[0]
+                    _bind(root, root)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            for alias in node.names:
+                _bind(alias.asname or alias.name, f"{node.module}.{alias.name}")
+    rebound = (
+        conflicting
+        | {
+            n.id
+            for n in ast.walk(tree)
+            if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store | ast.Del)
+        }
+        | {
+            n.name
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        }
+    )
+    return {name: origin for name, origin in bound.items() if name not in rebound}
 
 
 class Checker(
@@ -20,6 +66,7 @@ class Checker(
     ExceptionChainingMixin,
     HttpFailureMixin,
     SecurityMixin,
+    DependencyAudienceMixin,
     ast.NodeVisitor,
 ):
     """Walk a module AST and emit E-series findings."""
@@ -30,15 +77,23 @@ class Checker(
         directives: dict[int, _IgnoreDirective],
         atlan_ioerror_imported: bool,
         legacy_aliases: frozenset[str] = frozenset(),
+        local_helpers: dict[str, ast.FunctionDef] | None = None,
+        sdk_errors: frozenset[str] = frozenset(),
+        dependency_classes: frozenset[str] = frozenset(),
     ) -> None:
         self._filename = filename
         self._directives = directives
         self._atlan_ioerror_imported = atlan_ioerror_imported
         self._legacy_aliases = legacy_aliases
+        self._local_helpers = local_helpers or {}
+        self._sdk_errors = sdk_errors
+        self._dependency_classes = dependency_classes
         self._findings: list[Finding] = []
+        self._import_origins: dict[str, str] = {}
         # Context stacks — managed by visit_* methods
         self._function_stack: list[ast.FunctionDef | ast.AsyncFunctionDef] = []
         self._except_stack: list[ast.ExceptHandler] = []
+        self._class_stack: list[ast.ClassDef] = []
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
         # Set True while generic_visit walks the children of a Raise node so
         # _check_p017_call can skip the inline Call (already covered by
@@ -61,6 +116,10 @@ class Checker(
         )
 
     # ── Context management ────────────────────────────────────────────────────
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._import_origins = import_bindings(node)
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not
@@ -90,7 +149,11 @@ class Checker(
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:
         self._check_p011(node)
+        if not self._class_stack and not self._function_stack:
+            self._check_e021(node)
+        self._class_stack.append(node)
         self.generic_visit(node)
+        self._class_stack.pop()
 
     def visit_For(self, node: ast.For) -> None:
         self._loop_stack.append(node)

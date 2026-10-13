@@ -16,6 +16,8 @@
 #   DAPR_APP_PORT        - Application port DAPR connects to (default: 8000)
 #   DAPR_HTTP_PORT       - DAPR HTTP API port (default: 3500)
 #   DAPR_GRPC_PORT       - DAPR gRPC API port (default: 50001)
+#   DAPR_INTERNAL_GRPC_PORT - DAPR internal gRPC API port (default: DAPR_GRPC_PORT + 1,
+#                             i.e. 50002). Must differ from the other daprd ports.
 #   DAPR_COMPONENTS_PATH - Path to DAPR component YAML files (default: /app/components)
 #   DAPR_LOG_LEVEL                  - DAPR log level (base image ENV sets info; warn only if unset)
 #   DAPR_METRICS_PORT               - Port for daprd Prometheus metrics (default: 3100)
@@ -35,6 +37,12 @@ export DAPR_APP_ID="${DAPR_APP_ID:-${ATLAN_SERVICE_NAME:-app}}"
 export DAPR_APP_PORT="${DAPR_APP_PORT:-8000}"
 export DAPR_HTTP_PORT="${DAPR_HTTP_PORT:-3500}"
 export DAPR_GRPC_PORT="${DAPR_GRPC_PORT:-50001}"
+# Pinned so daprd never picks it: unset, daprd derives it from the pod's
+# hostname and can land on DAPR_GRPC_PORT, which makes daprd exit with
+# "bind: address already in use" (dapr v1.18.4, checked 2026-10-07).
+# Defaults to the port after DAPR_GRPC_PORT (50001/50002, Dapr's Kubernetes
+# sidecar pair), so overriding only DAPR_GRPC_PORT cannot make them collide.
+export DAPR_INTERNAL_GRPC_PORT="${DAPR_INTERNAL_GRPC_PORT:-$((DAPR_GRPC_PORT + 1))}"
 export DAPR_COMPONENTS_PATH="${DAPR_COMPONENTS_PATH:-/app/components}"
 export DAPR_LOG_LEVEL="${DAPR_LOG_LEVEL:-warn}"
 export DAPR_METRICS_PORT="${DAPR_METRICS_PORT:-3100}"
@@ -44,6 +52,15 @@ export DAPR_SCHEDULER_HOST_ADDRESS="${DAPR_SCHEDULER_HOST_ADDRESS:-}"
 # Must be >= APP_GRACEFUL_SHUTDOWN_TIMEOUT and < terminationGracePeriodSeconds
 # so Kubernetes always gets the last word.
 export DAPR_GRACEFUL_SHUTDOWN_SECONDS="${DAPR_GRACEFUL_SHUTDOWN_SECONDS:-3600}"
+
+# daprd binds the internal port first, so a clash kills its API server ~10s
+# later while the app keeps running. Fail here instead, with the cause.
+for _port in "${DAPR_GRPC_PORT}" "${DAPR_HTTP_PORT}" "${DAPR_METRICS_PORT}"; do
+    if [ "${DAPR_INTERNAL_GRPC_PORT}" = "${_port}" ]; then
+        echo "[entrypoint] ERROR: DAPR_INTERNAL_GRPC_PORT=${DAPR_INTERNAL_GRPC_PORT} clashes with another daprd port (grpc=${DAPR_GRPC_PORT}, http=${DAPR_HTTP_PORT}, metrics=${DAPR_METRICS_PORT}). Set DAPR_INTERNAL_GRPC_PORT to a free port." >&2
+        exit 1
+    fi
+done
 
 # PIDs managed by this script
 DAPRD_PID=""
@@ -76,6 +93,7 @@ echo "[entrypoint]   app-id:          ${DAPR_APP_ID}"
 echo "[entrypoint]   app-port:        ${DAPR_APP_PORT}"
 echo "[entrypoint]   dapr-http-port:  ${DAPR_HTTP_PORT}"
 echo "[entrypoint]   dapr-grpc-port:  ${DAPR_GRPC_PORT}"
+echo "[entrypoint]   dapr-internal-grpc-port: ${DAPR_INTERNAL_GRPC_PORT}"
 echo "[entrypoint]   components-path: ${DAPR_COMPONENTS_PATH}"
 echo "[entrypoint]   log-level:       ${DAPR_LOG_LEVEL}"
 echo "[entrypoint]   metrics-port:    ${DAPR_METRICS_PORT}"
@@ -117,6 +135,7 @@ ${DAPR_LOG_FORWARDER} daprd \
     --app-port "${DAPR_APP_PORT}" \
     --dapr-http-port "${DAPR_HTTP_PORT}" \
     --dapr-grpc-port "${DAPR_GRPC_PORT}" \
+    --dapr-internal-grpc-port "${DAPR_INTERNAL_GRPC_PORT}" \
     --resources-path "${DAPR_COMPONENTS_PATH}" \
     --log-level "${DAPR_LOG_LEVEL}" \
     --metrics-port "${DAPR_METRICS_PORT}" \

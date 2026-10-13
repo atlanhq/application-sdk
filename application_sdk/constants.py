@@ -480,6 +480,14 @@ STORAGE_WRITE_SIDECARS = (
     os.getenv("ATLAN_STORAGE_WRITE_SIDECARS", "true").strip().lower() != "false"
 )
 
+#: Opt-in for the e2e ``sdk:store-assert`` node (FND-3571). The workflow is
+#: registered on every worker so worker start-up is identical everywhere; with
+#: this unset the node reads nothing and reports itself disabled. Only e2e
+#: installs set it, per tenant, through ``deploy.env_overrides``.
+STORE_ASSERT_ENABLED = (
+    os.getenv("ATLAN_STORE_ASSERT_ENABLED", "false").strip().lower() == "true"
+)
+
 #: Build ID for worker versioning (injected by TWD controller via Kubernetes Downward API).
 #: When set, workers identify themselves with this build ID so the Temporal server can
 #: route tasks to the correct version during versioned deployments.
@@ -1075,7 +1083,9 @@ PERSISTENT_ARTIFACTS_S3_PREFIX_TEMPLATE = (
 )
 
 #: Maximum number of column extraction batch activities to execute in parallel
-#: Controls concurrency during incremental column extraction
+#: Controls concurrency during incremental column extraction.
+#: Not read by IncrementalSqlMetadataExtractor, whose run() fans out its own
+#: module-level MAX_CONCURRENT_COLUMN_BATCHES (10).
 MAX_CONCURRENT_COLUMN_BATCHES = 3
 
 #: Subpath template for per-run incremental diff (under connection prefix)
@@ -1083,12 +1093,29 @@ MAX_CONCURRENT_COLUMN_BATCHES = 3
 #: Example: persistent-artifacts/apps/oracle/connection/123456/runs/abc-def-ghi/incremental-diff
 INCREMENTAL_DIFF_SUBPATH_TEMPLATE = "runs/{run_id}/incremental-diff"
 
+#: Subpath of a connection's committed current-state snapshot (under connection prefix)
+#: Example: persistent-artifacts/apps/oracle/connection/123456/current-state
+CURRENT_STATE_SUBPATH = "current-state"
+
+#: Filename of a connection's incremental marker (under connection prefix)
+#: Example: persistent-artifacts/apps/oracle/connection/123456/marker.txt
+MARKER_FILENAME = "marker.txt"
+
+#: Subdirectory of a run's output path holding its transformed entity JSON
+#: Example: ./local/tmp/artifacts/.../{run_id}/transformed/table/chunk-0.json
+TRANSFORMED_SUBDIR = "transformed"
+
+#: Subpath of a run's output path holding its column-extraction batch files
+#: Example: ./local/tmp/artifacts/.../{run_id}/batches/column-table-ids/batch-0.json
+COLUMN_BATCHES_SUBPATH = "batches/column-table-ids"
+
 #: Format for marker timestamp in incremental extraction
 #: Example: 2025-12-08T10:00:00Z
 MARKER_TIMESTAMP_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 
 #: Default incremental state for first run (when incremental_state field doesn't exist)
-#: Required by coalesce function in DuckDB
+#: Required by coalesce function in DuckDB. Equal to
+#: ``application_sdk.common.incremental.models.TableState.NO_CHANGE``.
 INCREMENTAL_DEFAULT_STATE = "NO CHANGE"
 
 #: Base folder for DuckDB temp files (each connection gets a unique UUID subfolder)

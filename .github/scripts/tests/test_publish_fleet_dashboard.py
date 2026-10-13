@@ -17,6 +17,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+import publish_fleet_dashboard as pfd  # noqa: E402
 from publish_fleet_dashboard import (  # noqa: E402
     BUCKET,
     merge_history,
@@ -402,3 +403,28 @@ def test_a_partial_scan_retires_nothing(tmp_path, capsys):
     manifest = json.loads(s3.objects[f"{BUCKET}/{PREFIX}/repos.json"])
     assert len(manifest) == 11
     assert "absent from this scan" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("flags", "expected"),
+    [([], False), (["--single-repo"], True), (["--partial-scan"], True)],
+)
+def test_partial_scan_is_not_authoritative_about_membership(
+    tmp_path, monkeypatch, flags, expected
+):
+    """update-fleet-dashboards.yaml skips a repo with no live artifact, so its
+    output must not retire stored repos from the manifest (FND-3337)."""
+    seen = {}
+
+    def fake_publish(scan_dir, prefix, single_repo, tmp_dir):
+        seen["single_repo"] = single_repo
+        return {
+            "repoDocs": 1,
+            "manifestEntries": 1,
+            "historiesMerged": 1,
+            "fleetPublished": not single_repo,
+        }
+
+    monkeypatch.setattr(pfd, "publish", fake_publish)
+    assert pfd.main(["--dir", str(tmp_path), "--prefix", PREFIX, *flags]) == 0
+    assert seen["single_repo"] is expected

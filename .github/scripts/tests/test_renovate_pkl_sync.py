@@ -613,6 +613,7 @@ def test_format_generated_covers_all_py_not_just_input(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
     mod._format_generated()
 
     formatted_names = {Path(p).name for p in formatted}
@@ -645,6 +646,7 @@ def test_format_generated_check_defers_to_consumer_ruff_config(tmp_path, monkeyp
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
     mod._format_generated()
 
     assert len(check_calls) == 1
@@ -672,6 +674,7 @@ def test_format_generated_lints_real_path_not_temp_dir(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
     mod._format_generated()
 
     assert len(check_calls) == 1
@@ -699,6 +702,7 @@ def test_format_generated_passes_force_exclude(tmp_path, monkeypatch):
         return types.SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(mod, "run", spy_run)
+    monkeypatch.setattr(mod.shutil, "which", lambda name: f"/usr/bin/{name}")
     mod._format_generated()
 
     subcommands = {cmd[2] for cmd in calls}

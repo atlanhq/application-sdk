@@ -127,25 +127,191 @@ class TestUploadDirectory:
     async def test_upload_directory_error_propagation(
         self, store, tmp_path, monkeypatch
     ) -> None:
-        """Error in one upload propagates correctly from asyncio.gather."""
+        """Error in one upload propagates out of the directory fan-out.
+
+        Patched on ``reference._persist_file``: since FND-3796 a directory
+        upload runs on the persist engine, whose per-file step that is (it was
+        ``transfer._upload_one``).
+        """
         (tmp_path / "ok.txt").write_bytes(b"fine")
         (tmp_path / "fail.txt").write_bytes(b"boom")
 
-        from application_sdk.storage import transfer as transfer_mod
+        from application_sdk.storage import reference as reference_mod
 
-        _original = transfer_mod._upload_one
+        _original = reference_mod._persist_file
 
-        async def _failing_upload_one(st, local_file, store_key, *, skip_if_exists):
+        async def _failing_persist_file(st, local_file, store_key, **kwargs):
             if "fail.txt" in str(local_file):
                 raise RuntimeError("simulated upload failure")
-            return await _original(
-                st, local_file, store_key, skip_if_exists=skip_if_exists
-            )
+            return await _original(st, local_file, store_key, **kwargs)
 
-        monkeypatch.setattr(transfer_mod, "_upload_one", _failing_upload_one)
+        monkeypatch.setattr(reference_mod, "_persist_file", _failing_persist_file)
 
-        with pytest.raises(RuntimeError, match="simulated upload failure"):
+        # The engine's fan-out (``_run_bounded``) re-raises a lone
+        # ``StorageError`` bare and surfaces anything else whole, as a group —
+        # the contract ``transfer.download`` has had since FND-3795.
+        with pytest.raises(ExceptionGroup) as excinfo:
             await upload(str(tmp_path), "errtest", store=store)
+        assert excinfo.group_contains(RuntimeError, match="simulated upload failure")
+
+
+class TestUploadDirectoryLocalSidecars:
+    """A directory that was persisted or materialized carries local
+    ``<file>.sha256`` sidecars. They are cache keys, not data, and must not be
+    uploaded: one landing first on its data file's store-side sidecar key would
+    let that data file's ``skip_if_exists`` check match and skip the data."""
+
+    @staticmethod
+    def _with_local_sidecar(directory: Path, name: str, data: bytes) -> None:
+        (directory / name).write_bytes(data)
+        (directory / f"{name}.sha256").write_text(_hash_bytes(data), encoding="utf-8")
+
+    async def test_local_sidecars_are_not_counted_or_uploaded(
+        self, store, tmp_path
+    ) -> None:
+        self._with_local_sidecar(tmp_path, "0.json", b'{"a": 1}')
+        self._with_local_sidecar(tmp_path, "1.json", b'{"b": 2}')
+
+        out = await upload(str(tmp_path), "handoff", store=store, skip_if_exists=True)
+
+        assert out.ref.file_count == 2
+        dest = tmp_path / "dest"
+        dl = await download("handoff/", str(dest), store=store)
+        assert dl.ref.file_count == 2
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert (dest / "1.json").read_bytes() == b'{"b": 2}'
+
+    async def test_data_is_uploaded_when_its_local_sidecar_lists_first(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        # Pin the order the race needs: sidecar first, one upload at a time.
+        # The walk is the upload engine's (``reference._list_upload_files``)
+        # since FND-3796, so the listing it filters is patched there.
+        self._with_local_sidecar(tmp_path, "0.json", b'{"a": 1}')
+        from application_sdk.storage import reference as reference_mod
+
+        monkeypatch.setattr(
+            reference_mod,
+            "safe_list_directory",
+            lambda path: [path / "0.json.sha256", path / "0.json"],
+        )
+
+        out = await upload(
+            str(tmp_path),
+            "handoff",
+            store=store,
+            skip_if_exists=True,
+            max_concurrency=1,
+        )
+
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert out.ref.file_count == 1
+        assert out.reason == "uploaded"
+
+
+class TestUploadSkipIfExistsNeedsData:
+    """``skip_if_exists`` must not trust a sidecar whose data object is missing.
+
+    A store written by 3.42.x can hold ``0.json.sha256`` (the correct digest)
+    without ``0.json``. A matching sidecar alone would skip the data upload on
+    every retry, so the store is never repaired."""
+
+    @staticmethod
+    async def _stale_sidecar(store, local: Path, key: str) -> None:
+        """Upload *local* to *key*, then delete the data object, keeping its sidecar."""
+        from application_sdk.storage.ops import delete, exists
+
+        await upload(str(local), key, store=store)
+        await delete(key, store, normalize=False)
+        assert not await exists(key, store, normalize=False)
+        assert await exists(f"{key}.sha256", store, normalize=False)
+
+    async def test_directory_upload_repairs_data_behind_a_stale_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "0.json").write_bytes(b'{"a": 1}')
+        (src / "1.json").write_bytes(b'{"b": 2}')
+        await upload(str(src), "handoff", store=store)
+        await self._stale_sidecar(store, src / "0.json", "handoff/0.json")
+
+        out = await upload(str(src), "handoff", store=store, skip_if_exists=True)
+
+        assert out.reason == "uploaded"
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
+        assert (dest / "1.json").read_bytes() == b'{"b": 2}'
+
+    async def test_single_file_upload_repairs_data_behind_a_stale_sidecar(
+        self, store, tmp_path
+    ) -> None:
+        f = tmp_path / "0.json"
+        f.write_bytes(b'{"a": 1}')
+        await self._stale_sidecar(store, f, "handoff/0.json")
+
+        out = await upload(str(f), "handoff/0.json", store=store, skip_if_exists=True)
+
+        assert out.reason == "uploaded"
+        dest = tmp_path / "dest.json"
+        await download("handoff/0.json", str(dest), store=store)
+        assert dest.read_bytes() == b'{"a": 1}'
+
+    async def test_directory_skip_makes_no_per_file_probes(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        # The target LIST answers data and sidecar presence for every file, so
+        # an idempotent re-upload issues no HEAD per file.
+        for i in range(5):
+            (tmp_path / f"{i}.json").write_bytes(b"x" * i)
+        await upload(str(tmp_path), "handoff", store=store)
+
+        from application_sdk.storage import ops
+
+        probes: list[str] = []
+        real_exists = ops.exists
+
+        async def _counting_exists(key, *args, **kwargs):
+            probes.append(key)
+            return await real_exists(key, *args, **kwargs)
+
+        monkeypatch.setattr(ops, "exists", _counting_exists)
+
+        out = await upload(str(tmp_path), "handoff", store=store, skip_if_exists=True)
+
+        assert out.reason == "skipped:hash_match"
+        assert probes == []
+
+    async def test_unlistable_target_falls_back_to_per_file_checks(
+        self, store, tmp_path, monkeypatch
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "0.json").write_bytes(b'{"a": 1}')
+        (src / "1.json").write_bytes(b'{"b": 2}')
+        await upload(str(src), "handoff", store=store)
+        await self._stale_sidecar(store, src / "0.json", "handoff/0.json")
+
+        from application_sdk.storage import transfer as transfer_mod
+        from application_sdk.storage.errors import StorageError
+
+        async def _denied(*args, **kwargs):
+            raise StorageError("list denied")
+
+        monkeypatch.setattr(transfer_mod, "list_data_objects", _denied)
+
+        out = await upload(str(src), "handoff", store=store, skip_if_exists=True)
+
+        # 0.json is repaired; 1.json still skips on its matching sidecar.
+        assert out.reason == "uploaded"
+        assert out.synced is True
+        monkeypatch.undo()  # download lists the prefix too
+        dest = tmp_path / "dest"
+        await download("handoff/", str(dest), store=store)
+        assert (dest / "0.json").read_bytes() == b'{"a": 1}'
 
 
 class TestUploadRaiseOnEmpty:
@@ -401,9 +567,14 @@ class TestDownloadDirectory:
 
         dest = tmp_path / "dest"
         dl = await download("sc/", str(dest), store=store)
-        # Only 1 real file — sidecar should not appear in file_count or on disk
+        # Only 1 real file — the stored sidecar object is not data, so it is
+        # neither counted nor downloaded. What sits beside the file locally is
+        # the materialise cache marker the engine writes (FND-3795): its digest
+        # of the downloaded bytes, which upload excludes and a later
+        # materialise of this ref reuses instead of downloading again.
         assert dl.ref.file_count == 1
-        assert not (dest / "data.txt.sha256").exists()
+        local_marker = dest / "data.txt.sha256"
+        assert local_marker.read_text().strip() == hashlib.sha256(b"data").hexdigest()
 
     async def test_path_traversal_in_listed_key_rejected(self, store, tmp_path) -> None:
         """A listed key containing ``..`` must not write outside dest_dir.
@@ -668,11 +839,14 @@ class TestUploadDirectorySourceStoreReconcile:
         (local / "column").mkdir(parents=True)
         (local / "column" / "entities.json").write_bytes(b"C")
 
-        # Patch the reconcile branch's actual call site (``transfer.list_data_keys``,
-        # invoked via ``_list_source_data_keys``) rather than the lower-level
-        # ``batch.list_keys`` it delegates to — a direct guard that survives an
-        # inlining refactor of ``list_data_keys``.
-        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+        # Patch the reconcile branch's actual call site
+        # (``transfer.list_data_objects``, invoked via ``_list_source_objects``)
+        # rather than the lower-level ``batch.list_keys`` it delegates to — a
+        # direct guard that survives an inlining refactor. (It listed keys via
+        # ``list_data_keys`` until FND-3796 needed each object's size for the
+        # manifest; the stale name now fails to patch rather than spying on
+        # nothing.)
+        with patch("application_sdk.storage.transfer.list_data_objects") as spy:
             await upload(
                 str(local),
                 storage_path="d/transformed",
@@ -807,7 +981,8 @@ class TestUploadDirectorySourceStoreReconcile:
         (local / "column").mkdir(parents=True)
         (local / "column" / "entities.json").write_bytes(b"C")
 
-        with patch("application_sdk.storage.transfer.list_data_keys") as spy:
+        # The reconcile branch's source listing (see the same-store test above).
+        with patch("application_sdk.storage.transfer.list_data_objects") as spy:
             out = await upload(
                 str(local),
                 storage_path="d/transformed",
@@ -1041,3 +1216,242 @@ class TestUploadSameStoreCopy:
         exists_spy.assert_not_called()
         assert out.ref.file_count == 2
         assert out.synced == 0
+
+
+class TestDownloadOnTheSharedEngine:
+    """FND-3795: download() runs on the materialise engine; its own contract holds.
+
+    Lens round 5 found two places the engine was looser than the old
+    download loop: ``skip_if_exists`` trusting a local marker over the store,
+    and an owned temp file surviving a missing key or a cancellation.
+    """
+
+    async def test_skip_if_exists_refetches_an_object_overwritten_since(
+        self, store, tmp_path
+    ) -> None:
+        """The local marker records the last download, not the current object."""
+        from application_sdk.storage.ops import _put
+
+        await _put("sx/data.txt", b"old", store)
+        dest = tmp_path / "dest"
+        await download("sx/", str(dest), store=store)
+
+        await _put("sx/data.txt", b"new", store)  # no stored digest either
+        dl = await download("sx/", str(dest), store=store, skip_if_exists=True)
+
+        assert (dest / "data.txt").read_bytes() == b"new"
+        assert dl.synced is True
+
+    async def test_skip_if_exists_reuses_a_file_that_matches_the_stored_digest(
+        self, store, tmp_path
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "data.txt").write_bytes(b"same")
+        await upload(str(src), "sy/", store=store)
+        dest = tmp_path / "dest"
+        await download("sy/", str(dest), store=store)
+
+        dl = await download("sy/", str(dest), store=store, skip_if_exists=True)
+
+        assert dl.synced is False
+        assert dl.reason == "skipped:hash_match"
+
+    async def test_a_missing_key_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.errors import StorageError
+
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with pytest.raises(StorageError):
+            await download("missing/key.json", store=store)
+
+        assert list(scratch.iterdir()) == []
+
+    async def test_a_cancelled_download_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from application_sdk.storage.ops import _put
+
+        await _put("cx/key.json", b"{}", store)
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with (
+            patch(
+                "application_sdk.storage.ops.download_file",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await download("cx/key.json", store=store)
+
+        assert list(scratch.iterdir()) == []
+
+
+class TestUploadOnTheSharedEngine:
+    """FND-3796: upload() runs on the persist engine; its own contract holds.
+
+    The two regressions FND-3795's lens round 5 found when download moved onto
+    its engine, checked for upload up front: a dedup trusting a local marker
+    where the old loop asked the store, and an owned temp file surviving a
+    cancellation.
+    """
+
+    async def test_skip_if_exists_uploads_a_file_changed_since_its_marker(
+        self, store, tmp_path
+    ) -> None:
+        """The local marker says what was uploaded last time, not what is there now.
+
+        After the first upload the marker and the store's sidecar agree. A
+        dedup that read the marker instead of hashing the file would match
+        them and skip the changed bytes.
+        """
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "data.txt").write_bytes(b"old")
+        await upload(str(src), "mk/", store=store)
+        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"old")
+
+        (src / "data.txt").write_bytes(b"new")
+        up = await upload(str(src), "mk/", store=store, skip_if_exists=True)
+
+        assert up.synced is True
+        dest = tmp_path / "dest"
+        await download("mk/", str(dest), store=store)
+        assert (dest / "data.txt").read_bytes() == b"new"
+        assert (src / "data.txt.sha256").read_text() == _hash_bytes(b"new")
+
+    async def test_a_cancelled_store_copy_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.transfer import _upload_from_store
+
+        await _put("cc/key.json", b"{}", store)
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with (
+            patch(
+                "application_sdk.storage.ops.download_file_chunked",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await _upload_from_store(
+                store, "cc/key.json", create_memory_store(), "cc/key.json"
+            )
+
+        assert list(scratch.iterdir()) == []
+
+    async def test_the_manifest_lands_in_the_run_file_refs_namespace(
+        self, store, tmp_path
+    ) -> None:
+        """Where persist puts its own: ``{run}/file_refs/{uuid}.sdk-manifest``."""
+        from application_sdk.storage.reference import _fetch_manifest
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.json").write_bytes(b"{}")
+        (src / "sub").mkdir()
+        (src / "sub" / "b.json").write_bytes(b"[]")
+        run = "artifacts/apps/x/workflows/wf/run"
+
+        up = await upload(str(src), _app_prefix=run, _output_path=run, store=store)
+
+        assert up.ref.manifest_path is not None
+        assert up.ref.manifest_path.startswith(f"{run}/file_refs/")
+        assert up.ref.manifest_path.endswith(".sdk-manifest")
+        manifest = await _fetch_manifest(store, up.ref.manifest_path)
+        assert manifest is not None
+        assert {(e.path, e.sha256) for e in manifest.files} == {
+            ("a.json", _hash_bytes(b"{}")),
+            ("sub/b.json", _hash_bytes(b"[]")),
+        }
+
+    async def test_retained_upload_without_a_run_prefix_writes_no_manifest(
+        self, store, tmp_path
+    ) -> None:
+        """A direct caller with no run context: the ref lists, as before."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "a.json").write_bytes(b"{}")
+
+        up = await upload(str(src), "plain/", store=store)
+
+        assert up.ref.manifest_path is None
+        assert up.ref.file_count == 1
+
+    async def test_reconciled_copies_are_in_the_manifest(self, tmp_path) -> None:
+        """A partial local tree plus the source store's rest is one hand-off."""
+        from application_sdk.contracts.types import FileReference
+        from application_sdk.storage.ops import _put
+        from application_sdk.storage.reference import materialize_file_reference
+
+        source, target = create_memory_store(), create_memory_store()
+        await _put("pfx/transformed/table/entities.json", b"T", source)
+        await _put("pfx/transformed/column/entities.json", b"C", source)
+        local = tmp_path / "transformed"
+        (local / "column").mkdir(parents=True)
+        (local / "column" / "entities.json").write_bytes(b"C")
+        run = "artifacts/apps/x/workflows/wf/run"
+
+        up = await upload(
+            str(local),
+            store=target,
+            _source_ref=FileReference(
+                local_path=str(local), storage_path="pfx/transformed"
+            ),
+            _source_store=source,
+            _app_prefix=run,
+            _output_path=run,
+        )
+        assert up.ref.manifest_path is not None
+        assert up.ref.file_count == 2
+        # A stray object under the prefix is outside the hand-off.
+        await _put(f"{run}/stray.json", b"{}", target)
+
+        out = await materialize_file_reference(
+            target,
+            up.ref.model_copy(update={"local_path": str(tmp_path / "other")}),
+        )
+
+        assert out.local_path is not None
+        got = {
+            p.relative_to(out.local_path).as_posix()
+            for p in Path(out.local_path).rglob("*")
+            if p.is_file() and not p.name.endswith(".sha256")
+        }
+        assert got == {"table/entities.json", "column/entities.json"}
+
+
+class TestDeprecatedReexports:
+    """FND-3796: four names ``transfer`` no longer imports stay importable.
+
+    A fleet audit found no app using them from here, so each is a deprecated
+    no-op until v4.0 rather than a working alias new code could adopt.
+    """
+
+    async def test_each_name_warns_and_does_nothing(self, tmp_path) -> None:
+        from application_sdk.errors import InternalError as RealInternalError
+        from application_sdk.storage import transfer
+
+        (tmp_path / "a.json").write_bytes(b"{}")
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert transfer.is_sidecar_key("a.json.sha256") is False
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert transfer.safe_list_directory(tmp_path) == []
+        with pytest.warns(DeprecationWarning, match="removed in v4.0"):
+            assert await transfer.list_data_keys("", create_memory_store()) == []
+        # Inert as a catch target: the SDK raises the real class.
+        assert not issubclass(RealInternalError, transfer.InternalError)

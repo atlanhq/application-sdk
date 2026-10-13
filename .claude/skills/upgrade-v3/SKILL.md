@@ -1219,13 +1219,8 @@ app/
 ```python
 from pyatlan_v9.model.assets import Table
 
-def map_table(record: TableRecord, connection_qn: str, workflow_id: str, ...) -> Table:
-    asset = Table(
-        qualified_name=f"{connection_qn}/{record.database}/{record.schema}/{record.name}",
-        name=record.name,
-        connector_name="my-connector",
-        connection_qualified_name=connection_qn,
-    )
+def map_table(record: TableRecord, schema_qn: str, workflow_id: str, ...) -> Table:
+    asset = Table.creator(name=record.name, schema_qualified_name=schema_qn)
     asset.status = "ACTIVE"
     asset.last_sync_run = workflow_id
     return asset

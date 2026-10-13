@@ -75,6 +75,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from pkl_contract_layout import (  # noqa: E402
     GENERATED_DIR,
     ROOT_FILES,
+    format_generated_python,
     run_post_generate,
     swap_outputs,
 )
@@ -210,35 +211,15 @@ def opted_out_root_files(contract_dir: str, names: list[str]) -> set[str]:
 
 
 def _format_generated(root: Path) -> bool:
-    """ruff-fix + format every generated ``*.py``, mirroring
-    contract-toolkit/scripts/regenerate-all.sh and renovate_pkl_sync.py, so the
-    in-tree artifacts match what the consumer's pre-commit ruff would produce.
+    """Format the generated Python exactly as the freshness gate does — see
+    ``pkl_contract_layout.format_generated_python``. Returns True iff the
+    generated Python in the tree is formatted (nothing to format counts).
 
-    Best-effort: skipped when neither ``uvx`` nor ``ruff`` is on PATH (the e2e
-    pre-build invocation runs before ``setup-deps`` installs uv) — unformatted
-    but valid generated Python still imports at runtime.
-
-    Returns True iff the generated Python in the tree is formatted (nothing to
-    format counts). ``warn_on_drift`` needs this: unformatted generated Python
+    ``warn_on_drift`` needs that return value: unformatted generated Python
     reads as drift against a committed tree the app's pre-commit did format, and
     that false positive is the whole reason the image-build path used to skip the
     drift comparison outright (FND-1777)."""
-    gen = root / "app" / "generated"
-    if not gen.is_dir():
-        return True
-    py_files = sorted(str(p) for p in gen.rglob("*.py"))
-    if not py_files:
-        return True
-    if shutil.which("uvx"):
-        prefix = ["uvx", "ruff"]
-    elif shutil.which("ruff"):
-        prefix = ["ruff"]
-    else:
-        print("::notice::ruff/uvx not on PATH — skipping generated-Python formatting.")
-        return False
-    run([*prefix, "check", "--fix", "--select", "F401", "--quiet", *py_files])
-    run([*prefix, "format", *py_files])
-    return True
+    return format_generated_python(run, root)
 
 
 def _porcelain_paths(path: str) -> list[tuple[str, str]]:

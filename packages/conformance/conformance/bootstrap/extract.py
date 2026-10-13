@@ -239,6 +239,12 @@ _TESTS_YAML_VALUE_INPUTS: tuple[tuple[str, str, str], ...] = (
     ("dataforge_env_tier", "dataforge-env-tier", "plain"),
     ("dataforge_output_prefix", "dataforge-output-prefix", "plain"),
     ("dataforge_hermetic_fallback", "dataforge-hermetic-fallback", "bool"),
+    ("dataforge_lifecycle", "dataforge-lifecycle", "bool"),
+    # FND-3656: rendered on every file, unlike the rest, so the render default
+    # is "true" (ADR-0014's SDR posture) rather than "" — but a repo's own
+    # `false` must survive the resync, or an app with no SDR boundary to
+    # observe (a system app) is either flipped or held by the resync lane.
+    ("two_store", "two-store", "bool"),
 )
 
 # The two inputs whose real-world spelling is a ``>-`` folded scalar — a list of
@@ -966,6 +972,29 @@ def extract_use_ghcr_base(text: str) -> str:
     return "true" if extract_field(text, "use_ghcr_base") == "true" else ""
 
 
+# The line ``conformance-upload-sarif.yaml`` carries once a repo has opted in
+# with ``bootstrap --sarif-upload true`` (FND-3336). Every repo bootstrapped
+# before then holds a copy *without* it, so the marker — not the file's mere
+# presence — is what tells a public repo's opt-in apart from the copy a
+# private repo was given by default and should now lose.
+SARIF_UPLOAD_OPT_IN_MARKER = (
+    "# Installed by `bootstrap --sarif-upload true`: public repos only (FND-3336)."
+)
+
+
+def extract_sarif_upload(text: str) -> str:
+    """Return ``"true"`` when *text* (a ``conformance-upload-sarif.yaml``) is an
+    opted-in copy, else ``""``.
+
+    Same round-trip contract as ``extract_use_ghcr_base``: ``bootstrap``'s
+    autodetection reads it so a bare re-run keeps a public repo's upload, and
+    C002 reads it so an unmarked copy is reported for removal while a marked
+    one is compared against the canonical like any managed shim.
+    """
+    marker = SARIF_UPLOAD_OPT_IN_MARKER
+    return "true" if any(line.strip() == marker for line in text.splitlines()) else ""
+
+
 def extract_vulnerability_scan_lfs(text: str) -> str:
     """Return ``"true"`` when *text* (a ``vulnerability-scan.yml``) opts into the
     LFS checkout on the scan's image build, else ``""``.
@@ -996,7 +1025,8 @@ def extract_vulnerability_scan_lfs(text: str) -> str:
     Read file-wide via ``extract_field`` rather than through
     ``reusable_job_with_block``: that scope is keyed on the job calling
     ``tests-reusable.yaml`` and so does not apply here, and this shim is a
-    17-line file with exactly one job — the same reasoning that lets
+    short file whose two jobs (the bump PR's release-candidate build and the
+    scan, FND-3328) take the same value — the same reasoning that lets
     ``extract_use_ghcr_base`` read ``build-and-publish.yaml`` file-wide.
     """
     return "true" if extract_field(text, "lfs") == "true" else ""

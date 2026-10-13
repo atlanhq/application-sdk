@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import Field
 
 from application_sdk.testing.e2e._errors import (
     AmbiguousDAGRunError,
@@ -56,6 +57,7 @@ from application_sdk.testing.e2e.client import (
     DAGRunStatus,
     PublishedVersion,
 )
+from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.harness import atlas as atlas_api
 from application_sdk.testing.harness.automation_engine import AEClient
 from application_sdk.testing.harness.identity import Minter
@@ -282,7 +284,7 @@ def _wire(
     harness._active_dag = None  # type: ignore[attr-defined]
     harness._connection_seeded = False  # type: ignore[attr-defined]
     harness._connection_create_attempted = False  # type: ignore[attr-defined]
-    harness._dag_submitted = False  # type: ignore[attr-defined]
+    harness._submitted_connection_qns = []  # type: ignore[attr-defined]
     harness._seed_version = None  # type: ignore[attr-defined]
     harness._node_dispatch = {}  # type: ignore[attr-defined]
     harness._expected_node_identities = {}  # type: ignore[attr-defined]
@@ -537,6 +539,31 @@ class TestRunFullDagWithASpec:
 # ---------------------------------------------------------------------------
 
 
+_SELECTED_QN = "default/postgres/2"
+
+
+class _SelectorSubstitutions(MustacheSubstitutions):
+    """Adds the ``ConnectionSelector`` input a utility DAG acts on."""
+
+    connection_qualified_name: str = Field(alias="{{connection-qualified-name}}")
+
+
+class _SelectingUtility(_Miner):
+    """A connection-delete-shaped suite: publishes nothing, and its DAG acts on
+    the connection its selector names rather than on the run's own."""
+
+    selected_qn = _SELECTED_QN
+
+    def _mustache_substitutions(self) -> _SelectorSubstitutions:
+        base = super()._mustache_substitutions()
+        return _SelectorSubstitutions.model_validate(
+            {
+                **base.model_dump(by_alias=True),
+                "{{connection-qualified-name}}": self.selected_qn,
+            }
+        )
+
+
 class _CrawlThenMine(_Miner):
     """A miner suite that crawls its own connection first — FND-1157's case."""
 
@@ -656,6 +683,82 @@ class TestDeclaredRuns:
         teardowns = [name for name in ae.created_names if "-teardown-" in name]
         assert len(teardowns) == 1
         assert calls.purged == []
+
+    def test_a_utility_dag_on_a_seeded_connection_leaves_the_own_qn_alone(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """FND-3405: a connection-delete-shaped suite seeds a connection, points
+        its DAG at it through ``{{connection-qualified-name}}``, and publishes
+        nothing. The run's own QN was never created, so the only teardown is
+        the seeded one — in its own ordinal slot (2), not the run's (1)."""
+        harness = _SelectingUtility()
+        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        calls = _wire(harness, ae, monkeypatch)
+        harness._seeded_connection_qns = [_SELECTED_QN]  # type: ignore[attr-defined]
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert teardowns[0].endswith("-teardown-2")
+        assert calls.purged == []
+
+    def test_a_crawler_that_also_selects_another_connection_still_tears_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``expect_connection`` is the half that says a run lands a connection
+        of its own: a crawler mints the run's QN from ``{{connection}}``
+        whatever else a selector names, so its teardown has to stay."""
+
+        class _CrawlerThatSelects(_SelectingUtility):
+            manifest_path = CRAWLER_MANIFEST
+            expect_connection = True
+            required_dag_nodes = ("extract", "publish")
+
+        harness = _CrawlerThatSelects()
+        ae = _FakeAE(
+            _succeeded("extract", "publish"), _succeeded(CONNECTION_DELETE_NODE_ID)
+        )
+        _wire(harness, ae, monkeypatch)
+        harness._seeded_connection_qns = [_SELECTED_QN]  # type: ignore[attr-defined]
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert [name[-1] for name in teardowns] == ["1", "2"]
+
+    def test_a_non_publishing_run_with_no_selector_still_tears_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """``expect_connection = False`` alone is not evidence: with no selector
+        pointing elsewhere, the harness cannot tell which connection a miner
+        enriches, and a missed delete leaks onto a shared tenant."""
+        harness = _Miner()
+        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        _wire(harness, ae, monkeypatch)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+
+    def test_a_selector_naming_the_own_qn_still_tears_down(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        harness = _SelectingUtility()
+        harness.selected_qn = "default/bundle/1"
+        ae = _FakeAE(_succeeded("extract"), _succeeded(CONNECTION_DELETE_NODE_ID))
+        _wire(harness, ae, monkeypatch)
+
+        harness.run_full_dag()
+        harness.teardown_method(None)
+
+        teardowns = [name for name in ae.created_names if "-teardown-" in name]
+        assert len(teardowns) == 1
+        assert teardowns[0].endswith("-teardown-1")
 
     def test_a_run_that_never_submitted_reclaims_nothing(
         self, monkeypatch: pytest.MonkeyPatch

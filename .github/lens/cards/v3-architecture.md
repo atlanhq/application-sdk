@@ -5,5 +5,6 @@
 - Flag: `application_sdk/infrastructure/` importing `application_sdk/execution/` or `application_sdk/app/`.
 - Flag: v2 APIs (`application_sdk.workflows|activities|handlers`, `*Interface`) or the deprecated SQL templates (use `SqlApp`), except in `tools/migrate_v3/`.
 - Flag: `run_in_thread` wrapping the async `AtlanClient`; a workflow ID read from Temporal helpers instead of `input.workflow_id`.
+- Don't flag: a replay/determinism or stored-state break that needs history only an earlier commit of this PR could have produced; commits in an open PR are unreleased, so judge against the base branch and the last release.
 - Don't flag (enforced at class definition or by CI): `@task` signature shape, `bytes`/unbounded/`Any` fields (P001), field remove/rename/retype (B005).
 - Severity: critical for I/O or non-determinism in `run()`; high for new direct imports, v2 APIs, no-default fields; medium otherwise.

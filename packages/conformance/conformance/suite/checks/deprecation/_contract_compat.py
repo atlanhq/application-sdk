@@ -29,6 +29,8 @@ from conformance.suite.checks._entrypoint_contract_fields import (
     _canonical_type,
     collect_entrypoint_contract_names,
     resolve_contract_fields,
+    sdk_base_contract_names,
+    sdk_contract_ancestors,
 )
 from conformance.suite.checks.prescriptions._error_code_prefix import (
     ClassRecord,
@@ -38,7 +40,12 @@ from conformance.suite.checks.prescriptions._error_code_prefix import (
 from conformance.suite.schema.disposition import RuleScope
 from conformance.suite.schema.findings import Finding
 
-from ._ledger_schema import ContractField, ContractLedger, regen_command
+from ._ledger_schema import (
+    ContractField,
+    ContractLedger,
+    load_sdk_ledger,
+    regen_command,
+)
 from ._sdk_type_aliases import TypeAliasDef, collect_sdk_imported_aliases
 
 # ── Main scan function ────────────────────────────────────────────────────────
@@ -501,8 +508,14 @@ def scan_contract_compat(
     root: Path,
     ledger: ContractLedger,
     scope: RuleScope | None = None,
+    *,
+    sdk_ledger: ContractLedger | None = None,
 ) -> list[Finding]:
     """Emit B005/B006 for entrypoint contract backwards-compatibility violations.
+
+    *sdk_ledger* is the SDK's own ledger (default: the copy bundled in this
+    package). A field it records 'sunset' on an SDK contract this contract
+    still inherits from was retired by the SDK, so its absence is not B005.
 
     Two-pass:
     1. Parse every file; build the cross-file class registry (needed for
@@ -560,7 +573,9 @@ def scan_contract_compat(
     # would make every aliased contract read as an ambiguous name.
     register_alias_records(by_name, alias_targets)
 
-    entrypoint_names = collect_entrypoint_contract_names(file_trees, by_name)
+    entrypoint_names = collect_entrypoint_contract_names(
+        file_trees, by_name
+    ) | sdk_base_contract_names(by_name)
 
     if not entrypoint_names:
         return []
@@ -572,6 +587,11 @@ def scan_contract_compat(
     ledger_by_contract: dict[str, list[ContractField]] = {}
     for f in ledger.fields:
         ledger_by_contract.setdefault(f.contract, []).append(f)
+
+    sdk_retired: dict[str, set[tuple[str, str]]] = {}
+    for f in (sdk_ledger if sdk_ledger is not None else load_sdk_ledger()).fields:
+        if f.status == "sunset":
+            sdk_retired.setdefault(f.contract, set()).add((f.field, f.type))
 
     regen = regen_command(scope)
     has_ambiguous_names = any(len(v) > 1 for v in by_name_all.values())
@@ -608,6 +628,17 @@ def scan_contract_compat(
             # itself is untouched, so B006 and the type-change check below keep
             # today's behaviour exactly.
             present_names = set(live_by_name)
+            if class_node.name == _LEGACY_BUNDLE_INPUT:
+                present_names.update(
+                    f.name
+                    for path_, node in _renamed_bundle_inputs(file_trees)
+                    for f in resolve_contract_fields(
+                        node,
+                        file_aliases.get(path_, {}),
+                        by_name,
+                        by_name_all=by_name_all,
+                    )
+                )
             if has_ambiguous_names:
                 present_names.update(
                     f.name
@@ -628,6 +659,14 @@ def scan_contract_compat(
                         )
                     )
 
+            retired_upstream = {
+                retired
+                for ancestor in sdk_contract_ancestors(
+                    class_node, aliases, by_name, by_name_all=by_name_all
+                )
+                for retired in sdk_retired.get(ancestor, ())
+            }
+
             # B005: every ledger field must still exist with its recorded type
             for lf in ledger_by_contract.get(class_node.name, []):
                 live = live_by_name.get(lf.field)
@@ -640,6 +679,8 @@ def scan_contract_compat(
                     # A sunset field is withdrawn by decision; 'deprecated'
                     # still means shipped-but-discouraged and must stay present.
                     continue
+                if live is None and (lf.field, lf.type) in retired_upstream:
+                    continue
                 if live is None:
                     findings.append(
                         make_finding(
@@ -651,7 +692,8 @@ def scan_contract_compat(
                                 f"(ledger type: '{lf.type}', status: '{lf.status}') "
                                 "was removed from the contract. Entrypoint contract "
                                 "fields are permanent — mark it 'deprecated' and keep "
-                                "it, or mark it 'sunset' to retire it. An unmarked "
+                                "it; once that has merged, mark it 'sunset' to retire "
+                                "it. An unmarked "
                                 "removal breaks every consumer that already serializes "
                                 "this field. "
                                 "Suppress with '# conformance: ignore[B005] <reason>' "
@@ -660,7 +702,44 @@ def scan_contract_compat(
                             directives=directives,
                         )
                     )
-                elif live.canonical_type != lf.type:
+                    continue
+                if (
+                    live.status == "sunset"
+                    and lf.status != "sunset"
+                    and (lf.field, lf.type) not in retired_upstream
+                ):
+                    # The generator records 'sunset' only over 'deprecated', so
+                    # any other ledger status under a source 'sunset' is either
+                    # a skipped deprecation or a ledger not regenerated (or
+                    # hand-edited) since. An SDK retirement is excused — the
+                    # SDK's own B005 run enforces the order there.
+                    findings.append(
+                        make_finding(
+                            filename=rel,
+                            rule_id="B005",
+                            node=live.node or class_node,
+                            message=_unrecorded_sunset_message(
+                                f"{class_node.name}.{lf.field}", lf.status, regen
+                            ),
+                            directives=directives,
+                        )
+                    )
+                if lf.required is False and live.required:
+                    # The generator never records False → True, and records a
+                    # field new to a recorded contract as False — so this is
+                    # a default removed, or a field added without one.
+                    findings.append(
+                        make_finding(
+                            filename=rel,
+                            rule_id="B005",
+                            node=live.node or class_node,
+                            message=_newly_required_message(
+                                f"{class_node.name}.{lf.field}", recorded=True
+                            ),
+                            directives=directives,
+                        )
+                    )
+                if live.canonical_type != lf.type:
                     if _retype_is_compatible(
                         lf.type, live.canonical_type, inherited=live.node is None
                     ):
@@ -701,9 +780,28 @@ def scan_contract_compat(
                         )
                     )
 
-            # B006: every live field must be recorded in the ledger
+            # B006: every live field must be recorded in the ledger.
+            # A contract the ledger records always has rows, even with no
+            # fields of its own: the SDK refuses an entrypoint input or output
+            # that does not subclass `Input`/`Output`, and regeneration records the inherited
+            # `Input`/`Output` fields under the subclass's name.
+            contract_recorded = class_node.name in ledger_by_contract
             for fi in live_fields:
                 if (class_node.name, fi.name) not in ledger_by_key:
+                    if contract_recorded and fi.required:
+                        # B005 too: regenerating records it not-required, so
+                        # the finding survives the B006 fix — report it now.
+                        findings.append(
+                            make_finding(
+                                filename=rel,
+                                rule_id="B005",
+                                node=fi.node or class_node,
+                                message=_newly_required_message(
+                                    f"{class_node.name}.{fi.name}", recorded=False
+                                ),
+                                directives=directives,
+                            )
+                        )
                     # An inherited field is a *new* commitment for THIS contract
                     # even when its declaring base is ledgered under its own
                     # name: the ledger records each entrypoint contract's own
@@ -747,4 +845,261 @@ def scan_contract_compat(
                         )
                     )
 
+    findings.extend(
+        _renamed_bundle_input_findings(
+            file_trees,
+            file_aliases,
+            file_directives,
+            by_name,
+            by_name_all,
+            ledger_by_contract,
+            root,
+            regen,
+            {pair for pairs in sdk_retired.values() for pair in pairs},
+        )
+    )
+    return findings
+
+
+_LEGACY_BUNDLE_INPUT = "AppInputContract"
+
+
+def _unrecorded_sunset_message(qualified: str, ledger_status: str, regen: str) -> str:
+    """B005 text for a field source marks 'sunset' that the ledger does not."""
+    if ledger_status == "deprecated":
+        remedy = (
+            f"Regenerate with '{regen}' to record 'sunset' over the 'deprecated' "
+            "the ledger already holds. "
+        )
+    else:
+        remedy = (
+            "Mark it 'deprecated', regenerate with "
+            f"'{regen}' and merge that; mark it 'sunset' in a later PR. "
+        )
+    return (
+        f"Contract field '{qualified}' is marked 'sunset' but the ledger records "
+        f"it '{ledger_status}'. A field retires through 'active' → 'deprecated' → "
+        "'sunset' in separate PRs, so callers see a deprecation before it is "
+        f"withdrawn. {remedy}"
+        "Suppress with '# conformance: ignore[B005] <reason>' "
+        "only if this contract has no deployed consumers."
+    )
+
+
+def _newly_required_message(qualified: str, *, recorded: bool) -> str:
+    """B005 text for a field callers must send that the ledger does not require."""
+    if recorded:
+        what = (
+            f"Contract field '{qualified}' is required (it has no default) but "
+            "the ledger records it as not required: it was added to an existing "
+            "contract without a default, or its default was removed. "
+        )
+    else:
+        what = (
+            f"Contract field '{qualified}' is new and required (it has no "
+            "default) on a contract the ledger already records. "
+        )
+    return (
+        f"{what}Callers that predate it — a saved workflow config, another "
+        "app's DAG node — do not send it, so their next run on this version "
+        "fails validation though they changed nothing. Give it a default, then "
+        "migrate callers to send it; a new entrypoint contract may declare "
+        "required fields freely. "
+        "Suppress with '# conformance: ignore[B005] <reason>' "
+        "only if this contract has no deployed consumers."
+    )
+
+
+def _rel(path: Path, root: Path) -> str:
+    try:
+        return str(path.relative_to(root))
+    except ValueError:
+        return str(path)
+
+
+def _renamed_bundle_inputs(
+    file_trees: dict[Path, ast.AST],
+) -> list[tuple[Path, ast.ClassDef]]:
+    """Classes a module rebinds ``AppInputContract`` to (``AppInputContract = X``)."""
+    renamed: list[tuple[Path, ast.ClassDef]] = []
+    for path, tree in file_trees.items():
+        if not isinstance(tree, ast.Module):
+            continue
+        classes = {s.name: s for s in tree.body if isinstance(s, ast.ClassDef)}
+        for stmt in tree.body:
+            if (
+                isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == _LEGACY_BUNDLE_INPUT
+                and isinstance(stmt.value, ast.Name)
+                and stmt.value.id in classes
+            ):
+                renamed.append((path, classes[stmt.value.id]))
+    return sorted(renamed, key=lambda item: (str(item[0]), item[1].lineno))
+
+
+def _terminal_name(node: ast.expr | None) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        try:
+            node = ast.parse(node.value, mode="eval").body
+        except SyntaxError:
+            return None
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _legacy_row_anchor(
+    file_trees: dict[Path, ast.AST],
+    file_aliases: dict[Path, dict[str, str]],
+    names: set[str],
+    root: Path,
+) -> tuple[Path, ast.AST] | None:
+    """The first non-generated class or method that uses one of *names*.
+
+    A finding there can carry a suppression that survives regeneration; one in
+    ``app/generated/`` is overwritten by the next ``pkl eval``.
+    """
+    hits: list[tuple[str, int, Path, ast.AST]] = []
+    for path, tree in file_trees.items():
+        rel = _rel(path, root)
+        if "/generated/" in f"/{rel}":
+            continue
+        aliases = file_aliases.get(path, {})
+
+        def uses(node: ast.expr | None) -> bool:
+            name = _terminal_name(node)
+            return name is not None and aliases.get(name, name) in names
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ClassDef) and any(uses(b) for b in node.bases):
+                hits.append((rel, node.lineno, path, node))
+            elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                params = [a for a in node.args.args if a.arg not in ("self", "cls")]
+                if params and uses(params[0].annotation):
+                    hits.append((rel, node.lineno, path, node))
+    if not hits:
+        return None
+    _, _, path, node = min(hits, key=lambda h: (h[0], h[1]))
+    return path, node
+
+
+def _renamed_bundle_input_findings(
+    file_trees: dict[Path, ast.AST],
+    file_aliases: dict[Path, dict[str, str]],
+    file_directives: dict[Path, dict[int, _IgnoreDirective]],
+    by_name: dict[str, ClassRecord],
+    by_name_all: dict[str, list[ClassRecord]],
+    ledger_by_contract: dict[str, list[ContractField]],
+    root: Path,
+    regen: str,
+    sdk_retired: set[tuple[str, str]],
+) -> list[Finding]:
+    """B005 for ledger rows recorded under the pre-rename bundle input name.
+
+    Bundle ``_input.py`` modules once all declared ``class AppInputContract``;
+    they now declare ``<Entrypoint>AppInputContract`` and rebind
+    ``AppInputContract`` to it. The rows the ledger holds under the old name
+    were recorded across every entrypoint's class, so they are checked against
+    the renamed classes and any class still named ``AppInputContract``
+    together: a row is removed when none of them has the field, and retyped
+    when every one that has it changed its type, and sunset early when one marks
+    it 'sunset' over a ledger status the generator would not have recorded it
+    from (*sdk_retired* excuses an SDK retirement, as in the main pass). A
+    field on a class still named
+    ``AppInputContract`` is left to the main pass, which checks that class.
+    """
+    rows = ledger_by_contract.get(_LEGACY_BUNDLE_INPUT)
+    renamed = _renamed_bundle_inputs(file_trees)
+    if not rows or not renamed:
+        return []
+    live: dict[str, list[tuple[str, bool, str]]] = {}
+    for path, node in renamed:
+        for f in resolve_contract_fields(
+            node, file_aliases.get(path, {}), by_name, by_name_all=by_name_all
+        ):
+            live.setdefault(f.name, []).append(
+                (f.canonical_type, f.node is None, f.status)
+            )
+    still_named: set[str] = set()
+    real = [
+        rec
+        for rec in by_name_all.get(_LEGACY_BUNDLE_INPUT, [])
+        if isinstance(rec.node, ast.ClassDef)
+    ]
+    for rec in real:
+        still_named.update(
+            f.name
+            for f in resolve_contract_fields(
+                rec.node,
+                file_aliases.get(Path(root, rec.file), {}),
+                by_name,
+                by_name_all=by_name_all,
+            )
+        )
+    names = {_LEGACY_BUNDLE_INPUT, *(node.name for _, node in renamed)}
+    anchor = _legacy_row_anchor(file_trees, file_aliases, names, root) or renamed[0]
+    anchor_path, anchor_node = anchor
+    listed = ", ".join(sorted(names - {_LEGACY_BUNDLE_INPUT}))
+    findings: list[Finding] = []
+    legacy_note = (
+        f"The ledger recorded it under '{_LEGACY_BUNDLE_INPUT}' before "
+        "contract-toolkit named bundle input classes per entrypoint; "
+        f"it is checked against {listed}. "
+    )
+
+    def emit(message: str) -> None:
+        findings.append(
+            make_finding(
+                filename=_rel(anchor_path, root),
+                rule_id="B005",
+                node=anchor_node,
+                message=message,
+                directives=file_directives.get(anchor_path, {}),
+            )
+        )
+
+    for lf in rows:
+        types = live.get(lf.field)
+        if lf.status == "sunset" or lf.field in still_named or (real and not types):
+            continue
+        if (
+            types
+            and any(status == "sunset" for _, _, status in types)
+            and (lf.field, lf.type) not in sdk_retired
+        ):
+            emit(
+                legacy_note
+                + _unrecorded_sunset_message(
+                    f"{_LEGACY_BUNDLE_INPUT}.{lf.field}", lf.status, regen
+                )
+            )
+        if types and any(
+            t == lf.type or _retype_is_compatible(lf.type, t, inherited=inherited)
+            for t, inherited, _ in types
+        ):
+            continue
+        if types:
+            change = (
+                f"changed type from '{lf.type}' (ledger) to "
+                f"{', '.join(sorted({repr(t) for t, _, _ in types}))} (current). "
+                "Type changes break serialized payloads. Revert the type, or "
+                "deprecate/sunset this field and add a new one with the new type. "
+            )
+        else:
+            change = (
+                f"(ledger type: '{lf.type}', status: '{lf.status}') was removed "
+                "from the contract. Entrypoint contract fields are permanent — "
+                "mark it 'deprecated' and keep it; once that has merged, mark it "
+                "'sunset' to retire it. "
+            )
+        emit(
+            f"Contract field '{_LEGACY_BUNDLE_INPUT}.{lf.field}' {change}"
+            f"{legacy_note}"
+            "Suppress with '# conformance: ignore[B005] <reason>' "
+            "only if this contract has no deployed consumers."
+        )
     return findings

@@ -309,20 +309,22 @@ Both guards are pre-submission by design. The resolver's docstring says why: *"T
 
 See [Entry points — Testing each entry point](../concepts/entry-points.md#testing-each-entry-point).
 
-### Keep the artifacts you assert on
+### Assert on post-cleanup storage
 
 `APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR` defaults to `true`. With it on, `App.on_complete()` runs two cleanups after every run, pass or fail, and gates **both** on that single flag:
 
 - `cleanup_files` — the run's local files, including what a `create_local_store` root holds;
 - `cleanup_storage` — object-store objects: every tracked `TRANSIENT`-tier ref plus its `.sha256` sidecar. (The run-scoped prefix sweep is a separate opt-in, `StorageCleanupInput(include_prefix_cleanup=True)`; `on_complete()` does not request it.)
 
-So a suite that opens output files and asserts on their contents — the pattern in Step 2 — has to turn it off, alongside the other env vars:
+Leave it on. Production runs cleanup, so an integration suite that turns it off asserts on files a real run deletes — and misses a run whose cleanup deletes its own publish hand-off. Assert on the `RETAINED` outputs a run publishes, not on `TRANSIENT` intermediates. The [shared fixtures](./integration-fixtures.md) leave cleanup on by default and warn when the environment turns it off.
+
+To inspect intermediates while debugging, turn it off for that session only — with the shared fixtures, return `KitOptions(preserve_artifacts=True)` from `integration_options`; in a hand-written conftest:
 
 ```python
 os.environ.setdefault("APPLICATION_SDK_ENABLE_CLEANUP_INTERCEPTOR", "false")
 ```
 
-This one is read at run time rather than at import, so its position is not load-bearing: `atlan-metabase-app` sets it pre-import, `atlan-mysql-app` after the imports, and `atlan-openapi-app` not at all.
+This one is read at run time rather than at import, so its position is not load-bearing.
 
 ## Markers and CI tiering — the directory *is* the boundary
 

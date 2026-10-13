@@ -73,7 +73,7 @@ class SeedPrefixes:
     the three are siblings under one root rather than aliases of it. Deriving
     them from a single root is what lets a caller name any of them from the one
     value teardown carries — see :func:`seed_object_keys`, which composes the
-    key it deletes out of exactly this.
+    key the harness writes out of exactly this.
 
     Attributes:
         root: The prefix everything for this seed hangs under.
@@ -141,38 +141,28 @@ def seed_prefix_root(*, app_name: str, qualified_name: str) -> str:
 def seed_object_keys(*, root: str) -> tuple[str, ...]:
     """Every object-store key the *harness* wrote under one seed root.
 
-    Teardown deletes these one key at a time rather than deleting the root as a
-    prefix, because ``delete_prefix`` cannot work from a runner at all:
-    it is a LIST plus a bulk ``POST ?delete``, both *bucket-level* URLs, and
-    the tenant's Kong s3proxy path-matches against an allowlist it cannot apply
-    to a URL whose keys live in the request body. That call comes back
-    ``403 code 1009 "Invalid Path"`` even though ``/artifacts/apps/`` — the
-    prefix these keys sit under — is on that allowlist.
+    The enumeration, not a delete list: the one place that states what a seed
+    writes, and :func:`~application_sdk.testing.harness.seed.seed_assets`
+    composes the same key from :class:`SeedPrefixes`.
 
-    **The per-key DELETE does not get through either, and this docstring used to
-    claim it did.** Putting the key in the path was the expected fix — the
-    allowlist can read a path — but a live e2e run on 2026-09-07 (FND-1766's
-    three-cloud A/B) came back ``403`` on the single-object DELETE of
-    ``artifacts/apps/<app>/e2e-seed/<qn>/transformed/assets.json`` as well. So
-    the allowlist is not refusing a *URL shape*; it does not grant DELETE under
-    ``/artifacts/apps/`` to a runner in any form. No rearrangement of the
-    request from outside the tenant will fix that, and the next reader should
-    not spend the afternoon finding a third URL shape.
+    **Nothing on the runner deletes these, and nothing can.** ``delete_prefix``
+    is a LIST plus a bulk ``POST ?delete``, both *bucket-level* URLs, and the
+    tenant's Kong s3proxy path-matches against an allowlist it cannot apply to a
+    URL whose keys live in the request body (``403 code 1009 "Invalid Path"``).
+    The per-key DELETE that replaced it came back ``403`` too, on all three
+    clouds (FND-1766's A/B, 2026-09-07): the allowlist does not grant DELETE
+    under ``/artifacts/apps/`` to a runner in any request shape. The next reader
+    should not spend the afternoon finding a third URL shape.
 
-    Which makes this function's remaining value the *enumeration*, not the
-    deletion: it is the one place that states what a seed writes, and
-    :func:`~application_sdk.testing.harness.seed.seed_assets` composes the same
-    key from :class:`SeedPrefixes`. The real fix is to bring the seed root into
-    an on-tenant app's scope — ``connection-delete``'s ``archive_storage``,
-    which already clears the app-owned per-connection stores — so the keys are
-    deleted by something that is not behind the proxy. Until then the delete is
-    attempted and its failure logged, which leaves bounded bytes behind rather
-    than reding a leg.
+    The seed root is reclaimed on the tenant instead. Since FND-3569,
+    ``connection-delete``'s PURGE deletes ``artifacts/apps/<app>/e2e-seed/<encoded
+    qn>/`` for every app, and teardown reads that run's
+    ``storage_deleted_by_prefix`` to confirm it did (FND-3572).
 
     What is deliberately absent is everything *publish* writes under the same
     root (``publish-state/``, ``current-state/``). The harness did not write
-    those keys and cannot enumerate them from a runner; clearing them belongs to
-    an app running on the tenant.
+    those keys and cannot enumerate them from a runner. The same
+    ``connection-delete`` purge takes them with the rest of the root.
 
     Args:
         root: The seed's prefix root, from :func:`seed_prefix_root`.

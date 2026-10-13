@@ -292,13 +292,16 @@ outcome mirroring the error-handling shape in the reference app named by
   `.format(exc)`) still fire.  A string is the failure laundered into a plain
   value.
 
-- **E008 ImportErrorWithoutLogging** — `except ImportError` with no logging,
-  so a missing or broken dependency reads as a normal skip.  Bind the
-  exception and carry its text into whatever the block does next: a log line
-  for a runtime guard, as `application_sdk/clients/ssl_utils.py`'s
+- **E008 ImportErrorWithoutLogging** — `except ImportError` that hides a
+  missing or broken dependency, so it reads as a normal skip.  When the handler
+  takes a fallback or returns without surfacing the failure, bind the exception
+  and carry its text into a log line, as `application_sdk/clients/ssl_utils.py`'s
   `_get_default_ca_bundle_path` logs its certifi fallback (no reference app has
-  a scanned `except ImportError`; E008 skips `tests/`).  Legitimate optional-dependency guards still need the trace — the fallback
-  being correct is not the same as the failure being invisible.
+  a scanned `except ImportError`; E008 skips `tests/`).  A cause-preserving
+  re-raise on every path, including wrapping the ImportError in a typed domain
+  error (`raise MissingExtraError(cause=exc) from exc`), already surfaces the
+  failure and does not need a duplicate log.  A correct fallback still needs a
+  trace; correctness alone does not make the missing-import event visible.
 
 - **E009 ExceptBlockOnlyAssigns** — the `except` block only assigns a variable
   (a flag, a default) and logs nothing, so the failure sets state invisibly.
@@ -358,11 +361,14 @@ outcome mirroring the error-handling shape in the reference app named by
 
 - **E014 ExceptLoopControlSwallow** — an `except` block inside a loop whose
   body is only `continue` / `break` / `pass`, with no logging, so a shrinking
-  result set has no explanation.  Add a log line before the loop-control
-  statement — DEBUG when skipping a bad item is routine, WARNING when it is
-  not — with `exc_info=True`.  Mirror `atlan-metabase-app
-  app/lineage/qi_reader.py`'s `iter_qi_records`, which skips an unparseable
-  line only after logging it with `exc_info=True`.
+  result set has no explanation.  Explain a tolerated skip before the
+  loop-control statement.  For an expected format/probe mismatch (for example,
+  trying candidate datetime formats), log a concise message at DEBUG without
+  `exc_info=True`, then continue.  Mirror `atlan-metabase-app app/utils.py:46`,
+  which logs the input and candidate format at DEBUG for a `ValueError` mismatch.
+  Reserve WARNING/ERROR with `exc_info=True` for genuine unexpected per-item
+  failures (or re-raise); `app/lineage/qi_reader.py`'s `iter_qi_records` shows
+  traceback logging for an unparseable QI line.
 
 - **E015 ExceptionTextInErrorMessage** — a typed error is raised with the
   caught exception interpolated into `message=` (`f"...{exc}"`, `str(exc)`,
@@ -425,6 +431,20 @@ outcome mirroring the error-handling shape in the reference app named by
   and declares its gap under an `ignore[E020]` is converted to that typed
   catch.  Never give it a raise-only edit, which deletes the degradation.
 
+- **E021 DependencyUnavailableOverriddenToUser** — an error class whose
+  category is DEPENDENCY_UNAVAILABLE overrides `audience` to `USER`, so it says
+  "the customer's own system is down" under a category that means "an Atlan
+  platform service is down".  Re-base the class on `SourceUnavailableError`
+  (keep the class name and evidence fields), rename its `code` from
+  `DEPENDENCY_UNAVAILABLE_*` to `SOURCE_UNAVAILABLE_*`, and delete the
+  `audience` line, which the new base already sets.  Rename any tests that
+  assert the old code or category in the same edit.  This changes gate
+  behaviour for an app with a hard preflight gate: the failure now blocks on
+  the gate's final attempt, so the PR title and body must say so.  Mirror
+  `atlan-mysql-app app/failures.py`'s `SourceRestartingError`.  If the class
+  really covers an Atlan-side service, the override is the bug: delete the
+  `audience` line and keep the category.
+
 - **E013 LegacyAtlanErrorRaise** — the code raises a deprecated `AtlanError`
   subclass.  Consult the `/typed-failures` prescription: propose replacing
   with the appropriate `AppError` subclass from
@@ -437,7 +457,7 @@ outcome mirroring the error-handling shape in the reference app named by
   Propose narrowing to `except Exception as exc:` and adding
   `exc_info=True` to any existing log calls in the body.
 
-- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020)** — produce
+- **All other E-series rules (E003, E004, E007–E012, E014, E015, E017, E018, E020, E021)** — produce
   `classification = "judgment"` and a best-effort fix guided by the `hint` and
   `message`.  (E020: replace the empty/None return on
   a checked HTTP-failure branch with a raised typed `AppError` so the failure

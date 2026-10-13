@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import sys
 import time
 from pathlib import Path
@@ -27,7 +28,12 @@ from lens import review as review_mod  # noqa: E402
 from lens.agent import BundleResult  # noqa: E402
 from lens.bundle import group  # noqa: E402
 from lens.config import Config, load_config, validate  # noqa: E402
-from lens.diff import anchor, parse_unified_diff, snippet_in_text  # noqa: E402
+from lens.diff import (  # noqa: E402
+    FileDiff,
+    anchor,
+    parse_unified_diff,
+    snippet_in_text,
+)
 from lens.event import decide  # noqa: E402
 from lens.findings import Finding, PRState, merge_new  # noqa: E402
 from lens.github import GitHubError  # noqa: E402
@@ -3965,7 +3971,7 @@ def test_verify_checks_every_open_finding_in_batches(repo: Path):
         ),
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
-    fixed = review_mod._verify(client, ws, fs, "--- a.py\n@@ -1 +1 @@")
+    fixed = review_mod._verify(client, ws, fs, "--- a.py\n@@ -1 +1 @@").fixed
     assert fixed == [fs[0].id, fs[24].id]
     assert len(script.requests) == 2  # 20 + 5
     first, second = (json.dumps(r) for r in script.requests)
@@ -4148,7 +4154,9 @@ def test_concerns_alone_still_get_rechecked(repo: Path):
     )
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
     st = PRState(approach=json.loads(json.dumps(_CONCERNS)))
-    fixed = review_mod._verify(client, ws, [], "--- a.py", review_mod.open_concerns(st))
+    fixed = review_mod._verify(
+        client, ws, [], "--- a.py", review_mod.open_concerns(st)
+    ).fixed
     assert fixed == ["A1"] and len(script.requests) == 1
 
 
@@ -4276,7 +4284,9 @@ def test_verify_is_told_which_paths_no_longer_exist(repo: Path):
     client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
     removed = review_mod.removed_paths(parse_unified_diff(RENAME_DIFF))
 
-    assert review_mod._verify(client, ws, [f], "--- a.py", removed=removed) == [f.id]
+    assert review_mod._verify(client, ws, [f], "--- a.py", removed=removed).fixed == [
+        f.id
+    ]
     user = script.requests[0]["messages"][1]["content"]
     assert (
         "<paths_removed_by_this_pr>\n"
@@ -4372,3 +4382,795 @@ def test_a_rename_from_an_earlier_round_is_still_listed(repo: Path):
         "renamed: .github/workflows/old-name.yml -> .github/workflows/new-name.yml"
         in json.dumps(verify)
     )
+
+
+# ---- removals judged against the last release (FND-3340) -----------------------------
+
+
+def _git(cwd: Path, *args: str) -> None:
+    subprocess.run(["git", *args], cwd=cwd, check=True, capture_output=True, text=True)
+
+
+RELEASED_THING = "def shipped(): ...\n\ndef call(a, b=1): ...\n"
+
+
+@pytest.fixture
+def released_checkout(tmp_path: Path) -> Path:
+    """lens's checkout, as the workflow makes it: the base branch at depth 1 with
+    no tags. `origin` has released v1.0.0 (with `shipped`), a later rc, and moved
+    on; the checkout must fetch the stable tag itself to have a baseline."""
+    origin = tmp_path / "origin"
+    (origin / "application_sdk").mkdir(parents=True)
+    _git(tmp_path, "init", "-q", "-b", "main", "origin")
+    _git(origin, "config", "user.email", "t@example.com")
+    _git(origin, "config", "user.name", "t")
+    (origin / "application_sdk" / "__init__.py").write_text("")
+    (origin / "application_sdk" / "thing.py").write_text(RELEASED_THING)
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "release")
+    _git(origin, "tag", "v1.0.0")
+    (origin / "application_sdk" / "later.py").write_text("def unreleased(): ...\n")
+    _git(origin, "add", "-A")
+    _git(origin, "commit", "-qm", "next")
+    _git(origin, "tag", "v1.1.0-rc1")
+    _git(tmp_path, "clone", "-q", "--depth=1", "--no-tags", origin.as_uri(), "root")
+    root = tmp_path / "root"
+    assert not subprocess.run(
+        ["git", "tag"], cwd=root, capture_output=True, text=True
+    ).stdout, "the checkout must start tagless, as in the workflow"
+    return root
+
+
+def _released(root: Path, files: list[FileDiff], head: dict[str, str]) -> str:
+    return review_mod.surface.released_surface_removals(root, files, head, head.get)
+
+
+def _removal_finding() -> Finding:
+    return Finding(
+        "application_sdk/testing/warming.py",
+        1,
+        "critical",
+        "compatibility",
+        "Public name WarmingSource removed without deprecation",
+        "WarmingSource was public and is gone with no deprecated alias.",
+        "class SourceState: ...",
+    )
+
+
+def _verify_input(repo: Path, f: Finding, released: str) -> str:
+    ws, _ = _ws(repo)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    review_mod._verify(client, ws, [f], "--- a.py", released=released)
+    return script.requests[0]["messages"][1]["content"]
+
+
+def test_a_name_added_and_reshaped_within_the_pr_is_not_a_released_removal(
+    released_checkout: Path, repo: Path
+):
+    """The incident shape: a module new in this PR whose names were reshaped
+    between commits. Nothing in it shipped, so the block lists nothing, and the
+    verify call is told so and can close the removal finding."""
+    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
+    head = {"application_sdk/testing/warming.py": "class SourceState: ...\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released == (
+        "baseline v1.0.0: none (no public name that shipped in v1.0.0 and is still "
+        "on the base branch is removed or narrowed by this PR)"
+    )
+    user = _verify_input(repo, _removal_finding(), released)
+    assert f"<released_surface_removals>\n{released}\n</released_surface_removals>" in (
+        user
+    )
+    assert user.index("<released_surface_removals>") < user.index(
+        "<changes_this_round>"
+    )
+    assert "released_surface_removals" in review_mod.prompts.VERIFY_SYSTEM
+
+
+def test_a_released_name_removed_without_deprecation_is_listed(
+    released_checkout: Path, repo: Path
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {
+        "application_sdk/thing.py": "def renamed(): ...\n\ndef call(a, *, b=1): ...\n"
+    }
+
+    released = _released(released_checkout, files, head)
+
+    lines = released.splitlines()
+    assert lines[0] == "baseline v1.0.0"
+    assert "removed: application_sdk.thing:shipped" in lines
+    assert any(
+        line.startswith("narrowed: application_sdk.thing:call — parameter(s) hardened")
+        for line in lines
+    )
+    assert "renamed" not in released  # added, not removed
+    user = _verify_input(repo, _removal_finding(), released)
+    assert "removed: application_sdk.thing:shipped" in user
+
+
+def test_a_released_name_kept_as_a_deprecated_alias_is_not_listed(
+    released_checkout: Path,
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {
+        "application_sdk/thing.py": RELEASED_THING.replace(
+            "def shipped", "@deprecated('use renamed; removed in v2.0.0')\ndef shipped"
+        )
+    }
+    assert "none" in _released(released_checkout, files, head)
+
+
+def test_deleting_or_renaming_away_a_released_module_lists_its_names(
+    released_checkout: Path,
+):
+    deleted = [FileDiff(path="application_sdk/thing.py", status="deleted")]
+    assert "removed: application_sdk.thing:shipped" in _released(
+        released_checkout, deleted, {"application_sdk/thing.py": ""}
+    )
+    moved = [
+        FileDiff(
+            path="application_sdk/things.py",
+            old_path="application_sdk/thing.py",
+            status="renamed",
+        )
+    ]
+    released = _released(
+        released_checkout, moved, {"application_sdk/things.py": RELEASED_THING}
+    )
+    assert "removed: application_sdk.thing:shipped" in released
+
+
+def test_base_branch_drift_in_a_module_the_pr_does_not_touch_is_not_listed(
+    released_checkout: Path,
+):
+    """The checkout is the base branch, not the release: a name the base branch
+    removed since the release is not this PR's removal."""
+    (released_checkout / "application_sdk" / "thing.py").write_text("")
+    files = [FileDiff(path="application_sdk/testing/warming.py", status="added")]
+    released = _released(
+        released_checkout, files, {"application_sdk/testing/warming.py": "X = 1\n"}
+    )
+    assert "application_sdk.thing:shipped" not in released
+
+
+def _base_branch_removes_shipped(root: Path) -> None:
+    """A commit on the base branch after the tag: `shipped` is gone there."""
+    (root / "application_sdk" / "thing.py").write_text("def call(a, b=1): ...\n")
+    _git(
+        root,
+        "-c",
+        "user.email=t@example.com",
+        "-c",
+        "user.name=t",
+        "commit",
+        "-qam",
+        "drop",
+    )
+
+
+def test_a_removal_the_base_branch_made_is_not_the_prs_in_a_module_it_edits(
+    released_checkout: Path,
+):
+    """Release has thing.shipped; the base branch removed it after the tag; the
+    PR edits thing.py for an unrelated reason. The name is gone at the head, but
+    not by this PR, so nothing is listed."""
+    _base_branch_removes_shipped(released_checkout)
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.startswith("baseline v1.0.0: none"), released
+
+
+def test_a_released_name_still_on_the_base_branch_removed_by_the_pr_is_listed(
+    released_checkout: Path,
+):
+    """The converse: the base branch still has `shipped`; the PR removes it."""
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    head = {"application_sdk/thing.py": "def call(a, b=1): ...\n\nX = 1\n"}
+
+    released = _released(released_checkout, files, head)
+
+    assert released.splitlines() == [
+        "baseline v1.0.0",
+        "removed: application_sdk.thing:shipped",
+    ]
+
+
+def test_a_pr_that_changes_no_package_module_gets_no_block(tmp_path: Path):
+    files = parse_unified_diff(RENAME_DIFF)
+    assert (
+        review_mod.surface.released_surface_removals(
+            tmp_path, files, {}, lambda p: None
+        )
+        == ""
+    )
+
+
+@pytest.mark.parametrize(
+    ("head", "reason"),
+    [
+        ({"application_sdk/thing.py": "def broken(:\n"}, "cannot parse"),
+        ({}, "could not read application_sdk/thing.py"),  # head text unreadable
+    ],
+)
+def test_a_snapshot_failure_falls_back_without_raising(
+    released_checkout: Path, head: dict[str, str], reason: str
+):
+    files = [FileDiff(path="application_sdk/thing.py", status="modified")]
+    released = _released(released_checkout, files, head)
+    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
+    assert reason in released
+
+
+def test_no_release_tag_falls_back_without_raising(repo: Path):
+    """`repo` is not a git checkout: no tag, no origin to list one from."""
+    files = parse_unified_diff(DIFF)
+    released = review_mod.surface.released_surface_removals(
+        repo, files, {"application_sdk/storage/fetch.py": SRC_V2}, lambda p: None
+    )
+    assert released.startswith(f"{review_mod.surface.UNAVAILABLE}: ")
+
+
+def _review_context(script: Script) -> str:
+    """The line review's user context (it opens with <background>)."""
+    return next(
+        m["content"]
+        for r in script.requests
+        for m in r["messages"]
+        if isinstance(m.get("content"), str) and m["content"].startswith("<background>")
+    )
+
+
+def test_run_gives_the_block_to_every_bundle_and_to_verify(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Through `run`: computed once per round, then threaded into the line
+    review's context and the verify call, as `<paths_removed_by_this_pr>` is."""
+    calls: list[str] = []
+
+    def fake(root, files, head_text, fetch):  # noqa: ANN001, ANN202
+        calls.append(fetch("application_sdk/storage/fetch.py") or "")
+        return "baseline v9.9.9\nremoved: application_sdk.storage.fetch:gone"
+
+    monkeypatch.setattr(review_mod.surface, "released_surface_removals", fake)
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first_script = _review_script()
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(first_script),
+    )
+    block = (
+        "<released_surface_removals>\nbaseline v9.9.9\n"
+        "removed: application_sdk.storage.fetch:gone\n</released_surface_removals>"
+    )
+    assert block in _review_context(first_script)
+    assert calls == [SRC_V2], "head text is read at the PR head, once per round"
+
+    assert first.state.findings, "round 1 must leave a finding open to re-check"
+    _round_two_elsewhere(gh)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+    )
+    verify = next(r for r in script.requests if "<changes_this_round>" in json.dumps(r))
+    assert block in verify["messages"][1]["content"]
+    assert len(calls) == 2
+
+
+def test_run_survives_a_checkout_with_no_release(repo: Path):
+    """The real computation over a non-git root: the review still runs, and the
+    reviewer is told the baseline is unavailable rather than nothing."""
+    gh = FakeGitHub()
+    script = _review_script()
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=load_rules(repo / ".github" / "lens"),
+        client_factory=_factory(script),
+    )
+    assert res.action == "reviewed"
+    assert f"<released_surface_removals>\n{review_mod.surface.UNAVAILABLE}: " in (
+        _review_context(script)
+    )
+
+
+# ---- compatibility is judged against the base branch (FND-3344) ------------------------
+
+
+def _verify_user(ws: Workspace, f: Finding, verdicts: list[dict] | None = None):
+    script = Script(response([tool_call("verdicts", {"items": verdicts or []})]))
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+    return script.requests[0]["messages"][1]["content"], got
+
+
+def test_verify_sees_the_enclosing_symbol_as_it_is_on_the_base_branch(repo: Path):
+    """The checkout is the base branch: `fetch` there has no decode. Verify sees
+    that next to the PR-head site, so it can tell a break against what shipped
+    from one against an earlier commit of this PR."""
+    ws, _ = _ws(repo)
+    f = Finding(
+        "application_sdk/storage/fetch.py",
+        4,
+        "high",
+        "compatibility",
+        "Replay of a run started on an earlier commit fails",
+        "A history recorded before decode() was added replays differently.",
+        "return data.decode()",
+    )
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == "application_sdk/storage/fetch.py: fetch"
+    assert "def fetch(client, key):" in block
+    assert "return client.get(key)" in block
+    assert "decode" not in block  # the base copy, not the head's
+
+
+def test_a_symbol_the_pr_adds_is_absent_on_base(repo: Path):
+    files = parse_unified_diff(DIFF)
+    head = {
+        "application_sdk/storage/fetch.py": SRC_V2
+        + "\n\ndef fetch_many(client, keys):\n    return list(map(fetch, keys))\n",
+        "application_sdk/storage/new.py": "def brand_new():\n    return 1\n",
+    }
+    ws = Workspace(
+        root=repo,
+        head_text=head,
+        diffs={f.path: f for f in files},
+        index=build_index(repo, overrides=head),
+    )
+    in_new_symbol = Finding(
+        "application_sdk/storage/fetch.py",
+        12,
+        "high",
+        "bug",
+        "t",
+        "b",
+        "return list(map(fetch, keys))",
+    )
+    in_new_file = Finding(
+        "application_sdk/storage/new.py", 2, "high", "bug", "t", "b", "return 1"
+    )
+
+    user, _ = _verify_user(ws, in_new_symbol)
+    assert (
+        "<at_base_branch>\nabsent on base: fetch_many in "
+        "application_sdk/storage/fetch.py\n</at_base_branch>"
+    ) in user
+    user, _ = _verify_user(ws, in_new_file)
+    assert "<at_base_branch>\nabsent on base: application_sdk/storage/new.py" in user
+
+
+def _base_and_head_ws(tmp_path: Path, rel: str, base: str, head: str) -> Workspace:
+    (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+    (tmp_path / rel).write_text(base)
+    overlay = {rel: head}
+    return Workspace(
+        root=tmp_path,
+        head_text=overlay,
+        diffs={},
+        index=build_index(tmp_path, overrides=overlay),
+    )
+
+
+def test_a_module_level_finding_gets_the_base_lines_around_its_quote(tmp_path: Path):
+    rel = "application_sdk/keys.py"
+    ws = _base_and_head_ws(
+        tmp_path,
+        rel,
+        "A = 1\nKEY = 'v1'\n\n\ndef f():\n    return KEY\n",
+        "A = 1\nKEY = 'v2'\n\n\ndef f():\n    return KEY\n",
+    )
+    f = Finding(rel, 1, "medium", "compatibility", "t", "b", "A = 1")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert block.splitlines()[0] == f"{rel}: module level"
+    assert "KEY = 'v1'" in block and "'v2'" not in block
+
+    pr_only = Finding(rel, 2, "medium", "compatibility", "t", "b", "KEY = 'v2'")
+    user, _ = _verify_user(ws, pr_only)
+    assert f"absent on base: the quoted code is not in {rel}" in user
+
+
+def test_a_pr_only_quote_in_a_long_base_symbol_gets_the_matching_window(
+    tmp_path: Path,
+):
+    """The quote exists only at the head, so it cannot be found in the base
+    copy; the window is taken at the same offset into the symbol, not its top."""
+    rel = "application_sdk/long.py"
+    body = "".join(f"    x_{i} = {i}\n" for i in range(200))
+    base = f"def long():\n{body}    return 0\n"
+    head = base.replace("    x_150 = 150\n", "    x_150 = 'new'\n")
+    ws = _base_and_head_ws(tmp_path, rel, base, head)
+    f = Finding(rel, 152, "medium", "compatibility", "t", "b", "x_150 = 'new'")
+
+    user, _ = _verify_user(ws, f)
+
+    block = user.split("<at_base_branch>\n", 1)[1].split("\n</at_base_branch>", 1)[0]
+    assert "x_150 = 150" in block
+    assert "def long():" not in block
+
+
+def test_the_prompts_state_the_base_branch_rule():
+    for prompt in (review_mod.prompts.REVIEW_SYSTEM, review_mod.prompts.VERIFY_SYSTEM):
+        flat = " ".join(prompt.split())
+        assert "Commits in an open PR are unreleased" in flat
+        assert "against the base branch and the last release" in flat
+        assert "only an intermediate commit of this PR could have produced" in flat
+    assert "<at_base_branch>" in review_mod.prompts.VERIFY_SYSTEM
+    card = (
+        Path(__file__).resolve().parents[2] / "lens" / "cards" / "v3-architecture.md"
+    ).read_text()
+    assert "only an earlier commit of this PR could have produced" in card
+
+
+def test_a_moot_verdict_closes_the_finding_and_is_not_a_spiral(repo: Path):
+    ws, _ = _ws(repo)
+    f = Finding(
+        "application_sdk/storage/fetch.py",
+        4,
+        "high",
+        "compatibility",
+        "t",
+        "b",
+        "return data.decode()",
+    )
+
+    _, got = _verify_user(ws, f, [{"id": f.id, "status": "moot"}])
+
+    assert got.fixed == [f.id] and got.moot == [f.id]
+    assert f.status == "fixed"
+    earlier = [
+        Finding("d.py", r, "high", "bug", f"t{r}", "b", f"e{r}", round=r)
+        for r in (1, 2)
+    ]
+    new = [Finding("d.py", 9, "high", "bug", "t3", "b", "e3", round=3)]
+    st = PRState(round=3, findings=earlier + new)
+    assert review_mod.spiral_paths(st, new, 3) == [("d.py", [1, 2, 3])]
+    for e in earlier:
+        e.status, e.fixed_by = "fixed", "pr-history"
+    assert review_mod.spiral_paths(st, new, 3) == []
+
+
+# ---- verify that runs out of output budget ------------------------------------------------------------------------
+
+
+def _cut_off_reply(out: int = 8000):
+    """What a reasoning model returns when it spends the whole cap thinking: no
+    verdict tool call, every output token used."""
+    status, headers, text = response(out=out)
+    body = json.loads(text)
+    body["choices"][0]["finish_reason"] = "length"
+    return status, headers, json.dumps(body)
+
+
+def test_a_verify_cut_off_is_not_read_as_nothing_fixed(repo: Path):
+    """A verify reply with no verdict was taken as "none fixed", so findings the
+    PR had fixed were reported open round after round, with nothing said."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    concern = ("A1", {"title": "skipped not refused", "why": "w"})
+    script = Script(_cut_off_reply())
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+
+    got = review_mod._verify(client, ws, [f], "--- a.py", [concern])
+
+    assert got.fixed == [] and got.cut_off == [f.id, "A1"]
+    assert f.status != "fixed"
+
+
+def test_a_verdict_reply_at_the_cap_is_still_read(repo: Path):
+    """Using every token is only a cut-off when no verdict came back."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    reply = response(
+        [tool_call("verdicts", {"items": [{"id": f.id, "status": "fixed"}]})], out=8000
+    )
+    client = Client(
+        model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=Script(reply)
+    )
+
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert got.fixed == [f.id] and got.cut_off == []
+
+
+def test_verify_keeps_its_budget_unless_opted_in(repo: Path):
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    script = Script(
+        response([tool_call("verdicts", {"items": []})]),
+        response([tool_call("verdicts", {"items": []})]),
+    )
+    client = Client(model="m", price=PRICE, ledger=Ledger(cap_usd=1), transport=script)
+
+    review_mod._verify(client, ws, [f], "--- a.py")
+    review_mod._verify(client, ws, [f], "--- a.py", max_tokens=24000)
+
+    assert [r["max_tokens"] for r in script.requests] == [8000, 24000]
+
+
+def test_shipped_config_keeps_the_verify_default_and_names_the_opt_in():
+    cfg = load_config(Path(__file__).resolve().parents[2] / "lens")
+    assert cfg.limits.verify_max_tokens == 8000
+    assert cfg.limits.verify_max_tokens_opt_in > cfg.limits.verify_max_tokens
+
+
+@pytest.mark.parametrize(
+    ("body", "force", "verify_budget"),
+    [
+        ("/lens", False, False),
+        ("/lens verify-budget", False, True),
+        ("/lens force verify-budget", True, True),
+        ("/lens force please", True, False),
+    ],
+)
+def test_verify_budget_is_parsed_from_the_comment(body, force, verify_budget):
+    d = decide("issue_comment", _comment(body), REPO)
+    assert d.run and (d.force, d.verify_budget) == (force, verify_budget)
+
+
+def test_a_cut_off_round_says_so_and_names_the_opt_in(repo: Path):
+    """End to end through `run`: round 2's verify is cut off. The finding stays
+    open, and both the verdict and the summary say it was not re-judged and
+    how to re-check it with the raised budget."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_elsewhere(gh)
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(Script(_cut_off_reply())),
+    )
+
+    assert fid in res.verify_cut_off and fid not in res.resolved_verified
+    assert res.verify_skipped == []  # verify ran; it was cut off, not skipped
+    assert any(f.id == fid for f in res.state.open_findings())
+    brief = review_mod.verdict_brief(res, "https://example.test/summary")
+    summary = review_mod.render_summary(res)
+    for body in (brief, summary):
+        assert "Verify ran out of output budget" in body and fid in body
+        assert "`/lens force verify-budget`" in body
+        # Without force, a merge-only push re-checks nothing: never offer that form.
+        assert "`/lens verify-budget`" not in body
+    from lens import report as report_mod  # noqa: PLC0415
+
+    # Both JSON outputs carry the same cut-off, guidance included, not just the ids.
+    rep = report_mod.build(res)
+    for cut in (
+        json.loads(review_mod.to_json(res))["verify_cut_off"],
+        rep["verify_cut_off"],
+    ):
+        assert cut["items"] == res.verify_cut_off
+        assert (cut["max_tokens"], cut["opted_in"]) == (8000, False)
+        assert cut["opt_in_tokens"] == 24000
+        assert "`/lens force verify-budget`" in cut["message"]
+    assert "Verify ran out of output budget" in report_mod.markdown(rep, 1)
+
+
+def test_a_cut_off_with_the_opt_in_does_not_offer_it_again():
+    res = review_mod.RunResult(
+        "reviewed",
+        verify_cut_off=["F-000001"],
+        verify_max_tokens=24000,
+        verify_opt_in_tokens=24000,
+        verify_opted_in=True,
+    )
+    line = review_mod.verify_cut_off_line(res)
+    assert "24,000" in line and "already the opt-in budget" in line
+    assert "/lens force verify-budget" not in line
+
+
+def test_a_responses_api_cut_off_is_read_from_its_incomplete_status(repo: Path):
+    """The shipped config uses Responses, which reports the cap as status
+    `incomplete`. Fewer tokens than the cap, so only the status can flag it."""
+    ws, _ = _ws(repo)
+    f = Finding("application_sdk/storage/fetch.py", 1, "low", "bug", "t", "b", "x")
+    status, headers, text = _responses_reply([REASONING], output=500, reasoning=500)
+    body = json.loads(text)
+    body["status"] = "incomplete"
+    client = Client(
+        model="gpt-6-luna",
+        price=PRICE,
+        ledger=Ledger(cap_usd=1),
+        transport=Script((status, headers, json.dumps(body))),
+        api="responses",
+    )
+
+    got = review_mod._verify(client, ws, [f], "--- a.py")
+
+    assert got.fixed == [] and got.cut_off == [f.id]
+    assert f.status != "fixed"
+
+
+@pytest.mark.parametrize(
+    ("argv", "verify_budget"),
+    [([], False), (["--verify-budget"], True)],
+)
+def test_cli_forwards_verify_budget_to_the_review(monkeypatch, argv, verify_budget):
+    import lens.__main__ as cli  # noqa: PLC0415 - module under test, patched below
+
+    seen: dict = {}
+
+    def fake_run(**kwargs):
+        seen.update(kwargs)
+        return review_mod.RunResult("skipped", "test")
+
+    class QuietGitHub:  # --dry-run posts nothing; only cleanup is looked up
+        def __init__(self, repo):
+            pass
+
+        def delete_comment(self, comment_id):  # pragma: no cover - id is 0
+            raise AssertionError("a dry run posts no progress note to delete")
+
+    monkeypatch.setattr(cli, "GitHub", QuietGitHub)
+    monkeypatch.setattr(cli, "run", fake_run)
+    monkeypatch.delenv("GITHUB_RUN_ID", raising=False)
+    monkeypatch.delenv("LENS_REPORT_PATH", raising=False)
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    root = str(Path(__file__).resolve().parents[3])
+
+    code = cli.main(
+        ["review", "--repo", "o/r", "--pr", "7", "--root", root, "--dry-run", *argv]
+    )
+
+    assert code == 0 and seen["verify_budget"] is verify_budget
+
+
+def _round_two_merge_only(gh):
+    """A second head that only merges the base branch: no PR file changes."""
+    gh.head = "h2"
+    gh.diffs[("h1", "h2")] = ""
+    gh.diffs[("b0", "h2")] = gh.diffs[("b0", "h1")]
+    gh.files[("application_sdk/storage/fetch.py", "h2")] = gh.files[
+        ("application_sdk/storage/fetch.py", "h1")
+    ]
+
+
+def test_a_round_that_changes_no_pr_file_says_nothing_was_rechecked(repo: Path):
+    """A merge-only push left 0 PR files in range, so verify was skipped and the
+    open findings were shown again with nothing saying they were not re-checked."""
+    from lens import report as report_mod  # noqa: PLC0415
+
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script()
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        verify_budget=True,
+    )
+
+    assert res.verify_skipped and fid in res.verify_skipped
+    assert res.verify_cut_off == [] and fid not in res.resolved_verified
+    assert not any("<changes_this_round>" in json.dumps(r) for r in script.requests)
+    brief = review_mod.verdict_brief(res, "https://example.test/summary")
+    summary = review_mod.render_summary(res)
+    for body in (brief, summary):
+        assert "Nothing was re-checked this round" in body and fid in body
+        assert "`/lens force`" in body
+    rep = report_mod.build(res)
+    for skipped in (
+        json.loads(review_mod.to_json(res))["verify_skipped"],
+        rep["verify_skipped"],
+    ):
+        assert skipped["items"] == res.verify_skipped
+        assert "Nothing was re-checked" in skipped["message"]
+    assert "Nothing was re-checked this round" in report_mod.markdown(rep, 1)
+
+
+def test_a_round_that_rechecks_says_nothing_about_skipping(repo: Path):
+    """Control: a round that touches a PR file runs verify and adds no notice."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    _round_two_elsewhere(gh)
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(
+            Script(response([tool_call("verdicts", {"items": []})]))
+        ),
+    )
+
+    assert res.verify_skipped == [] and res.verify_cut_off == []
+    assert review_mod.verify_notice_line(res) == ""
+    assert "Nothing was re-checked" not in review_mod.render_summary(res)
+
+
+def test_force_rechecks_open_findings_after_a_merge_only_push(repo: Path):
+    """The cut-off hint names `/lens force verify-budget`. Followed on a new head that
+    only merges the base branch, force must still re-check: it reviews the (empty) new
+    commits incrementally, and verify used to be skipped, so the hint did nothing."""
+    gh = FakeGitHub()
+    rules = load_rules(repo / ".github" / "lens")
+    first = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(_review_script()),
+    )
+    fid = first.state.findings[0].id
+    _round_two_merge_only(gh)
+    script = Script(response([tool_call("verdicts", {"items": []})]))
+
+    res = run(
+        gh=gh,
+        number=1,
+        root=repo,
+        cfg=cfg_for(repo),
+        rules=rules,
+        client_factory=_factory(script),
+        force=True,
+        verify_budget=True,
+    )
+
+    assert res.mode == "incremental"  # a new head: force did not make it a full review
+    assert res.verify_skipped == [] and res.verify_opted_in
+    assert len(script.requests) == 1 and fid in json.dumps(script.requests[0])
+    # Nothing in the round's own range, so verify is shown the whole PR's change.
+    assert "<changes_this_round>" in json.dumps(script.requests[0])
+    assert review_mod.verify_notice_line(res) == ""

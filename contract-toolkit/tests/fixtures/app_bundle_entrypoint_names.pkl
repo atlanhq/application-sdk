@@ -1,0 +1,20 @@
+/// App.pkl bundle whose entrypoint names carry `_` and `-`, so the bundle
+/// input-class naming test covers PascalCase over both separators.
+amends "../../src/App.pkl"
+
+import "../../examples/bundle/miner.pkl" as Miner
+
+name = "entrypoint-names"
+icon = "https://assets.atlan.com/assets/snowflake.svg"
+hasCredentialConfig = false
+
+entrypoints {
+  new Entrypoint {
+    name = "query_miner"
+    contract = Miner
+  }
+  new Entrypoint {
+    name = "usage-stats"
+    contract = Miner
+  }
+}

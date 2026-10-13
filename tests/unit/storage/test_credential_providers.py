@@ -190,6 +190,20 @@ class TestMakeS3AssumeRoleProvider:
         )
         assert provider.kwargs["ExternalId"] == "ext-123"
 
+    @pytest.mark.parametrize(
+        ("external_id", "expected"),
+        [("  ext-123  ", "ext-123"), ("", None), ("   ", None)],
+    )
+    def test_external_id_normalised(
+        self, external_id: str, expected: str | None
+    ) -> None:
+        """Padded IDs are trimmed; blank ones are omitted (STS rejects empty)."""
+        provider = make_s3_assume_role_provider(
+            role_arn=ROLE_ARN,
+            external_id=external_id,
+        )
+        assert provider.kwargs.get("ExternalId") == expected
+
     def test_external_id_omitted_by_default(self) -> None:
         provider = make_s3_assume_role_provider(role_arn=ROLE_ARN)
         assert "ExternalId" not in provider.kwargs

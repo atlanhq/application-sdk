@@ -30,6 +30,8 @@ open module com.atlan.app.contract.App
 
 import "Connectors.pkl" as ConnectorsPkg
 import "Deployment.pkl" as DeploymentPkg
+import "InputContract.pkl" as InputContractPkg
+import "Inputs.pkl" as InputsPkg
 import "Widgets.pkl"
 
 // ── CONNECTOR RE-EXPORT ───────────────────────────────────────────────────────
@@ -109,6 +111,21 @@ typealias VpaConfig = DeploymentPkg.VpaConfig
 typealias DeployConfig = DeploymentPkg.DeployConfig
 typealias Pool = DeploymentPkg.Pool
 
+// ── Input field re-exports (see `inputs`) ────────────────────────────────────
+typealias InputField = InputsPkg.InputField
+typealias StringField = InputsPkg.StringField
+typealias IntField = InputsPkg.IntField
+typealias FloatField = InputsPkg.FloatField
+typealias BoolField = InputsPkg.BoolField
+typealias EnumField = InputsPkg.EnumField
+typealias ListField = InputsPkg.ListField
+typealias MapField = InputsPkg.MapField
+typealias ObjectField = InputsPkg.ObjectField
+typealias ConnectionRefField = InputsPkg.ConnectionRefField
+typealias FileReferenceField = InputsPkg.FileReferenceField
+typealias TreeSelectionField = InputsPkg.TreeSelectionField
+typealias JsonObjectField = InputsPkg.JsonObjectField
+
 // ── CONSTRAINED TYPES ────────────────────────────────────────────────────────
 
 /// Lowercase kebab-case string: `[a-z][a-z0-9]*(-[a-z0-9]+)*`.
@@ -151,7 +168,26 @@ appId: String = ""
 creatorOrg: String?
 
 /// Marketplace app type (`connector`, `miner`, `utility`, `system`, ...).
+///
+/// Written to `atlan.yaml` as the top-level `type`. `"system"` also switches
+/// the contract into system-app mode: an app that runs only inside a tenant,
+/// invoked by other apps' DAG nodes, with no marketplace card. System-app mode:
+///
+///   - defaults `marketplaceCard` and `hasCredentialConfig` to `false`;
+///   - omits the `entrypoints` block from `atlan.yaml`, so no card can be
+///     expanded from it (an entrypoint with no `marketplace_card` key is read
+///     downstream as a card);
+///   - refuses `marketplaceCard = true` and any `Entrypoint.packageId`, both of
+///     which would otherwise be dropped without a word.
+///
+/// It does not change `manifest.json`, the workflow configmap or `_input.py`:
+/// those still follow `uiConfig`, so a system app with a setup form keeps it.
+/// It does not hide the app's own listing either. That is the Global
+/// Marketplace App row's `is_system_app` flag, which only a GM admin sets.
 type: String = "connector"
+
+/// (Derived) Whether this contract is in system-app mode. See `type`.
+local isSystemApp: Boolean = type == "system"
 
 /// Marketplace icon URL. Defaults to the app `icon` when not set.
 iconUrl: String? = icon
@@ -205,7 +241,11 @@ tags: Listing<String> = new Listing {}
 ///
 /// For multi-entrypoint apps this flag has no effect; control card presence
 /// per-entrypoint via `Entrypoint.packageId` instead.
-marketplaceCard: Boolean = true
+///
+/// Defaults to `false` when `type = "system"`, and a system app may not set it
+/// to `true`: system apps render no `entrypoints` block, so there is nothing to
+/// carry the card.
+marketplaceCard: Boolean = !isSystemApp
 
 /// Extra top-level metadata fields for atlan.yaml.
 metadata: Mapping<String, Any> = new Mapping {}
@@ -241,6 +281,74 @@ emitGeneratedArtifacts: Boolean = true
 /// can omit this property entirely.
 workflowType: String?
 
+/// Workflow type the DAG dispatches when this entrypoint's event triggers use AE's
+/// streaming shell (`EventTriggerConfig.streaming.enabled`).
+///
+/// Streaming is a genuinely different execution: the batch shell's workflow reads the
+/// entrypoint's Iceberg events table, while the streaming shell hands the DAG its
+/// events inline and never writes that table. Those are two different workflow types
+/// in the app, so one `workflowType` cannot serve both — and an entrypoint
+/// whose triggers stream while its DAG still dispatches the batch type is the worst
+/// available outcome: AE starts the streaming run, that run walks the DAG, the batch
+/// workflow starts with no events in its arguments, and nothing reports an error.
+/// Observed end-to-end on a tenant before this field existed.
+///
+/// When set, and when at least one event trigger has `streaming.enabled`, the extract
+/// node renders this workflow type and gains `args.batch = "$.event.batch"` — the
+/// list of `{id, topic, data}` envelopes AE delivers for one micro-batch, or `null`
+/// above its inline cap — `args.batch_key` is always set alongside it.
+streamingWorkflowType: String?
+
+/// Refuses both ways an entrypoint's single extract node can end up dispatching a
+/// workflow type that cannot apply what reaches it.
+///
+/// An entrypoint renders ONE extract node, and every trigger on it — each schedule,
+/// each event trigger — starts that same node. Its `workflow_type` is therefore a
+/// property of the entrypoint, not of the trigger that fired. There are only two
+/// shapes it can take, and they are mutually exclusive:
+///
+///   - the batch type, which reads the entrypoint's Iceberg events table
+///   - the streaming type, which reads `args.batch` / `args.batch_key` handed to it
+///
+/// So a streaming entrypoint may hold streaming event triggers and nothing else.
+/// A `DISABLED` non-streaming trigger counts: it is one somebody means to enable, and
+/// enabling it later would silently retarget it rather than fail.
+/// Mixing is not expressible: whichever type the node renders, the other kind of
+/// trigger starts a workflow with nothing to apply, and reports no error doing it.
+hidden _streamingEntrypointCheck: Any =
+  let (_streaming = events.toList().filter((e) -> e.triggerConfig.streaming.enabled))
+  let (_batch = events.toList().filter((e) -> !e.triggerConfig.streaming.enabled))
+    // A bundle root renders no manifest of its own, so anything declared here is
+    // dropped without a word — the same outcome the refusals below exist to prevent,
+    // and refused by name for `artifactSchemas` and `legacyWorkflowTypes` already.
+    // Scoped to what streaming adds: plain `events`/`schedules` on a root are dropped
+    // the same way, but that predates this change and refusing them here would break
+    // contracts this PR never touched.
+    if (!entrypoints.isEmpty && (streamingWorkflowType != null || !_streaming.isEmpty))
+      throw("App.pkl: streaming is declared on a multi-entrypoint bundle root, which renders no manifest of its own — the trigger(s) and streamingWorkflowType would be dropped silently. A streaming trigger binds to an entrypoint by containment, so declare `events` and `streamingWorkflowType` on each entrypoint's `contract` instead. Separate entrypoints are also how several high-volume topics get separate extract nodes.")
+    else if (_streaming.isEmpty)
+      // The mirror of the case below, and the same class this whole check exists for:
+      // a declared value silently dropped. With nothing streaming, the node renders
+      // the batch type and the streaming type the author wrote is discarded without a
+      // word — a contract that reads as streaming and behaves as batch.
+      if (streamingWorkflowType != null && streamingWorkflowType!! != "")
+        throw("This entrypoint sets streamingWorkflowType but no event trigger has streaming.enabled = true, so the extract node renders the batch workflow type and the streaming type is dropped. Set streaming { enabled = true } on the trigger(s) that should stream, or remove streamingWorkflowType.")
+      else null
+    else if (streamingWorkflowType == null || streamingWorkflowType!! == "")
+      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no streamingWorkflowType. AE would start the streaming run, which would then dispatch the batch workflow type with no events in its arguments — silently applying nothing. Set streamingWorkflowType to the app's streaming workflow type (e.g. \"my-app:my-entrypoint-stream\").")
+    else if (pipeline.extract == null)
+      // The extract node is what renders the streaming workflow type and the
+      // batch args, so `pipeline { extract = null }` leaves a manifest that
+      // declares streaming and wires nothing to receive it. Same class as the
+      // refusals around it: declared one way, behaves another, silently.
+      throw("This entrypoint has event trigger(s) with streaming.enabled = true but no extract node (`pipeline { extract = null }`). The extract node is what renders streamingWorkflowType and the `batch` / `batch_key` args, so the manifest would carry `streaming_enabled: true` with nothing wired to receive the batch — AE starts a run whose args resolve to nothing and it applies nothing, silently. Enable the extract step, or drop `streaming`. A custom DAG that wants streaming has no supported wiring today; raise it on the toolkit before relying on one.")
+    else if (!_batch.isEmpty)
+      throw("This entrypoint mixes streaming and non-streaming event triggers: streaming = \(_streaming.map((e) -> e.name)), batch = \(_batch.map((e) -> e.name)). Both start the same extract node, which now dispatches the streaming workflow type — so the batch trigger(s) would start it with args.batch resolving to nothing and apply nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
+    else if (!schedules.isEmpty)
+      throw("This entrypoint has streaming event trigger(s) and \(schedules.length) schedule(s): \(schedules.toList().map((s) -> s.name)). A schedule starts the same extract node, which now dispatches the streaming workflow type, and a scheduled run carries no events — so args.batch resolves to nothing and the run applies nothing, silently. Move the streaming trigger(s) to their own entrypoint.")
+    else null
+
+
 /// Task queue prefix for the extract node in the AE manifest.
 taskQueuePrefix: String = "atlan-\(name)"
 
@@ -274,7 +382,11 @@ appServiceUrl: String = "http://\(name).\(name)-app.svc.cluster.local"
 // ── CREDENTIAL CONFIG ─────────────────────────────────────────────────────────
 
 /// Whether this app has a credential config.
-hasCredentialConfig: Boolean = true
+///
+/// Defaults to `false` when `type = "system"`: system apps run on the tenant's
+/// own identity rather than a user-supplied credential. Set it explicitly for
+/// the rare system app that does take one.
+hasCredentialConfig: Boolean = !isSystemApp
 
 /// Name for the credential configmap (e.g., "atlan-connectors-redshift").
 connectorConfigName: String = "atlan-connectors-\(name)"
@@ -332,6 +444,124 @@ workflowConfigName: String = name
 /// UI configuration for the workflow setup form.
 /// Required for single-entrypoint apps (when `entrypoints` is empty).
 uiConfig: Widgets.UIConfig?
+
+/// Typed inputs that have no setup-form widget. System apps only (`type = "system"`).
+///
+/// A system app is started by other apps' DAG nodes, so its inputs are the
+/// args those nodes pass, not form fields. Declare each one here, keyed by
+/// the arg name callers send (snake_case, used as-is), and the toolkit renders
+/// them into `app/generated/_input.py`. The app imports the generated
+/// `AppInputContract` (subclassing it to add validators or properties) instead
+/// of hand-maintaining its own model.
+///
+/// Field types: `StringField`, `IntField`, `FloatField`, `BoolField`,
+/// `EnumField` (`Literal[...]`), `ListField` and `MapField` (always bounded by
+/// `MaxItems`), and `ObjectField` (a nested model, `extra="forbid"` by
+/// default). See `Inputs.pkl` for how each field's default is resolved.
+///
+/// What changes: `_input.py` (and `app/generated/__init__.py`) are emitted
+/// when `inputs` is non-empty, even with no `uiConfig`. What does not:
+/// `manifest.json` and the workflow configmap still follow `uiConfig` only,
+/// so declaring inputs never creates a manifest.
+///
+/// Refused at eval: `inputs` on a non-system app (no manifest arg would
+/// populate them, so they would always hold their defaults), on a
+/// multi-entrypoint bundle root (which renders no `_input.py`), a key that
+/// collides with a field the generated class already declares, and two
+/// different `ObjectField`s sharing a `className`.
+inputs: Mapping<InputsPkg.FieldName, InputsPkg.InputField> = new Mapping {}
+
+/// (Derived) Base class of the generated input model. A system app's input is
+/// the args its callers pass, not an extraction run's, so it extends the SDK's
+/// plain `Input` instead of `ExtractionInput`.
+local inputBaseClass: String = if (isSystemApp) "Input" else "ExtractionInput"
+
+/// (Derived) Fields the base input class already declares. A generated field
+/// with one of these names is skipped (UI) or refused (`inputs`).
+local inputBaseProvidedFields: Set<String> =
+  if (isSystemApp) Set("workflow_id", "correlation_id", "app_name", "workflow_slug")
+  else extractionInputProvidedFields.toList().toSet()
+
+/// (Derived) Every nested object `inputs` needs, dependencies first.
+local inputAllObjects: List<InputsPkg.ObjectField> =
+  inputs.toMap().values.flatMap((f) -> f.nestedClasses).toList()
+
+/// (Derived) One class per `className`, in dependency order.
+local inputNestedClasses: List<InputsPkg.ObjectField> =
+  inputAllObjects.fold(List(), (acc: List<InputsPkg.ObjectField>, o: InputsPkg.ObjectField) ->
+    if (acc.any((a) -> a.className == o.className)) acc else acc.add(o))
+
+/// Name of the generated caller node class (`contract/generated/input.pkl`).
+/// Defaults to `name` in PascalCase plus `Node`: `popularity` →
+/// `PopularityNode`, `connection-delete` → `ConnectionDeleteNode`.
+///
+/// Only a system app with `inputs` generates a caller node. See
+/// `inputContractPath`.
+inputContractClassName: InputsPkg.ClassName =
+  name.split("-").map((p) -> p.capitalize()).join("") + "Node"
+
+/// Where the generated caller node is written, relative to the repo root.
+///
+/// A system app with `inputs` renders the Pkl class its callers add to their
+/// `extraNodes`, with one typed property per input. The file is synced into
+/// the toolkit as `src/system/<name>.pkl`, so every connector (internal,
+/// public or partner-built) imports it through the toolkit dependency it
+/// already has:
+///
+/// ```pkl
+/// import "@app-contract-toolkit/system/popularity.pkl" as Popularity
+/// extraNodes { ["popularity"] = new Popularity.PopularityNode { ... } }
+/// ```
+inputContractPath: String = "contract/generated/input.pkl"
+
+/// How the generated caller node imports the toolkit. The default,
+/// `../App.pkl`, resolves from the file's synced home in the toolkit,
+/// `src/system/<name>.pkl`. The copy left in the app's own repo is only the
+/// sync source and is not evaluated there. Only a contract that evaluates the
+/// file in place (as the toolkit's own example does) sets this.
+inputContractToolkitImport: String = "../App.pkl"
+
+/// (Derived) Names `_input.py` declares or imports at module level. A nested
+/// object class of one of these names would shadow it: an `Input` class, for
+/// one, would replace the SDK base `AppInputContract` extends.
+local inputReservedClassNames: Set<String> = Set(
+  "AppInputContract", "Input", "ExtractionInput", "BaseModel", "ConfigDict",
+  "Field", "ConnectionRef", "FileReference", "MaxItems", "TreeSelection",
+  "CredentialRef", "Annotated", "Any", "ClassVar", "Literal"
+)
+
+/// Refuses `inputs` declarations that would be dropped or would clash.
+local _inputsCheck: Any =
+  if (inputs.isEmpty) null
+  else if (!entrypoints.isEmpty)
+    throw("App.pkl: `inputs` is declared on a multi-entrypoint bundle root, which renders no `_input.py` of its own, so the inputs would be dropped. Declare `inputs` on each entrypoint's `contract` instead.")
+  else if (!isSystemApp)
+    throw("App.pkl: `inputs` is only supported on system apps (`type = \"system\"`). Nothing in this app's manifest would pass them, so every run would see only their defaults. Use `uiConfig` for setup-form inputs.")
+  else
+    let (keys = inputs.keys)
+    let (uiNames = (uiConfig?.properties ?? Map()).keys.map((k) -> toPyFieldName(k)))
+    let (reserved = inputBaseProvidedFields
+      + (if (credentialFieldName != null) Set(credentialFieldName!!) else Set())
+      + (if (uiConfig != null && pipeline.publish != null && pipeline.publish!!.includeInputFields)
+          Set("output_dir", "checkpoint_dir", "load_to_atlan", "publish_dry_run") else Set())
+      + (if (events.toList().any((e) -> e.triggerConfig.streaming.enabled)) Set("batch_key") else Set()))
+    let (clashUi = keys.filter((k) -> uiNames.contains(k)))
+    let (clashBase = keys.filter((k) -> reserved.contains(k)))
+    let (clashPyNames = inputAllObjects.map((o) -> o.className).toSet().filter((c) -> inputReservedClassNames.contains(c)))
+    let (dupClasses = inputAllObjects
+      .filter((o) -> inputAllObjects.any((p) -> p.className == o.className && p != o))
+      .map((o) -> o.className).toSet())
+    if (!clashUi.isEmpty)
+      throw("App.pkl: `inputs` key(s) \(clashUi.toList().sort()) are also uiConfig fields. Declare each input in one place.")
+    else if (!clashBase.isEmpty)
+      throw("App.pkl: `inputs` key(s) \(clashBase.toList().sort()) are already declared by the generated input class (base \(inputBaseClass), credential, publish or streaming fields).")
+    else if (!dupClasses.isEmpty)
+      throw("App.pkl: different ObjectFields share className(s) \(dupClasses.toList().sort()). Give each nested object a unique className, or reuse one ObjectField value.")
+    else if (inputs.toMap().values.any((f) -> f.opaque))
+      throw("App.pkl: `inputs` field(s) \(inputs.toMap().filter((_, f) -> f.opaque).keys.toList().sort()) are or contain a JsonObjectField, an opaque dict[str, Any]. Declare the shape with an ObjectField, or a MapField of a known value type.")
+    else if (!clashPyNames.isEmpty)
+      throw("App.pkl: ObjectField className(s) \(clashPyNames.toList().sort()) would shadow a class `_input.py` declares or imports. Rename the object(s).")
+    else null
 
 // ── MANIFEST CONFIG ───────────────────────────────────────────────────────────
 
@@ -814,7 +1044,23 @@ open class DAGNode {
     if (dependsOn != null && dependsOnCondition != null)
       throw("DAGNode cannot set both dependsOn and dependsOnCondition. Use dependsOn for shorthand or dependsOnCondition for explicit AE conditions.")
     else null
+
+  /// Checks this node's `args`, forced when the node renders. A system app's
+  /// generated caller node overrides it to refuse args the app does not
+  /// declare.
+  hidden _nodeArgsCheck: Any = null
 }
+
+/// A value an AE DAG resolves at run time: an upstream node's output
+/// (`$.extract.outputs.connection_qualified_name`) or an exact workflow
+/// parameter placeholder (`{{window-days}}`). Generated caller nodes accept one
+/// wherever an input's own type is not already a string.
+typealias DagRef = String(matches(Regex(#"\$\..+|\{\{[A-Za-z0-9][A-Za-z0-9_-]*\}\}"#)))
+
+/// An explicit `None` for a nullable system-app input. A generated caller
+/// property set to `new App.ExplicitNull {}` sends its arg as JSON `null`;
+/// leaving the property unset omits the arg, so the app applies its default.
+class ExplicitNull
 
 /// Error handling / retry / timeout configuration for a DAG node.
 class ErrorHandlingConfig {
@@ -2292,12 +2538,17 @@ local function renderJdbcUrlField(
     }
   }
   ["anyOf"] = new Listing {
-    for (authKey, _ in options) {
+    for (authKey, opt in options) {
       new Mapping {
         ["properties"] = new Mapping {
           ["auth-type"] = new Mapping { ["const"] = authKey }
         }
-        ["required"] = new Listing { authKey }
+        ["required"] = new Listing {
+          authKey
+          for (field in opt.anyOfRequiredFields) {
+            field
+          }
+        }
       }
     }
   }
@@ -2430,6 +2681,12 @@ local connectorInvariant =
 /// `generateExtractNode` skip the property, so the rendered form widget reaches
 /// nothing; and codegen would shadow the base `Input.app_name` with the author's
 /// type, which only raises at workflow dispatch. Fail at generation instead.
+/// Reserved only while streaming: the extract node emits BOTH ``batch`` and
+/// ``batch_key``, so a uiConfig property of either name collides in the same
+/// args mapping. Deliberately not in `reservedUiFieldNames`, which is
+/// unconditional — a non-streaming contract may legitimately have one.
+local streamingReservedArgNames: Set<String> = Set("batch", "batch_key")
+
 local reservedUiFieldNames: Set<String> = Set("app_name")
 
 local reservedUiFieldInvariant: Any =
@@ -2443,6 +2700,27 @@ local reservedUiFieldInvariant: Any =
     + "Rename the property (e.g. `source-app-name`). To change this app's "
     + "log identity set `name`, or `appName` on the specific node. "
     + "See contract-toolkit/docs/reference.md → Per-node `app_name` in `inputs.args`.")
+
+/// The streaming half of `reservedUiFieldInvariant`. The arg-rendering loops skip a
+/// uiConfig property named `batch` / `batch_key` while streaming so the event
+/// jsonpath can own that key; without this the skip is silent, and the author gets a
+/// form field that collects a value nothing reads — the exact failure the `app_name`
+/// invariant exists to prevent. Conditional because the names are reserved only while
+/// streaming: a batch contract may legitimately have a `batch` field.
+local streamingReservedUiFieldInvariant: Any =
+  if (!events.toList().any((e) -> e.triggerConfig.streaming.enabled)) null
+  else
+    let (offenders = (uiConfig?.properties ?? Map()).keys.toList()
+      .filter((k) -> streamingReservedArgNames.contains(toPyName(k))))
+    if (offenders.isEmpty) null
+  else throw("uiConfig property \(offenders.join(", ")) uses the name `batch` or "
+    + "`batch_key`, which AE's streaming event context owns. This entrypoint has a "
+    + "trigger with streaming.enabled = true, so the extract node renders both args "
+    + "from `$.event.batch` / `$.event.batch_key` and the form field is dropped from "
+    + "the args mapping — it would still render on the setup form, accept a tenant "
+    + "value, and reach nothing. Refused rather than silently dropped, for the same "
+    + "reason `app_name` is. Rename the property (e.g. `source-batch`), or drop "
+    + "`streaming`. See contract-toolkit/docs/reference.md -> Streaming dispatch.")
 
 /// Auto-derived: hide the auth-type radio when the connector has a single auth
 /// option, since presenting a one-item radio adds no value. Auto-calculation
@@ -2580,6 +2858,33 @@ class EventSource {
   topic: String
 }
 
+/// AE's streaming dispatch shell. Mechanics of *how* AE delivers, not part of the
+/// app's event contract — see `EventTriggerConfig.ackPaths` for what a trigger
+/// asserts about delivery. Kept as its own class so the boundary is visible in the
+/// syntax: a future AE dispatch capability has to be classified as contract or
+/// mechanics rather than defaulting into the contract by being appended to a flat
+/// class.
+class StreamingDispatch {
+  /// Opt this trigger into AE's streaming dispatch shell: instead of writing the
+  /// batch to the entrypoint's Iceberg events table and firing a top-level run that
+  /// drains it, AE starts one short run per Kafka micro-batch and hands that run its
+  /// events directly. Reserved for genuinely continuous, high-volume,
+  /// seconds-level-latency workloads — not a general speed setting.
+  ///
+  /// The streaming path does NOT read the workflow's Iceberg events table and does
+  /// NOT write acks. A streaming DAG receives its events two ways, and must handle
+  /// both: inline at `$.event.batch` (a list of `{id, topic, data}`) when the
+  /// serialised batch fits AE's inline cap, and `null` there when it does not — in
+  /// which case `$.event.batch_key` is the object-store key to read them from. The
+  /// key is always sent; the inline copy is an optimisation for small batches.
+  ///
+  /// There are deliberately no size or timing knobs here. AE bounds a micro-batch by
+  /// BYTES, not by a count the app picks: the unit of work is one Dapr bulk delivery,
+  /// split to fit the object it writes. A per-trigger count would not survive that
+  /// split and would describe a queue this shell does not have.
+  enabled: Boolean = false
+}
+
 /// Per-trigger delivery config. Mirrors AE's `TriggerConfig`: `max_retries` bounds
 /// redelivery; `ack_paths` are JSONPaths (against the run's node outputs) to the ack
 /// parquet AE marks processed after the run settles.
@@ -2589,8 +2894,33 @@ class EventSource {
 /// ack parquet. Leave it empty to opt into fire-and-forget — the toolkit then renders
 /// `[""]` (AE's fire-and-forget form: auto-ack without reading a parquet), never `[]`.
 class EventTriggerConfig {
+  /// Redelivery bound for the batch path. Inert when `streaming.enabled` — the
+  /// streaming path never reads it (verified against AE: the micro-batch consumer in
+  /// `routes/dapr.py` and `workflows/streaming_batch.py` references neither
+  /// `max_retries` nor `ack_paths`), so it is suppressed from the
+  /// rendered manifest rather than shipped as a key AE will not act on.
   maxRetries: Int(this >= 0) = 3
+
   ackPaths: Listing<String> = new Listing {}
+
+  streaming: StreamingDispatch = new StreamingDispatch {}
+
+  /// `ackPaths` is an explicit at-least-once durability assertion by the author, and
+  /// the streaming path writes no acks and has no watchdog backstop — so declaring
+  /// both reads as "acked once the DAG produced its output" and behaves as
+  /// fire-and-forget. Refused rather than silently voided: the batch-knob case costs
+  /// latency, this one costs events. Spans both levels, so it lives here rather than
+  /// on `StreamingDispatch`.
+  /// Forced from the manifest renderer only, unlike `_streamingEntrypointCheck` which
+  /// is also forced from `output`. That asymmetry is deliberate: the skip here is
+  /// `uiConfig == null`, and a contract on that path emits no manifest at all, so an
+  /// unrefused value never reaches AE. `_streamingEntrypointCheck` needed the extra
+  /// force because `pipeline { extract = null }` still emits a manifest, with the
+  /// trigger config in it.
+  hidden _ackShapeCheck: Any =
+    if (streaming.enabled && !ackPaths.isEmpty)
+      throw("EventTriggerConfig: ackPaths is inert when streaming.enabled = true (the streaming path writes no acks and has no watchdog backstop); drop ackPaths or drop streaming.")
+    else null
 }
 
 /// One ingest-time filter rule. Mirrors AE's `FilterRule`: AE applies these when the
@@ -2713,13 +3043,35 @@ local manifestData: Mapping<String, Any> = new Mapping {
               when (e.filterRules.length > 0) {
                 ["filter_rules"] = e.filterRules.toList().map((r) -> renderFilterRule(r))
               }
-              ["trigger_config"] = new Mapping {
-                ["max_retries"] = e.triggerConfig.maxRetries
-                // AE rejects an empty ack_paths; render the fire-and-forget [""] when
-                // none is declared, never [].
-                ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
-                                else e.triggerConfig.ackPaths
-              }
+              ["trigger_config"] =
+                // Hidden properties are lazy — reference the validator so its `throw`
+                // fires at eval time rather than silently rendering an inert config.
+                let (_ackCheck = e.triggerConfig._ackShapeCheck)
+                new Mapping {
+                  // Suppressed under streaming: the streaming path never reads it —
+                  // a run's retries are Temporal's, set by AE, not per trigger — and a
+                  // contract author reading a generated manifest has no other way to
+                  // tell which keys are live. AE defaults it to 3 when absent.
+                  when (!e.triggerConfig.streaming.enabled) {
+                    ["max_retries"] = e.triggerConfig.maxRetries
+                  }
+                  // Rendered under streaming too, unlike max_retries above — not an
+                  // oversight. AE's `_validate_event_ack_paths` rejects the whole
+                  // workflow when ANY event trigger has a falsy `ack_paths`, with no
+                  // streaming exemption, so omitting it here fails registration
+                  // rather than trimming an inert key. `[""]` is AE's documented
+                  // fire-and-forget escape hatch: it satisfies the validator and
+                  // asserts nothing, which is the honest shape for a path that
+                  // writes no acks. Drop this only in lockstep with an AE that
+                  // exempts streaming — and AE must ship first, everywhere.
+                  ["ack_paths"] = if (e.triggerConfig.ackPaths.isEmpty) new Listing { "" }
+                                  else e.triggerConfig.ackPaths
+                  // Emitted only when streaming is on, so every existing (non-streaming)
+                  // manifest stays byte-identical and AE keeps applying its own defaults.
+                  when (e.triggerConfig.streaming.enabled) {
+                    ["streaming_enabled"] = true
+                  }
+                }
               ["status"] = e.status
             }
           }
@@ -2834,6 +3186,7 @@ local function renderDependencyCondition(condition: DependencyCondition): Mappin
 local function renderNode(node: DAGNode): Mapping<String, Any> =
   let (_nodeCheck = node._errorHandlingCheck)
   let (_depCheck = node._dependencyConfigCheck)
+  let (_argsCheck = node._nodeArgsCheck)
   let (_qiCheck = if (node is QueryIntelligenceNode) (node as QueryIntelligenceNode)._qiArgsCheck else null)
   let (_popularityCheck = if (node is PopularityNode) (node as PopularityNode)._popularityDependencyCheck else null)
   let (_popularityFormRefCheck = if (node is PopularityNode) validatePopularityFormRefs(node as PopularityNode) else null)
@@ -3025,6 +3378,8 @@ local function generateExtractNode(): Mapping<String, Any> =
   let (step = pipeline.extract!!)
   let (_extractEhCheck = validateWorkflowNodeErrorHandling(step.errorHandling, "pipeline.extract.errorHandling"))
   let (topLevelFormFields = manifestTopLevelArgs.toMap().values.toList())
+  let (_streamingEpCheck = _streamingEntrypointCheck)
+  let (_isStreaming = events.toList().any((e) -> e.triggerConfig.streaming.enabled))
   new Mapping {
     ["activity_name"] = "execute_workflow"
     ["activity_display_name"] = step.displayName ?? "Extract \(displayName) Metadata"
@@ -3034,12 +3389,29 @@ local function generateExtractNode(): Mapping<String, Any> =
     // the runtime app class name) or failure logs won't surface (HYP-1678).
     ["app_name"] = name
     ["inputs"] = new Mapping {
-      ["workflow_type"] = workflowTypeResolved
+      ["workflow_type"] = if (_isStreaming) streamingWorkflowType!! else workflowTypeResolved
       ["app_name"] = name
       ["app_id"] = ""
       ["argo_workflow_slug"] = ""
       ["task_queue"] = "\(taskQueuePrefix)-{deployment_name}"
       ["args"] = new Mapping {
+        // The streaming run carries its batch in these args; nothing else does.
+        // Without this the streaming workflow starts with no events to apply.
+        // Reserved while streaming, like app_name/agent_json/extraction_method above:
+        // the loops below skip a `batch`/`batch_key` property to avoid a duplicate key, and
+        // `streamingReservedUiFieldInvariant` fails generation up front so the skip can
+        // never silently drop a live form field. Not in reservedUiFieldNames, which is
+        // unconditional — a non-streaming contract may legitimately have one. Both keys
+        // are reserved; see streamingReservedArgNames.
+        when (_isStreaming) {
+          // Both, because AE sends both: `batch` is the events inline when the
+          // serialised micro-batch fits its inline cap and `null` when it does not,
+          // and `batch_key` is always the object-store key they can be read from.
+          // An app that wired only `batch` applies nothing, silently, the first time
+          // a batch goes over the cap — the events are gone from Kafka by then.
+          ["batch"] = "$.event.batch"
+          ["batch_key"] = "$.event.batch_key"
+        }
         // CNCT-93: extract-node app_name is the contract identity (`name`, the
         // same value baked at `app_name` above and into ATLAN_APPLICATION_NAME),
         // and it is authoritative — a tenant-typed form value must not replace it
@@ -3067,13 +3439,16 @@ local function generateExtractNode(): Mapping<String, Any> =
         when (uiConfig == null || !uiConfig!!.properties.containsKey("extraction-method")) {
           ["extraction_method"] = "{{extraction-method}}"
         }
+        // The `_isStreaming` skip below never drops a live form field: a uiConfig
+        // property named `batch` / `batch_key` on a streaming contract is refused
+        // by `streamingReservedUiFieldInvariant` (forced from `output`) first.
         for (argName, formField in manifestTopLevelArgs) {
-          when (argName != "app_name" && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
+          when (argName != "app_name" && !(_isStreaming && streamingReservedArgNames.contains(argName)) && uiConfig != null && uiConfig!!.properties.containsKey(formField) && uiConfig!!.properties[formField].includeInManifest) {
             [argName] = "{{" + formField + "}}"
           }
         }
         for (paramKey, param in (uiConfig?.properties ?? Map())) {
-          when (toPyName(paramKey) != "app_name" && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
+          when (toPyName(paramKey) != "app_name" && !(_isStreaming && streamingReservedArgNames.contains(toPyName(paramKey))) && param.includeInManifest && !topLevelFormFields.contains(paramKey)) {
             [toPyName(paramKey)] = "{{" + paramKey + "}}"
           }
         }
@@ -3170,115 +3545,75 @@ local function toPyName(k: String): String = k.replaceAll("-", "_")
 local function toPyFieldName(k: String): String =
   toPyName(k).replaceFirst(Regex("^_+"), "")
 
-local function getPyDefaultFactoryField(k: String, fieldType: String, factory: String): String =
-  let (line = "\(k): \(fieldType) = Field(default_factory=\(factory))")
-  if (line.length <= 84)
-    line
-  else
-    "\(k): \(fieldType) = Field(\n        default_factory=\(factory)\n    )"
-
-/// Wrap a generated field line with a Pydantic lifecycle marker when the field is
-/// deprecated or sunset.  The existing default value is preserved inside Field(...).
+/// The `_input.py` field a setup-form widget declares.
 ///
-/// active  → pass through unchanged
-/// deprecated → `x: T = expr`          → `x: T = Field(default=expr, deprecated=True)`
-///              `x: T = Field(...)`     → `x: T = Field(..., deprecated=True)`
-/// sunset  → same as deprecated but also appends `json_schema_extra={"x-lifecycle": "sunset"}`
-local function applyLifecycle(fieldLine: String, u: Widgets.UIElement): String =
-  if (u.lifecycle == "active")
-    fieldLine
-  else
-    let (deprecatedKwarg =
-      if (u.lifecycleMessage != null)
-        "deprecated=\"\(u.lifecycleMessage!!)\""
-      else
-        "deprecated=True")
-    let (lifecycleKwargs =
-      if (u.lifecycle == "sunset")
-        ", \(deprecatedKwarg), json_schema_extra={\"x-lifecycle\": \"sunset\"}"
-      else
-        ", \(deprecatedKwarg)")
-    if (fieldLine.contains("= Field("))
-      // Already has a Field(...) call — append lifecycle kwargs before the final closing )
-      fieldLine.replaceFirst(Regex("\\)\\s*$"), "\(lifecycleKwargs))")
-    else
-      // Simple `name: Type = expr` form — rewrite as Field(default=expr, ...)
-      fieldLine.replaceFirst(Regex(" = (.+)$"), " = Field(default=$1\(lifecycleKwargs))")
-
-local function getInputPyField(k: String, u: Widgets.UIElement): String =
-  let (k = toPyFieldName(k))
-  let (baseLine =
+/// Every widget maps onto the `Inputs.pkl` vocabulary, so a widget-derived field
+/// and an `inputs` field render through the same `InputsPkg.renderField`. Each
+/// mapping restates the type and default this widget has always generated:
+/// changing one changes every connector's `_input.py`.
+///
+/// Widgets that a setup form posts as a JSON-encoded string set
+/// `coerceJsonString`, which adds them to the generated `field_validator`.
+local function widgetInputField(u: Widgets.UIElement): InputsPkg.InputField =
+  let (base =
     if (u is Widgets.BooleanInput)
-      "\(k): bool = \(if ((u as Widgets.BooleanInput).default) "True" else "False")"
+      new InputsPkg.BoolField { default = (u as Widgets.BooleanInput).default }
     else if (u is Widgets.Switcher)
-      "\(k): bool = \(if ((u as Widgets.Switcher).default) "True" else "False")"
+      new InputsPkg.BoolField { default = (u as Widgets.Switcher).default }
     else if (u is Widgets.NumericInput)
-      "\(k): int = \(if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0)"
+      new InputsPkg.IntField {
+        default = if ((u as Widgets.NumericInput).default != null) (u as Widgets.NumericInput).default!!.toInt() else 0
+      }
     else if (u is Widgets.DateInput)
-      "\(k): int = 0"
+      new InputsPkg.IntField { default = 0 }
     else if (u is Widgets.FileUploader)
-      "\(k): FileReference | None = None"
+      new InputsPkg.FileReferenceField { nullable = true }
     else if (u is Widgets.ConnectionCreator)
-      "\(k): ConnectionRef | None = None"
+      new InputsPkg.ConnectionRefField { nullable = true }
     else if (u is Widgets.ConnectionRefInput)
       (if ((u as Widgets.ConnectionRefInput).multiSelect)
-        getPyDefaultFactoryField(k, "Annotated[list[ConnectionRef], MaxItems(1000)]", "list")
+        new InputsPkg.ListField { items = new InputsPkg.ConnectionRefField {} }
       else
-        "\(k): ConnectionRef | None = None")
-    else if (u is Widgets.ConnectionSelector)
-      "\(k): str = \"\""
-    else if (u is Widgets.CredentialInput)
-      "\(k): str = \"\""
-    else if (u is Widgets.PasswordInput)
-      "\(k): str = \"\""
-    else if (u is Widgets.TagsInput)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
-    else if (u is Widgets.InputRepeater)
-      getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+        new InputsPkg.ConnectionRefField { nullable = true })
+    else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
+      new InputsPkg.ListField { items = new InputsPkg.StringField {} }
     else if (u is Widgets.DropDown)
       (if ((u as Widgets.DropDown).multiSelect)
-        getPyDefaultFactoryField(k, "Annotated[list[str], MaxItems(1000)]", "list")
+        new InputsPkg.ListField { items = new InputsPkg.StringField {} }
       else
-        "\(k): str = \"\(escapePyStr(if ((u as Widgets.DropDown).default != null) (u as Widgets.DropDown).default!! else ""))\"")
+        new InputsPkg.StringField { default = (u as Widgets.DropDown).default ?? "" })
     else if (u is Widgets.Radio)
-      "\(k): str = \"\(escapePyStr(if ((u as Widgets.Radio).default != null) (u as Widgets.Radio).default!! else ""))\""
-    else if (u is Widgets.CloudProvider)
-      "\(k): str = \"\""
-    else if (u is Widgets.Sage || u is Widgets.SageV2)
-      "\(k): str = \"\""
-    else if (u is Widgets.InfoBanner || u is Widgets.GlossarySelector)
-      "\(k): str = \"\""
-    else if (u is Widgets.CustomWidget)
-      "\(k): str = \"\""
+      new InputsPkg.StringField { default = (u as Widgets.Radio).default ?? "" }
     else if (u is Widgets.TextInput)
-      "\(k): str = \"\(escapePyStr(if ((u as Widgets.TextInput).default != null) (u as Widgets.TextInput).default!! else ""))\""
-    else if (u is Widgets.TextBoxInput)
-      "\(k): str = \"\""
+      new InputsPkg.StringField { default = (u as Widgets.TextInput).default ?? "" }
     else if (u is Widgets.ConditionalInput)
       (let (ci = u as Widgets.ConditionalInput)
-        if (ci.outputValueType == "object")
-          getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+        // A non-apitree base with treeSelection is refused by
+        // _treeSelectionWidgetCheck, which also covers fields not emitted here.
+        if (ci.treeSelection && ci.baseWidgetType == "apitree")
+          new InputsPkg.TreeSelectionField { coerceJsonString = ci.outputValueType == "object" }
+        else if (ci.outputValueType == "object")
+          new InputsPkg.JsonObjectField { coerceJsonString = true }
         else
-          "\(k): str = \"\(escapePyStr(if (ci.default != null) ci.default!!.toString() else ""))\"")
+          new InputsPkg.StringField { default = if (ci.default != null) ci.default!!.toString() else "" })
     else if (u is Widgets.SqlTree)
       // Values are bounded strings (schema names / JSON-encoded selections); `str` avoids
       // the SDK's AAF-CTR-002 rejection of `Any`.  Pydantic's lax mode coerces non-string
       // leaf values (e.g. booleans) to str during model construction.
-      getPyDefaultFactoryField(k, "Annotated[dict[str, str], MaxItems(1000)]", "dict")
+      new InputsPkg.MapField { values = new InputsPkg.StringField {}; coerceJsonString = true }
+    else if (u is Widgets.APITree && (u as Widgets.APITree).treeSelection)
+      new InputsPkg.TreeSelectionField { coerceJsonString = true }
     else if (u is Widgets.NestedInput || u is Widgets.APITree || u is Widgets.ApiTreeSelect || u is Widgets.DsnTreeMap || u is Widgets.AgentSelector)
-      getPyDefaultFactoryField(k, "Annotated[dict[str, Any], MaxItems(1000)]", "dict")
+      new InputsPkg.JsonObjectField { coerceJsonString = true }
     else
-      "\(k): str = \"\"")
-  applyLifecycle(baseLine, u)
-
-local function needsJsonObjectStringCoercion(u: Widgets.UIElement): Boolean =
-  u is Widgets.NestedInput
-  || u is Widgets.APITree
-  || u is Widgets.ApiTreeSelect
-  || u is Widgets.DsnTreeMap
-  || u is Widgets.SqlTree
-  || u is Widgets.AgentSelector
-  || (u is Widgets.ConditionalInput && (u as Widgets.ConditionalInput).outputValueType == "object")
+      // ConnectionSelector, CredentialInput, PasswordInput, TextBoxInput,
+      // CloudProvider, Sage, SageV2, InfoBanner, GlossarySelector, CustomWidget, ...
+      new InputsPkg.StringField { default = "" })
+  (base) {
+    doc = u.helpText
+    lifecycle = u.lifecycle
+    lifecycleMessage = u.lifecycleMessage
+  }
 
 local function pyQuotedCsv(values: List<String>): String =
   values.fold("", (acc: String, value: String) ->
@@ -3320,23 +3655,19 @@ local extractionInputProvidedFields: Listing<String> = new Listing {
 
 local function generateInputClassPy(): FileOutput = new FileOutput {
   local props = uiConfig?.properties ?? Map()
-  local skipFields: Set<String> = extractionInputProvidedFields.toList().toSet()
-  local uiFieldLines: String = (new Listing {
+  local skipFields: Set<String> = inputBaseProvidedFields
+  // Every class field, in order: widget-derived first, then `inputs`.
+  local classFields: List<Pair<String, InputsPkg.InputField>> = (new Listing {
     for (k, u in props) {
-      if (u.includeInInput && !skipFields.contains(toPyFieldName(k)))
-        "    " + getInputPyField(k.replaceAll("-", "_"), u) + "\n" +
-        (if (u.helpText != "") "    \"\"\"" + u.helpText + "\"\"\"\n" else "")
-      else
-        ""
-    }
-  }).toList().fold("", (acc: String, s: String) -> acc + s)
-  local objectStringCoercionFields: List<String> = (new Listing {
-    for (k, u in props) {
-      when (u.includeInInput && !skipFields.contains(toPyFieldName(k)) && needsJsonObjectStringCoercion(u)) {
-        toPyFieldName(k)
+      when (u.includeInInput && !skipFields.contains(toPyFieldName(k))) {
+        Pair(toPyFieldName(k), widgetInputField(u))
       }
     }
-  }).toList()
+  }).toList() + inputs.toMap().entries.toList()
+  local fieldLines: String =
+    classFields.fold("", (acc: String, e: Pair<String, InputsPkg.InputField>) -> acc + InputsPkg.renderField(e.first, e.second, "    "))
+  local objectStringCoercionFields: List<String> =
+    classFields.filter((e) -> e.second.coerceJsonString).map((e) -> e.first)
   local objectStringCoercionBlock: String = if (!objectStringCoercionFields.isEmpty)
     "    @field_validator(\(pyQuotedCsv(objectStringCoercionFields)), mode=\"before\")\n" +
     "    @classmethod\n" +
@@ -3359,13 +3690,19 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "                return parsed\n" +
     "        return value\n\n"
   else ""
+  local nestedClassText: String =
+    inputNestedClasses.fold("", (acc: String, o: InputsPkg.ObjectField) -> acc + InputsPkg.renderClass(o) + "\n\n")
+  // Everything the module declares, for import detection.
+  local fieldText: String = fieldLines + nestedClassText
   local objectStringCoercionSeparator: String =
-    if (!uiFieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
+    if (!fieldLines.isEmpty && !objectStringCoercionBlock.isEmpty) "\n" else ""
   local credFieldLine: String = if (credentialFieldName != null && !skipFields.contains(credentialFieldName!!))
     "    \(credentialFieldName!!): CredentialRef | None = None\n"
   else ""
   local hasPublish = pipeline.publish != null
-  local includePublishInputFields = hasPublish && pipeline.publish!!.includeInputFields
+  // The scaffold serves the manifest's publish step, so only an app that renders
+  // a manifest (one with a uiConfig) gets it. `inputs` alone renders none.
+  local includePublishInputFields = uiConfig != null && hasPublish && pipeline.publish!!.includeInputFields
   // py-names already emitted from uiConfig — used to deduplicate the publish scaffold
   local uiPyNames: Set<String> = (new Listing {
     for (k, u in props) {
@@ -3401,15 +3738,36 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
       "    \"\"\"When True, skip the Atlas publish step (executor_enabled=False).\"\"\"\n"
     else "")
   else ""
+  // `Input` drops undeclared keys, so a streaming run's events reach the workflow
+  // only through a field declared here. `batch_key` is declared: AE always sets it,
+  // so it is the one route that works for every batch, over the inline cap or not.
+  //
+  // `batch` is deliberately NOT declared, though the extract node still renders it.
+  // Its shape (a list of `{id, topic, data}` envelopes with an arbitrary `data`
+  // payload) has no typed contract, and an untyped `list[dict[str, Any]]` fails the
+  // SDK's payload-safety check (AAF-CTR-002) even with `MaxItems`, because the inner
+  // dict is unbounded too. Declaring it would mean opting the whole class out of
+  // that check. For `batch` to reach an SDK app, the event envelope first needs a
+  // real typed definition; until then the app reads `batch_key` every time.
+  //
+  // The reserved-name invariant refuses a uiConfig property named `batch_key` while
+  // streaming, so this never collides with a UI field.
+  local isStreaming: Boolean = events.toList().any((e) -> e.triggerConfig.streaming.enabled)
+  local streamingFieldBlock: String = if (isStreaming)
+    "    batch_key: str = \"\"\n" +
+    "    \"\"\"Object-store key holding this micro-batch's events; AE always sets it.\"\"\"\n"
+  else ""
   local classBody: String =
     publishHashExcludeBlock +
-    uiFieldLines +
+    fieldLines +
     objectStringCoercionSeparator +
     objectStringCoercionBlock +
     credFieldLine +
-    publishFieldBlock
-  local usesAnnotated: Boolean = uiFieldLines.contains("Annotated[")
-  local usesAny: Boolean = uiFieldLines.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+    publishFieldBlock +
+    streamingFieldBlock
+  local usesAnnotated: Boolean = fieldText.contains("Annotated[")
+  local usesAny: Boolean = fieldText.contains("dict[str, Any]") || !objectStringCoercionFields.isEmpty
+  local usesLiteral: Boolean = fieldText.contains("Literal[")
   local usesClassVar: Boolean = includePublishInputFields
   local typingImports: List<String> = (new Listing {
     when (usesAnnotated) {
@@ -3421,6 +3779,9 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     when (usesClassVar) {
       "ClassVar"
     }
+    when (usesLiteral) {
+      "Literal"
+    }
   }).toList()
   local stdlibImportLines: String =
     (if (!typingImports.isEmpty) "from typing import \(typingImports.join(", "))\n" else "")
@@ -3430,7 +3791,11 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local thirdPartyImportLines: String =
     (if (!objectStringCoercionFields.isEmpty) "import orjson\n" else "")
   local pydanticImports: List<String> = (new Listing {
-    when (uiFieldLines.contains(" = Field(")) {
+    when (!nestedClassText.isEmpty) {
+      "BaseModel"
+      "ConfigDict"
+    }
+    when (fieldText.contains(" = Field(")) {
       "Field"
     }
     when (!objectStringCoercionFields.isEmpty) {
@@ -3440,14 +3805,17 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
   local pydanticImportLines: String =
     if (!pydanticImports.isEmpty) "from pydantic import \(pydanticImports.join(", "))\n" else ""
   local sdkTypeImports: List<String> = (new Listing {
-    when (uiFieldLines.contains(": ConnectionRef") || uiFieldLines.contains("list[ConnectionRef]")) {
+    when (fieldText.contains(": ConnectionRef") || fieldText.contains("[ConnectionRef]") || fieldText.contains(", ConnectionRef]")) {
       "ConnectionRef"
     }
-    when (uiFieldLines.contains(": FileReference")) {
+    when (fieldText.contains(": FileReference")) {
       "FileReference"
     }
-    when (uiFieldLines.contains("MaxItems(")) {
+    when (fieldText.contains("MaxItems(")) {
       "MaxItems"
+    }
+    when (fieldText.contains(": TreeSelection")) {
+      "TreeSelection"
     }
   }).toList()
   local firstPartyImportLines: String =
@@ -3458,7 +3826,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     (if (!objectStringCoercionFields.isEmpty)
       "from application_sdk.observability.logger_adaptor import get_logger\n"
     else "") +
-    "from application_sdk.templates.contracts import ExtractionInput\n"
+    (if (inputBaseClass == "Input") "from application_sdk.contracts.base import Input\n"
+     else "from application_sdk.templates.contracts import ExtractionInput\n")
   // Module-level logger, emitted only when the coercion validator needs it, so
   // its benign "not valid JSON" fallback is observable (conformance E007) rather
   // than silently swallowed. The message never logs the value itself.
@@ -3479,7 +3848,8 @@ local function generateInputClassPy(): FileOutput = new FileOutput {
     "# To regenerate: pkl eval -m . contract/app.pkl\n" +
     inputImportBlock +
     loggerModuleLine +
-    "class AppInputContract(ExtractionInput):\n" +
+    nestedClassText +
+    "class AppInputContract(\(inputBaseClass)):\n" +
     (if (classBody.isEmpty) "    pass\n" else classBody)
 }
 
@@ -3531,10 +3901,13 @@ local function pascalCase(s: String): String =
     for (seg in s.split(Regex("[^A-Za-z0-9]+"))) { capitalizeFirst(seg) }
   }).toList().join("")
 
-// SQL-family categories drive SQLAppE2ETest / SQLMustacheSubstitutions selection.
+// A system app's suite submits straight to AE on the system-app tenant pool
+// (`SystemAppE2ETest`). Otherwise SQL-family categories drive SQLAppE2ETest /
+// SQLMustacheSubstitutions selection.
 local function e2eBaseClass(): String =
   let (cat = connector?.category)
-  if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
+  if (isSystemApp) "SystemAppE2ETest"
+  else if (cat == "warehouse" || cat == "database" || cat == "lake" || cat == "queryengine")
     "SQLAppE2ETest"
   else "BaseE2ETest"
 
@@ -3575,6 +3948,8 @@ local function getSubsFieldLine(k: String, u: Widgets.UIElement): String? =
   else if (u is Widgets.NumericInput)
     let (d = (u as Widgets.NumericInput).default)
     fmtSubsField(pyName, "int", "default=\(if (d != null) d!!.toInt() else 0)", k)
+  else if (u is Widgets.TagsInput || u is Widgets.InputRepeater)
+    fmtSubsField(pyName, "list[str]", "default_factory=list", k)
   else if (u is Widgets.Radio)
     let (radio = u as Widgets.Radio)
     let (vals = radio.possibleValues.keys.toList())
@@ -3662,11 +4037,21 @@ local function generateE2EBasePy(): FileOutput = new FileOutput {
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(name))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
-    "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
-    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    // SystemAppE2ETest submits straight to AE and never sends the Heracles
+    // envelope these name, so a system app's base leaves them out.
+    (if (isSystemApp) "" else
+      "    argo_package_name = \"\(escapePyStr(resolvedArgoPackageName))\"\n" +
+      "    argo_template_name = \"\(escapePyStr(argoTemplateName))\"\n" +
+      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
     (if (emitConnType) "    connection_type = \"\(escapePyStr(connector!!.value))\"\n" else "") +
-    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "")
+    (if (emitConnCat) "    connection_category = \"\(escapePyStr(connector!!.category))\"\n" else "") +
+    // No manifest.json is generated without a uiConfig, so the harness's
+    // default manifest_path names a file that does not exist.
+    (if (isSystemApp && uiConfig == null)
+      "    # This app generates no manifest.json: its callers declare its DAG node.\n" +
+      "    # Set manifest_path in the suite to a fixture DAG copied from a calling\n" +
+      "    # connector's manifest, and required_dag_nodes to the nodes it runs.\n"
+    else "")
 }
 
 // ── Bundle (multi-entrypoint) e2e base ────────────────────────────────────────
@@ -3770,7 +4155,9 @@ local function epTemplateName(ep: Entrypoint): String =
 
 local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOutput {
   local c = ep.contract!!
-  local baseClass = e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
+  local baseClass =
+    if (isSystemApp) "SystemAppE2ETest"
+    else e2eBaseClassForCategory(ep.sourceCategory ?? c.connector?.category)
   local cname = pascalCase(ep.name)
   // Identity is the BUNDLE's, not the entrypoint's: every entrypoint of a bundle
   // is served by one deployed app service, and `connector_short_name` drives the
@@ -3797,9 +4184,11 @@ local function generateBundleE2EBasePy(ep: Entrypoint): FileOutput = new FileOut
     "from application_sdk.testing.e2e import \(baseClass)\n\n\n" +
     "class \(cname)GeneratedE2EBase(\(baseClass)):\n" +
     "    connector_short_name = \"\(escapePyStr(shortName))\"\n" +
-    "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
-    "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
-    "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n" +
+    // As for a single-entrypoint system app: no Heracles envelope is sent.
+    (if (isSystemApp) "" else
+      "    argo_package_name = \"\(escapePyStr(pkgName))\"\n" +
+      "    argo_template_name = \"\(escapePyStr(tmplName))\"\n" +
+      "    app_service_url = \"\(escapePyStr(appServiceUrl))\"\n") +
     (if (connType != null) "    connection_type = \"\(escapePyStr(connType))\"\n" else "") +
     (if (connCat != null && connCat != "warehouse") "    connection_category = \"\(escapePyStr(connCat))\"\n" else "") +
     "    connector_config_name = \"\(escapePyStr(configName))\"\n" +
@@ -4238,6 +4627,26 @@ local effectiveEntrypoints: Listing<Entrypoint> =
       }
     }
 
+/// Whether `atlan.yaml` carries an `entrypoints` block. A system app never does:
+/// downstream reads an entrypoint without `marketplace_card` as a card, and a
+/// system app's own listing is hidden by GM's `is_system_app`, which does not
+/// hide cards expanded from entrypoints. Omitting the block also keeps the
+/// top-level `type = "system"` out of the synthesized entrypoint: GM and CI
+/// publish do not accept `system` as an entrypoint type.
+local emitsEntrypointsBlock: Boolean = emitEntrypoints && !isSystemApp
+
+/// Refuses system-app settings that would be dropped without a word, because a
+/// system app renders no `entrypoints` block to carry them.
+local _systemAppCheck: Any =
+  if (!isSystemApp) null
+  else if (marketplaceCard)
+    throw("App.pkl: type = \"system\" with marketplaceCard = true. A system app renders no `entrypoints` block, so no card would be emitted. Remove marketplaceCard, or use a non-system type if the app needs a marketplace card.")
+  else
+    let (_withPkg = entrypoints.toList().filter((ep) -> ep.packageId != null))
+    if (!_withPkg.isEmpty)
+      throw("App.pkl: type = \"system\" with packageId set on entrypoint(s) \(_withPkg.map((ep) -> ep.name)). A system app renders no `entrypoints` block, so the package_id and card would be dropped. Remove packageId, or use a non-system type if the entrypoint needs a marketplace card.")
+    else null
+
 local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["name"] = name
   when (appId != "") { ["app_id"] = appId }
@@ -4254,7 +4663,7 @@ local generatedAtlanYamlData: Mapping<String, Any> = new Mapping {
   ["build_tag"] = buildTag
   ["self_deployed_runtime"] = selfDeployedRuntime
   when (tags.toList().length > 0) { ["tags"] = tags }
-  when (emitEntrypoints) {
+  when (emitsEntrypointsBlock) {
     ["entrypoints"] = new Listing {
       for (ep in effectiveEntrypoints) {
         renderEntrypoint(ep)
@@ -4546,6 +4955,39 @@ local function normalizeContractFileName(fileName: String): String =
   else if (fileName.startsWith(prefix)) fileName.drop(prefix.length)
   else fileName
 
+// FND-3140: a bundle gives each entrypoint's input class a unique name and keeps
+// `AppInputContract` as an alias, so existing imports still resolve.
+local function bundleInputClassName(entrypointName: String): String =
+  pascalCase(entrypointName) + "AppInputContract"
+
+local bundleInputClassDecl: String = "\nclass AppInputContract("
+
+local function bundleInputPy(entrypointName: String, file: FileOutput): FileOutput =
+  let (cls = bundleInputClassName(entrypointName))
+  if (cls == "AppInputContract" || !file.text.contains(bundleInputClassDecl)) file
+  else new FileOutput {
+    text = file.text.replaceFirst(bundleInputClassDecl, "\nclass \(cls)(") + "\n\nAppInputContract = \(cls)\n"
+  }
+
+local bundleContractEntrypointNames: List<String> =
+  entrypoints.toList().filter((e) -> e.contract != null).map((e) -> e.name)
+
+local bundleInputClassNameGroups: Map<String, List<String>> =
+  bundleContractEntrypointNames.groupBy((n) -> bundleInputClassName(n))
+
+local _bundleInputClassNameCheck: Any =
+  let (invalid = bundleContractEntrypointNames
+    .filter((n) -> !bundleInputClassName(n).matches(Regex("[A-Za-z][A-Za-z0-9]*AppInputContract"))))
+  let (clashes = bundleInputClassNameGroups.filter((_, names) -> names.length > 1))
+  if (!invalid.isEmpty)
+    throw("Entrypoint name(s) \(invalid.join(", ")) do not yield a valid Python class name "
+      + "for the generated input contract. Start each entrypoint name with a letter.")
+  else if (!clashes.isEmpty)
+    throw("Entrypoints \(clashes.values.map((names) -> names.join(" and ")).join("; ")) "
+      + "generate the same input contract class name (\(clashes.keys.join(", "))). "
+      + "Rename one so every entrypoint gets a unique class.")
+  else null
+
 local function isCredentialFile(entrypoint: Entrypoint, rawFileName: String): Boolean =
   let (normalized = normalizeContractFileName(rawFileName))
   normalized != "" &&
@@ -4586,6 +5028,21 @@ local credentialConflictNames: List<String> =
 // files) and a single-entrypoint contract with no uiConfig (manifest.json is emitted
 // only `when (uiConfig != null)`). `local`, not `hidden`, so an amending contract cannot
 // assign the guard away and generate silently.
+// treeSelection types a field as the SDK's TreeSelection, which only fits an
+// apitree value. Checked over every uiConfig property, not inside field
+// generation, so a field excluded from _input.py (includeInInput = false) is
+// refused too rather than silently accepting a setting that means nothing.
+local _treeSelectionWidgetCheck: Any =
+  let (bad = (uiConfig?.properties ?? Map())
+    .filter((_, u) -> u is Widgets.ConditionalInput
+      && (u as Widgets.ConditionalInput).treeSelection
+      && (u as Widgets.ConditionalInput).baseWidgetType != "apitree")
+    .map((k, u) -> Pair(k, "'\(k)' (baseWidgetType = \"\((u as Widgets.ConditionalInput).baseWidgetType)\")"))
+    .values.toList())
+  if (bad.isEmpty) null
+  else throw("ConditionalInput \(bad.join(", ")) sets treeSelection; "
+    + "treeSelection applies only to baseWidgetType = \"apitree\".")
+
 local _legacyWorkflowTypesPlacementCheck: Any =
   if (legacyWorkflowTypes.isEmpty)
     null
@@ -4615,6 +5072,10 @@ output =
   let (_jdbcCheck = jdbcInvariant)
   let (_connectorCheck = connectorInvariant)
   let (_credCheck = _credentialConflictCheck)
+  // Forced here because nothing that renders atlan.yaml reads it, so it would
+  // otherwise never be evaluated.
+  let (_sysAppCheck = _systemAppCheck)
+  let (_inputsDeclCheck = _inputsCheck)
   // Forced here because a bundle root never evaluates manifestData, which is the only
   // other reader of legacyWorkflowTypes — the misplacement would otherwise stay lazy.
   let (_legacyAliasPlacementCheck = _legacyWorkflowTypesPlacementCheck)
@@ -4622,10 +5083,21 @@ output =
   // is a supported opt-out, and a lazily-evaluated check inside that node would
   // let a reserved-name collision through for exactly those contracts.
   let (_reservedUiCheck = reservedUiFieldInvariant)
+  // Same reasoning, streaming-conditional: the arg loops skip these names rather
+  // than refusing them, so without this force the collision is silent.
+  let (_streamingReservedUiCheck = streamingReservedUiFieldInvariant)
+  // Forced here as well as inside generateExtractNode: `pipeline { extract = null }`
+  // is a supported opt-out, and the in-node reference is skipped for exactly those
+  // contracts — so a streaming trigger on an extract-less entrypoint rendered
+  // `streaming_enabled: true` and threw nothing. Same reasoning as _reservedUiCheck
+  // directly above.
+  let (_streamingEpOutputCheck = _streamingEntrypointCheck)
   // Forced for the same reason: the single-entrypoint emission below is the only
   // reader of `artifactSchemas`, so a bundle root's declaration would otherwise
   // never be evaluated and would vanish without a word.
   let (_bundleSchemaCheck = _bundleArtifactSchemaCheck)
+  let (_bundleInputNameCheck = _bundleInputClassNameCheck)
+  let (_treeSelectionCheck = _treeSelectionWidgetCheck)
   let (_e2eCredOutput = generateE2ECredentialPy())
   let (_e2eSubsOutput = generateE2ESubstitutionsPy())
   new ModuleOutput {
@@ -4648,8 +5120,28 @@ output =
             ["app/generated/\(connectorConfigName).json"] = credentialConfigOutput
           }
           ["app/generated/manifest.json"] = manifestOutput
+        }
+        // The input model: from uiConfig, `inputs`, or both. `inputs` alone
+        // (a system app) renders it with no manifest or configmap.
+        when (uiConfig != null || !inputs.isEmpty) {
           ["app/generated/_input.py"] = generateInputClassPy()
           ["app/generated/__init__.py"] = new FileOutput { text = "" }
+        }
+        // The DAG node a system app's callers add to start it, derived from
+        // `inputs` so no caller restates the app's args by hand.
+        when (isSystemApp && !inputs.isEmpty) {
+          [inputContractPath] = new FileOutput {
+            text = InputContractPkg.render(
+              inputContractClassName,
+              name,
+              displayName,
+              workflowTypeResolved,
+              "\(taskQueuePrefix)-{deployment_name}",
+              inputs.toMap(),
+              inputNestedClasses,
+              inputContractToolkitImport
+            )
+          }
         }
         // e2e test-harness artifacts (independent of uiConfig)
         ["app/generated/_e2e_base.py"] = generateE2EBasePy()
@@ -4689,7 +5181,9 @@ output =
                 when (normalizeContractFileName(fileName) != ""
                       && normalizeContractFileName(fileName) != "_e2e_base.py"
                       && !isCredentialFile(entrypoint, fileName)) {
-                  ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] = fileOutput
+                  ["app/generated/\(entrypoint.name)/\(normalizeContractFileName(fileName))"] =
+                    if (normalizeContractFileName(fileName) == "_input.py") bundleInputPy(entrypoint.name, fileOutput)
+                    else fileOutput
                 }
               }
               ["app/generated/\(entrypoint.name)/_e2e_base.py"] = generateBundleE2EBasePy(entrypoint)

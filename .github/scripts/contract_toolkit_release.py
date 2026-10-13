@@ -173,6 +173,10 @@ def categorize(commits):
         is_breaking = bool(re.search(r"!:", subject)) or bool(
             re.search(r"^BREAKING[ _-]CHANGE:", body, re.MULTILINE)
         )
+        if re.match(r"^ci[(!:]", subject) and not is_breaking:
+            # `ci` touches only this repo's automation, never the released
+            # package, so it is the one type left out of the notes (FND-3748).
+            continue
         if is_breaking:
             msg = re.sub(r"^[^:]+:\s*", "", subject)
             cats["breaking"].append((link, msg))

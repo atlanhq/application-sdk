@@ -58,6 +58,12 @@ import uuid
 # newline.
 _VALID_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
+# Names a caller's extra-env may not set: the SDK's own CI writes them, and the
+# e2e harness acts on them. ``E2E_TENANT_POOL`` is the per-leg tenant resolver's
+# record of which tenant pool a leg was placed in (FND-3542). Checked in ``main``
+# only, because the resolver renders through this module and must still write it.
+RESERVED_NAMES = frozenset({"E2E_TENANT_POOL"})
+
 
 class ExtraEnvError(ValueError):
     """The caller-supplied extra-env payload is not usable."""
@@ -111,6 +117,16 @@ def parse(payload: str) -> list[tuple[str, str]]:
             )
         pairs.append((name, str(value)))
     return pairs
+
+
+def reject_reserved(payload: str) -> None:
+    """Raise if *payload* sets any name in :data:`RESERVED_NAMES`."""
+    taken = sorted(name for name, _text in parse(payload) if name in RESERVED_NAMES)
+    if taken:
+        raise ExtraEnvError(
+            f"extra-env may not set {', '.join(taken)}: the SDK's e2e tenant "
+            "resolution writes it."
+        )
 
 
 def render(payload: str) -> str:
@@ -239,6 +255,7 @@ def main() -> int:
     )
     args = parser.parse_args()
     try:
+        reject_reserved(args.json)
         render_fn = render_masks if args.mask_only else render
         sys.stdout.write(render_fn(args.json))
     except ExtraEnvError as exc:

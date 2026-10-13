@@ -4,13 +4,14 @@ from pathlib import Path
 from typing import Annotated
 
 import pytest
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from application_sdk.contracts.types import (
     AssetArtifact,
     FileReference,
     MaxItems,
     StorageTier,
+    TreeSelection,
     asset_artifact_fields,
     asset_artifact_marker,
 )
@@ -404,3 +405,40 @@ class TestMarkerSurvivesRedeclaration:
             plain: FileReference | None = None
 
         assert asset_artifact_marker(_RedeclaredPlainNeighbour, "plain") is None
+
+
+# =============================================================================
+# TreeSelection
+# =============================================================================
+
+
+class _TreeModel(BaseModel):
+    selection: TreeSelection = Field(default_factory=dict)
+
+
+class TestTreeSelection:
+    # The widget's nested shape, arbitrarily deep; {} = a node with nothing
+    # chosen beneath it.
+    WIRE = {"SAP": {"MM": {"MM-SRV": {"MM-SRV-PO": {}}}, "FI": {}}}
+
+    def test_value_is_the_plain_nested_dict(self) -> None:
+        value = _TreeModel(selection=self.WIRE).selection
+        assert type(value) is dict
+        assert value == self.WIRE
+
+    def test_dump_round_trips_unchanged(self) -> None:
+        model = _TreeModel(selection=self.WIRE)
+        assert model.model_dump(mode="json")["selection"] == self.WIRE
+        restored = _TreeModel.model_validate_json(model.model_dump_json())
+        assert restored.selection == self.WIRE
+
+    def test_defaults_to_empty(self) -> None:
+        assert _TreeModel().selection == {}
+
+    @pytest.mark.parametrize(
+        "bad",
+        [{"SAP": True}, {"SAP": {"MM": "x"}}, {"SAP": ["MM"]}, ["SAP"]],
+    )
+    def test_non_tree_values_are_rejected(self, bad: object) -> None:
+        with pytest.raises(ValidationError):
+            _TreeModel(selection=bad)

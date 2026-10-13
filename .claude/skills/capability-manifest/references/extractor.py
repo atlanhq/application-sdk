@@ -243,6 +243,34 @@ def _is_classvar_attribute(obj: Any) -> bool:
     return bool(re.search(r":\s*ClassVar\b", source_line))
 
 
+def _contract_members(cls_obj: Any) -> list[tuple[str, Any]]:
+    """A griffe class's members, inherited ones included, in Pydantic field order.
+
+    A contract that shares its fields through a base class (``PreflightInput``
+    and ``WarmupInput`` both extend ``_SourceRequestInput``) would otherwise list
+    only the fields it declares itself. Bases come first, walking the MRO from
+    the root; a subclass's redefinition replaces the base's member but keeps the
+    base's position, the order Pydantic gives ``model_fields``. Bases griffe
+    cannot resolve (``pydantic.BaseModel``, which it never loads) are skipped by
+    ``mro()`` itself; if the MRO cannot be computed at all, only the class's own
+    members are returned.
+    """
+    own = list(cls_obj.members.items()) if hasattr(cls_obj, "members") else []
+    try:
+        bases = list(reversed(cls_obj.mro()))
+    except (
+        Exception
+    ):  # ValueError or AliasResolutionError: an MRO griffe cannot compute
+        return own
+    merged: dict[str, Any] = {}
+    for base in bases:
+        for name, member in base.members.items():
+            merged[name] = member
+    for name, member in own:
+        merged[name] = member
+    return list(merged.items())
+
+
 def _render_signature(obj: Any) -> str:
     """Render a callable's signature string (≤120 chars, truncated deterministically).
 
@@ -681,9 +709,7 @@ def cmd_dump() -> None:
                     "model_computed_fields",
                 }
                 fields: list[dict[str, Any]] = []
-                for f_name, f_obj in (
-                    m_obj.members.items() if hasattr(m_obj, "members") else []
-                ):
+                for f_name, f_obj in _contract_members(m_obj):
                     if f_name.startswith("_"):
                         continue
                     if f_name in PYDANTIC_INTERNALS:

@@ -15,9 +15,9 @@ here is what makes a failed member task hold the group.
 
 Behaviour
 ---------
-* Head ref not under ``renovate/``: pass at once. This job runs on every PR,
-  push and merge-group run in every app repo, so this path must never wait or
-  call the API.
+* Head ref not under ``renovate/``: pass at once, never waiting or calling the
+  API. The job's own ``if:`` already skips these refs (FND-3320), so this path
+  is the backstop for a caller that wires the script without that filter.
 * Renovate PR: read ``renovate/artifacts`` on the head SHA. Renovate pushes the
   branch before it posts statuses, so an absent or ``pending`` context is
   polled for up to a minute. Renovate posts it seconds after the push, so the

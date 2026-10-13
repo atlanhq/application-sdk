@@ -23,6 +23,21 @@ from application_sdk.observability.logger_adaptor import get_logger
 logger = get_logger(__name__)
 
 
+def _normalize_external_id(external_id: str | None) -> str | None:
+    """Return the STS ``ExternalId`` to send, or ``None`` to omit it.
+
+    Shared by every ``AssumeRole`` call site so they agree on what counts as
+    "set". Surrounding whitespace is stripped: STS's ExternalId pattern
+    (``[\\w+=,.@:/-]*``) admits none, so a padded value pasted into a credential
+    form can only ever fail. A blank result is ``None``, because STS rejects an
+    empty ExternalId (min length 2) and trust policies without an external-id
+    condition must not be forced to send one.
+    """
+    if external_id is None:
+        return None
+    return external_id.strip() or None
+
+
 def get_region_name_from_hostname(hostname: str) -> str:
     """
     Extract region name from AWS RDS endpoint.
@@ -119,15 +134,13 @@ def generate_aws_rds_token_with_iam_role(
             if has_session_token:
                 sts_kwargs["aws_session_token"] = aws_session_token
         sts_client = client("sts", **sts_kwargs)
-        # Only include ExternalId when set — AWS STS rejects an empty
-        # ExternalId (min length 2). Trust policies without an external-id
-        # requirement are valid and must not be forced to send one.
         assume_role_kwargs: dict[str, Any] = {
             "RoleArn": role_arn,
             "RoleSessionName": session_name,
         }
-        if external_id:
-            assume_role_kwargs["ExternalId"] = external_id
+        resolved_external_id = _normalize_external_id(external_id)
+        if resolved_external_id:
+            assume_role_kwargs["ExternalId"] = resolved_external_id
         assumed_role = sts_client.assume_role(**assume_role_kwargs)
 
         credentials = assumed_role["Credentials"]

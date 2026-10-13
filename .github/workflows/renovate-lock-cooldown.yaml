@@ -29,6 +29,14 @@ name: Bound the Renovate lock refresh
 # whole — take the bounded resolve, or restore the base branch's lock verbatim.
 # See renovate_npm_lock_bounded's docstring for the measurements behind that.
 #
+# When the bounded lock moves pyatlan, the driver also regenerates the
+# conformance package's relationship_directions.json, which a drift test pins to
+# the locked pyatlan. That installs and imports the freshly-resolved release, so
+# the lane is two jobs: `bound` resolves and regenerates holding only a read-only
+# GITHUB_TOKEN, and `publish` — the only job that ever sees the App token —
+# copies the declared output paths out of its artifact, commits and pushes. No
+# resolver and no third-party install runs where the push credential lives.
+#
 # All logic lives in the tested driver .github/scripts/bound_lock_branch.py; this
 # workflow provides the toolchain, the baseline ref, and the push.
 
@@ -89,8 +97,113 @@ jobs:
     if: >-
       ${{ contains(fromJSON('["atlan-app-fleet[bot]", "renovate[bot]"]'), github.actor)
       && !startsWith(github.event.head_commit.message, 'chore(deps): bound the refreshed locks') }}
+    # Read-only, and no App token or secret anywhere in this job: it runs the
+    # resolver and, when pyatlan moved, installs and imports the new release.
     permissions:
-      contents: write
+      contents: read
+    steps:
+      # The pushed SHA, not the branch: `publish` commits onto this same SHA, so
+      # a branch that moves in between makes its push non-fast-forward instead
+      # of landing these outputs on top of a newer refresh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # The baseline the bound is computed against — see the driver's
+      # baseline_lock_text docstring. Only the tree at the tip of the base branch
+      # is needed (one `git show` of each lock), so a depth-1 fetch is enough and
+      # a full-history checkout is not.
+      - name: Fetch the base branch
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
+
+      # Pinned to the same uv the fleet runner uses — a resolver version skew
+      # here would show up as unexplained lock churn.
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.13.0"
+
+      # For the npm half of the bound. Pinned to the same major as renovate.yaml
+      # rather than taking whatever the runner image ships: npm's major decides
+      # the lockfileVersion it writes, and a runner rolling forward to a major
+      # that writes a different one would turn every bounded resolve into a
+      # whole-file rewrite. Verified on npm 11.x: an unbounded
+      # `npm install --package-lock-only` reproduces the committed lock
+      # byte for byte, so the lane's diffs stay reviewable.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      # P3D matches the fleet. A shorter window here would put application-sdk's
+      # CI on a different dependency set from the connectors again, which is half
+      # of what FND-376 exists to fix.
+      - name: Bound the refreshed locks
+        env:
+          BASE_BRANCH: ${{ github.event.repository.default_branch }}
+        # `--with packaging`, pinned: the driver's rollback gate needs PEP 440
+        # parsing, and the runner image shipping `packaging` for the system
+        # interpreter is not a promise GitHub makes. Without it every ordinary
+        # upgrade reads as a regression. `--no-project` keeps this off the repo's
+        # own environment — the bound must not depend on a full dev sync.
+        # `--no-commit`: committing is `publish`'s job, below.
+        run: |
+          set -euo pipefail
+          uv run --no-project --with 'packaging==26.3' \
+            python .github/scripts/bound_lock_branch.py \
+            --window P3D \
+            --baseline-ref "origin/$BASE_BRANCH" \
+            --no-commit
+
+      # Exactly the driver's OUTPUT_PATHS — a drift test pins the two together.
+      # Every one of them exists on every run, so a missing file is an error,
+      # not something to upload around.
+      - name: Upload the bounded locks
+        id: upload-locks
+        continue-on-error: true
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bounded-locks
+          path: |
+            uv.lock
+            packages/conformance/uv.lock
+            packages/conformance/conformance/package-lock.json
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+      # Same retry shape as conformance-reusable.yaml's SARIF uploads: a wait,
+      # then a DISTINCT name (a failed finalize holds the first name for the
+      # run), which `publish` picks up by `bounded-locks*` glob. No
+      # continue-on-error: a second failure fails here, not as a confusing
+      # missing-artifact error in `publish`.
+      - name: Wait before the upload retry
+        if: steps.upload-locks.outcome == 'failure'
+        run: sleep 20
+
+      - name: Upload the bounded locks (retry)
+        if: steps.upload-locks.outcome == 'failure'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: bounded-locks-retry
+          path: |
+            uv.lock
+            packages/conformance/uv.lock
+            packages/conformance/conformance/package-lock.json
+            packages/conformance/conformance/data/relationship_directions.json
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: Commit and push the bounded locks
+    needs: bound
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
       # For the carry-forward below. Written with GITHUB_TOKEN rather than the
       # App token: publishing a commit status needs no identity that re-triggers
       # anything, so the narrower credential is the right one.
@@ -120,58 +233,49 @@ jobs:
           # here rather than an omission.
           permission-contents: write
 
+      # The same SHA `bound` resolved against — see the comment on its checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           token: ${{ steps.app-token.outputs.token }}
-          ref: ${{ github.ref }}
+          ref: ${{ github.sha }}
 
-      # The baseline the bound is computed against — see the driver's
-      # baseline_lock_text docstring. Only the tree at the tip of the base branch
-      # is needed (one `git show` of each lock), so a depth-1 fetch is enough and
-      # a full-history checkout is not.
-      - name: Fetch the base branch
-        env:
-          BASE_BRANCH: ${{ github.event.repository.default_branch }}
-        run: git fetch --no-tags --depth=1 origin "+refs/heads/$BASE_BRANCH:refs/remotes/origin/$BASE_BRANCH"
-
-      # Pinned to the same uv the fleet runner uses — a resolver version skew
-      # here would show up as unexplained lock churn.
-      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # Outside the checkout, so the artifact's paths cannot overwrite anything
+      # in it except through the driver's allowlisted copy.
+      - name: Download the bounded locks
+        id: download-locks
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        continue-on-error: true
         with:
-          version: "0.12.20"
+          # Glob, not the bare name: the upload's retry lands under
+          # `bounded-locks-retry`. Both uploads overwrite, so exactly one is live.
+          pattern: bounded-locks*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bounded-locks
 
-      # For the npm half of the bound. Pinned to the same major as renovate.yaml
-      # rather than taking whatever the runner image ships: npm's major decides
-      # the lockfileVersion it writes, and a runner rolling forward to a major
-      # that writes a different one would turn every bounded resolve into a
-      # whole-file rewrite. Verified on npm 11.x: an unbounded
-      # `npm install --package-lock-only` reproduces the committed lock
-      # byte for byte, so the lane's diffs stay reviewable.
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Wait before the download retry
+        if: steps.download-locks.outcome == 'failure'
+        run: sleep 20
+
+      # No continue-on-error: a second failure fails the job rather than
+      # committing nothing.
+      - name: Download the bounded locks (retry)
+        if: steps.download-locks.outcome == 'failure'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
-          node-version: "24"
+          pattern: bounded-locks*
+          merge-multiple: true
+          path: ${{ runner.temp }}/bounded-locks
 
-      # P3D matches the fleet. A shorter window here would put application-sdk's
-      # CI on a different dependency set from the connectors again, which is half
-      # of what FND-376 exists to fix.
-      - name: Bound the refreshed locks
-        env:
-          BASE_BRANCH: ${{ github.event.repository.default_branch }}
-        # `--with packaging`, pinned: the driver's rollback gate needs PEP 440
-        # parsing, and the runner image shipping `packaging` for the system
-        # interpreter is not a promise GitHub makes. Without it every ordinary
-        # upgrade reads as a regression. `--no-project` keeps this off the repo's
-        # own environment — the bound must not depend on a full dev sync.
-        run: |
-          uv run --no-project --with 'packaging==26.3' \
-            python .github/scripts/bound_lock_branch.py \
-            --window P3D \
-            --baseline-ref "origin/$BASE_BRANCH"
+      # Stdlib only, on the runner's python3: no resolver, no install, nothing
+      # from the refreshed dependency set runs beside the App token.
+      - name: Commit the bounded locks
+        run: python3 .github/scripts/bound_lock_branch.py --apply-from "$RUNNER_TEMP/bounded-locks"
 
-      # No-op when the locks were already inside the window (the driver commits
-      # nothing), so this needs no condition of its own.
+      # Unchanged outputs commit nothing, so HEAD is still the pushed SHA and this
+      # is a no-op. A branch that moved since `bound` rejects it as
+      # non-fast-forward, and the newer push's own run takes over.
       - name: Push
-        run: git push
+        run: git push origin "HEAD:$GITHUB_REF"
 
       # Commit statuses are per-SHA and Renovate stamps only its own commits, so
       # our push moves the head off the SHA `renovate/artifacts` lives on — which
@@ -184,5 +288,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           python3 .github/scripts/carry_artifact_status.py \
             --target-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

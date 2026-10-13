@@ -62,6 +62,10 @@ __all__ = [
     "ProgressWatchdogUnreachableError",
     "RequestDelivery",
     "SeededConnectionNotSearchableError",
+    "StoreAssertDisabledError",
+    "StoreAssertQueueAmbiguousError",
+    "StoreAssertUnreadableError",
+    "TenantPoolMismatchError",
     "UnknownConnectorTypeError",
     "WorkerNotHealthyError",
 ]
@@ -123,6 +127,17 @@ class DeployedManifestMismatchError(DataIntegrityError):
     expectation: str | None = (
         "the published DAG's node identities match the local manifest's"
     )
+
+
+@dataclass(kw_only=True)
+class TenantPoolMismatchError(PreconditionError):
+    """The suite is not written for the tenant pool this run was placed in.
+
+    Raised from ``setup_method``, before anything touches the tenant. See
+    :mod:`application_sdk.testing.e2e.tenant_pool`.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_E2E_TENANT_POOL"
 
 
 @dataclass(kw_only=True)
@@ -276,3 +291,46 @@ class HarnessMethodNotImplementedError(UnimplementedError):
     code: ClassVar[str] = "UNIMPLEMENTED_HARNESS_METHOD"
     message: str = "Test harness subclass did not implement required method"
     component: str | None = "e2e_harness"
+
+
+@dataclass(kw_only=True)
+class StoreAssertQueueAmbiguousError(InvalidInputError):
+    """The harness cannot tell which task queue the store-assertion node goes on.
+
+    The node must run on the app under test's own queue, so it is served by the
+    same pod and store binding the app used. The default reads that queue off
+    the seed DAG and gives up when the DAG names zero or several; the suite
+    then overrides
+    :meth:`~application_sdk.testing.e2e.system_app.SystemAppE2ETest.store_assert_task_queue`.
+    """
+
+    code: ClassVar[str] = "INVALID_INPUT_STORE_ASSERT_QUEUE_AMBIGUOUS"
+    field: str | None = "store_assert_task_queue"
+
+
+@dataclass(kw_only=True)
+class StoreAssertUnreadableError(DependencyUnavailableError):
+    """The store-assertion node's verdict could not be read back from AE.
+
+    Not an ``AssertionError`` for the reason
+    :class:`AtlasReadIndeterminateError` is not one: the run never saw a
+    verdict, so it cannot make a claim about the app. It is not a pass either.
+    """
+
+    code: ClassVar[str] = "DEPENDENCY_UNAVAILABLE_STORE_ASSERT_UNREADABLE"
+    component: str | None = "e2e_harness_store_assert"
+
+
+@dataclass(kw_only=True)
+class StoreAssertDisabledError(PreconditionError):
+    """The app's deployment on this tenant has store assertions turned off.
+
+    The node ran and read nothing, because ``ATLAN_STORE_ASSERT_ENABLED`` was
+    not set on the app's pod. The SDK's e2e install sets it, per tenant,
+    through ``deploy.env_overrides``; an app installed any other way does not
+    get it. Like :class:`StoreAssertUnreadableError`, this says nothing about
+    the app, and it is not a pass.
+    """
+
+    code: ClassVar[str] = "PRECONDITION_STORE_ASSERT_DISABLED"
+    expected_state: str | None = "ATLAN_STORE_ASSERT_ENABLED=true on the app's pod"

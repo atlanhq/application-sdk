@@ -672,7 +672,10 @@ class TaskExecutionContext:
         return None
 
     async def run_in_thread(
-        self, func: Callable[..., T], *args: Any, **kwargs: Any
+        self,
+        func: Callable[..., T],
+        *args: Any,
+        **kwargs: Any,
     ) -> T:
         """Last-resort escape hatch: run a blocking function in a thread pool.
 
@@ -717,8 +720,12 @@ class TaskExecutionContext:
 
         Args:
             func: Blocking function to run. MUST have internal timeout handling.
+                Bind a :class:`~application_sdk.execution.heartbeat.CancelHandle`
+                to it (``handle.bind(func)``) to cancel the driver call when this
+                task is cancelled; register the driver's cancel on the handle
+                from inside ``func``.
             *args: Positional arguments for ``func``.
-            **kwargs: Keyword arguments for ``func``.
+            **kwargs: Keyword arguments for ``func``, all passed through.
 
         Returns:
             Result of ``func(*args, **kwargs)``.

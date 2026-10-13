@@ -26,6 +26,9 @@ from application_sdk.handler.contracts import (
     PreflightOutput,
     PreflightStatus,
     SqlMetadataOutput,
+    WarmupInput,
+    WarmupObservation,
+    WarmupState,
 )
 
 if TYPE_CHECKING:
@@ -122,7 +125,8 @@ class Handler(ABC):
 
             raise AppContextError(
                 "Handler context is not set. "
-                "Access self.context only inside test_auth, preflight_check, or fetch_metadata."
+                "Access self.context only inside a handler method "
+                "(test_auth, preflight_check, fetch_metadata, warmup)."
             )
         return ctx
 
@@ -153,15 +157,20 @@ class Handler(ABC):
 
         Raising is not equivalent, and what it means depends on the error's type:
 
-        - A **typed plumbing** error (``RateLimitedError``,
-          ``DependencyUnavailableError``, ``ResourceExhaustedError``) means "I could
-          not determine readiness". The gate fails open on it in both postures.
-          This is the right way to report a transient — returning ``NOT_READY``
-          for a 429 makes a hard-mode gate fail *closed* on a blip.
-        - Anything else — an untyped crash, a typed source error, or overrunning
-          ``input.timeout_seconds`` — is treated as an unverifiable source and is
-          subject to the app's ``preflight_gate_mode``. In hard mode it aborts the
-          run, attributed to preflight.
+        - A retryable ``SourceUnavailableError`` (the source did not answer) or
+          ``RateLimitedError`` (it answered 429) means "I could not ask this
+          time". A hard gate retries it and blocks only if it persists to the
+          final attempt, under its own category; soft mode reports and proceeds.
+          Compute that is cold, warming or queued is not this: report it from
+          :meth:`warmup`.
+        - A ``DependencyUnavailableError``, ``ResourceExhaustedError`` or
+          ``CancelledError`` is the deprecated fail-open idiom: the gate fails
+          open on it in both postures, with a ``DeprecationWarning``.
+        - Anything else — an untyped crash, another typed source error, or
+          overrunning ``input.timeout_seconds`` — is treated as an unverifiable
+          source and is subject to the app's ``preflight_gate_mode``. In hard
+          mode it aborts the run when its category is one the customer can act
+          on (``TIMEOUT`` and an untyped crash's ``INTERNAL`` never do).
 
         Keep probes awaitable: the gate cancels this method at the budget, and
         cancellation only lands at an ``await``. Blocking synchronous I/O on the
@@ -194,6 +203,37 @@ class Handler(ABC):
             HandlerError: On fetch errors that should surface as HTTP 500.
         """
         ...
+
+    async def warmup(self, input: WarmupInput) -> WarmupObservation:
+        """Probe the source's compute, pushing its warmup forward.
+
+        Optional. The default reports ``READY``, so an app that does not
+        override it passes on the first probe and behaves exactly as it did
+        before warmup existed.
+
+        Idempotent and stateless: each call both pushes the warmup forward and
+        reports where it is, and the SDK holds no warmup state between calls.
+        The gate calls it once per poll on durable timers, and
+        ``POST /workflows/v1/warmup`` once per request. A query-probe app
+        submits its probe query (which wakes a suspended warehouse), waits up to
+        ``input.probe_timeout_seconds``, and reports ``READY`` if it answered,
+        ``WARMING`` / ``QUEUED`` if not. Whether to cancel a probe still pending
+        at the timeout is the app's call; each poll submits again, so the
+        default guidance is to cancel.
+
+        Raise a typed AUTH / PERMISSION / NOT_FOUND ``AppError`` for a failure
+        no amount of waiting fixes; return ``UNAVAILABLE`` for a source that
+        will not get ready on its own. Never use privileges beyond what the
+        app's checks already verify.
+
+        Args:
+            input: Credentials and connection config, as sent to ``/check``,
+                plus the probe timeout.
+
+        Returns:
+            What this probe saw.
+        """
+        return WarmupObservation(state=WarmupState.READY)
 
 
 class DefaultHandler(Handler):

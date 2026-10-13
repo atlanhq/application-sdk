@@ -30,6 +30,14 @@ that must stay red, and ``resolve_e2e_tenant.py`` already reports it precisely
 per leg; silently narrowing it away here would convert that red into a run that
 looks complete and is not.
 
+Tenant pools (FND-3542)
+-----------------------
+A repo that can see ``E2E_SYSTEM_TENANT_MATRIX_JSON`` runs its legs on the
+system-app pool only (see ``resolve_e2e_tenant.py``), so its fan-out is that
+secret's clouds, not the connector matrix's. ``--system-matrix-json`` takes the
+same precedence here as in the resolver, so the two cannot disagree on which
+map a leg is placed from.
+
 Degradation
 -----------
 An unusable payload prints an empty list and warns, rather than failing. Empty
@@ -81,6 +89,15 @@ def cloud_keys(matrix_json: str) -> list[str]:
     return sorted(str(key).strip() for key in parsed if str(key).strip())
 
 
+def effective_matrix(matrix_json: str, system_matrix_json: str) -> str:
+    """Return the map the resolver will place legs from.
+
+    The system pool wins whenever it is present, exactly as in
+    ``resolve_e2e_tenant.resolve``.
+    """
+    return system_matrix_json if system_matrix_json.strip() else matrix_json
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -91,10 +108,18 @@ def main(argv: list[str] | None = None) -> int:
             "read, and only its keys are ever printed."
         ),
     )
+    parser.add_argument(
+        "--system-matrix-json",
+        default="",
+        help=(
+            "E2E_SYSTEM_TENANT_MATRIX_JSON. When non-empty its keys are read "
+            "instead of --matrix-json's."
+        ),
+    )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
     try:
-        clouds = cloud_keys(args.matrix_json)
+        clouds = cloud_keys(effective_matrix(args.matrix_json, args.system_matrix_json))
     except MatrixCloudsError as exc:
         # Never echo the payload, not even a fragment of it: the JSONDecodeError
         # text carries a position, not content, and that is all that is quoted.

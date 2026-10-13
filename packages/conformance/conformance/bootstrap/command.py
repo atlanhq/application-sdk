@@ -33,6 +33,7 @@ from conformance.bootstrap.render import (
     MANAGED_WORKFLOWS,
     RETIRED_CONNECTOR_REVIEW_FILES,
     RETIRED_FILES,
+    SARIF_UPLOAD_WORKFLOW,
     render,
 )
 
@@ -680,6 +681,10 @@ def main(argv: list[str]) -> int:
     kit_requested = kwargs.pop("connector_review_kit") == "true"
     connector_review_kit = kit_requested or resync
     apply_bootstrap_autodetection(kwargs, root)
+    # Popped after autodetection, which is what fills in an opt-in already on
+    # disk, and for the same reason as resync: it picks whether a file exists,
+    # not a value inside one, so render() has no keyword for it.
+    sarif_upload = kwargs.pop("sarif_upload") == "true"
 
     # Validate shared config before bootstrap writes anything. The kit must
     # never overwrite a hand-maintained review block or a malformed settings
@@ -753,6 +758,15 @@ def main(argv: list[str]) -> int:
     for name in MANAGED_WORKFLOWS:
         dest = root / ".github" / "workflows" / name
         _record(dest, _bootstrap_file(dest, render(name, **kwargs)))
+
+    # Opt-in shim: written on public repos that asked for it, removed from
+    # every other repo. See SARIF_UPLOAD_WORKFLOW. Recorded like the retired
+    # files below: a removal is a touch, a repo that never had it is nothing.
+    sarif_dest = root / ".github" / "workflows" / SARIF_UPLOAD_WORKFLOW
+    if sarif_upload:
+        _record(sarif_dest, _bootstrap_file(sarif_dest, render(SARIF_UPLOAD_WORKFLOW)))
+    elif _retire_file(sarif_dest) == "removed":
+        _record(sarif_dest, "removed")
 
     # Shims bootstrap once installed and now removes. See RETIRED_WORKFLOWS.
     # Only an actual deletion is recorded: a repo that never had the file (or

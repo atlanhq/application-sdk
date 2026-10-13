@@ -40,7 +40,10 @@ whose attribute name starts with ``assert`` (``self.assertEqual``,
 project-local ``_assert_*`` helper) or is exactly ``fail``
 (``pytest.fail``/``self.fail``); one of the SDK integration-test scenario
 helpers (``.equals``/``.contains``/``.exists``/``.is_dict``/``.is_string``/
-``.is_true``/``.is_list``); or an explicit ``# should not raise`` /
+``.is_true``/``.is_list``); a direct, same-name
+``super().test_full_dag_runs_end_to_end()`` delegation from a class whose base
+is imported from the SDK e2e harness or the contract-generated ``_e2e_base``
+(the SDK's assertion-bearing full-DAG scenario); or an explicit ``# should not raise`` /
 ``# must not raise`` comment anywhere in the test body (case-insensitive).
 
 The last form covers "the call completing without raising *is* the
@@ -150,6 +153,107 @@ def discover(root: Path) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
+_PYTEST_OPT_OUT_ATTR = "__test__"
+
+
+def _assigned_value(
+    target: ast.expr, value: ast.expr | None
+) -> tuple[bool, ast.expr | None]:
+    """Return ``(binds, value)`` for ``__test__`` in an assignment *target*.
+
+    ``value`` is the expression bound to ``__test__``, or ``None`` when it
+    cannot be read statically (starred or length-mismatched unpacking).
+    """
+    if isinstance(target, ast.Name):
+        return target.id == _PYTEST_OPT_OUT_ATTR, value
+    if isinstance(target, ast.Starred):
+        return _assigned_value(target.value, None)[0], None
+    if isinstance(target, (ast.Tuple, ast.List)):
+        paired: list[ast.expr] | None = None
+        if (
+            isinstance(value, (ast.Tuple, ast.List))
+            and len(value.elts) == len(target.elts)
+            and not any(isinstance(e, ast.Starred) for e in target.elts)
+            and not any(isinstance(e, ast.Starred) for e in value.elts)
+        ):
+            paired = value.elts
+        result: tuple[bool, ast.expr | None] = (False, None)
+        for index, element in enumerate(target.elts):
+            binds, bound = _assigned_value(
+                element, paired[index] if paired is not None else None
+            )
+            if binds:
+                result = (True, bound)
+        return result
+    return False, None
+
+
+def _binds_opt_out_attr(node: ast.AST) -> bool:
+    """True when *node* binds ``__test__`` in the enclosing class scope.
+
+    Nested function, class and lambda bodies are their own scopes, so only
+    their names are checked.
+    """
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if child.name == _PYTEST_OPT_OUT_ATTR:
+                return True
+            continue
+        if isinstance(child, ast.Lambda):
+            continue
+        if (
+            (
+                isinstance(child, ast.Name)
+                and child.id == _PYTEST_OPT_OUT_ATTR
+                and isinstance(child.ctx, (ast.Store, ast.Del))
+            )
+            or (
+                isinstance(child, ast.alias)
+                and (child.asname or child.name.split(".")[0]) == _PYTEST_OPT_OUT_ATTR
+            )
+            or (
+                isinstance(child, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar))
+                and child.name == _PYTEST_OPT_OUT_ATTR
+            )
+            or (
+                isinstance(child, ast.MatchMapping)
+                and child.rest == _PYTEST_OPT_OUT_ATTR
+            )
+        ):
+            return True
+        if _binds_opt_out_attr(child):
+            return True
+    return False
+
+
+def _class_has_pytest_collection_opt_out(cls: ast.ClassDef) -> bool:
+    """True when the class body leaves ``__test__`` bound to the literal ``False``.
+
+    Only unconditional top-level assignments (including tuple unpacking) are
+    read. Any other binding — conditional, looped, imported, walrus, ``def`` —
+    makes the value unknown, and an unknown value counts as collected so the
+    class is still checked.
+    """
+    test_value: ast.expr | None = None
+    for stmt in cls.body:
+        if isinstance(stmt, ast.Assign):
+            if _binds_opt_out_attr(stmt.value):
+                test_value = None
+            for target in stmt.targets:
+                binds, bound = _assigned_value(target, stmt.value)
+                if binds:
+                    test_value = bound
+        elif isinstance(stmt, ast.AnnAssign):
+            if stmt.value is not None:
+                binds, bound = _assigned_value(stmt.target, stmt.value)
+                if binds:
+                    test_value = bound
+        elif _binds_opt_out_attr(stmt):
+            test_value = None
+
+    return isinstance(test_value, ast.Constant) and test_value.value is False
+
+
 def _collect_tests(
     tree: ast.Module,
 ) -> list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]]:
@@ -157,13 +261,15 @@ def _collect_tests(
 
     Mirrors pytest's default collection: module-level ``test*`` functions,
     and ``test*`` methods of module-level ``Test*`` classes (one level deep —
-    the same shape T001 mirrors).
+    the same shape T001 mirrors). A class whose body unconditionally leaves
+    ``__test__`` bound to the literal ``False`` is excluded, as pytest does;
+    inherited, conditional or dynamic values are not inferred.
     """
     collected: list[tuple[ast.FunctionDef | ast.AsyncFunctionDef, str]] = []
     for node in tree.body:
         if is_test_function(node):
             collected.append((node, node.name))
-        elif is_test_class(node):
+        elif is_test_class(node) and not _class_has_pytest_collection_opt_out(node):
             for sub in node.body:
                 if is_test_function(sub):
                     collected.append((sub, f"{node.name}.{sub.name}"))
@@ -257,19 +363,98 @@ def _has_no_raise_marker(
     )
 
 
+_FULL_DAG_ASSERTION_SCENARIO = "test_full_dag_runs_end_to_end"
+
+# Modules whose classes inherit the SDK's assertion-bearing
+# ``test_full_dag_runs_end_to_end`` unchanged: the SDK harness itself, and the
+# contract-emitted ``generated/[<entrypoint>/]_e2e_base`` module that subclasses
+# it. An app-local intermediate base is not trusted — it may override the
+# scenario with a body that asserts nothing.
+_SDK_E2E_MODULE_PREFIXES: tuple[str, ...] = (
+    "application_sdk.testing.e2e",
+    "application_sdk.testing.full_dag",
+)
+_GENERATED_E2E_BASE_RE = re.compile(r"(?:^|\.)generated(?:\.\w+)?\._e2e_base$")
+
+
+def _is_sdk_e2e_module(module: str) -> bool:
+    return (
+        any(
+            module == prefix or module.startswith(prefix + ".")
+            for prefix in _SDK_E2E_MODULE_PREFIXES
+        )
+        or _GENERATED_E2E_BASE_RE.search(module) is not None
+    )
+
+
+def _sdk_e2e_base_names(tree: ast.Module) -> frozenset[str]:
+    """Local names bound by ``from <sdk e2e module> import X [as Y]``."""
+    names: set[str] = set()
+    for stmt in tree.body:
+        if (
+            isinstance(stmt, ast.ImportFrom)
+            and stmt.level == 0
+            and stmt.module is not None
+            and _is_sdk_e2e_module(stmt.module)
+        ):
+            names.update(alias.asname or alias.name for alias in stmt.names)
+    return frozenset(names)
+
+
+def _inherits_sdk_full_dag_scenario(
+    cls: ast.ClassDef | None, sdk_base_names: frozenset[str]
+) -> bool:
+    """True when a direct base of *cls* is imported from an SDK e2e module."""
+    if cls is None:
+        return False
+    return any(
+        isinstance(base, ast.Name) and base.id in sdk_base_names for base in cls.bases
+    )
+
+
+def _has_direct_full_dag_scenario_delegation(
+    node: ast.FunctionDef | ast.AsyncFunctionDef, inherits_sdk_scenario: bool
+) -> bool:
+    """True for a direct same-name delegation to the SDK full-DAG test."""
+    if not inherits_sdk_scenario or node.name != _FULL_DAG_ASSERTION_SCENARIO:
+        return False
+    for stmt in node.body:
+        if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+            continue
+        call = stmt.value
+        if (
+            isinstance(call.func, ast.Attribute)
+            and call.func.attr == _FULL_DAG_ASSERTION_SCENARIO
+            and isinstance(call.func.value, ast.Call)
+            and isinstance(call.func.value.func, ast.Name)
+            and call.func.value.func.id == "super"
+            and not call.func.value.args
+            and not call.func.value.keywords
+            and not call.args
+            and not call.keywords
+        ):
+            return True
+    return False
+
+
 def _assertion_signals(
-    node: ast.FunctionDef | ast.AsyncFunctionDef, lines: list[str]
+    node: ast.FunctionDef | ast.AsyncFunctionDef,
+    lines: list[str],
+    inherits_sdk_scenario: bool = False,
 ) -> tuple[bool, bool]:
     """Return ``(has_any_assertion, only_vacuous_plain_asserts)`` for *node*.
 
     ``only_vacuous_plain_asserts`` is meaningful only when ``has_any_assertion``
     is ``True``: it is set when every ``assert`` statement found is a constant-
     true literal and no other assertion form (context-manager, ``assert_*``
-    call, scenario helper, no-raise marker) is present.
+    call, scenario helper, inherited full-DAG scenario, or no-raise marker) is
+    present.
     """
     has_assert_stmt = False
     has_nonvacuous_assert_stmt = False
-    has_other_assertion = _has_no_raise_marker(lines, node)
+    has_other_assertion = _has_no_raise_marker(lines, node) or (
+        _has_direct_full_dag_scenario_delegation(node, inherits_sdk_scenario)
+    )
     for sub in ast.walk(node):
         if isinstance(sub, ast.Assert):
             has_assert_stmt = True
@@ -381,6 +566,13 @@ def scan_text(text: str, file: str) -> list[Finding]:
     directives = _parse_directives(text)
     lines = text.splitlines()
     collected = _collect_tests(tree)
+    sdk_base_names = _sdk_e2e_base_names(tree)
+    enclosing_class = {
+        id(sub): cls
+        for cls in tree.body
+        if isinstance(cls, ast.ClassDef)
+        for sub in cls.body
+    }
 
     if not is_collectable_test_file(Path(file).name):
         if not collected:
@@ -408,7 +600,13 @@ def scan_text(text: str, file: str) -> list[Finding]:
                 )
             )
             continue
-        has_any, only_vacuous = _assertion_signals(node, lines)
+        has_any, only_vacuous = _assertion_signals(
+            node,
+            lines,
+            _inherits_sdk_full_dag_scenario(
+                enclosing_class.get(id(node)), sdk_base_names
+            ),
+        )
         if not has_any:
             findings.append(
                 make_finding(

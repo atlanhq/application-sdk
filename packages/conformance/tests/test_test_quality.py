@@ -74,6 +74,83 @@ def test_t005_fires_on_class_method_with_no_assertion() -> None:
     assert "TestFoo.test_bar" in findings[0].message
 
 
+def test_t005_silent_on_pytest_opted_out_class_with_abstract_test_methods() -> None:
+    findings = scan_text(
+        "from abc import abstractmethod\n"
+        "class TestAdapter:\n"
+        "    __test__ = False\n"
+        "    @abstractmethod\n"
+        "    def test_connect(self):\n"
+        "        raise NotImplementedError\n"
+        "    @abstractmethod\n"
+        "    def test_disconnect(self):\n"
+        "        raise NotImplementedError\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_still_fires_on_workflow_method_without_opt_out() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        super().run_pipeline()\n"
+        "        print('completed')\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
+def test_t005_silent_on_tuple_unpacked_opt_out() -> None:
+    findings = scan_text(
+        "class TestAdapter:\n"
+        "    __test__, marker = (False, None)\n"
+        "    def test_connect(self):\n"
+        "        run()\n",
+        "tests/e2e/test_adapter.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_when_opt_out_is_conditionally_rebound() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    __test__ = False\n"
+        "    if True:\n"
+        "        __test__ = True\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+    assert "TestPipeline.test_run_pipeline" in findings[0].message
+
+
+def test_t005_fires_when_opt_out_is_starred_unpacked() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    *__test__, marker = (False, None)\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_ignores_opt_out_assigned_inside_a_method() -> None:
+    findings = scan_text(
+        "class TestPipeline:\n"
+        "    def helper(self):\n"
+        "        __test__ = False\n"
+        "    def test_run_pipeline(self):\n"
+        "        run()\n",
+        "tests/e2e/test_pipeline.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
 def test_t005_silent_on_bare_assert() -> None:
     findings = scan_text(
         "def test_foo():\n    x = compute()\n    assert x == 1\n",
@@ -117,6 +194,90 @@ def test_t005_silent_on_scenario_helper() -> None:
         "tests/integration/test_foo.py",
     )
     assert findings == []
+
+
+def test_t005_silent_on_inherited_full_dag_test_scenario() -> None:
+    """The SDK's same-name base scenario grades the full DAG outcome."""
+    findings = scan_text(
+        "from app.generated._e2e_base import ScenarioBase\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert findings == []
+
+
+def test_t005_silent_on_full_dag_delegation_from_sdk_base_alias() -> None:
+    """An aliased import straight from the SDK harness is resolved too."""
+    findings = scan_text(
+        "from application_sdk.testing.e2e import SQLAppE2ETest as Base\n"
+        "class TestWorkflow(Base):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert findings == []
+
+
+def test_t005_fires_on_full_dag_delegation_to_app_local_base() -> None:
+    """An app-local base may override the scenario with no assertions."""
+    findings = scan_text(
+        "from tests.e2e.helpers import ScenarioBase\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_full_dag_delegation_to_same_file_base() -> None:
+    """A base defined in the test file is not the SDK scenario."""
+    findings = scan_text(
+        "class ScenarioBase:\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        run()\n"
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [f.rule_id for f in findings] == ["T005"]
+    assert "TestWorkflow" in findings[0].message
+
+
+def test_t005_fires_on_different_test_delegating_to_full_dag_scenario() -> None:
+    """A scenario call from a different test is not inherited test delegation."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_collects_inventory(self):\n"
+        "        super().test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_unrecognized_same_name_super_delegation() -> None:
+    """A same-name parent call is not enough without the SDK scenario contract."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_collects_inventory(self):\n"
+        "        super().test_collects_inventory()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
+
+
+def test_t005_fires_on_self_call_to_full_dag_test_name() -> None:
+    """The SDK scenario only counts when delegated through the base class."""
+    findings = scan_text(
+        "class TestWorkflow(ScenarioBase):\n"
+        "    def test_full_dag_runs_end_to_end(self):\n"
+        "        self.test_full_dag_runs_end_to_end()\n",
+        "tests/e2e/test_workflow.py",
+    )
+    assert [finding.rule_id for finding in findings] == ["T005"]
 
 
 def test_t005_silent_on_underscore_assert_helper() -> None:

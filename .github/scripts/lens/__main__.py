@@ -1,6 +1,6 @@
 """lens CLI.
 
-    python -m lens review --repo atlanhq/application-sdk --pr 1234 [--force] [--dry-run]
+    python -m lens review --repo atlanhq/application-sdk --pr 1234 [--force] [--verify-budget] [--dry-run]
     python -m lens review --repo "$GITHUB_REPOSITORY" --event-name "$GITHUB_EVENT_NAME" --event-path "$GITHUB_EVENT_PATH"
 
 Run from `.github/scripts` against a checkout of the BASE branch (`--root`).
@@ -38,6 +38,11 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--root", default=".", help="checkout of the base branch (trusted)")
     r.add_argument("--config-dir", default=None, help="default: <root>/.github/lens")
     r.add_argument("--force", action="store_true")
+    r.add_argument(
+        "--verify-budget",
+        action="store_true",
+        help="give the verify call its opt-in output budget (agent.verify_max_tokens_opt_in)",
+    )
     r.add_argument("--dry-run", action="store_true")
     a = sub.add_parser(
         "approve",
@@ -63,9 +68,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         dismissal = d if d.dismiss else None
         args.pr, args.force, comment_id = d.pr, args.force or d.force, d.comment_id
+        args.verify_budget = args.verify_budget or d.verify_budget
         trace.line(
             f"trigger: {args.event_name} on PR #{d.pr}"
             + (" (force)" if d.force else "")
+            + (" (verify-budget)" if d.verify_budget else "")
         )
     if not args.pr:
         ap.error("--pr or --event-name is required")
@@ -155,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             rules=rules,
             client_factory=client_factory,
             force=args.force,
+            verify_budget=args.verify_budget,
             post=live,
             run_url=run_url,
         )

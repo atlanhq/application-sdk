@@ -1,13 +1,22 @@
 """Append-only guard for the contract schema ledger.
 
-Validates that no entry was deleted from ``contract_schema.lock.json`` and no
-recorded ``type`` was changed between the base ref and HEAD.  Status changes
-and additions are always allowed.
+Validates that no entry was deleted from ``contract_schema.lock.json``, no
+recorded ``type`` was changed, no entry moved straight from ``active`` to
+``sunset``, no entry moved from not required to required, and no required entry
+was added to a contract the base ledger already records, between the base ref
+and HEAD.  Additions and every other status change are allowed.  Retirement
+runs ``active`` → ``deprecated`` → ``sunset`` across separate merges, so callers
+always see a deprecation before a field is withdrawn; and a caller that predates
+a field never has to send it.  An unknown ``required`` in the base (a ledger
+written before the key existed) may be backfilled with either value; a known
+one may never become unknown, since unknown is not checked.
 
 Exit codes
 ----------
-0  All checks pass (no deletions, no type changes).
-1  A deletion or type change was detected — block the PR.
+0  All checks pass (no deletions, no type changes, no skipped deprecation, no
+   newly required field).
+1  A deletion, type change, ``active`` → ``sunset`` move or newly required
+   field was detected — block the PR.
 2  Usage error (bad arguments, missing base-ref ledger, etc.).
 
 Usage
@@ -63,20 +72,50 @@ def _index_fields(payload: dict) -> dict[tuple[str, str], str]:
     return result
 
 
+_STATUSES = frozenset({"active", "deprecated", "sunset"})
+
+
+def _index_statuses(payload: dict) -> dict[tuple[str, str], str]:
+    """Index ledger statuses as {(contract, field): status}.
+
+    An absent or null status means active, as the ledger loader reads it.
+    """
+    return {
+        (entry.get("contract", ""), entry.get("field", "")): entry.get("status")
+        or "active"
+        for entry in payload.get("fields", [])
+    }
+
+
+def _index_required(payload: dict) -> dict[tuple[str, str], object]:
+    """Index ledger requiredness as {(contract, field): required}.
+
+    The raw value: ``True``/``False``, ``None`` when absent (unknown), or
+    anything else a hand edit wrote, which :func:`check` reports.
+    """
+    return {
+        (entry.get("contract", ""), entry.get("field", "")): entry.get("required")
+        for entry in payload.get("fields", [])
+    }
+
+
 def check(
     base_payload: dict | None,
     head_payload: dict | None,
 ) -> tuple[bool, list[str]]:
     """Compare base and head ledger payloads.
 
-    Returns (passed, error_messages).  ``passed`` is True when no deletions or
-    type changes are detected.  An absent *base_payload* (no prior ledger) means
-    there is nothing to guard against — passes with no errors.
+    Returns (passed, error_messages).  ``passed`` is True when no deletions,
+    type changes, ``active`` → ``sunset`` moves, newly required fields or
+    unknown HEAD statuses or requiredness are detected.  An absent
+    *base_payload* (no prior ledger) has no entries to compare against, so
+    only HEAD's own values are checked.
     """
-    errors: list[str] = []
-
     if base_payload is None:
-        return True, errors
+        errors = _invalid_values(head_payload) if head_payload is not None else []
+        return len(errors) == 0, errors
+
+    errors: list[str] = []
 
     if head_payload is None:
         errors.append(
@@ -87,13 +126,19 @@ def check(
 
     base_index = _index_fields(base_payload)
     head_index = _index_fields(head_payload)
+    base_status = _index_statuses(base_payload)
+    head_status = _index_statuses(head_payload)
+    base_required = _index_required(base_payload)
+    head_required = _index_required(head_payload)
+    base_contracts = {contract for contract, _ in base_index}
 
     for (contract, field), base_type in base_index.items():
         if (contract, field) not in head_index:
             errors.append(
                 f"DELETED: {contract}.{field} (type: {base_type!r}) — "
-                "ledger entries are permanent. Mark the field 'deprecated' or "
-                "'sunset' in source and regenerate instead of deleting the entry."
+                "ledger entries are permanent. Mark the field 'deprecated' in "
+                "source and regenerate instead of deleting the entry; it may "
+                "move to 'sunset' in a later PR."
             )
         else:
             head_type = head_index[(contract, field)]
@@ -103,8 +148,67 @@ def check(
                     f"'{base_type}' → '{head_type}' — "
                     "a recorded type is frozen on first record and can never change."
                 )
+            if (
+                base_status[(contract, field)] == "active"
+                and head_status[(contract, field)] == "sunset"
+            ):
+                errors.append(
+                    f"SUNSET WITHOUT DEPRECATION: {contract}.{field} "
+                    "'active' → 'sunset' — mark it 'deprecated' first and merge "
+                    "that, then move it to 'sunset' in a later PR."
+                )
+            base_req = base_required[(contract, field)]
+            head_req = head_required[(contract, field)]
+            if base_req is False and head_req is True:
+                errors.append(
+                    f"NEWLY REQUIRED: {contract}.{field} not required → required "
+                    "— callers that omit it fail validation. Keep a default."
+                )
+            elif isinstance(base_req, bool) and head_req is None:
+                # Unknown is never checked, so erasing a known value would
+                # let the source drop its default with neither B005 nor this
+                # guard noticing.
+                errors.append(
+                    f"REQUIRED ERASED: {contract}.{field} 'required' was "
+                    f"{str(base_req).lower()} and is now absent — a recorded "
+                    "requiredness is permanent; regenerate instead of editing "
+                    "it by hand."
+                )
 
+    for (contract, field), required in head_required.items():
+        if (
+            required is True
+            and (contract, field) not in base_index
+            and contract in base_contracts
+        ):
+            errors.append(
+                f"NEW REQUIRED FIELD: {contract}.{field} — a field added to an "
+                "existing contract must have a default; callers that predate it "
+                "do not send it. Give it a default and regenerate."
+            )
+
+    errors.extend(_invalid_values(head_payload))
     return len(errors) == 0, errors
+
+
+def _invalid_values(payload: dict) -> list[str]:
+    """Report statuses and requiredness no regeneration writes."""
+    errors: list[str] = []
+    for (contract, field), required in _index_required(payload).items():
+        if required is not None and not isinstance(required, bool):
+            errors.append(
+                f"INVALID REQUIRED: {contract}.{field} {required!r} — a ledger "
+                "'required' is true, false or absent; regenerate instead of "
+                "editing it by hand."
+            )
+    for (contract, field), status in _index_statuses(payload).items():
+        if status not in _STATUSES:
+            errors.append(
+                f"INVALID STATUS: {contract}.{field} {status!r} — a ledger "
+                "status is one of 'active', 'deprecated' or 'sunset'; "
+                "regenerate instead of editing it by hand."
+            )
+    return errors
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -121,7 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--ledger-path",
         required=True,
-        help="Repo-relative path to the ledger file (e.g. packages/conformance/conformance/data/contract_schema.lock.json).",
+        help="Repo-relative path to the ledger file (e.g. contract_schema.lock.json).",
     )
     args = parser.parse_args(argv)
 
@@ -142,9 +246,13 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  {msg}", file=sys.stderr)
     print(
         "\nThe contract_schema.lock.json ledger is append-only. "
-        "Field deletions and type changes are not permitted.\n"
-        "To retire a field: mark it 'deprecated' or 'sunset' in the widget "
-        "definition and regenerate with:\n"
+        "Field deletions and type changes are not permitted, a field "
+        "retires through 'active' → 'deprecated' → 'sunset' in separate PRs, "
+        "and a field callers must send cannot be added to an existing contract "
+        "or made required later.\n"
+        "To retire a field: mark it 'deprecated' in the widget definition and "
+        "regenerate; once that has merged, mark it 'sunset' and regenerate "
+        "again with:\n"
         f"  {regen_command(detect_scope(Path.cwd()))}",
         file=sys.stderr,
     )

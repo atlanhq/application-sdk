@@ -32,6 +32,7 @@ from conformance.suite.checks import (
     asyncio_loop_scope,
     atomic_publish,
     bootstrap_drift,
+    client_lifecycle,
     client_seam,
     coverage_config,
     credential_seam,
@@ -44,6 +45,7 @@ from conformance.suite.checks import (
     e2e_agent_spec,
     e2e_deployment_name,
     e2e_generated_harness,
+    e2e_system_app_base,
     e2e_workflow_shape,
     entrypoint,
     entrypoint_alignment,
@@ -113,6 +115,12 @@ _CHECKS: list[CheckRegistration] = [
         series=client_seam.SERIES,
         discover=client_seam.discover,
         scan_path=client_seam.scan_path,
+    ),
+    CheckRegistration(
+        series=client_lifecycle.SERIES,
+        discover=client_lifecycle.discover,
+        scan_path=client_lifecycle.scan_path,
+        scan_all=client_lifecycle.scan_all,
     ),
     CheckRegistration(
         series=persistence_seam.SERIES,
@@ -237,6 +245,12 @@ _CHECKS: list[CheckRegistration] = [
         discover=entrypoint_e2e_coverage.discover,
         scan_path=entrypoint_e2e_coverage.scan_path,
         scan_all=entrypoint_e2e_coverage.scan_all,
+    ),
+    CheckRegistration(
+        series=e2e_system_app_base.SERIES,
+        discover=e2e_system_app_base.discover,
+        scan_path=e2e_system_app_base.scan_path,
+        scan_all=e2e_system_app_base.scan_all,
     ),
     CheckRegistration(
         series=dockerfile_conformance.SERIES,

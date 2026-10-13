@@ -45,7 +45,9 @@ from application_sdk.app.entrypoint import (
 from application_sdk.app.registry import AppNotFoundError, AppRegistry
 from application_sdk.app.task import task
 from application_sdk.contracts.base import Input, Output
+from application_sdk.contracts.types import FileReference, StoreTarget
 from application_sdk.errors import APP_ERROR, APP_NON_RETRYABLE
+from application_sdk.handler.contracts import PreflightGateMode
 
 # =============================================================================
 # Test fixtures
@@ -357,6 +359,12 @@ class _BLDXOutput(Output, allow_unbounded_fields=True):
     result: str = ""
 
 
+class _RefInput(Input):
+    """An @update payload carrying a ref (FND-3795)."""
+
+    ref: FileReference
+
+
 class _GateEligibleInput(Input, allow_unbounded_fields=True):
     """Declares the three CredentialResolvable fields top-level — gate-eligible."""
 
@@ -591,6 +599,21 @@ class TestTaskOnlyMethods:
         result = await app.run_in_thread(lambda: None, 1, x=2)
         assert result == "done"
         tc.run_in_thread.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_run_in_thread_forwards_a_func_cancel_kwarg(self) -> None:
+        """Every keyword is func's: ``cancel=`` and ``cancel_handle=`` both
+        pass through unchanged (lens F-b8aa2a)."""
+        app = self._app()
+        tc = mock.MagicMock()
+        tc.run_in_thread = mock.AsyncMock(return_value="done")
+        app._task_context = tc
+        token = object()
+        await app.run_in_thread(print, "x", cancel=token, cancel_handle=token)
+        assert tc.run_in_thread.await_args.kwargs == {
+            "cancel": token,
+            "cancel_handle": token,
+        }
 
 
 # =============================================================================
@@ -1540,7 +1563,8 @@ class TestGenerateWorkflowClass:
     ) -> None:
         """When the gate returns (READY, PARTIAL, soft would_block, fail-open),
         extraction runs once, and the gate is handed the app's declared
-        budget, attempts and mode — the same ClassVars the worker reads."""
+        budget, attempts, mode and warmup ceiling / probe timeout / posture
+        (the SDK defaults here) — the same ClassVars the worker reads."""
         GatedApp, wf_cls = self._counting_gate_app()
         gate = mock.AsyncMock(return_value=None)
 
@@ -1559,7 +1583,14 @@ class TestGenerateWorkflowClass:
         assert isinstance(out, _BLDXOutput) and out.result == "extracted"
         assert GatedApp.calls == 1
         gate.assert_awaited_once()
-        assert gate.await_args.args[3:] == (42, 2, "hard")
+        assert gate.await_args.args[3:] == (
+            42,
+            2,
+            "hard",
+            600,
+            10,
+            PreflightGateMode.SOFT,
+        )
 
 
 # =============================================================================
@@ -1678,6 +1709,42 @@ class TestWorkflowInteractionRelay:
         # _run will later read from.
         await wf_cls.set_state(wf_inst, _BLDXInput(value="paused"))
         assert wf_inst._app_instance.state == "paused"
+
+    async def test_update_payload_cannot_carry_an_upstream_store_tag(self) -> None:
+        """FND-3795: an @update argument comes from outside the run.
+
+        ``FileReference.store`` picks the bucket the interceptor reads, so the
+        relay demotes ``UPSTREAM`` before app code can hand the ref to a task.
+        """
+        seen: list[FileReference] = []
+
+        class _RefApp(App):
+            async def run(self, input: _BLDXInput) -> _BLDXOutput:
+                return _BLDXOutput(result="")
+
+            @update
+            async def take_ref(self, input: _RefInput) -> _BLDXOutput:
+                seen.append(input.ref)
+                return _BLDXOutput(result="")
+
+        wf_cls = generate_workflow_class(
+            _RefApp, self._make_ep(_BLDXInput, _BLDXOutput)
+        )
+        wf_inst = wf_cls()
+        payload = _RefInput(
+            ref=FileReference(
+                storage_path="artifacts/other-run/",
+                is_durable=True,
+                store=StoreTarget.UPSTREAM,
+            )
+        )
+
+        with mock.patch("application_sdk.app.base._safe_log") as log:
+            await wf_cls.take_ref(wf_inst, payload)
+
+        assert seen[0].store is StoreTarget.DEPLOYMENT
+        assert seen[0].storage_path == "artifacts/other-run/"
+        log.assert_called_once()
 
     def test_validator_is_preserved_through_relay(self) -> None:
         class _ValidatedApp(App):

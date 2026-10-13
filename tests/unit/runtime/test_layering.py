@@ -121,6 +121,7 @@ def test_the_app_facing_facades_re_export_the_substrate_objects() -> None:
     assert heartbeat.submit_in_thread is offload.submit_in_thread
     assert heartbeat.run_fault_isolated is offload.run_fault_isolated
     assert heartbeat.run_best_effort is offload.run_best_effort
+    assert heartbeat.CancelHandle is offload.CancelHandle
     assert progress_facade.current_progress_tracker is progress.current_progress_tracker
     assert progress_facade.holding_progress is progress.holding_progress
     assert progress_facade.ProgressTracker is progress.ProgressTracker

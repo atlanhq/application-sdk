@@ -15,8 +15,10 @@ import pytest
 import yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import require_renovate_artifacts as gate
+from _gha_expr import evaluate
 
 REPO = "atlanhq/atlan-example-app"
 SHA = "a" * 40
@@ -195,3 +197,53 @@ def _timeout_minutes(workflow: str, job: str) -> int:
 def test_job_timeout_outlasts_the_wait():
     wait = gate.POLL_ATTEMPTS * gate.POLL_INTERVAL_SECONDS
     assert _timeout_minutes("tests-reusable.yaml", "renovate-artifacts") * 60 > wait
+
+
+# ── Job-level skip (FND-3320) ────────────────────────────────────────────────
+#
+# The job used to start on every event and let the script pass at once; a job
+# that starts is billed a full minute however fast it exits. The filter now sits
+# on the job's `if:`, so it must keep running wherever the script would check,
+# and Tests Gate must read the resulting `skipped` as a pass.
+
+_NON_RENOVATE_REFS = ["", "main", "gh-readonly-queue/main/pr-1-abc", "renovate"]
+_RENOVATE_REFS = [BRANCH, "renovate/lock-file-maintenance"]
+
+
+def _tests_jobs() -> dict:
+    return yaml.safe_load((_WORKFLOWS / "tests-reusable.yaml").read_text())["jobs"]
+
+
+def _job_runs(head_ref: str) -> bool:
+    gate_if = str(_tests_jobs()["renovate-artifacts"]["if"])
+    return evaluate(gate_if, {"github": {"head_ref": head_ref}})
+
+
+@pytest.mark.parametrize("head_ref", _RENOVATE_REFS)
+def test_job_runs_wherever_the_script_would_check(head_ref):
+    assert head_ref.startswith(gate.RENOVATE_PREFIX)
+    assert _job_runs(head_ref) is True
+
+
+@pytest.mark.parametrize("head_ref", _NON_RENOVATE_REFS)
+def test_job_is_skipped_where_the_script_would_pass_at_once(head_ref):
+    assert not head_ref.startswith(gate.RENOVATE_PREFIX)
+    assert _job_runs(head_ref) is False
+
+
+def _enforce_fires(result: str) -> bool:
+    steps = _tests_jobs()["tests-passed"]["steps"]
+    step = next(s for s in steps if s.get("name") == "Enforce Renovate artifacts")
+    return evaluate(
+        str(step["if"]), {"needs": {"renovate-artifacts": {"result": result}}}
+    )
+
+
+@pytest.mark.parametrize("result", ["success", "skipped"])
+def test_tests_gate_passes_a_checked_or_skipped_job(result):
+    assert _enforce_fires(result) is False
+
+
+@pytest.mark.parametrize("result", ["failure", "cancelled"])
+def test_tests_gate_holds_on_a_failed_check(result):
+    assert _enforce_fires(result) is True

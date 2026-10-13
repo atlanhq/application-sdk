@@ -1,0 +1,52 @@
+name: Rebase conflicted Renovate PRs
+
+# Backstop for FND-3481. Renovate only rebuilds a conflicted branch when it runs
+# on that repo, and the scheduled sweep (renovate.yaml) is every four hours —
+# while a conflicted PR runs no `pull_request` workflows and cannot auto-merge.
+# The lock-refresh lane now holds every package the framework lane moves, so
+# those two PRs should no longer conflict; this catches whatever still does
+# (two releases racing, a replay that could not run) within one tick instead of
+# up to four hours.
+#
+# Cost per tick: one GraphQL search on the fleet App's budget, plus two run
+# listings on this repo's GITHUB_TOKEN. A dispatch is skipped while any
+# renovate.yaml run is queued or running, so scoped runs never pile up on the
+# fleet App's hourly budget behind a slow sweep.
+#
+# All logic lives in the tested .github/scripts/renovate_rebase_conflicted.py.
+
+on:
+  schedule:
+    # :07/:22/:37/:52 — off the :00 sweep and the :20 dashboard scan.
+    - cron: "7,22,37,52 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # list and dispatch renovate.yaml runs in this repo
+
+concurrency:
+  group: renovate-rebase-conflicted
+  cancel-in-progress: false
+
+jobs:
+  rebase:
+    name: Dispatch Renovate for conflicted PRs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Mint fleet App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        with:
+          app-id: ${{ secrets.FLEET_APP_ID }}
+          private-key: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
+          owner: atlanhq
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Dispatch a scoped Renovate run for conflicted PRs
+        env:
+          FLEET_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/renovate_rebase_conflicted.py

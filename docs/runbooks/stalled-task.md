@@ -236,6 +236,27 @@ The alert is only as good as its inputs. In order of likelihood:
    run-duration problem; duration is an alert at the run level, not a kill (ADR-0018
    → *Bounding total time*).
 
+## A storage fan-out that stopped waiting for its threads
+
+When a `download_prefix` / `upload_prefix` / `delete_prefix` fan-out fails or is
+cancelled, it waits for the threads its tasks offloaded (an `fsync`, a file
+read) before it lets the error through. That wait runs on its own stall clock,
+separate from the attempt's watchdog, and it is **always enforced**, whatever
+`ATLAN_PROGRESS_WATCHDOG` is set to. The clock resets each time one of those
+threads finishes. If none finishes within the attempt's `max_no_progress_seconds`,
+the fan-out stops waiting, logs one WARNING, and raises the original error (or the
+cancellation). The WARNING starts with:
+
+```
+Stopped waiting for N offloaded call(s) that made no progress for Ns: <callables>
+```
+
+That line means a local disk call on this worker is wedged. Treat the pod's
+volume as suspect:
+- The named threads are still running, and one of them may still write if it
+  ever returns.
+- The attempt's own failure (the error it raised) is what Temporal retries.
+
 ## Panels
 
 Import [`task-stall-dashboard.json`](../static/observability/task-stall-dashboard.json)
