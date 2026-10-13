@@ -6,6 +6,9 @@ dependencies = [
     "fastapi>=0.142.2,<0.143.0",
     "pydantic>=2.10.6,<3.0.0",
     "orjson>=3.11.6,<4.0.0",
+    # Form parsing for the file-upload route. Arrives on the worker through
+    # fastapi[standard]; the floor is the SDK's CVE constraint.
+    "python-multipart>=0.0.26",
 ]
 
 # Same extras, same pins, as atlan-application-sdk: a handler that uses the SQL

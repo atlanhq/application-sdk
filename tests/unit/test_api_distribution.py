@@ -37,6 +37,11 @@ def test_the_api_core_dependencies_match_the_sdks_pins() -> None:
         re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0]: re.sub(r"\[[^\]]*\]", "", r)
         for r in _project(ROOT / "pyproject.toml")["dependencies"]
     }
+    # A transitive dependency of the SDK carries its constraint pin (the CVE
+    # floors in [tool.uv].constraint-dependencies) instead.
+    root = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    for r in root["tool"]["uv"].get("constraint-dependencies", []):
+        sdk.setdefault(re.split(r"[<>=!~;\[ ]", r, maxsplit=1)[0], r)
     for req in _project(ROOT / "packages/api/pyproject.toml")["dependencies"]:
         name = re.split(r"[<>=!~;\[ ]", req, maxsplit=1)[0]
         assert sdk.get(name) == req, (name, sdk.get(name), req)

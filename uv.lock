@@ -511,6 +511,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "orjson" },
     { name = "pydantic" },
+    { name = "python-multipart" },
 ]
 
 [package.metadata]
@@ -525,6 +526,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.10.6,<3.0.0" },
     { name = "python-dotenv", marker = "extra == 'aws'", specifier = ">=1.1.0,<2.0.0" },
     { name = "python-dotenv", marker = "extra == 'sql'", specifier = ">=1.1.0,<2.0.0" },
+    { name = "python-multipart", specifier = ">=0.0.26" },
     { name = "sqlalchemy", extras = ["asyncio"], marker = "extra == 'sql'", specifier = ">=2.0.36,<3.0.0" },
 ]
 provides-extras = ["sql", "pandas", "aws", "pyatlan"]
