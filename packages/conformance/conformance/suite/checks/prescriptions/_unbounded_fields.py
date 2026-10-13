@@ -308,7 +308,8 @@ def _optout_message(
     if refused or open_ended:
         parts.append(
             "Fix each, then remove the opt-out: drop an override of a field the SDK base already types "
-            "(connection: ConnectionRef; include/exclude filters: FilterMap | str); model passthrough data "
+            "(connection: ConnectionRef; include/exclude filters: FilterMap | str, or TreeSelection | str "
+            "for a tree widget read below its first level); model passthrough data "
             "(metadata: a BaseMetadataConfig subclass; credentials by reference: credential_guid or "
             "CredentialRef, never inline); bound a dict or list of safe values with "
             "Annotated[..., MaxItems(n)]; pass data that grows with the source system by FileReference. "
@@ -541,8 +542,10 @@ class UnboundedContractFieldsChecker(ast.NodeVisitor):
                     "allow_unbounded_fields — payload-safety validation refuses Any "
                     "unconditionally, so this class raises PayloadSafetyError at "
                     "import and the app will not start. MaxItems does not help: bound "
-                    "the value type instead (a concrete type, or the SDK's FilterMap "
-                    "for filter maps), or keep allow_unbounded_fields with a justified "
+                    "the value type instead (a concrete type, the SDK's FilterMap "
+                    "for flat filter maps, or TreeSelection for a tree-widget "
+                    "selection; not a str the dict is encoded into), or keep "
+                    "allow_unbounded_fields with a justified "
                     "'# conformance: ignore[P001] <reason>' directive."
                 ),
                 directives=self._directives,
