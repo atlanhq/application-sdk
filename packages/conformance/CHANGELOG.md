@@ -2,6 +2,20 @@
 
 All notable changes to `atlan-application-sdk-conformance` are documented here.
 
+## [0.48.0] - 2026-10-13
+
+### Features
+
+- request e2e and release gates by PR comment, not label (#4359) ([27c734c](https://github.com/atlanhq/application-sdk/commit/27c734c))
+- network source probes prototype and ADR-0021 source validation (#4358) ([4017e57](https://github.com/atlanhq/application-sdk/commit/4017e57))
+
+### Bug fixes
+
+- L006 false positive on compliant code (1 repo) (#4345) ([90e6888](https://github.com/atlanhq/application-sdk/commit/90e6888))
+- E004 false positive on compliant code (1 repo) (#4344) ([63e2783](https://github.com/atlanhq/application-sdk/commit/63e2783))
+- E007 false positive on compliant code (1 repo) (#4341) ([daf6176](https://github.com/atlanhq/application-sdk/commit/daf6176))
+- correct S001's fix guidance (1 repo) (#4342) ([5bb467b](https://github.com/atlanhq/application-sdk/commit/5bb467b))
+
 ## [0.47.0] - 2026-10-13
 
 ### Features
