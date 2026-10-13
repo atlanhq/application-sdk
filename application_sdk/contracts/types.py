@@ -521,10 +521,18 @@ class FileReference(BaseModel, frozen=True):
         # Best-effort file_count. We swallow OSError so the constructor
         # stays usable from inside Temporal sandbox where filesystem
         # inspection may not be permitted.
+        from application_sdk.storage.integrity import (  # noqa: PLC0415 — circular: storage modules import contracts.types
+            is_sidecar_key,
+        )
+
         file_count = 1
         try:
             if p.is_dir():
-                file_count = len(safe_list_directory(p))
+                # Local ``.sha256`` markers are not data: persist and
+                # verify skip them, so counting them over-declares (FND-3406).
+                file_count = sum(
+                    1 for f in safe_list_directory(p) if not is_sidecar_key(f.name)
+                )
         except OSError:  # conformance: ignore[E009] sandbox-safe fallback to 1
             file_count = 1
         return FileReference(

@@ -258,7 +258,8 @@ TRACKED_FILE_REFS_KEY = "_tracked_file_refs"
 
 # Object-store prefixes that must never be deleted by cleanup_storage.
 # These store cross-run persistent state (connection configs, incremental markers, etc.)
-PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/",)
+# and platform-owned objects an app may read but never owns (the connection cache).
+PROTECTED_STORAGE_PREFIXES = ("persistent-artifacts/", "connection-cache/")
 
 # State Store Constants
 #: Path template for state store files.

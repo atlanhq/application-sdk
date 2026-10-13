@@ -1829,11 +1829,19 @@ class App(ABC):
         if not storage_path and input.ref is not None:
             storage_path = input.ref.storage_path or ""
 
+        # A ref this run produced keeps its tier, so its TRANSIENT output is
+        # still cleaned up; any other key is not the run's to delete (FND-3815).
+        tier = input.tier
+        if tier is None:
+            ref = input.ref
+            from_ref = ref is not None and storage_path == ref.storage_path
+            tier = ref.tier if ref is not None and from_ref else StorageTier.RETAINED
         out = await _download(
             storage_path,
             input.local_path,
             skip_if_exists=input.skip_if_exists,
             store=store,
+            tier=tier,
         )
         return _tag_ref_store(out, store, self.context.storage)
 
@@ -2344,7 +2352,13 @@ class App(ABC):
            deliberately ignores tracked tiers: opting in is the documented
            way to remove ``RETAINED`` refs.
 
-        Objects under ``persistent-artifacts/`` are never deleted.
+        Objects under ``PROTECTED_STORAGE_PREFIXES`` (``persistent-artifacts/``,
+        ``connection-cache/``) are never deleted. Pass 1 also skips every ref
+        tagged ``store=UPSTREAM``: those bytes are in the upstream store, not
+        the deployment store this task deletes from. Pass 2 does not consult
+        refs: every deployment key under this run's prefix belongs to this
+        run, including the deployment copy ``App.upload`` dual-writes beside
+        an UPSTREAM ref in a two-store deployment.
 
         If no object store is configured (local dev), returns immediately with
         zero counts.  Individual delete errors increment ``error_count`` but
@@ -2431,6 +2445,14 @@ class App(ABC):
                 if not storage_path:
                     continue
                 if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
+                    skipped += 1
+                    continue
+                # The ref names the upstream store; this task deletes only from
+                # the deployment store, where the same key is not this ref's.
+                if (
+                    getattr(ref, "store", StoreTarget.DEPLOYMENT)
+                    == StoreTarget.UPSTREAM
+                ):
                     skipped += 1
                     continue
                 tier = getattr(ref, "tier", StorageTier.TRANSIENT)
