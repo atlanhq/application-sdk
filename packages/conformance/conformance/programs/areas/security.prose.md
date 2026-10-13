@@ -122,10 +122,18 @@ above.  `classification` is always `"judgment"` for both S-rules.  Read the full
 function/class context around `finding.line` before drafting.
 
 - **S001 HardcodedCredential** — a string literal is stored as a credential-named
-  variable, keyword argument, or dict value.  Draft, in order of preference:
+  variable, keyword argument, or dict value.  Trace every reader of the value and
+  identify what the literal means before choosing a fix:
 
-  1. **The real fix (preferred)** — remove the literal and resolve the secret at
-     runtime through the SDK seam:
+  1. **Absence sentinel** — if the literal is a non-secret marker for no credential
+     (for example, `"None"`), confirm that every reader of the value — not just the
+     nearest one — treats both the marker and Python `None` (or the field's declared
+     empty default) as the same absent state.
+     Replace the marker with that native absence value/default, preserving behavior;
+     do not resolve a secret that does not exist.  Return `outcome = "fix"`.
+
+  2. **Actual credential** — remove the literal and resolve the secret at runtime
+     through the SDK seam:
      - inside an `App` subclass with a credential context →
        `cred = await self.context.resolve_credential(ref)` where `ref` is a
        `CredentialRef` (`from application_sdk.credentials import CredentialRef`
@@ -135,8 +143,8 @@ function/class context around `finding.line` before drafting.
        (`from application_sdk.infrastructure.secrets import SecretStore`).
      Name the secret key you assumed in the proposal.  Return `outcome = "fix"`.
 
-  2. **Fallback** — if the literal is a genuinely non-secret sample confined to a
-     local-only path the discover walk did not exclude (rare), draft an inline
+  3. **Fallback** — only if the literal is a genuinely non-secret sample confined
+     to a local-only path the discover walk did not exclude (rare), draft an inline
      `# conformance: ignore[S001] <reason>` on the assignment line, where the
      justification explains *why* the value is not a real credential.  Return
      `outcome = "suppress"`.
