@@ -1,5 +1,31 @@
 # Changelog
 
+## v3.47.0 (October 13, 2026)
+
+Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.46.0...v3.47.0
+
+### Features
+
+- network source probes prototype and ADR-0021 source validation (#4358) (by @cmgrote in [4017e57](https://github.com/atlanhq/application-sdk/commit/4017e57))
+
+### Bug Fixes
+
+- stop cleanup_storage deleting keys read via App.download (#4346) (by @cmgrote in [e005c75](https://github.com/atlanhq/application-sdk/commit/e005c75))
+- a null component metadata value is empty, not "None" (#4333) (by @connectivity-ai[bot] in [fb2d5bc](https://github.com/atlanhq/application-sdk/commit/fb2d5bc))
+
+### Chores
+
+- sync daprd pin to 1.18.5 (#4335) (by @atlan-app-fleet[bot] in [e7e5e1a](https://github.com/atlanhq/application-sdk/commit/e7e5e1a))
+- lock file maintenance (#4334) (by @renovate[bot] in [cb9ca9e](https://github.com/atlanhq/application-sdk/commit/cb9ca9e))
+- remove 2 resolved allowlist entries (#4339) (by @atlan-app-fleet[bot] in [4737571](https://github.com/atlanhq/application-sdk/commit/4737571))
+- lock file maintenance (#4340) (by @renovate[bot] in [e7278fc](https://github.com/atlanhq/application-sdk/commit/e7278fc))
+- hold Python runtime below 3.15 in Renovate (#4352) (by @cmgrote in [0cfe5fe](https://github.com/atlanhq/application-sdk/commit/0cfe5fe))
+- update github-actions (#4329) (by @renovate[bot] in [40ea319](https://github.com/atlanhq/application-sdk/commit/40ea319))
+- lock file maintenance (#4348) (by @renovate[bot] in [c0f51cb](https://github.com/atlanhq/application-sdk/commit/c0f51cb))
+- update dependency pymdown-extensions to >=12,<12.3 (#4353) (by @renovate[bot] in [fa405bf](https://github.com/atlanhq/application-sdk/commit/fa405bf))
+- lock file maintenance (#4355) (by @renovate[bot] in [c4a85a1](https://github.com/atlanhq/application-sdk/commit/c4a85a1))
+
+
 ## v3.46.0 (October 13, 2026)
 
 Full Changelog: https://github.com/atlanhq/application-sdk/compare/v3.45.0...v3.46.0
