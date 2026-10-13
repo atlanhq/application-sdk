@@ -1986,6 +1986,57 @@ def inspect():
     _none(src)
 
 
+def test_p007_no_finding_when_same_class_helper_has_setup_before_log() -> None:
+    src = """\
+class Probe:
+    def _log(self, problem):
+        message = "lookup failed"
+        metrics.increment("failures")
+        logger.error("%s: %s", message, problem)
+
+    def run(self):
+        try:
+            read_value()
+        except LookupError as problem:
+            self._log(problem)
+            return None
+"""
+    _none(src)
+
+
+def test_p007_no_finding_when_module_helper_has_setup_before_log() -> None:
+    src = """\
+def _log(problem):
+    message = "lookup failed"
+    logger.error("%s: %s", message, problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_still_flags_when_helper_rebinds_input_inside_branch() -> None:
+    src = """\
+def _log(problem, hide):
+    if hide:
+        problem = "redacted"
+    logger.error("failed: %s", problem)
+
+def run():
+    try:
+        read_value()
+    except LookupError as problem:
+        _log(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_still_flags_when_module_helper_logs_unrelated_argument() -> None:
     src = """\
 def _report_problem(problem, detail):

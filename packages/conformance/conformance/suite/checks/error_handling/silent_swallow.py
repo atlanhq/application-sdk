@@ -602,6 +602,18 @@ class SilentSwallowMixin:
             for statement in helper.body
         ):
             return False
+        opaque_control_flow = (
+            ast.For,
+            ast.AsyncFor,
+            ast.While,
+            ast.Try,
+            ast.TryStar,
+            ast.With,
+            ast.AsyncWith,
+            ast.Match,
+            ast.Break,
+            ast.Continue,
+        )
 
         def _logged_paths(
             body: list[ast.stmt], incoming: set[bool]
@@ -635,8 +647,6 @@ class SilentSwallowMixin:
                     exited.update(active)
                     active.clear()
                     continue
-                if isinstance(statement, ast.Pass):
-                    continue
                 if _is_log_call_stmt(statement):
                     call = statement.value
                     if isinstance(call, ast.Await):
@@ -650,9 +660,12 @@ class SilentSwallowMixin:
                     ):
                         active = {True}
                     continue
-                # Loops, try blocks, and opaque calls cannot prove that all paths
-                # log the input before returning.
-                return None
+                # Loops, try/with blocks, match, and jumps cannot prove that all
+                # paths log the input before returning.
+                if isinstance(statement, opaque_control_flow):
+                    return None
+                # Straight-line setup (assignments, metrics calls) neither logs
+                # nor exits; rebinding the input was rejected up front.
             return active, exited
 
         paths = _logged_paths(helper.body, {False})
