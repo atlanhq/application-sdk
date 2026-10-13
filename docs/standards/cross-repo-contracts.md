@@ -164,7 +164,10 @@ it is read instead of listing the prefix.
   also covers `continue_with`) and every `@update` argument (the interaction
   relay). Signals and queries carry no payload. Honouring the tag on those
   payloads would let any external caller materialise any key in the upstream
-  bucket. A ref that one app outputs and
+  bucket. The reset reaches typed fields, model extras, and plain dicts shaped
+  like a dumped ref (`storage_path`, `is_durable` and `store` keys). The dicts
+  are covered because an app may round-trip refs through untyped state with
+  `model_dump()` and `FileReference(**raw)` across `continue_with`. A ref that one app outputs and
   another app takes as input therefore reads the deployment store, as before
   this field existed. That consumer should go through `App.download(ref=...)`,
   which routes to upstream itself.

@@ -3352,23 +3352,42 @@ def _demote_args(
     return tuple(_demote(a) for a in args), {k: _demote(v) for k, v in kwargs.items()}
 
 
+_REF_DUMP_KEYS = frozenset({"storage_path", "is_durable", "store"})
+
+
+def _log_demoted(storage_path: object) -> None:
+    _safe_log(
+        "warning",
+        "Ignoring store=upstream on a FileReference in the workflow input; "
+        "only refs App.download/App.upload return in this run read the "
+        "upstream store",
+        storage_path=storage_path,
+    )
+
+
 def _demote(node: object) -> object:
-    """Tree walk for :func:`_demote_upstream_refs`; returns *node* itself if unchanged."""
+    """Tree walk for :func:`_demote_upstream_refs`; returns *node* itself if unchanged.
+
+    Reaches every place a ref can ride in a payload: typed fields, model
+    extras (an ``extra="allow"`` input carrying app state), and plain dicts
+    shaped like a dumped ``FileReference``. That last one is how an app
+    round-trips refs through untyped state (``model_dump()`` out,
+    ``FileReference(**raw)`` back in after ``continue_with``); left alone, the
+    rebuilt ref would carry a tag nobody in this run set.
+    """
     if isinstance(node, FileReference):
         if node.store is not StoreTarget.UPSTREAM:
             return node
-        _safe_log(
-            "warning",
-            "Ignoring store=upstream on a FileReference in the workflow input; "
-            "only refs App.download/App.upload return in this run read the "
-            "upstream store",
-            storage_path=node.storage_path,
-        )
+        _log_demoted(node.storage_path)
         return node.model_copy(update={"store": StoreTarget.DEPLOYMENT})
     if isinstance(node, BaseModel):
         changes: dict[str, object] = {}
         for name in type(node).model_fields:
             old = getattr(node, name)
+            new = _demote(old)
+            if new is not old:
+                changes[name] = new
+        for name, old in (node.model_extra or {}).items():
             new = _demote(old)
             if new is not old:
                 changes[name] = new
@@ -3380,7 +3399,12 @@ def _demote(node: object) -> object:
         return items if isinstance(node, list) else tuple(items)
     if isinstance(node, dict):
         mapped = {k: _demote(v) for k, v in node.items()}
-        return node if all(mapped[k] is node[k] for k in node) else mapped
+        if _REF_DUMP_KEYS <= mapped.keys() and mapped["store"] == StoreTarget.UPSTREAM:
+            _log_demoted(mapped.get("storage_path"))
+            mapped["store"] = StoreTarget.DEPLOYMENT.value
+        if all(mapped[k] is node[k] for k in node):
+            return node
+        return mapped
     return node
 
 

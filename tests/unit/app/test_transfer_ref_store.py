@@ -15,6 +15,7 @@ from typing import Annotated
 from unittest import mock
 
 import pytest
+from pydantic import ConfigDict
 
 from application_sdk.app.base import App, _validate_workflow_input
 from application_sdk.app.registry import AppRegistry, TaskRegistry
@@ -50,6 +51,12 @@ class _StartInput(Input):
 
     records: FileReference
     extra: Annotated[list[FileReference], MaxItems(4)] = []
+
+
+class _StatefulInput(Input):
+    """An ``extra="allow"`` input carrying app state, as continue-as-new apps do."""
+
+    model_config = ConfigDict(extra="allow")
 
 
 class _TransferApp(App):
@@ -378,4 +385,51 @@ class TestStartPayloadCannotChooseUpstream:
         typed = _StartInput(records=FileReference(storage_path="a/", is_durable=True))
 
         assert _validate_workflow_input(typed, _StartInput) is typed
+        self.log.assert_not_called()
+
+
+class TestRefsRoundTrippedThroughUntypedState:
+    """Audit finding: an app dumps refs into untyped state and rebuilds them.
+
+    The pattern (``model_dump()`` into an ``extra="allow"`` dict, then
+    ``FileReference(**raw)`` after ``continue_with``) never presents a typed
+    ref to the boundary, so the demotion has to reach model extras and
+    ref-shaped dicts too, or the rebuilt ref carries a tag nobody in the run set.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _no_workflow_logger(self):
+        with mock.patch("application_sdk.app.base._safe_log") as log:
+            self.log = log
+            yield
+
+    def _state(self, *, store: str) -> dict[str, object]:
+        dumped = FileReference(
+            storage_path="artifacts/other-run/x/", is_durable=True
+        ).model_dump()
+        return {"phase": "process", "ref": {**dumped, "store": store}}
+
+    def test_a_dumped_upstream_ref_in_extras_comes_back_as_deployment(self) -> None:
+        raw = {"_crawl_state": self._state(store="upstream")}
+
+        out = _validate_workflow_input(raw, _StatefulInput)
+
+        state = (out.model_extra or {})["_crawl_state"]
+        rebuilt = FileReference(**state["ref"])
+        assert rebuilt.store is StoreTarget.DEPLOYMENT
+        assert rebuilt.storage_path == "artifacts/other-run/x/"
+        assert state["phase"] == "process"
+        self.log.assert_called_once()
+
+    def test_a_typed_continue_with_input_is_demoted_too(self) -> None:
+        typed = _StatefulInput(_crawl_state=self._state(store="upstream"))
+
+        out = _validate_workflow_input(typed, _StatefulInput)
+
+        assert (out.model_extra or {})["_crawl_state"]["ref"]["store"] == "deployment"
+
+    def test_dicts_that_are_not_ref_dumps_are_left_alone(self) -> None:
+        typed = _StatefulInput(_meta={"store": "upstream", "name": "not a ref"})
+
+        assert _validate_workflow_input(typed, _StatefulInput) is typed
         self.log.assert_not_called()
