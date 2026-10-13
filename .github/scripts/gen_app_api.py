@@ -154,10 +154,14 @@ def _module_file(root: Path, module: str) -> str | None:
 
 
 def _app_imports(
-    tree: ast.Module, module: str
+    tree: ast.Module, module: str, is_package: bool = False
 ) -> list[tuple[ast.ImportFrom | ast.Import, str, bool]]:
-    """``(node, imported app module, is_relative)`` for every app-internal import."""
-    package = module.rpartition(".")[0]
+    """``(node, imported app module, is_relative)`` for every app-internal import.
+
+    A relative import resolves against the module's package: the module itself
+    when it is a package's ``__init__.py``, its parent otherwise.
+    """
+    package = module if is_package else module.rpartition(".")[0]
     found = []
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom):
@@ -191,7 +195,9 @@ def closure(root: Path, config: Config) -> tuple[list[str], list[str]]:
             continue
         files.add(rel)
         tree = ast.parse((root / rel).read_text(encoding="utf-8"), filename=rel)
-        for node, target, relative in _app_imports(tree, module):
+        for node, target, relative in _app_imports(
+            tree, module, is_package=rel.endswith("__init__.py")
+        ):
             if _module_file(root, target) is None:
                 continue  # a name inside a module
             if not relative:

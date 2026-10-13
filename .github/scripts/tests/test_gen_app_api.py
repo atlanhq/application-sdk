@@ -295,3 +295,13 @@ def test_check_refuses_a_compute_manifest_hook(tmp_path: Path) -> None:
         "consolidated host serves static manifests only, so this app cannot be "
         "hosted yet"
     ]
+
+
+def test_a_relative_import_in_a_package_init_ships_its_sibling(tmp_path: Path) -> None:
+    root = _app(tmp_path, "from .errors import Boom2\nfrom .client import C\n")
+    (root / "app/errors").mkdir()
+    (root / "app/errors/__init__.py").write_text("from .mapping import Boom2\n")
+    (root / "app/errors/mapping.py").write_text("class Boom2(Exception): ...\n")
+    files, absolute = gen.closure(root, gen.load(root))
+    assert "app/errors/mapping.py" in files
+    assert absolute == []
