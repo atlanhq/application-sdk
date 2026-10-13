@@ -45,7 +45,7 @@ import tempfile
 import time
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING
 
 from application_sdk._runtime.offload import run_in_thread
@@ -160,9 +160,38 @@ _SENSITIVE_FILE_PREFIXES = (".env",)
 
 
 def _parse_blocked_paths() -> list[str]:
-    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns)."""
+    """Parse ATLAN_UPLOAD_FILE_BLOCKED_PATHS env var (comma-separated patterns).
+
+    Each pattern is returned in ``/`` form, whichever separator it was written
+    with, to be matched by :func:`_is_user_blocked`.
+    """
     val = os.environ.get("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "")
-    return [p.strip() for p in val.split(",") if p.strip()] if val else []
+    return (
+        [p.strip().replace("\\", "/") for p in val.split(",") if p.strip()]
+        if val
+        else []
+    )
+
+
+def _is_user_blocked(path: PurePath, patterns: list[str]) -> bool:
+    """Whether *path* contains any ATLAN_UPLOAD_FILE_BLOCKED_PATHS pattern.
+
+    A substring match, so both sides are put in one spelling first: the path
+    by ``as_posix()``, the patterns by :func:`_parse_blocked_paths`. Matching
+    against ``str(path)`` used the platform's separator, so on Windows a
+    pattern written ``/custom/secrets/`` never matched anything.
+    """
+    full = path.as_posix()
+    return any(pattern in full for pattern in patterns)
+
+
+def _is_sensitive_component(part: str) -> bool:
+    """Whether one path component is a credential directory or an ``.env*`` name.
+
+    Compared component by component, never as a string, so it holds for
+    either separator.
+    """
+    return part in _SENSITIVE_DIR_NAMES or part.startswith(_SENSITIVE_FILE_PREFIXES)
 
 
 def _validate_upload_path(path: Path) -> None:
@@ -172,7 +201,10 @@ def _validate_upload_path(path: Path) -> None:
     so ``App.upload()`` and the interceptor's persist refuse the same paths
     (FND-3796). A protected system directory is refused itself as well as
     anything under it: ``/etc`` resolves without the trailing ``/`` the
-    prefixes carry. The files a directory upload walks are checked too, by
+    prefixes carry. Every component of the resolved path is checked, so a
+    root under a credential directory or an ``.env*`` directory
+    (``/tmp/.env.local/output``) is refused as well as a root that is one.
+    The files a directory upload walks are checked too, by
     :func:`_list_upload_files`.
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
@@ -183,25 +215,23 @@ def _validate_upload_path(path: Path) -> None:
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
     resolved = path.resolve()
-    resolved_str = str(resolved)
 
     # The trailing "/" makes the directory itself match its own prefix, so
     # ``/etc`` is refused like ``/etc/passwd`` — without the separator check
-    # loosening to ``/etcetera``.
-    if (resolved_str.rstrip("/") + "/").startswith(_SENSITIVE_SYSTEM_PREFIXES):
+    # loosening to ``/etcetera``. Unix system paths: on Windows nothing
+    # resolves under them, by design.
+    if (resolved.as_posix().rstrip("/") + "/").startswith(_SENSITIVE_SYSTEM_PREFIXES):
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
-    if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
-        raise UnsafeUploadPathError(unsafe_path=str(path))
-
-    if resolved.is_file() and resolved.name.startswith(_SENSITIVE_FILE_PREFIXES):
+    # Every component, not only the last and not only for a file: a directory
+    # root inside ``.env.local/`` or ``.aws/`` carries what they hold.
+    if any(_is_sensitive_component(part) for part in resolved.parts):
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
     # User-defined blocked paths via ATLAN_UPLOAD_FILE_BLOCKED_PATHS (comma-separated).
     # Each entry is matched as a substring against the full resolved path.
     # e.g. ATLAN_UPLOAD_FILE_BLOCKED_PATHS="/custom/secrets/,.vault,.credentials"
-    user_blocked = _parse_blocked_paths()
-    if any(pattern in resolved_str for pattern in user_blocked):
+    if _is_user_blocked(resolved, _parse_blocked_paths()):
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
 
@@ -360,15 +390,10 @@ def _validate_upload_tree(root: Path, files: list[Path]) -> None:
     resolved_root = root.resolve()
     for fp in files:
         rel = fp.relative_to(root)
-        if any(
-            part in _SENSITIVE_DIR_NAMES or part.startswith(_SENSITIVE_FILE_PREFIXES)
-            for part in rel.parts
-        ):
+        if any(_is_sensitive_component(part) for part in rel.parts):
             raise UnsafeUploadPathError(unsafe_path=str(fp))
-        if user_blocked:
-            full = str(resolved_root / rel)
-            if any(pattern in full for pattern in user_blocked):
-                raise UnsafeUploadPathError(unsafe_path=str(fp))
+        if user_blocked and _is_user_blocked(resolved_root / rel, user_blocked):
+            raise UnsafeUploadPathError(unsafe_path=str(fp))
 
 
 async def _persist_file(

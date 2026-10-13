@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Annotated
 
 import pytest
@@ -596,13 +596,20 @@ class TestDirectoryUploadGuardCoversTheTree:
         # Refused before any byte moved.
         assert await list_keys("", store, normalize=False) == []
 
+    @pytest.mark.parametrize(
+        "pattern",
+        # The native spelling, built by the OS's own separator, and the
+        # ``/`` spelling the docs use: each must block on every platform.
+        [os.sep + "secrets" + os.sep, "/secrets/"],
+        ids=["native-separator", "forward-slash"],
+    )
     async def test_a_user_blocked_pattern_inside_the_tree_refuses_the_upload(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pattern: str
     ) -> None:
         from application_sdk.storage.errors import UnsafeUploadPathError
 
-        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/secrets/")
-        root = self._tree_with(tmp_path, "secrets/token.txt")
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", pattern)
+        root = self._tree_with(tmp_path, str(Path("secrets") / "token.txt"))
 
         with pytest.raises(UnsafeUploadPathError):
             await persist_file_refs(
@@ -625,3 +632,87 @@ class TestDirectoryUploadGuardCoversTheTree:
             )
         with pytest.raises(UnsafeUploadPathError):
             await upload(root, "out/", store=create_memory_store())
+
+
+class TestGuardRefusesRootsUnderSensitiveAncestors:
+    """lens F-afaa64 on #4332: a directory root *inside* ``.env*`` passed.
+
+    The root check tested ``.env*`` only when the root was a file, and the
+    tree check sees only paths below the root, so ``/tmp/.env.local/output``
+    and everything in it was uploaded.
+    """
+
+    @pytest.mark.parametrize(
+        "ancestor", [".env", ".env.local", ".aws", ".ssh"], ids=lambda a: a
+    )
+    @pytest.mark.parametrize("path", ["persist", "upload"])
+    async def test_a_root_below_a_sensitive_directory_is_refused(
+        self, tmp_path: Path, ancestor: str, path: str
+    ) -> None:
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        root = tmp_path / ancestor / "output"
+        root.mkdir(parents=True)
+        (root / "part-0.json").write_bytes(b"{}")
+        store = create_memory_store()
+
+        with pytest.raises(UnsafeUploadPathError):
+            if path == "persist":
+                await persist_file_refs(
+                    store,
+                    _TaskOutput(
+                        ref=FileReference(local_path=str(root), is_durable=False)
+                    ),
+                    output_path="artifacts/run",
+                )
+            else:
+                await upload(str(root), "out/", store=store)
+
+        assert await list_keys("", store, normalize=False) == []
+
+
+class TestBlockedPathPatternsAreSeparatorAgnostic:
+    """``ATLAN_UPLOAD_FILE_BLOCKED_PATHS`` matches whichever separator either
+    side was written with. It compared against ``str(path)``, so on Windows a
+    pattern written ``/custom/secrets/`` never matched. Pure paths make the
+    Windows case run on every CI runner, not only the Windows jobs."""
+
+    @pytest.mark.parametrize(
+        "pattern", ["/secrets/", "\\secrets\\"], ids=["forward", "backslash"]
+    )
+    @pytest.mark.parametrize(
+        "path",
+        [
+            PureWindowsPath("C:/work/export/secrets/token.txt"),
+            PurePosixPath("/work/export/secrets/token.txt"),
+        ],
+        ids=["windows", "posix"],
+    )
+    def test_either_spelling_matches_either_platform(
+        self, monkeypatch: pytest.MonkeyPatch, pattern: str, path: PurePath
+    ) -> None:
+        from application_sdk.storage.reference import (
+            _is_user_blocked,
+            _parse_blocked_paths,
+        )
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", pattern)
+
+        assert _is_user_blocked(path, _parse_blocked_paths())
+
+    def test_an_unrelated_path_is_not_blocked(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.reference import (
+            _is_user_blocked,
+            _parse_blocked_paths,
+        )
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/secrets/")
+
+        assert not _is_user_blocked(
+            PureWindowsPath("C:/work/export/secretsauce/t.txt"),
+            _parse_blocked_paths(),
+        )
