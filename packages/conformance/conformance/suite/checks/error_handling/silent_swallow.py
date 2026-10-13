@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from .._ast_common._sanitizers import call_uses_sanitizer
+from .._ast_common._sanitizers import call_uses_sanitizer, is_sanitizer_call
 from ._constants import _BROAD_EXCEPT_TYPES, _OPTIONAL_IMPORT_TYPES
 from ._helpers import (
     _any_logging_in,
@@ -532,12 +532,13 @@ class SilentSwallowMixin:
 
     @staticmethod
     def _expression_represents_parameter(expression: ast.expr, parameter: str) -> bool:
-        """Whether a value passed to a log carries its input's identity or text.
+        """Whether a log argument carries its input directly or as safe text.
 
-        Allowlisted shapes only: the bare name (``%s`` / ``exc_info=``),
-        ``str()`` / ``repr()`` of it, an f-string field of it, or ``%``
-        formatting with it as an operand. Lossy derivations such as
-        ``bool(problem)`` or ``type(problem)`` do not surface the exception.
+        Allowlisted shapes include the bare name (``%s`` / ``exc_info=``),
+        ``str()`` / ``repr()`` of it, a recognized sanitizer applied to it, an
+        f-string field of it, or ``%`` formatting with it as an operand. Lossy
+        derivations such as ``bool(problem)`` or ``type(problem)`` do not surface
+        the exception.
         """
 
         def is_parameter(node: ast.AST) -> bool:
@@ -550,13 +551,24 @@ class SilentSwallowMixin:
         if is_parameter(expression):
             return True
         if isinstance(expression, ast.Call):
-            return (
+            if (
                 isinstance(expression.func, ast.Name)
                 and expression.func.id in {"str", "repr"}
                 and len(expression.args) == 1
                 and not expression.keywords
                 and is_parameter(expression.args[0])
-            )
+            ):
+                return True
+            if is_sanitizer_call(expression):
+                return any(
+                    is_parameter(node)
+                    for argument in [
+                        *expression.args,
+                        *(keyword.value for keyword in expression.keywords),
+                    ]
+                    for node in ast.walk(argument)
+                )
+            return False
         if isinstance(expression, ast.JoinedStr):
             return any(
                 isinstance(value, ast.FormattedValue)
@@ -581,54 +593,136 @@ class SilentSwallowMixin:
     def _helper_logs_parameter_before_return(
         self, helper: ast.FunctionDef, parameter: str
     ) -> bool:
-        """Prove a straight-line helper logs its un-rebound input before returning."""
+        """Prove a helper logs its un-rebound input on every path before return."""
         if any(
             isinstance(node, (ast.Yield, ast.YieldFrom))
             for node in _iter_shallow(helper)
+        ) or any(
+            self._statement_rebinds_name(statement, parameter)
+            for statement in helper.body
         ):
             return False
-        control_flow = (
-            ast.If,
-            ast.For,
-            ast.AsyncFor,
-            ast.While,
-            ast.Try,
-            ast.TryStar,
-            ast.With,
-            ast.AsyncWith,
-            ast.Match,
-            ast.Return,
-            ast.Raise,
-            ast.Break,
-            ast.Continue,
-        )
-        for statement in helper.body:
-            if (
-                isinstance(statement, ast.Expr)
-                and isinstance(statement.value, ast.Constant)
-                and isinstance(statement.value.value, str)
+
+        def _logged_paths(
+            body: list[ast.stmt], incoming: set[bool]
+        ) -> tuple[set[bool], set[bool]] | None:
+            active = set(incoming)
+            exited: set[bool] = set()
+            for statement in body:
+                if not active or active == {True}:
+                    break
+                if (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and isinstance(statement.value.value, str)
+                ):
+                    continue  # helper docstring
+                if isinstance(statement, ast.If):
+                    then_paths = _logged_paths(statement.body, active)
+                    if then_paths is None:
+                        return None
+                    else_paths = (
+                        _logged_paths(statement.orelse, active)
+                        if statement.orelse
+                        else (set(active), set())
+                    )
+                    if else_paths is None:
+                        return None
+                    active = then_paths[0] | else_paths[0]
+                    exited.update(then_paths[1] | else_paths[1])
+                    continue
+                if isinstance(statement, (ast.Return, ast.Raise)):
+                    exited.update(active)
+                    active.clear()
+                    continue
+                if isinstance(statement, ast.Pass):
+                    continue
+                if _is_log_call_stmt(statement):
+                    call = statement.value
+                    if isinstance(call, ast.Await):
+                        call = call.value
+                    if isinstance(call, ast.Call) and any(
+                        self._expression_represents_parameter(value, parameter)
+                        for value in [
+                            *call.args,
+                            *(keyword.value for keyword in call.keywords),
+                        ]
+                    ):
+                        active = {True}
+                    continue
+                # Loops, try blocks, and opaque calls cannot prove that all paths
+                # log the input before returning.
+                return None
+            return active, exited
+
+        paths = _logged_paths(helper.body, {False})
+        if paths is None:
+            return False
+        all_paths = paths[0] | paths[1]
+        return bool(all_paths) and all_paths == {True}
+
+    def _module_helper_logs_caught_exception(
+        self, handler: ast.ExceptHandler, statements: list[ast.stmt]
+    ) -> bool:
+        """True when a visible module helper logs the handler's actual exception."""
+        if (
+            handler.name is None
+            or _handler_rebinds_exception(handler)
+            or not self._function_stack
+        ):
+            return False
+        local_helpers = visible_helpers(self._local_helpers, self._function_stack)
+        for index, statement in enumerate(statements):
+            if not isinstance(statement, ast.Expr) or not isinstance(
+                statement.value, ast.Call
             ):
-                continue
-            if isinstance(statement, control_flow):
-                return False
-            if self._statement_rebinds_name(statement, parameter):
-                return False
-            if not _is_log_call_stmt(statement):
                 continue
             call = statement.value
-            if isinstance(call, ast.Await):
-                call = call.value
-            if isinstance(call, ast.Call) and any(
-                self._expression_represents_parameter(value, parameter)
-                for value in [*call.args, *(keyword.value for keyword in call.keywords)]
+            if not isinstance(call.func, ast.Name):
+                continue
+            helper = local_helpers.get(call.func.id)
+            if (
+                helper is None
+                or helper.decorator_list
+                or helper.args.vararg is not None
+                or helper.args.kwarg is not None
             ):
-                return True
+                continue
+            prefix = statements[:index]
+            if any(
+                not isinstance(
+                    previous, (ast.Assign, ast.AnnAssign, ast.Expr, ast.Pass)
+                )
+                and not (
+                    isinstance(previous, ast.If)
+                    and not previous.orelse
+                    and len(previous.body) == 1
+                    and isinstance(previous.body[0], ast.Raise)
+                )
+                for previous in prefix
+            ):
+                continue
+            parameters = [
+                *helper.args.posonlyargs,
+                *helper.args.args,
+                *helper.args.kwonlyargs,
+            ]
+            for parameter in parameters:
+                passed = _call_argument_for_parameter(call, helper, parameter.arg)
+                if (
+                    isinstance(passed, ast.Name)
+                    and passed.id == handler.name
+                    and self._helper_logs_parameter_before_return(helper, parameter.arg)
+                ):
+                    return True
         return False
 
     def _helper_logs_caught_exception(
         self, handler: ast.ExceptHandler, statements: list[ast.stmt]
     ) -> bool:
-        """True when a prior same-class call logs the handler's actual exception."""
+        """True when a prior local helper logs the handler's actual exception."""
+        if self._module_helper_logs_caught_exception(handler, statements):
+            return True
         if (
             handler.name is None
             or _handler_rebinds_exception(handler)

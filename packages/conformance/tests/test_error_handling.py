@@ -1963,6 +1963,60 @@ class Probe:
     assert "E007" not in _findings(src)
 
 
+def test_p007_no_finding_when_module_helper_logs_sanitized_exception_on_every_path() -> (
+    None
+):
+    src = """\
+def _report_problem(label, problem, internal):
+    if internal:
+        logger.error("%s failed: %s", label, safe_traceback(problem))
+    else:
+        logger.error("%s failed: %s", label, sanitize_cause_repr(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        failure = classify(problem)
+        if failure is None:
+            raise
+        _report_problem("lookup", problem, failure.internal)
+        return None
+"""
+    _none(src)
+
+
+def test_p007_still_flags_when_module_helper_logs_unrelated_argument() -> None:
+    src = """\
+def _report_problem(problem, detail):
+    logger.error("operation failed: %s", detail)
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _report_problem(problem, "unrelated detail")
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
+def test_p007_still_flags_when_module_helper_has_a_path_without_logging() -> None:
+    src = """\
+def _maybe_report(problem, enabled):
+    if enabled:
+        logger.error("operation failed: %s", safe_traceback(problem))
+
+def inspect():
+    try:
+        read_value()
+    except LookupError as problem:
+        _maybe_report(problem, True)
+        return None
+"""
+    assert "E007" in _findings(src)
+
+
 def test_p007_still_flags_when_same_class_helper_drops_caught_exception() -> None:
     src = """\
 class Probe:
