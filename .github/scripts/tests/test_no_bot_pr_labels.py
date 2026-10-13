@@ -63,10 +63,11 @@ _LABEL_ADDS: dict[str, tuple[re.Pattern[str], str]] = {
         "-f labels[]=conformance-resync",
     ),
     "REST POST/PUT …/labels": (
-        # Ends at /labels: adds or replaces. DELETE …/labels/<name> is a removal,
-        # which fires `unlabeled`, a type tests.yaml does not trigger on.
+        # Ends at /labels: a read, an add or a replace. _is_label_write keeps
+        # only the writes. DELETE …/labels/<name> is a removal, which fires
+        # `unlabeled`, a type tests.yaml does not trigger on.
         re.compile(r"/issues/[^\s/]+/labels(?=[\"'\s`]|$)", re.MULTILINE),
-        "f\"repos/{repo}/issues/{pr['number']}/labels\",",
+        "gh api -X POST \"repos/{repo}/issues/{pr['number']}/labels\" --input l.json",
     ),
     "Octokit / GraphQL add or set labels": (
         re.compile(r"\b(?:add|set)_?[Ll]abels(?:ToLabelable)?\b"),
@@ -161,10 +162,38 @@ def _tracked_files() -> Iterator[Path]:
             yield path
 
 
+#: What turns a request to …/issues/{n}/labels into a write: an explicit
+#: POST/PUT, or a body (`gh api` switches to POST as soon as a field or
+#: `--input` is given, so `-f labels[]=x` alone is a write).
+_WRITE_MARKER = re.compile(
+    r"\b(?:POST|PUT)\b|labels\[\]=|--input\b|(?:-[fF]|--(?:raw-)?field)[\s\"',]+labels"
+)
+
+
+def _is_label_write(text: str, match: re.Match[str]) -> bool:
+    """Whether the request around an ``…/issues/{n}/labels`` path writes.
+
+    Textual, so the request is approximated as the line before the path (where
+    a ``-X POST`` sits in a multi-line call) through ~200 characters after it
+    (where the method and fields sit in an argv list). That errs towards
+    flagging: a read with an unrelated POST a few lines on is reported, and
+    goes in _GRANDFATHERED with its reason if it really is a read.
+    """
+    line_start = text.rfind("\n", 0, match.start())
+    window_start = text.rfind("\n", 0, max(line_start, 0)) + 1
+    return bool(_WRITE_MARKER.search(text, window_start, match.end() + 200))
+
+
+_CONFIRM = {"REST POST/PUT …/labels": _is_label_write}
+
+
 def _hits(text: str) -> list[str]:
     found = []
     for name, (pattern, _) in _LABEL_ADDS.items():
+        confirm = _CONFIRM.get(name)
         for match in pattern.finditer(text):
+            if confirm and not confirm(text, match):
+                continue
             line = text.count("\n", 0, match.start()) + 1
             found.append(f"L{line} {name}: {match.group(0)!r}")
     return found
@@ -191,10 +220,28 @@ def test_every_pattern_matches_its_example():
         'gh api "repos/{repo}/pulls/{pr}" --jq ".labels[].name"',
         "contains(github.event.pull_request.labels.*.name, 'e2e')",
         "--label-filter foo",
+        'gh api "repos/$owner/$repo/issues/$pr/labels" --jq ".[].name"',
+        'run(["gh", "api", f"repos/{repo}/issues/{n}/labels", "--paginate"])',
     ],
 )
 def test_removals_and_reads_are_not_flagged(harmless: str):
     assert _hits(harmless) == []
+
+
+@pytest.mark.parametrize(
+    "write",
+    [
+        'gh api -X POST "repos/$owner/$repo/issues/$pr/labels" --input l.json',
+        'gh api --method PUT "repos/o/r/issues/1/labels" -f "labels[]=x"',
+        'gh api "repos/o/r/issues/1/labels" -F labels=@labels.json',
+        """gh api \\
+          -X POST \\
+          "repos/${REPO}/issues/${PR_NUMBER}/labels" \\
+          --input -""",
+    ],
+)
+def test_rest_label_writes_are_flagged(write: str):
+    assert any("REST POST/PUT" in h for h in _hits(write)), write
 
 
 def test_the_removed_resync_label_post_is_caught():
