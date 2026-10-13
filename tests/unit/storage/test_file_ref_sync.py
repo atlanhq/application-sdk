@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
 
+import pytest
 from pydantic import Field
 
 from application_sdk.contracts.base import Input, Output
@@ -544,3 +546,82 @@ class TestPersistRefusesSensitivePaths:
 
         assert persisted.ref.is_durable is True
         assert persisted.ref.manifest_path is not None
+
+
+class TestDirectoryUploadGuardCoversTheTree:
+    """lens F-8a73a1 / F-4c4d7a on #4332: the guard checked only the root.
+
+    An exact protected root (``/etc``) slipped past the ``"/etc/"`` prefix, and
+    an ordinary directory holding a ``.env`` or ``.aws/credentials`` uploaded
+    them. Both the interceptor's persist and ``transfer.upload`` refuse now.
+    """
+
+    @staticmethod
+    def _tree_with(tmp_path: Path, rel: str) -> Path:
+        root = tmp_path / "export"
+        (root / "data").mkdir(parents=True)
+        (root / "data" / "part-0.json").write_bytes(b"{}")
+        secret = root / rel
+        secret.parent.mkdir(parents=True, exist_ok=True)
+        secret.write_bytes(b"placeholder\n")
+        return root
+
+    @pytest.mark.parametrize(
+        "rel", [".env", "nested/.env.local", ".aws/credentials", "x/.ssh/id_rsa"]
+    )
+    @pytest.mark.parametrize("path", ["persist", "upload"])
+    async def test_a_sensitive_file_inside_the_tree_refuses_the_upload(
+        self, tmp_path: Path, rel: str, path: str
+    ) -> None:
+        from application_sdk.storage.batch import list_keys
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        store = create_memory_store()
+        root = self._tree_with(tmp_path, rel)
+
+        with pytest.raises(UnsafeUploadPathError) as excinfo:
+            if path == "persist":
+                await persist_file_refs(
+                    store,
+                    _TaskOutput(
+                        ref=FileReference(local_path=str(root), is_durable=False)
+                    ),
+                    output_path="artifacts/run",
+                )
+            else:
+                await upload(str(root), "out/", store=store)
+
+        assert excinfo.value.unsafe_path == str(root / rel)
+        # Refused before any byte moved.
+        assert await list_keys("", store, normalize=False) == []
+
+    async def test_a_user_blocked_pattern_inside_the_tree_refuses_the_upload(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+
+        monkeypatch.setenv("ATLAN_UPLOAD_FILE_BLOCKED_PATHS", "/secrets/")
+        root = self._tree_with(tmp_path, "secrets/token.txt")
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(
+                create_memory_store(),
+                _TaskOutput(ref=FileReference(local_path=str(root), is_durable=False)),
+                output_path="artifacts/run",
+            )
+
+    @pytest.mark.skipif(sys.platform == "win32", reason="Unix-only system paths")
+    @pytest.mark.parametrize("root", ["/etc", "/etc/", "/dev"])
+    async def test_an_exact_protected_root_is_refused(self, root: str) -> None:
+        from application_sdk.storage.errors import UnsafeUploadPathError
+        from application_sdk.storage.transfer import upload
+
+        with pytest.raises(UnsafeUploadPathError):
+            await persist_file_refs(
+                create_memory_store(),
+                _TaskOutput(ref=FileReference(local_path=root, is_durable=False)),
+                output_path="artifacts/run",
+            )
+        with pytest.raises(UnsafeUploadPathError):
+            await upload(root, "out/", store=create_memory_store())

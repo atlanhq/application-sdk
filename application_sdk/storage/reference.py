@@ -168,10 +168,12 @@ def _parse_blocked_paths() -> list[str]:
 def _validate_upload_path(path: Path) -> None:
     """Block uploads from sensitive system paths, credential dirs, and env files.
 
-    Checked once per upload, on the root handed to the engine — the file, or
-    the directory — so ``App.upload()`` and the interceptor's persist refuse
-    the same paths (FND-3796). Files inside an uploaded directory are not
-    checked one by one.
+    Checked on the root handed to the engine — the file, or the directory —
+    so ``App.upload()`` and the interceptor's persist refuse the same paths
+    (FND-3796). A protected system directory is refused itself as well as
+    anything under it: ``/etc`` resolves without the trailing ``/`` the
+    prefixes carry. The files a directory upload walks are checked too, by
+    :func:`_list_upload_files`.
     """
     from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
         UnsafeUploadPathError,
@@ -183,7 +185,10 @@ def _validate_upload_path(path: Path) -> None:
     resolved = path.resolve()
     resolved_str = str(resolved)
 
-    if resolved_str.startswith(_SENSITIVE_SYSTEM_PREFIXES):
+    # The trailing "/" makes the directory itself match its own prefix, so
+    # ``/etc`` is refused like ``/etc/passwd`` — without the separator check
+    # loosening to ``/etcetera``.
+    if (resolved_str.rstrip("/") + "/").startswith(_SENSITIVE_SYSTEM_PREFIXES):
         raise UnsafeUploadPathError(unsafe_path=str(path))
 
     if any(part in _SENSITIVE_DIR_NAMES for part in resolved.parts):
@@ -323,10 +328,47 @@ def _list_upload_files(root: Path) -> list[Path]:
     ``skip_if_exists`` the data file's dedup check could then read that
     sidecar, match, and skip the data upload entirely. Blocking (fsync +
     scandir): call it through ``run_in_thread``.
+
+    Raises:
+        UnsafeUploadPathError: If any file in the tree is one the guard
+            refuses — see :func:`_validate_upload_tree`.
     """
-    return [
+    files = [
         fp for fp in safe_list_directory(root) if not integrity.is_sidecar_key(fp.name)
     ]
+    _validate_upload_tree(root, files)
+    return files
+
+
+def _validate_upload_tree(root: Path, files: list[Path]) -> None:
+    """Refuse a directory upload that would carry a credential or env file.
+
+    Checking only the root let an ordinary output directory ship a ``.env``
+    or a ``.aws/credentials`` that happened to sit inside it. Each file's
+    path below *root* gets the same tests :func:`_validate_upload_path`
+    applies to a root: no credential directory on the way down, no
+    ``.env``-prefixed name, nothing matching ``ATLAN_UPLOAD_FILE_BLOCKED_PATHS``.
+    Fail-closed: the whole upload is refused, naming the file, rather than
+    silently dropping it from the hand-off. Symlinks never reach here —
+    ``safe_list_directory`` does not follow them.
+    """
+    from application_sdk.storage.errors import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules
+        UnsafeUploadPathError,
+    )
+
+    user_blocked = _parse_blocked_paths()
+    resolved_root = root.resolve()
+    for fp in files:
+        rel = fp.relative_to(root)
+        if any(
+            part in _SENSITIVE_DIR_NAMES or part.startswith(_SENSITIVE_FILE_PREFIXES)
+            for part in rel.parts
+        ):
+            raise UnsafeUploadPathError(unsafe_path=str(fp))
+        if user_blocked:
+            full = str(resolved_root / rel)
+            if any(pattern in full for pattern in user_blocked):
+                raise UnsafeUploadPathError(unsafe_path=str(fp))
 
 
 async def _persist_file(

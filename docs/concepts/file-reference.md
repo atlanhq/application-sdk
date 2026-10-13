@@ -100,8 +100,13 @@ persist also share one upload engine. A directory `up.ref` carries a
 `manifest_path` and leaves a local `.sha256` marker beside each file, so a task
 on the same worker reuses the files instead of downloading them back, and never
 reads a stray object under the prefix as part of the hand-off. Both refuse the
-same sensitive local paths (`/etc`, `.ssh`, `.aws`, `.env*`, and
-`ATLAN_UPLOAD_FILE_BLOCKED_PATHS`). The tag is honoured only for refs
+same sensitive local paths: a protected system directory itself or anything
+under it (`/etc`, `/proc`, `/sys`, `/dev`, `/root`), and any path through a
+credential directory (`.ssh`, `.aws`, `.gnupg`, `.kube`, `.vault`), an
+`.env*` name, or a match for `ATLAN_UPLOAD_FILE_BLOCKED_PATHS`. For a directory
+that applies to every file in it: one `.env` inside an output directory refuses
+the whole upload, naming the file, rather than shipping it or dropping it
+silently. The tag is honoured only for refs
 produced inside the run. A workflow's start
 input (including `continue_with`) and every `@update` argument have any
 `store=UPSTREAM` reset to `DEPLOYMENT`, so to consume another
