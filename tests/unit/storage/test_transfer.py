@@ -1201,3 +1201,80 @@ class TestUploadSameStoreCopy:
         exists_spy.assert_not_called()
         assert out.ref.file_count == 2
         assert out.synced == 0
+
+
+class TestDownloadOnTheSharedEngine:
+    """FND-3795: download() runs on the materialise engine; its own contract holds.
+
+    Lens round 5 found two places the engine was looser than the old
+    download loop: ``skip_if_exists`` trusting a local marker over the store,
+    and an owned temp file surviving a missing key or a cancellation.
+    """
+
+    async def test_skip_if_exists_refetches_an_object_overwritten_since(
+        self, store, tmp_path
+    ) -> None:
+        """The local marker records the last download, not the current object."""
+        from application_sdk.storage.ops import _put
+
+        await _put("sx/data.txt", b"old", store)
+        dest = tmp_path / "dest"
+        await download("sx/", str(dest), store=store)
+
+        await _put("sx/data.txt", b"new", store)  # no stored digest either
+        dl = await download("sx/", str(dest), store=store, skip_if_exists=True)
+
+        assert (dest / "data.txt").read_bytes() == b"new"
+        assert dl.synced is True
+
+    async def test_skip_if_exists_reuses_a_file_that_matches_the_stored_digest(
+        self, store, tmp_path
+    ) -> None:
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "data.txt").write_bytes(b"same")
+        await upload(str(src), "sy/", store=store)
+        dest = tmp_path / "dest"
+        await download("sy/", str(dest), store=store)
+
+        dl = await download("sy/", str(dest), store=store, skip_if_exists=True)
+
+        assert dl.synced is False
+        assert dl.reason == "skipped:hash_match"
+
+    async def test_a_missing_key_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from application_sdk.storage.errors import StorageError
+
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with pytest.raises(StorageError):
+            await download("missing/key.json", store=store)
+
+        assert list(scratch.iterdir()) == []
+
+    async def test_a_cancelled_download_leaves_no_temp_file(
+        self, store, tmp_path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import asyncio
+
+        from application_sdk.storage.ops import _put
+
+        await _put("cx/key.json", b"{}", store)
+        scratch = tmp_path / "tmp"
+        scratch.mkdir()
+        monkeypatch.setattr("tempfile.tempdir", str(scratch))
+
+        with (
+            patch(
+                "application_sdk.storage.ops.download_file",
+                side_effect=asyncio.CancelledError,
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await download("cx/key.json", store=store)
+
+        assert list(scratch.iterdir()) == []

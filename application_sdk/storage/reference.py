@@ -85,7 +85,8 @@ class _Reuse(Enum):
     * ``VERIFIED`` — materialise: reuse a local copy that hashes to its local
       ``.sha256`` sidecar (directory) or to the stored digest (single file).
     * ``REMOTE_DIGEST`` — ``download(skip_if_exists=True)``: reuse a local copy
-      that hashes to its local sidecar or, failing that, to the stored digest.
+      only if it hashes to the stored digest; a local marker is not consulted,
+      since the object may have changed since it was written.
     * ``NEVER`` — ``download(skip_if_exists=False)``: always download.
     """
 
@@ -853,26 +854,6 @@ async def _materialize_single_file(
         # Otherwise (no stored sidecar OR hash mismatch) fall through
         # to re-download — conservative since we cannot verify.
 
-    # Determine output path. owns_temp: a fresh mkstemp name per call
-    # means a resume checkpoint could never be reused on retry — disable
-    # resume and clean up the partial + sidecar on failure. A stable
-    # ref.local_path keeps the default (env-driven) resume behaviour so a
-    # Temporal retry on the same pod fetches only the missing ranges.
-    owns_temp = ref.local_path is None
-    if ref.local_path is not None:
-        out_path = ref.local_path
-        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    else:
-        suffix = Path(ref.storage_path).suffix or ""
-        if local_dir:
-            Path(local_dir).mkdir(parents=True, exist_ok=True)
-            fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
-        else:
-            fd, out_path = tempfile.mkstemp(suffix=suffix)
-        os.close(
-            fd
-        )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it
-
     # Use get_file_meta (HEAD) for two purposes: existence check (avoids
     # the ambiguous empty-listing → misleading 404 from download_file) and
     # threshold check for chunked vs streaming download.
@@ -917,6 +898,28 @@ async def _materialize_single_file(
         tier=str(ref.tier),
     )
 
+    # Determine output path — only now, after the HEAD proved there is
+    # something to fetch, so a missing key strands no temp file. owns_temp:
+    # a fresh mkstemp name per call
+    # means a resume checkpoint could never be reused on retry — disable
+    # resume and clean up the partial + sidecar on failure. A stable
+    # ref.local_path keeps the default (env-driven) resume behaviour so a
+    # Temporal retry on the same pod fetches only the missing ranges.
+    owns_temp = ref.local_path is None
+    if ref.local_path is not None:
+        out_path = ref.local_path
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    else:
+        suffix = Path(ref.storage_path).suffix or ""
+        if local_dir:
+            Path(local_dir).mkdir(parents=True, exist_ok=True)
+            fd, out_path = tempfile.mkstemp(suffix=suffix, dir=local_dir)
+        else:
+            fd, out_path = tempfile.mkstemp(suffix=suffix)
+        os.close(
+            fd
+        )  # close immediately; this only reserves the destination name — the download stages in .sdk-partial/ and publishes over it
+
     try:
         # Dispatch to chunked (parallel range-GET) or single-stream download.
         if _is_chunked:
@@ -958,15 +961,17 @@ async def _materialize_single_file(
             )
 
         await run_in_thread(_write_local_sidecar, out_path, sha256)
-    except Exception as exc:
-        # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
-        logger.error(
-            "file_ref.materialize.failed",
-            storage_path=ref.storage_path,
-            error_type=type(exc).__name__,
-            bytes_transferred_before_failure=0,
-            exc_info=True,
-        )
+    # conformance: ignore[E004] cleanup handler that always re-raises; BaseException so a cancelled transfer strands no owned temp either
+    except BaseException as exc:
+        if isinstance(exc, Exception):
+            # conformance: ignore[L018,L009] structured failure event; keys promoted to indexed OTLP attributes via _KNOWN_EXTRA_KEYS; distinct transfer-boundary telemetry not re-emitted by caller
+            logger.error(
+                "file_ref.materialize.failed",
+                storage_path=ref.storage_path,
+                error_type=type(exc).__name__,
+                bytes_transferred_before_failure=0,
+                exc_info=True,
+            )
         if owns_temp:
             # A fresh-named temp can never be resumed — don't strand the
             # partial file or its checkpoint sidecar (best-effort).
@@ -1088,15 +1093,19 @@ async def _materialize_directory(
             reuse is not _Reuse.NEVER or expected_sha256 is not None
         ) and dest_path.exists():
             try:
+                # REMOTE_DIGEST asks the store and nothing else: a local
+                # marker only says what was downloaded last time, and the
+                # object may have been overwritten since. No stored digest
+                # means no proof, so the file is downloaded.
                 reference: str | None
                 if expected_sha256 is not None:
                     reference = expected_sha256
-                elif dest_sidecar.exists():
-                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
                 elif reuse is _Reuse.REMOTE_DIGEST:
                     reference = await integrity.read_expected_digest(
                         store, key, sidecar_present=obj.has_sidecar
                     )
+                elif dest_sidecar.exists():
+                    reference = dest_sidecar.read_text(encoding="utf-8").strip()
                 else:
                     reference = None
                 local_hash = (
@@ -1105,7 +1114,7 @@ async def _materialize_directory(
                     else None
                 )
                 if reference is not None and local_hash == reference:
-                    if not dest_sidecar.exists() or expected_sha256 is not None:
+                    if reuse is not _Reuse.VERIFIED or expected_sha256 is not None:
                         await run_in_thread(_write_local_sidecar, dest, local_hash)
                     # conformance: ignore[L018] keys are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
                     logger.debug(
