@@ -1930,3 +1930,58 @@ jobs:
           echo "Published \`${APP_NAME}\` version \`${IMAGE_TAG}\` to \`${CHANNEL_USED}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "Refer to [Global Marketplace](https://globalmarketplaceui.atlan.com/admin/) for approval." >> $GITHUB_STEP_SUMMARY
+
+  # ── Consolidated API host (FND-3165) ────────────────────────────────────────
+  # An app that serves its handler from the consolidated host declares
+  # [tool.atlan-app-api]. After a successful publish on a channel branch, hand
+  # its commit to the host's bump-api-app-pin workflow, which moves the host's
+  # pin only when the content hash of the handler package changed (a
+  # worker-only release does not roll the host) and skips an app the host does
+  # not pin yet. No-op for every other app: detect_api_member.py answers
+  # present=false and the bump job is skipped.
+  api-host-member:
+    name: Detect hosted api member
+    needs: [prepare, publish]
+    if: ${{ !failure() && !cancelled() && needs.publish.result == 'success' && contains(fromJSON('["main","beta","staging"]'), needs.prepare.outputs.branch) }}
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    outputs:
+      present: ${{ steps.detect.outputs.present }}
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Checkout app
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+          path: app
+          fetch-depth: 1
+
+      - name: Checkout SDK helper scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: atlanhq/application-sdk
+          ref: main
+          path: .sdk-entrypoint
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Detect
+        id: detect
+        run: python3 .sdk-entrypoint/.github/scripts/detect_api_member.py --root app >> "$GITHUB_OUTPUT"
+
+      - name: Resolve the released commit
+        id: sha
+        run: echo "sha=$(git -C app rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  api-host-pin:
+    name: Bump the app on the consolidated host
+    needs: [prepare, api-host-member]
+    if: ${{ needs.api-host-member.outputs.present == 'true' }}
+    uses: atlanhq/common-app-server/.github/workflows/bump-api-app-pin.yaml@main
+    with:
+      app_repo: ${{ github.repository }}
+      ref: ${{ needs.api-host-member.outputs.sha }}
+      target_branch: ${{ needs.prepare.outputs.branch }}
+    secrets:
+      FLEET_APP_ID: ${{ secrets.FLEET_APP_ID }}
+      FLEET_APP_PRIVATE_KEY: ${{ secrets.FLEET_APP_PRIVATE_KEY }}
