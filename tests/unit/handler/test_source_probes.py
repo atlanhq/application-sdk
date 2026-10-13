@@ -1,8 +1,9 @@
 """Unit tests for the network source probes (ADR-0021).
 
-No sockets: the unit tier runs with ``--disable-socket``. ``socket.getaddrinfo``
-and ``asyncio.open_connection`` are replaced at the module boundary the probes
-call through, so the probes' own classification and chaining run for real.
+No sockets: the unit tier runs with ``--disable-socket``. The module's own
+``_getaddrinfo`` and ``_open_connection`` seams are replaced (never the shared
+``socket`` / ``asyncio`` functions), so the probes' own classification,
+racing and chaining run for real.
 Real-socket behaviour (a refused port, a plaintext port, an untrusted
 certificate) is in ``tests/integration/test_source_probes.py``.
 """
@@ -56,7 +57,25 @@ def _raises(exc: BaseException) -> Callable[..., Any]:
     return fake
 
 
+async def _fail(error: BaseException | None) -> None:
+    if isinstance(error, _Hang):
+        await asyncio.sleep(30)
+    if error is not None:
+        raise error
+
+
 class _Writer:
+    def __init__(self, owner: _Connections, host: str) -> None:
+        self.owner, self.host = owner, host
+
+    async def start_tls(
+        self, context: ssl.SSLContext, *, server_hostname: str | None = None
+    ) -> None:
+        self.owner.attempts.append((self.host, True))
+        self.owner.contexts.append(context)
+        self.owner.server_hostnames.append(server_hostname)
+        await _fail(self.owner.tls)
+
     def close(self) -> None:
         pass
 
@@ -65,28 +84,31 @@ class _Writer:
 
 
 class _Connections:
-    """Stands in for ``asyncio.open_connection``; records every attempt."""
+    """Stands in for the module's ``_open_connection``; records every attempt.
 
-    def __init__(
-        self, plain: BaseException | None = None, tls: BaseException | None = None
-    ) -> None:
-        self.plain, self.tls = plain, tls
+    ``attempts`` holds ``(address, False)`` per plain connect and
+    ``(address, True)`` per TLS upgrade. ``plain`` fails every connect,
+    ``by_host`` fails connects to one address, and ``reconnect`` fails every
+    connect after the first that succeeded (the TLS probe's own connect).
+    """
+
+    def __init__(self) -> None:
+        self.plain: BaseException | None = None
+        self.tls: BaseException | None = None
+        self.reconnect: BaseException | None = None
+        self.by_host: dict[str, BaseException] = {}
+        self.connected = 0
         self.attempts: list[tuple[str, bool]] = []
         self.server_hostnames: list[str | None] = []
         self.contexts: list[ssl.SSLContext] = []
 
-    async def __call__(self, host: str, port: int, **kwargs: Any) -> Any:
-        is_tls = "ssl" in kwargs
-        self.attempts.append((host, is_tls))
-        if is_tls:
-            self.contexts.append(kwargs["ssl"])
-            self.server_hostnames.append(kwargs.get("server_hostname"))
-        error = self.tls if is_tls else self.plain
-        if isinstance(error, _Hang):
-            await asyncio.sleep(30)
-        if error is not None:
-            raise error
-        return object(), _Writer()
+    async def __call__(self, host: str, port: int) -> Any:
+        self.attempts.append((host, False))
+        await _fail(self.by_host.get(host, self.plain))
+        if self.connected:
+            await _fail(self.reconnect)
+        self.connected += 1
+        return object(), _Writer(self, host)
 
 
 class _Hang(Exception):
@@ -96,8 +118,8 @@ class _Hang(Exception):
 @pytest.fixture
 def connections(monkeypatch: pytest.MonkeyPatch) -> _Connections:
     fake = _Connections()
-    monkeypatch.setattr(source_probes.asyncio, "open_connection", fake)
-    monkeypatch.setattr(source_probes.socket, "getaddrinfo", _resolves_to(_PUBLIC))
+    monkeypatch.setattr(source_probes, "_open_connection", fake)
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _resolves_to(_PUBLIC))
     return fake
 
 
@@ -124,7 +146,11 @@ async def test_reachable_tls_endpoint_passes_all_three(connections: _Connections
     assert report.skipped == report.unsupported == report.broken == []
     assert all(c.duration_ms >= 0 for c in report.checks)
     # Connects to the resolved address, verifies against the configured name.
-    assert connections.attempts == [(_PUBLIC, False), (_PUBLIC, True)]
+    assert connections.attempts == [
+        (_PUBLIC, False),  # sourceTcp
+        (_PUBLIC, False),  # sourceTls connects ...
+        (_PUBLIC, True),  # ... then upgrades
+    ]
     assert connections.server_hostnames == [_HOST]
     [context] = connections.contexts
     assert context.verify_mode is ssl.CERT_REQUIRED and context.check_hostname
@@ -137,7 +163,7 @@ async def test_malformed_host_is_invalid_input_and_never_resolved(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch, host: str
 ):
     monkeypatch.setattr(
-        source_probes.socket, "getaddrinfo", _raises(AssertionError("resolved"))
+        source_probes, "_getaddrinfo", _raises(AssertionError("resolved"))
     )
     report = await _probe(host)
     assert _only_failure(report) == (
@@ -170,8 +196,8 @@ async def test_dns_failures_split_nxdomain_from_resolver_outage(
     retryable: bool,
 ):
     monkeypatch.setattr(
-        source_probes.socket,
-        "getaddrinfo",
+        source_probes,
+        "_getaddrinfo",
         _raises(socket.gaierror(gai_errno, "lookup failed")),
     )
     report = await _probe()
@@ -184,7 +210,7 @@ async def test_dns_failures_split_nxdomain_from_resolver_outage(
 async def test_an_empty_answer_is_a_resolver_failure_not_a_disallowed_address(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(source_probes.socket, "getaddrinfo", _resolves_to())
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _resolves_to())
     assert _only_failure(await _probe())[1] == "SOURCE_UNAVAILABLE_DNS"
 
 
@@ -192,18 +218,23 @@ async def test_hung_resolver_is_cut_off_at_the_dns_bound(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
     release = threading.Event()
+    threads: list[str] = []
 
     def hang(*_: Any, **__: Any) -> list[Any]:
+        threads.append(threading.current_thread().name)
         release.wait(5)
         return []
 
-    monkeypatch.setattr(source_probes.socket, "getaddrinfo", hang)
+    monkeypatch.setattr(source_probes, "_getaddrinfo", hang)
     try:
         report = await asyncio.wait_for(_probe(), timeout=2)
     finally:
         release.set()
     assert _only_failure(report)[1] == "SOURCE_UNAVAILABLE_DNS"
     assert report.failed[0].duration_ms < 1000
+    # getaddrinfo cannot be cancelled, so the stalled lookup keeps its thread:
+    # it must be one of the probe's own, never the shared sdk-blocking pool.
+    assert threads and all(n.startswith("sdk-source-dns-") for n in threads)
 
 
 @pytest.mark.parametrize(
@@ -221,7 +252,7 @@ async def test_disallowed_resolution_is_refused_before_any_connect(
     addresses: tuple[str, ...],
     reason: str,
 ):
-    monkeypatch.setattr(source_probes.socket, "getaddrinfo", _resolves_to(*addresses))
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _resolves_to(*addresses))
     report = await _probe()
     assert _only_failure(report)[1] == "INVALID_INPUT_SOURCE_ADDRESS_DISALLOWED"
     error = report.failed[0].error
@@ -233,7 +264,7 @@ async def test_ip_literal_host_skips_resolution_but_not_the_policy(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
-        source_probes.socket, "getaddrinfo", _raises(AssertionError("resolved"))
+        source_probes, "_getaddrinfo", _raises(AssertionError("resolved"))
     )
     assert (await _probe(_PUBLIC)).failed == []
     assert _only_failure(await _probe("169.254.169.254"))[1] == (
@@ -245,10 +276,10 @@ async def test_disallowed_addresses_are_dropped_from_a_mixed_answer(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
-        source_probes.socket, "getaddrinfo", _resolves_to("127.0.0.1", _PUBLIC)
+        source_probes, "_getaddrinfo", _resolves_to("127.0.0.1", _PUBLIC)
     )
     assert (await _probe()).failed == []
-    assert [a for a, _ in connections.attempts] == [_PUBLIC, _PUBLIC]
+    assert {a for a, _ in connections.attempts} == {_PUBLIC}
 
 
 async def test_private_ranges_are_allowed():
@@ -305,25 +336,63 @@ async def test_errno_names_are_the_same_on_every_platform(
     assert report.failed[0].error.evidence["network_error"] == "EHOSTUNREACH"  # type: ignore[union-attr]
 
 
-async def test_tcp_tries_the_next_address_when_one_fails(
-    connections: _Connections, monkeypatch: pytest.MonkeyPatch
+_SECOND = "203.0.113.11"
+
+
+@pytest.mark.parametrize(
+    "first_fails",
+    [ConnectionRefusedError(errno.ECONNREFUSED, "refused"), _Hang()],
+    ids=["refused", "blackholed"],
+)
+async def test_tcp_reaches_a_later_address_when_the_first_fails(
+    connections: _Connections,
+    monkeypatch: pytest.MonkeyPatch,
+    first_fails: BaseException,
 ):
-    second = "203.0.113.11"
-    monkeypatch.setattr(
-        source_probes.socket, "getaddrinfo", _resolves_to(_PUBLIC, second)
-    )
-    real = connections.__call__
-
-    async def first_refuses(host: str, port: int, **kwargs: Any) -> Any:
-        if host == _PUBLIC and "ssl" not in kwargs:
-            connections.attempts.append((host, False))
-            raise ConnectionRefusedError(errno.ECONNREFUSED, "refused")
-        return await real(host, port, **kwargs)
-
-    monkeypatch.setattr(source_probes.asyncio, "open_connection", first_refuses)
+    # Raced, not tried in turn: a blackholed first address must not spend the
+    # deadline that a reachable second address would have answered within.
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _resolves_to(_PUBLIC, _SECOND))
+    connections.by_host[_PUBLIC] = first_fails
     assert (await _probe()).failed == []
     # TLS goes to the address TCP actually reached.
-    assert connections.attempts[-1] == (second, True)
+    assert connections.attempts[-1] == (_SECOND, True)
+
+
+async def test_a_refusal_outranks_a_timeout_when_every_address_fails(
+    connections: _Connections, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _resolves_to(_PUBLIC, _SECOND))
+    connections.by_host = {
+        _PUBLIC: _Hang(),
+        _SECOND: ConnectionRefusedError(errno.ECONNREFUSED, "refused"),
+    }
+    assert _only_failure(await _probe())[1] == "SOURCE_UNAVAILABLE_TCP_REFUSED"
+
+
+@pytest.mark.parametrize(
+    ("error", "code"),
+    [
+        (
+            ConnectionRefusedError(errno.ECONNREFUSED, "refused"),
+            "SOURCE_UNAVAILABLE_TCP_REFUSED",
+        ),
+        (_Hang(), "SOURCE_UNAVAILABLE_TCP_TIMEOUT"),
+    ],
+)
+async def test_a_failed_reconnect_in_the_tls_probe_is_not_a_tls_precondition(
+    connections: _Connections, error: BaseException, code: str
+):
+    # The source restarted between sourceTcp and sourceTls: no handshake ever
+    # started, so this is reachability, retryable, not a certificate problem.
+    connections.reconnect = error
+    report = await _probe()
+    name, got, category = _only_failure(report)
+    assert (name, got, category) == (
+        SOURCE_TLS_CHECK,
+        code,
+        FailureCategory.SOURCE_UNAVAILABLE,
+    )
+    assert connections.contexts == []
 
 
 def _cert_error() -> ssl.SSLCertVerificationError:
@@ -408,9 +477,7 @@ async def test_only_direct_tls_is_handshaken(
 async def test_a_raising_probe_fails_open_without_a_row(
     connections: _Connections, monkeypatch: pytest.MonkeyPatch
 ):
-    monkeypatch.setattr(
-        source_probes.socket, "getaddrinfo", _raises(RuntimeError("our bug"))
-    )
+    monkeypatch.setattr(source_probes, "_getaddrinfo", _raises(RuntimeError("our bug")))
     report = await _probe()
     assert report.checks == []
     assert report.broken == [SOURCE_DNS_CHECK]
@@ -438,7 +505,7 @@ async def test_several_endpoints_are_labelled_and_independent(
             raise socket.gaierror(socket.EAI_NONAME, "nx")
         return _resolves_to(_PUBLIC)(host, port)
 
-    monkeypatch.setattr(source_probes.socket, "getaddrinfo", resolve)
+    monkeypatch.setattr(source_probes, "_getaddrinfo", resolve)
     report = await probe_source_network(
         [
             SourceEndpoint(host=_HOST, port=443, label="api"),

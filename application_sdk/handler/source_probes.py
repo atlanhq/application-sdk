@@ -18,6 +18,7 @@ raw socket text: see :mod:`application_sdk.handler.source_probe_errors`.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import errno
 import ipaddress
 import socket
@@ -28,7 +29,6 @@ from typing import Final
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from application_sdk._runtime.offload import run_in_thread
 from application_sdk.clients.ssl_utils import get_ssl_context
 from application_sdk.contracts.base import SerializableEnum
 from application_sdk.errors.base import AppError
@@ -57,8 +57,26 @@ SOURCE_DNS_CHECK: Final = "sourceDns"
 SOURCE_TCP_CHECK: Final = "sourceTcp"
 SOURCE_TLS_CHECK: Final = "sourceTls"
 
-#: At most this many resolved addresses are tried for TCP, inside one deadline.
-_MAX_CONNECT_ADDRESSES = 3
+#: At most this many resolved addresses are raced for TCP, inside one deadline.
+_MAX_CONNECT_ADDRESSES = 6
+
+#: Resolver calls run on their own small pool, never the shared ``sdk-blocking``
+#: one: ``getaddrinfo`` has no per-call timeout, so when the system resolver
+#: stalls, a probe that has already timed out leaves its thread waiting on it.
+#: Bounded here, a resolver outage holds at most these threads; a lookup still
+#: queued behind them is dropped unstarted when its probe's deadline cancels it.
+_DNS_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=4, thread_name_prefix="sdk-source-dns-"
+)
+
+
+def _getaddrinfo(host: str, port: int) -> list[tuple]:  # type: ignore[type-arg]
+    """The blocking resolver call. A module seam so tests replace only this."""
+    return socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+
+
+#: The connector. A module seam so tests replace only this, never asyncio's own.
+_open_connection = asyncio.open_connection
 
 _IpAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 
@@ -231,11 +249,8 @@ async def _probe_dns(
     except ValueError:
         try:
             async with asyncio.timeout(timeouts.dns_seconds):
-                infos = await run_in_thread(
-                    socket.getaddrinfo,
-                    host,
-                    endpoint.port,
-                    type=socket.SOCK_STREAM,
+                infos = await asyncio.get_running_loop().run_in_executor(
+                    _DNS_EXECUTOR, _getaddrinfo, host, endpoint.port
                 )
         except (OSError, TimeoutError) as exc:
             return _row(SOURCE_DNS_CHECK, endpoint, started, _dns_error(exc))
@@ -317,32 +332,64 @@ async def _close(writer: asyncio.StreamWriter) -> None:
         )
 
 
+async def _connect(address: _IpAddress, port: int) -> None:
+    _, writer = await _open_connection(str(address), port)
+    await _close(writer)
+
+
+def _discard(task: asyncio.Task[None]) -> None:
+    """Cancel *task* without awaiting it, consuming whatever it later raises."""
+    task.cancel()
+    task.add_done_callback(lambda t: None if t.cancelled() else t.exception())
+
+
 async def _probe_tcp(
     endpoint: SourceEndpoint,
     state: _ProbeState,
     timeouts: NetworkProbeTimeouts,
     policy: AddressPolicy,
 ) -> PreflightCheck:
+    """Race every candidate address; the first to accept wins.
+
+    Raced rather than tried in turn, so an address that silently drops packets
+    cannot spend the whole deadline while another one would have answered.
+    """
     started = time.monotonic()
-    first_error: BaseException | None = None
+    candidates = state.addresses[:_MAX_CONNECT_ADDRESSES]
+    attempts = {
+        asyncio.ensure_future(_connect(address, endpoint.port)): address
+        for address in candidates
+    }
+    errors: dict[_IpAddress, OSError] = {}
+    pending = set(attempts)
+    deadline = time.monotonic() + timeouts.tcp_seconds
     try:
-        async with asyncio.timeout(timeouts.tcp_seconds):
-            for address in state.addresses[:_MAX_CONNECT_ADDRESSES]:
-                try:
-                    _, writer = await asyncio.open_connection(
-                        str(address), endpoint.port
-                    )
-                except OSError as exc:  # conformance: ignore[E009] not hidden: the first error becomes this probe's typed row
-                    first_error = first_error or exc
-                    continue
-                await _close(writer)
-                state.connected = address
-                return _row(SOURCE_TCP_CHECK, endpoint, started, None)
-    except TimeoutError as exc:  # conformance: ignore[E009] becomes the timeout row
-        first_error = first_error or exc
-    assert first_error is not None  # the loop ran at least once: DNS passed
+        while pending:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            done, pending = await asyncio.wait(
+                pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED
+            )
+            for task in done:
+                exc = task.exception()
+                if exc is None:
+                    state.connected = attempts[task]
+                    return _row(SOURCE_TCP_CHECK, endpoint, started, None)
+                if not isinstance(exc, OSError):
+                    raise exc
+                errors[attempts[task]] = exc
+    finally:
+        for task in pending:
+            _discard(task)
+    # Every address failed or the deadline passed. The first refusal or route
+    # error in DNS order says more than a timeout on an address still pending.
+    first = next((errors[a] for a in candidates if a in errors), None)
     return _row(
-        SOURCE_TCP_CHECK, endpoint, started, _connect_error(first_error, endpoint.port)
+        SOURCE_TCP_CHECK,
+        endpoint,
+        started,
+        _connect_error(first if first is not None else TimeoutError(), endpoint.port),
     )
 
 
@@ -383,20 +430,28 @@ async def _probe_tls(
     timeouts: NetworkProbeTimeouts,
     policy: AddressPolicy,
 ) -> PreflightCheck:
+    """Connect, then upgrade to TLS: two steps, so each failure is told apart.
+
+    A connection refused or dropped before any handshake (the source restarted
+    since ``sourceTcp`` passed) is a reachability fault and is reported as one,
+    never as a TLS precondition.
+    """
     started = time.monotonic()
     assert state.connected is not None  # TCP passed
     context = _verifying_context()
+    writer: asyncio.StreamWriter | None = None
+    handshaking = False
     try:
         async with asyncio.timeout(timeouts.tls_seconds):
-            _, writer = await asyncio.open_connection(
-                str(state.connected),
-                endpoint.port,
-                ssl=context,
-                server_hostname=endpoint.host.strip("[]"),
-            )
+            _, writer = await _open_connection(str(state.connected), endpoint.port)
+            handshaking = True
+            await writer.start_tls(context, server_hostname=endpoint.host.strip("[]"))
     except (OSError, TimeoutError) as exc:  # ssl.SSLError is an OSError
-        return _row(SOURCE_TLS_CHECK, endpoint, started, _tls_error(exc))
-    await _close(writer)
+        error = _tls_error(exc) if handshaking else _connect_error(exc, endpoint.port)
+        return _row(SOURCE_TLS_CHECK, endpoint, started, error)
+    finally:
+        if writer is not None:
+            await _close(writer)
     return _row(SOURCE_TLS_CHECK, endpoint, started, None)
 
 

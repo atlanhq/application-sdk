@@ -228,7 +228,7 @@ The other fields are for the user and the poll cadence; nothing branches on them
 
 #### Network source probes (experimental)
 
-`application_sdk.handler.source_probes.probe_source_network(endpoints)` checks DNS, then TCP, then TLS for each `SourceEndpoint` and returns a `SourceProbeReport`. Each probe runs only if the one before it passed, and is bounded by its own timeout (5s / 5s / 10s by default). The report's `checks` are ordinary `PreflightCheck` rows with typed errors under canonical names (`sourceDns`, `sourceTcp`, `sourceTls`). A probe that did not run is listed in `skipped`, never reported as a failed row.
+`application_sdk.handler.source_probes.probe_source_network(endpoints)` checks DNS and TCP for each `SourceEndpoint`, then TLS only for `TlsMode.DIRECT`: `NEGOTIATED` lists the TLS probe as `unsupported`, and `NONE` produces no TLS result. It returns a `SourceProbeReport`. Each probe runs only if the previous applicable probe passed, and is bounded by its own timeout (5s / 5s / 10s by default). The report's `checks` are ordinary `PreflightCheck` rows with typed errors under canonical names (`sourceDns`, `sourceTcp`, `sourceTls`). A probe that did not run is listed in `skipped`, never reported as a failed row.
 
 * Rows carry no host name, resolved address or raw socket text.
 * The TLS probe always verifies certificates against the SDK trust store; there is no option to skip verification.
