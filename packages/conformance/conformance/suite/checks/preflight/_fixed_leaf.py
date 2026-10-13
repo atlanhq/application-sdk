@@ -220,24 +220,19 @@ def _fixed_leaf(
 ) -> ast.expr | None:
     """The auth or permission class ``handler`` reports on every path, if any.
 
-    A leaf is a constructor call reported through ``_report_site``, or a class
-    raised bare (``raise AuthError``), whose report site is the ``raise``.
+    Only a constructor call is a leaf. A class raised bare (``raise AuthError``)
+    is unknown: the SDK's own leaves require ``message``, so that line raises
+    ``TypeError`` and no auth leaf reaches the gate.
     """
     parents = _parents(handler)
     for node in _own_nodes(handler):
-        if isinstance(node, ast.Raise) and isinstance(
-            node.exc, ast.Name | ast.Attribute
-        ):
-            leaf_class: ast.expr = node.exc
-        elif isinstance(node, ast.Call):
-            leaf_class = node.func
-        else:
+        if not isinstance(node, ast.Call):
             continue
-        if not _customer_rooted(checker, src, leaf_class):
+        if not _customer_rooted(checker, src, node.func):
             continue
-        site = node if isinstance(node, ast.Raise) else _report_site(node, src, parents)
+        site = _report_site(node, src, parents)
         if site is not None and _always_runs(site, src, parents, handler):
-            return leaf_class
+            return node.func
     return None
 
 

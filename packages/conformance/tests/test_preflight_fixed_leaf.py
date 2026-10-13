@@ -212,8 +212,6 @@ def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path, leaf: str) -> None:
         f"            return (PreflightCheck(name='a', passed=False, error={_AUTH}), None)\n",
         f"            with self.lock:\n                raise {_AUTH}\n",
         f"            try:\n                raise {_AUTH}\n            finally:\n                self.close()\n",
-        "            raise AppPermissionDeniedError\n",
-        "            raise AuthError from exc\n",
     ],
     ids=[
         "raise-from",
@@ -226,8 +224,6 @@ def test_silent_on_a_non_auth_fixed_leaf(tmp_path: Path, leaf: str) -> None:
         "tuple-return",
         "with-body",
         "try-finally",
-        "bare-class-raise",
-        "bare-class-raise-from",
     ],
 )
 def test_supported_reporting_shapes_fire(tmp_path: Path, row: str) -> None:
@@ -337,6 +333,8 @@ def test_any_condition_on_the_way_is_not_reported(tmp_path: Path, row: str) -> N
         '                message="Could not log in.", suggested_action="Check it.",\n'
         "                cause=exc)\n"
         "            raise error\n",
+        "            raise AppPermissionDeniedError\n",
+        "            raise AuthError from exc\n",
     ],
     ids=[
         "unused-constructor",
@@ -351,6 +349,8 @@ def test_any_condition_on_the_way_is_not_reported(tmp_path: Path, row: str) -> N
         "try-body-with-handler",
         "classifier-default",
         "pass-through-else-leaf",
+        "bare-class-raise",
+        "bare-class-raise-from",
     ],
 )
 def test_unmodelled_reporting_is_not_reported(tmp_path: Path, row: str) -> None:
