@@ -306,6 +306,8 @@ Both transfer tasks validate the bytes they move. An upload confirms the local f
   - `StorageTier.TRANSIENT` refs are always removed, except a key that a `RETAINED` or `PERSISTENT` ref in the same run also points at (the same file key, its `.sha256` sidecar, or a key under a durable directory ref). The durable tier wins: that key is counted in `skipped_count` and a WARNING names the clash.
   - `StorageTier.PERSISTENT` refs are always left untouched.
   - `StorageTier.RETAINED` refs under the run-scoped prefix are removed **only** when `input.include_prefix_cleanup=True` is set (opt-in); otherwise they are left untouched.
+  - Tracked refs tagged `store=UPSTREAM` are skipped: their bytes are in the upstream store, and cleanup deletes only from the deployment store. The opt-in run-prefix sweep does not consult refs: every deployment key under the run's own prefix is the run's, including the deployment copy `App.upload` dual-writes in a two-store deployment.
+  - Keys under `persistent-artifacts/` or `connection-cache/` (`PROTECTED_STORAGE_PREFIXES`) are never deleted, whatever the tier.
 
 Both are called automatically by the default `on_complete()` implementation. Do not call them directly from `run()` — the cleanup contract is tied to workflow completion, not mid-run state.
 
@@ -491,21 +493,39 @@ Hard mode applies to every outcome the gate can attribute to the **source**, not
 a platform blip must not fail a healthy run. The gate stamps which of the two happened as
 `gate_classification` on the outcome event, so the two are separable downstream.
 
-Among source-attributed outcomes, hard mode blocks only on a failure that is deterministic and that
-the customer can act on: the attributed `FailureDetails.category` (`details[0]`, the failure the
-row's `reason` names) must be `AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION` or `NOT_FOUND`
-(`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run proceeds, as in
-soft mode. Hard mode **never** blocks on `TIMEOUT`, `SOURCE_UNAVAILABLE` or the four pre-3.35
+Among source-attributed outcomes, hard mode blocks only on a failure the customer can act on: the
+attributed `FailureDetails.category` (`details[0]`, the failure the row's `reason` names) must be
+`AUTH`, `PERMISSION`, `INVALID_INPUT`, `PRECONDITION`, `NOT_FOUND`, `SOURCE_UNAVAILABLE` or
+`RATE_LIMITED` (`GATE_BLOCKING_CATEGORIES`). Anything else is reported as `would_block` and the run
+proceeds, as in soft mode. Hard mode **never** blocks on `TIMEOUT` or the three remaining pre-3.35
 fail-open categories (`GATE_NEVER_BLOCKING_CATEGORIES`): waiting or the platform fixes those, not
-the customer. An untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
+the customer. An
+untyped `NOT_READY` verdict is attributed to `PRECONDITION`, so it still blocks.
+
+`SOURCE_UNAVAILABLE` and `RATE_LIMITED` block only on the gate's **final attempt**
+(`GATE_RETRIED_CATEGORIES`), each under its own reason: an outage is for the source's operator to
+fix, an exhausted rate limit for whoever is spending it. On an earlier attempt a hard gate raises
+the retryable `PreflightNoVerdict` marker instead and emits no row, so a source that was
+unreachable or rate-limited for a moment gets the next attempt
+(`App.preflight_gate_max_attempts`, default 2) to answer `READY`. Soft mode never retries, because it
+never blocks. A source that is **cold** rather than down (a paused warehouse, a queued cluster)
+must not raise `SOURCE_UNAVAILABLE` for that: it reports `COLD`, `WARMING` or `QUEUED` from
+`Handler.warmup`, which the gate polls and the warmup posture decides (see
+[Waiting for a warmup](#waiting-for-a-warmup-opt-in)).
+
+When a verdict has several failed checks and no aggregate `result.error`, `details[0]` is the most
+decisive one: the first in a deterministic blocking category (`AUTH`, `PERMISSION`, ...), else the
+first `SOURCE_UNAVAILABLE` or `RATE_LIMITED`, else the first typed error. So an unreachable or timed-out row listed
+ahead of a failed login cannot let a run proceed on bad credentials. An aggregate `result.error` is
+always the attributed failure. HTTP `/check` and SDR attribute the same failure.
 
 | Gate outcome | `gate_classification` | soft | hard |
 | -- | -- | -- | -- |
 | Verdict `READY` (or the deprecated `PARTIAL`) | — | proceed | proceed |
-| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category, else `would_block` |
+| Verdict `NOT_READY` | — | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`, `RATE_LIMITED`: final attempt only, earlier attempts retry), else `would_block` |
 | Probe overran the budget (`TIMEOUT`) | `source_unverifiable` | report `would_block` | report `would_block` |
-| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category, else `would_block` (an untyped crash is `INTERNAL`) |
-| Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED`, `CANCELLED`), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
+| Handler raised any error outside the row below | `source_unverifiable` | report `would_block` | **block** on a blocking category (`SOURCE_UNAVAILABLE`, `RATE_LIMITED`: final attempt only, earlier attempts retry), else `would_block` (an untyped crash is `INTERNAL`) |
+| Handler raised a typed leaf in the pre-3.35 fail-open set (`DEPENDENCY_UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `CANCELLED`; `RATE_LIMITED` left it in FND-3774), until 3.40.0 | `deprecated_fail_open` | fail open, deprecation warning | fail open, deprecation warning |
 | Temporal killed a running attempt that left evidence in an earlier attempt | `source_unverifiable` | report `would_block` | **block** on the evidence's category, else `would_block` |
 | Temporal killed a running attempt that left no evidence (`START_TO_CLOSE`, `HEARTBEAT`; `TIMEOUT`) | `frame_lost` | report `would_block` | report `would_block` |
 | Credential provably absent | `source_unverifiable` | report `would_block` | **block** on the credential error's category, else `would_block` |
@@ -519,18 +539,18 @@ The line is drawn by **who raised**, not by the error's category, with the one t
 exception in the `deprecated_fail_open` row. Anything that escapes
 `preflight_check` is the handler's statement about the source if typed, or an app fault if not,
 and the mode applies to both — a handler cannot declare its source to be plumbing by raising a
-`RateLimitedError` or a `DependencyUnavailableError`. A verdict is reached on the attempt the fault
-happens on; the gate's retry attempts exist for its own plumbing, not to give a source a second try.
+`DependencyUnavailableError`. A verdict is reached on the attempt the fault happens on, except that
+a hard gate gives `SOURCE_UNAVAILABLE` and `RATE_LIMITED` its remaining attempts first.
 
 One exception runs for a single release train. Before 3.35 the gate treated a raised leaf in the
 `DEPENDENCY_UNAVAILABLE`, `RATE_LIMITED`, `RESOURCE_EXHAUSTED` or `CANCELLED` categories as its own
-plumbing and failed open, and every hard-mode app that predates this rule documents and tests that
+plumbing and failed open (`RATE_LIMITED` left this train in FND-3774 and now retries, then blocks), and every hard-mode app that predates this rule documents and tests that
 idiom. Until 3.40.0 such a raise still proceeds in both modes, logs a WARNING line (and a
 `DeprecationWarning`, which default filters hide in a worker) naming the app, the leaf and the
 removal version, and stamps `deprecated_fail_open` on the row so the fleet can count which apps
 still rely on it. The row and the log line are the observable signal. From 3.40.0 it is reported
-as `source_unverifiable` like any other raise, and it still never blocks: the four categories are
-in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
+as `source_unverifiable` like any other raise, and it still never blocks: the three remaining
+categories are in the never-block set for good. Migrate by returning `READY` with the failed check as an advisory
 row, as below, which keeps the other checks.
 
 A handler signals "I could not verify, and extraction can cope" — a 429, a database still
@@ -538,8 +558,9 @@ resuming — by **returning** `READY` with the failed check carrying the typed r
 by raising. `PARTIAL` is deprecated and the gate treats it exactly like `READY`, so it adds nothing
 but a warning. The run proceeds in both modes, the row carries the check's code as `reason`, and
 the check list is preserved. Returning an *untyped* `NOT_READY` for a transient makes hard mode
-fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it keeps the run going
-but loses every other check.
+fail *closed* on a blip, because it is attributed to `PRECONDITION`; raising it gets the retry (a hard gate
+still blocks a `SOURCE_UNAVAILABLE` or `RATE_LIMITED` that persists to the final attempt) but loses
+every other check.
 
 A running attempt that Temporal has to kill is one the gate's own cancel could not end — a probe
 holding the event loop, an uncancellable thread — so the workflow applies the mode from the failure
@@ -617,11 +638,18 @@ causes separable in the dashboards.
 
 **Upgrading an app that is already on hard mode:** hard mode used to block on every
 source-attributed outcome whatever its category — a budget overrun, a lost frame, an unreachable
-source, an untyped handler crash. It now blocks only on the five customer-actionable categories
-above; the rest are reported as `would_block` and the run proceeds. A handler that wants a
-transient to stop a hard-gated run has to type it as one of those five, and an app that relied on a
-handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
+source, an untyped handler crash. Since v3.42.0 it blocks only on the customer-actionable
+categories above; the rest are reported as `would_block` and the run proceeds. A handler that
+wants a transient to stop a hard-gated run has to type it as one of those, and an app that relied
+on a handler crash aborting the run should return a typed `NOT_READY` instead. The worker logs the
 policy alongside the hard-mode line at boot.
+
+**`SOURCE_UNAVAILABLE` blocks again (FND-3774).** v3.42.0 put `SOURCE_UNAVAILABLE` in the
+never-block set, so a hard-gated run proceeded past a source that was down and failed later on
+the same fault. It now blocks on the final attempt, and so does `RATE_LIMITED`, which used to fail
+open as a deprecated raise. A hard-mode app that raises or returns
+`SOURCE_UNAVAILABLE` to mean "the source is still warming up" must move that signal to
+`Handler.warmup`, or the run blocks.
 
 #### Sizing the check budget
 
@@ -629,7 +657,8 @@ The handler gets `preflight_gate_timeout_seconds` (default 150, clamped 5-300) t
 checks, and the SDK **enforces** it — the gate cancels `preflight_check` when it elapses.
 `preflight_gate_max_attempts` (default 2, clamped 1-3) sets the retries for the gate's own
 retryable plumbing, a store probe or a credential lookup; a handler fault is a verdict on the
-attempt it happens and is never retried. Both Temporal timeouts derive from the pair:
+attempt it happens, except that a hard gate defers a `SOURCE_UNAVAILABLE` or `RATE_LIMITED` fault
+to its final attempt (see [Preflight Gate Posture](#preflight-gate-posture)). Both Temporal timeouts derive from the pair:
 
 ```python
 class MyConnector(App):
@@ -790,14 +819,19 @@ probe is skipped silently only when the handler already returned `NOT_READY`, si
 blocked or reported on that verdict whatever storage would have said.
 
 Note the deliberate taxonomy choice: gate *plumbing* failures fail open, but a storage failure
-confirmed across the gate's retry attempts blocks in hard mode — a store rejecting every upload
-for hours is not the transient blip fail-open protects.
+confirmed across the gate's retry attempts becomes the verdict. Whether it then blocks in hard mode
+depends on its category. In-cluster, every probed store is Atlan-side, so the failure is
+`DEPENDENCY_UNAVAILABLE` and is reported as `would_block`, never blocked. In SDR mode the store is
+the customer's own bucket: a missing binding (`PRECONDITION`), a denied grant (`PERMISSION`) or
+rejected credentials (`AUTH`) block, and so does a store still unreachable on the final attempt
+(`SOURCE_UNAVAILABLE`).
 
 `PreflightInput.timeout_seconds` carries what is *left* after credential resolution, so a handler
 sizing probes to that field is sizing to the real deadline. Three rules follow:
 
-- **In hard mode an overrun blocks the run**, so the declared budget and the handler's actual cost
-  must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
+- **An overrun is never a verdict.** It is classified `TIMEOUT`, which does not block even in hard
+  mode, so a handler that overruns leaves the gate with no evidence about the source. The declared
+  budget and the handler's actual cost must agree. Raise the budget for a demonstrably slow source rather than letting checks overrun.
 - **Size from the p99 of successful runs**, read off the SDK-measured `gate_duration_ms` on the
   outcome event. Sizing to the worst observed run makes the timeout decorative; sizing to p95
   blocks 5% of runs. Per-check `duration_ms` inside `check_matrix` is handler-authored and is not

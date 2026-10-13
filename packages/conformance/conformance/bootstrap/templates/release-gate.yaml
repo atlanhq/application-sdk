@@ -1,8 +1,11 @@
 name: Release Gate
 
 # Blocks release PRs (auto-labeled `release` by the SDK release-version-bump
-# workflow) from being merged until a reviewer adds the `e2e` label, which
-# triggers the full e2e tests as the final gate before a release is cut.
+# workflow) from being merged until a reviewer adds the `gate-check` label,
+# which opts the PR in to CI — the full suite including e2e — as the final gate
+# before a release is cut. CI does not run on a release PR at all until then
+# (FND-3748), and the release automation clears `gate-check` before each new
+# bump commit. `e2e` is still honoured while the fleet resyncs.
 #
 # The label is consumed: the SDK's Tests Gate removes it once the run finishes
 # and records the verdict as an `e2e` commit status on the head (FND-3411). So

@@ -11,6 +11,7 @@ from ._config import ConfigMixin
 from ._format import FormatMixin
 from ._helpers import (
     Framework,
+    collect_bounded_loop_caps,
     collect_logging_aliases,
     collect_path_segment_names,
     collect_redacted_names,
@@ -76,6 +77,7 @@ class Checker(
         self._findings: list[Finding] = []
         # Context stacks — managed by visit_* methods
         self._loop_stack: list[ast.For | ast.AsyncFor | ast.While] = []
+        self._bounded_loop_caps: dict[ast.For | ast.AsyncFor, int] = {}
         self._except_stack: list[ast.ExceptHandler] = []
         # Innermost enclosing function's URL path-segment names (L010)
         self._path_segment_names: frozenset[str] = frozenset()
@@ -96,6 +98,10 @@ class Checker(
         )
 
     # ── Context management ────────────────────────────────────────────────────
+
+    def visit_Module(self, node: ast.Module) -> None:
+        self._bounded_loop_caps = collect_bounded_loop_caps(node)
+        self.generic_visit(node)
 
     def visit_FunctionDef(self, node: ast.FunctionDef) -> None:  # type: ignore[override]
         # Reset loop/except context: handlers in a nested function are not

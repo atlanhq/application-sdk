@@ -45,6 +45,12 @@ from application_sdk.observability.context import (
     is_replaying,
     request_context,
 )
+
+# Module level, not lazy: the record patcher runs on whichever thread logs. A
+# background thread logging while the main thread is still initialising the
+# observability package would otherwise import this module mid-boot and deadlock
+# on the module lock (_DeadlockError at startup when the log level is DEBUG).
+from application_sdk.observability.correlation import get_correlation_context
 from application_sdk.observability.logger_adaptor_errors import (
     UnsupportedLogRecordError,
 )
@@ -293,6 +299,8 @@ _KNOWN_EXTRA_KEYS = frozenset(
         "file_count",
         "files_skipped",
         "files_downloaded",
+        "files_listed",
+        "manifest_path",
         "chunk_size_bytes",
         "chunks_total",
         "chunks_completed",
@@ -559,10 +567,6 @@ def _apply_atlan_context(kwargs: dict[str, Any], *, prefer_caller: bool) -> None
     # read from v3 CorrelationContext ContextVar (set by the v3
     # CorrelationContextInterceptor).
     if "correlation_id" not in kwargs:
-        from application_sdk.observability.correlation import (  # noqa: PLC0415 — circular: observability is imported transitively by many modules; lifting risks circles
-            get_correlation_context,
-        )
-
         v3_ctx = get_correlation_context()
         if v3_ctx and v3_ctx.correlation_id:
             kwargs["correlation_id"] = v3_ctx.correlation_id

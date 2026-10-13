@@ -7,15 +7,16 @@ introduced since the last release. It categorizes commits according to
 conventional commit types and creates sections that match the project's
 changelog format.
 
-Usage: python update_changelog.py <current_version> <new_version>
+Usage: python update_changelog.py <current_version> <new_version> [--sections all|legacy|auto]
 """
 
+import argparse
 import json
 import os
 import re
 import subprocess
-import sys
 from datetime import datetime
+from pathlib import Path
 
 
 def _get_repo() -> tuple[str, str]:
@@ -122,17 +123,79 @@ def get_commits_since_last_tag(current_version):
     return _format_commits(_gh_api_commits(f"repos/{owner}/{repo}/commits?sha=HEAD"))
 
 
-def categorize_commits(commits):
+# Changelog sections in render order: (key, heading, conventional types).
+# Every conventional type except `ci` is rendered (FND-3748): the release
+# changelog is the human review gate for a semver release, so any change to
+# what ships must be visible in it — a large `perf:` or `refactor:` PR used to
+# leave the notes empty. `ci` alone is dropped, because it only touches the
+# repo's own automation, never the released artefact.
+SECTIONS = (
+    ("features", "Features", ("feat",)),
+    ("fixes", "Bug Fixes", ("fix",)),
+    ("performance", "Performance", ("perf",)),
+    ("refactors", "Refactoring", ("refactor",)),
+    ("docs", "Documentation", ("docs",)),
+    ("chores", "Chores", ("chore", "build")),
+    # Anything else lands here with its full subject, so a non-conventional or
+    # unknown-type subject is still listed rather than silently dropped.
+    ("other", "Other Changes", ()),
+)
+EXCLUDED_TYPES = frozenset({"ci"})
+
+# The notes as they were before FND-3748: Features (feat, docs) and Bug Fixes
+# only. Kept for app repos whose CI shims are not yet gated on `gate-check`
+# (see sections_for_repo): rendering chores there would move the bump PR on
+# every Renovate merge and re-run its full, still-ungated CI each time.
+LEGACY_SECTIONS = (
+    ("features", "Features", ("feat", "docs")),
+    ("fixes", "Bug Fixes", ("fix",)),
+)
+
+# What marks a repo whose bump-PR CI is gated on the opt-in label: the
+# bootstrap shims carry it once the repo has resynced onto the FND-3748
+# templates, and they all arrive in the same resync.
+OPT_IN_MARKER = "'gate-check'"
+_CONVENTIONAL_RE = re.compile(
+    r"^(?P<type>[a-z]+)(?:\([^)]*\))?(?P<breaking>!)?:\s*(?P<desc>.*)$",
+    re.IGNORECASE,
+)
+# Sub-packages have their own CHANGELOGs and release pipelines; exclude their
+# commits from this changelog. Same predicate as release.py's _SUBPKG_RE.
+_SUBPKG_RE = re.compile(r"^[a-z]+\((contract-toolkit|conformance)\)!?:")
+
+
+def sections_for_repo(root="."):
+    """Pick SECTIONS or LEGACY_SECTIONS for the repo checked out at ``root``.
+
+    Full notes only once the repo's own workflows gate bump-PR CI on
+    `gate-check`, so the extra bump-PR pushes they cause never run ahead of
+    that gate: each app repo switches over in the same resync that gates it.
+    """
+    workflows = Path(root) / ".github" / "workflows"
+    for path in sorted(workflows.glob("*.y*ml")) if workflows.is_dir() else []:
+        try:
+            if OPT_IN_MARKER in path.read_text(encoding="utf-8"):
+                return SECTIONS
+        except OSError:
+            continue
+    return LEGACY_SECTIONS
+
+
+def categorize_commits(commits, sections=SECTIONS):
     """
     Categorize commits based on conventional commit types.
 
     Args:
-        commits (list): List of commit messages
+        commits (list): List of `sha7|author|subject` lines
+        sections: SECTIONS or LEGACY_SECTIONS
 
     Returns:
-        dict: Categorized commits
+        dict: One list of `(commit_link, author, message)` per section key.
+        `ci` commits and sub-package commits are omitted, as is any type the
+        sections don't render (everything outside feat/docs/fix in legacy).
     """
-    categories = {"features": [], "fixes": [], "chores": [], "other": []}
+    categories = {key: [] for key, _, _ in sections}
+    type_to_section = {t: key for key, _, types in sections for t in types}
 
     owner, repo = _get_repo()
 
@@ -147,24 +210,23 @@ def categorize_commits(commits):
 
         commit_hash, author_name, message_subject = parts
 
-        # Sub-packages have their own CHANGELOGs and release pipelines; exclude
-        # their commits from the SDK changelog.
-        if re.match(r"^[a-z]+\((contract-toolkit|conformance)\):", message_subject):
+        if _SUBPKG_RE.match(message_subject):
             continue
 
         commit_link = f"https://github.com/{owner}/{repo}/commit/{commit_hash}"
 
-        if re.match(r"^(feat|docs)(\(.*\))?:", message_subject):
-            msg = re.sub(r"^(feat|docs)(\(.*\))?:\s*", "", message_subject)
-            categories["features"].append((commit_link, author_name, msg))
-        elif re.match(r"^fix(\(.*\))?:", message_subject):
-            msg = re.sub(r"^fix(\(.*\))?:\s*", "", message_subject)
-            categories["fixes"].append((commit_link, author_name, msg))
-        elif re.match(r"^(chore|build)(\(.*\))?:", message_subject):
-            msg = re.sub(r"^(chore|build)(\(.*\))?:\s*", "", message_subject)
-            categories["chores"].append((commit_link, author_name, msg))
-        else:
-            categories["other"].append((commit_link, author_name, message_subject))
+        match = _CONVENTIONAL_RE.match(message_subject)
+        commit_type = match["type"].lower() if match else None
+        if commit_type in EXCLUDED_TYPES:
+            continue
+
+        section = type_to_section.get(commit_type, "other")
+        if section not in categories:
+            continue
+        msg = message_subject if section == "other" else match["desc"]
+        if match and match["breaking"]:
+            msg = f"**BREAKING:** {msg}"
+        categories[section].append((commit_link, author_name, msg))
 
     return categories
 
@@ -179,7 +241,9 @@ def get_full_changelog_url(current_version, new_version):
     )
 
 
-def format_changelog_section(categories, current_version, new_version):
+def format_changelog_section(
+    categories, current_version, new_version, sections=SECTIONS
+):
     """
     Format the changelog section according to the project's format.
 
@@ -198,18 +262,11 @@ def format_changelog_section(categories, current_version, new_version):
     full_changelog_url = get_full_changelog_url(current_version, new_version)
     changelog += f"Full Changelog: {full_changelog_url}\n\n"
 
-    if categories["features"]:
-        changelog += "### Features\n\n"
-        for commit_link, author_name, msg in categories["features"]:
-            short_sha = commit_link.split("/")[-1][:7]
-            changelog += (
-                f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
-            )
-        changelog += "\n"
-
-    if categories["fixes"]:
-        changelog += "### Bug Fixes\n\n"
-        for commit_link, author_name, msg in categories["fixes"]:
+    for key, heading, _ in sections:
+        if not categories[key]:
+            continue
+        changelog += f"### {heading}\n\n"
+        for commit_link, author_name, msg in categories[key]:
             short_sha = commit_link.split("/")[-1][:7]
             changelog += (
                 f"- {msg} (by @{author_name} in [{short_sha}]({commit_link}))\n"
@@ -267,22 +324,41 @@ def update_changelog_file(changelog_content):
         f.write(new_content)
 
 
-def main():
-    if len(sys.argv) < 3:
-        print("Usage: python update_changelog.py <current_version> <new_version>")
-        sys.exit(1)
-
-    current_version = sys.argv[1]
-    new_version = sys.argv[2]
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Prepend a CHANGELOG section.")
+    parser.add_argument("current_version")
+    parser.add_argument("new_version")
+    parser.add_argument(
+        "--sections",
+        choices=("all", "legacy", "auto"),
+        default="all",
+        help=(
+            "all: every type but ci (default). legacy: Features + Bug Fixes "
+            "only. auto: all once this repo's workflows gate bump-PR CI on "
+            "`gate-check`, else legacy (what fleet app repos pass)."
+        ),
+    )
+    args = parser.parse_args(argv)
+    current_version = args.current_version
+    new_version = args.new_version
+    sections = {
+        "all": SECTIONS,
+        "legacy": LEGACY_SECTIONS,
+    }.get(args.sections) or sections_for_repo()
+    print(
+        "Changelog sections: "
+        + ", ".join(heading for _, heading, _ in sections)
+        + f" ({args.sections})"
+    )
 
     commits = get_commits_since_last_tag(current_version)
     if not commits:
         print("No new commits found to add to the changelog.")
         return
 
-    categories = categorize_commits(commits)
+    categories = categorize_commits(commits, sections)
     changelog_content = format_changelog_section(
-        categories, current_version, new_version
+        categories, current_version, new_version, sections
     )
     # Print the new content to the console
     print(changelog_content)

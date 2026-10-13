@@ -13,15 +13,28 @@ on:
   pull_request:
     branches:
       - main
+    # `labeled` lets `gate-check` start the opt-in run on a bump-version PR
+    # (FND-3748). On any other PR the job below skips label events.
+    types: [opened, synchronize, reopened, labeled]
   merge_group:
 
 jobs:
   pre-commit:
+    # Bump-version PR CI is opt-in (FND-3748): it runs only once a reviewer
+    # adds `gate-check` (`e2e` is still honoured while the fleet resyncs).
+    # Skipping this CALLER job costs no runner and never creates its required
+    # context, so a fresh bump commit sits at "Expected" — Release Gate says
+    # why — rather than reading a skipped check as a pass. The release
+    # automation clears the label before each push, so every bump commit needs
+    # its own opt-in.
+    if: >-
+      (github.event.action != 'labeled' && !startsWith(github.head_ref, 'bump-version')) || (startsWith(github.head_ref, 'bump-version') && ((contains(github.event.pull_request.labels.*.name, 'gate-check') && (github.event.action != 'labeled' || github.event.label.name == 'gate-check')) || (contains(github.event.pull_request.labels.*.name, 'e2e') && (github.event.action != 'labeled' || github.event.label.name == 'e2e'))))
     uses: atlanhq/application-sdk/.github/workflows/checks-reusable.yaml@main
     permissions:
       contents: read
+    # A label event is run-unique, so it can never cancel the head's run.
     concurrency:
-      group: ${{ github.workflow }}-${{ github.ref }}
+      group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && github.run_id || github.ref }}
       cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
 <% if checks_private_git_deps %>    # private-git-deps needs ORG_PAT_GITHUB from the reusable's declared secrets.
     secrets: inherit

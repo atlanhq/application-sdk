@@ -8,6 +8,70 @@ from ._base import _MixinBase
 from ._helpers import get_logger_method, loop_is_bounded
 
 
+def _is_terminal_break_summary(
+    node: ast.Call, loop: ast.For | ast.AsyncFor | ast.While
+) -> bool:
+    """True when a bare log statement immediately precedes a break from *loop*."""
+    parents = {
+        child: parent
+        for parent in ast.walk(loop)
+        for child in ast.iter_child_nodes(parent)
+    }
+    statement = parents.get(node)
+    if not isinstance(statement, ast.Expr) or statement.value is not node:
+        return False
+    suite = parents.get(statement)
+    if suite is None:
+        return False
+    statements = next(
+        (
+            values
+            for _, values in ast.iter_fields(suite)
+            if isinstance(values, list) and any(value is statement for value in values)
+        ),
+        None,
+    )
+    if statements is None:
+        return False
+    index = next(index for index, value in enumerate(statements) if value is statement)
+    if index + 1 >= len(statements) or not isinstance(statements[index + 1], ast.Break):
+        return False
+
+    child: ast.AST = statement
+    ancestor: ast.AST | None = suite
+    while ancestor is not None:
+        if isinstance(ancestor, (ast.For, ast.AsyncFor, ast.While)):
+            return ancestor is loop
+        # A ``finally: continue`` overrides the break and re-runs the loop.
+        if (
+            isinstance(ancestor, (ast.Try, ast.TryStar))
+            and not any(child is value for value in ancestor.finalbody)
+            and _continues_enclosing_loop(ancestor.finalbody)
+        ):
+            return False
+        child = ancestor
+        ancestor = parents.get(ancestor)
+    return False
+
+
+def _continues_enclosing_loop(statements: list[ast.stmt]) -> bool:
+    """True when *statements* contain a ``continue`` for the enclosing loop."""
+    pending: list[ast.AST] = list(statements)
+    while pending:
+        current = pending.pop()
+        if isinstance(current, ast.Continue):
+            return True
+        # A continue in a nested loop's body targets that loop; one in its
+        # ``else`` still targets ours.  Nested scopes cannot continue ours.
+        if isinstance(current, (ast.For, ast.AsyncFor, ast.While)):
+            pending.extend(current.orelse)
+        elif not isinstance(
+            current, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+        ):
+            pending.extend(ast.iter_child_nodes(current))
+    return False
+
+
 class LevelMixin(_MixinBase):
     """Rule methods for L006, L007, L017 (log-level category)."""
 
@@ -31,7 +95,14 @@ class LevelMixin(_MixinBase):
         if isinstance(innermost, ast.While):
             # While loops are always flagged — bound is not statically obvious
             pass
-        elif loop_is_bounded(innermost):  # type: ignore[arg-type]
+        elif loop_is_bounded(innermost, self._bounded_loop_caps):  # type: ignore[arg-type]
+            return
+        enclosing_loops_are_bounded = all(
+            isinstance(loop, (ast.For, ast.AsyncFor))
+            and loop_is_bounded(loop, self._bounded_loop_caps)
+            for loop in self._loop_stack[:-1]
+        )
+        if enclosing_loops_are_bounded and _is_terminal_break_summary(node, innermost):
             return
         self._add(
             "L006",

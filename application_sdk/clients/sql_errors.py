@@ -66,6 +66,20 @@ class EngineNotInitializedError(InternalError):
 
 
 @dataclass(kw_only=True)
+class SqlBindParameterError(InternalError):
+    """``run_query`` was given bind parameters it cannot apply.
+
+    A name that is not an identifier, or one the query never references as
+    ``:name``. Running anyway would execute the query without that value, so a
+    filter meant to narrow the result would silently not apply.
+    """
+
+    code: ClassVar[str] = "INTERNAL_SQL_BIND_PARAMETER"
+    message: str = "SQL bind parameters do not match the query"
+    component: str | None = "sql_client"
+
+
+@dataclass(kw_only=True)
 class UnsupportedSqlCursorError(UnimplementedError):
     """The current SQL engine or connection does not support cursors."""
 

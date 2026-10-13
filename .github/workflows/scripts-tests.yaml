@@ -48,6 +48,10 @@ concurrency:
 jobs:
   pytest:
     name: pytest .github/scripts/tests
+    # A bump-version PR only moves version strings, the lock and CHANGELOG —
+    # never .github/scripts — and its CI is opt-in (FND-3748), so this never
+    # runs there. Skipped reports as a pass; SDK Gate is what blocks the merge.
+    if: ${{ !startsWith(github.head_ref, 'bump-version') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

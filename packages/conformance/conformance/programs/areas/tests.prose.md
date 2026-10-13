@@ -361,21 +361,33 @@ residue for a human to apply, not an applied edit:
   `remediate-finding.prose.md`); route to residue with the suggested
   destination for a human to apply.
 
-- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured but
-  `[tool.coverage.report].fail_under` is absent or `0`. Run the test suite's
-  own coverage report (or read the most recent CI coverage artifact) to find
-  the *current* measured percentage, then set `fail_under` to that value (or
-  the nearest whole number at or below it — never above, or the fix itself
-  would fail the gate it's setting). Do not jump straight to the 90-100%
-  target in one step; that is a follow-up ratchet, not this fix.
+- **T014 CoverageGateDisabled** — `[tool.coverage]` is configured, but the
+  *effective* coverage floor is absent or `0`. First read the current *unit*
+  coverage (the unit job's `coverage.json` artifact, or `coverage report` after
+  `pytest tests/unit`) and take the whole number `<N>` at or below it — never
+  above, or the fix itself fails the gate it sets. Then set `<N>` on the input
+  that gates the unit tier:
 
-  ```toml
-  [tool.coverage.report]
-  fail_under = 60  # current measured percentage; ratchet up in follow-ups
-  ```
+  - **`tests-reusable.yaml` caller** — set `unit-coverage-fail-under: "<N>"`
+    in the `with:` block (the mysql reference uses `"90"`). This input is the unit tier's only gate: the unit
+    job runs `coverage report --fail-under=<input>` (default `0`), so
+    `[tool.coverage.report].fail_under` never applies there. Write a quoted
+    whole number — `bootstrap --resync` reads it back and keeps it; a decimal
+    is not read back and makes `--resync` refuse the file.
+  - **Leave `--cov-fail-under=0` in `pytest-args` alone.** `pytest-args` only
+    reaches the integration tier. Removing the flag applies the TOML
+    `fail_under` to integration coverage — a different measurement that can
+    fail integration runs — and still leaves the unit gate at `0`.
+  - **Direct `connector-unit-tests` user** — set its `fail-under:` input to
+    `<N>`.
+  - **No CI coverage gate** — set `[tool.coverage.report].fail_under = <N>`.
 
-  `classification` is `"judgment"` — the specific number requires knowing
-  the repo's actual current coverage, which isn't in the finding.
+  Keep a positive `fail_under` in `pyproject.toml` as the local-run fallback
+  (mysql keeps `84`), and ratchet the floor up in follow-up PRs; do not jump
+  straight to the 90-100% target.
+
+  `classification` is `"judgment"` — selecting a safe floor requires the
+  repo's actual current unit coverage, which isn't in the finding.
 
 - **T015 CoverageOmitsProductCode** — `[tool.coverage.run].omit` excludes
   real product code under `app/`, or `source` is configured but excludes the

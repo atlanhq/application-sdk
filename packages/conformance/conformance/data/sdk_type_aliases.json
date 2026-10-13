@@ -1,6 +1,7 @@
 {
   "type_aliases": {
     "application_sdk.app.task.TaskMethod": "Callable[..., Any]",
+    "application_sdk.clients.sql.SqlBindValue": "str | int | float | bool | Decimal | datetime.datetime | datetime.date | datetime.time | bytes | None",
     "application_sdk.common.filter_matching.FilterInput": "str | list[str] | dict[str, object] | None",
     "application_sdk.common.incremental.state.incremental_diff.DuckDBConnection": "DuckDBConnectionLike | None",
     "application_sdk.common.incremental.state.table_scope.DuckDBConnection": "DuckDBConnectionLike | None",

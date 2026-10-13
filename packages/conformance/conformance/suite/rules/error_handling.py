@@ -168,7 +168,12 @@ RULES: tuple[RuleDefinition, ...] = (
             "exception through a recognised redaction helper\n"
             "(redact*/sanitiz*/safe_traceback/…) — the failure is logged at a\n"
             "deliberate no-traceback boundary.  A sanitized debug/info call does not\n"
-            "qualify.\n"
+            "qualify. A direct call to an undecorated same-module helper also counts\n"
+            "when it receives the caught binding as a parameter and every control-flow\n"
+            "path through the helper passes that parameter through a recognized sanitizer\n"
+            "among the warning/error/critical call arguments. The helper call must be on\n"
+            "a straight-line handler path; a prior branch\n"
+            "that can bypass it does not prove the failure was logged.\n"
             "\n\nAlso exempt: ``raise X(...) from None`` whose raised error carries the\n"
             "caught exception through such a helper (directly, or via a local assigned\n"
             "from one), or hands it as ``cause=exc`` to an SDK error — a class imported\n"
@@ -628,9 +633,11 @@ RULES: tuple[RuleDefinition, ...] = (
     RuleDefinition(
         id="E014",
         canonical_reference=(
-            "atlan-metabase-app app/lineage/qi_reader.py — `iter_qi_records` skips an "
-            "unparseable line only after logging it with exc_info=True. A bare `continue` "
-            "in an except block turns a shrinking result set into a mystery."
+            "atlan-metabase-app app/utils.py — the expected ValueError for a candidate "
+            "date-format mismatch is logged at DEBUG without exc_info before continuing. "
+            "For an unparseable QI line, app/lineage/qi_reader.py's `iter_qi_records` "
+            "logs at WARNING with exc_info=True before continuing. Reserve tracebacks for "
+            "genuine unexpected failures, not routine format probes."
         ),
         scope=RuleScope.BOTH,
         name="ExceptLoopControlSwallow",
@@ -651,9 +658,11 @@ RULES: tuple[RuleDefinition, ...] = (
             "An ``except`` block inside a loop whose body is only ``continue``,\n"
             "``break``, or ``pass`` — with no logging call — silently swallows the\n"
             "exception and resumes or exits the iteration.  This is the loop-body twin\n"
-            "of P001/P002 (ruff S112 family).  At minimum log at DEBUG before the loop\n"
-            "control statement; if the exception signals a genuine error, re-raise or\n"
-            "log at WARNING/ERROR with ``exc_info=True``.\n"
+            "of P001/P002 (ruff S112 family).  Explain a tolerated skip before the loop\n"
+            "control statement.  For an expected format/probe mismatch, use a concise\n"
+            "DEBUG diagnostic without ``exc_info=True``.  If the exception signals a\n"
+            "genuine unexpected error, re-raise or log at WARNING/ERROR with\n"
+            "``exc_info=True``.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e014",
         remediation_reference=RemediationReference(
@@ -957,6 +966,70 @@ RULES: tuple[RuleDefinition, ...] = (
             "``if x is None: return None`` guards.\n"
         ),
         help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e020",
+        remediation_reference=RemediationReference(
+            kind=RemediationKind.PRESCRIPTION,
+            target="programs/areas/error-handling.prose.md",
+        ),
+    ),
+    RuleDefinition(
+        id="E021",
+        canonical_reference=(
+            "atlan-mysql-app app/failures.py — `SourceRestartingError` and "
+            "`PreflightProbeTimeoutError` subclass `SourceUnavailableError` with "
+            "SOURCE_UNAVAILABLE_* codes and no audience override: an unreachable "
+            "customer source is SOURCE_UNAVAILABLE / USER by inheritance."
+        ),
+        scope=RuleScope.BOTH,
+        name="DependencyUnavailableOverriddenToUser",
+        tier=EnforcementTier.WARN,
+        mechanism=RuleMechanism.STATIC,
+        category="failure-category",
+        autofixable=True,
+        orthogonal_gate="tests",
+        since="0.47.0",
+        rationale=(
+            "DEPENDENCY_UNAVAILABLE means an Atlan platform service (Dapr, Temporal, "
+            "object store) is down, so a hard preflight gate never blocks on it. "
+            "Overriding its audience to USER says the customer's own system is down, "
+            "which is SOURCE_UNAVAILABLE, and SOURCE_UNAVAILABLE blocks a hard gate on "
+            "its final attempt. "
+            "Customer impact: with the wrong category, a hard gate lets a run start "
+            "against an unreachable source, and the run then fails on the same fault "
+            "after consuming its slot. The failure also routes inconsistently: the "
+            "category says PLATFORM while the audience says USER."
+        ),
+        short_description=(
+            "DependencyUnavailableError subclass overrides audience to USER — a "
+            "customer-owned system that is down is SourceUnavailableError"
+        ),
+        full_description=(
+            "A class whose category is DEPENDENCY_UNAVAILABLE assigns\n"
+            "``audience = Audience.USER`` in its own body.  The category is read the\n"
+            "way Python's MRO reads it: from the first base, in declaration order,\n"
+            "that resolves to an SDK error, unless the class assigns ``category``\n"
+            "itself.  So ``class X(NotFoundError, StorageError)`` is NOT_FOUND and is\n"
+            "not flagged, even though ``StorageError`` is a DEPENDENCY_UNAVAILABLE\n"
+            "leaf.  SDK subclasses outside ``application_sdk.errors`` (e.g.\n"
+            "``StorageError``, ``AzureConnectionError``) count.  An app-defined\n"
+            "intermediate is followed when it is defined in the same module or\n"
+            "imported by name (``from app.base import AppDependencyError``, absolute\n"
+            "or relative); a base reached through a module alias\n"
+            "(``import app.base as base`` then ``base.AppDependencyError``) is not\n"
+            "followed, and the class is not flagged.\n"
+            "\n"
+            "Fix: re-base the class on ``SourceUnavailableError`` (or an app\n"
+            "subclass of it), rename its code to ``SOURCE_UNAVAILABLE_*``, and delete\n"
+            "the audience override, which ``SourceUnavailableError`` already sets.\n"
+            "This is a behaviour change for an app running a hard preflight gate:\n"
+            "the failure now blocks on the gate's final attempt.  Say so in the PR.\n"
+            "\n"
+            "Only the class that assigns the override is flagged; subclasses that\n"
+            "inherit it are fixed by the same edit.  A DEPENDENCY_UNAVAILABLE leaf\n"
+            "raised for a customer source *without* an override is not detected:\n"
+            "the rule matches the structural pattern and does not infer intent from\n"
+            "names.\n"
+        ),
+        help_uri="https://github.com/atlanhq/application-sdk/blob/main/conformance/docs/rules/error-handling.md#e021",
         remediation_reference=RemediationReference(
             kind=RemediationKind.PRESCRIPTION,
             target="programs/areas/error-handling.prose.md",

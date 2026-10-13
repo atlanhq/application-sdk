@@ -81,6 +81,20 @@ def test_release_pr_with_the_label_passes(
     assert _run(gate, tmp_path, ["release", "e2e"], state) == 0
 
 
+def test_release_pr_opted_in_with_gate_check_passes(
+    gate: types.ModuleType, tmp_path: pathlib.Path
+) -> None:
+    """`gate-check` is the bump-PR CI opt-in and implies e2e (FND-3748)."""
+    assert _run(gate, tmp_path, ["release", "gate-check"], "") == 0
+
+
+def test_missing_hint_names_the_opt_in_label(
+    gate: types.ModuleType, tmp_path: pathlib.Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    assert _run(gate, tmp_path, ["release"], "") == 1
+    assert "'gate-check'" in capsys.readouterr().out
+
+
 def test_consumed_label_with_a_passing_status_passes(
     gate: types.ModuleType,
     tmp_path: pathlib.Path,

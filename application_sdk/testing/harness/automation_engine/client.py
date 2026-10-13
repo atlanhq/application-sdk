@@ -1369,6 +1369,54 @@ class AEClient:
         )
         return False
 
+    async def terminate_run(self, run_id: str) -> bool | None:
+        """Ask AE to terminate *run_id* immediately. Never raises.
+
+        The teardown's stop for a run the harness stopped watching while it was
+        still going. A CI e2e run's extract node is dispatched to a task queue
+        only the CI job's own worker serves, so once the job exits nothing can
+        make progress on it — and without a stop the child sits on that dead
+        queue until its workflow execution timeout closes it as "Timed out",
+        hours or days later. Terminate rather than cancel: a graceful cancel
+        has to be delivered to the child's worker, which is exactly what is
+        gone; terminating the AE root closes the child through its
+        terminate-on-parent-close policy without any worker's help.
+
+        AE answers a run that is already terminal with a 2xx and no action, so
+        calling this on a run that settled on its own is harmless.
+
+        Args:
+            run_id: AE's run id, as ``submit_workflow`` returned it.
+
+        Returns:
+            ``True`` if AE accepted the terminate (or the run was already
+            terminal), ``False`` if it answered with an error, ``None`` if the
+            request did not get through.
+        """
+        path = f"/automation/api/v1/runs/{quote(run_id, safe='')}/terminate"
+        try:
+            status, body = await self._request("POST", path)
+        except AppError:
+            logger.warning(
+                "e2e cleanup: terminate for AE run %s did not get through; the "
+                "run may keep running until its workflow execution timeout",
+                run_id,
+                exc_info=True,
+            )
+            return None
+        if status >= 300:
+            logger.warning(
+                "e2e cleanup: AE refused to terminate run %s (HTTP %d); the run "
+                "may keep running until its workflow execution timeout\n"
+                "response=%r",
+                run_id,
+                status,
+                body,
+            )
+            return False
+        logger.info("e2e cleanup: AE run %s terminated (or already terminal)", run_id)
+        return True
+
     async def submit_workflow(
         self,
         payload: dict[str, Any],
@@ -1376,6 +1424,7 @@ class AEClient:
         slug: str = "",
         retries: int = 4,
         retry_sleep_seconds: int = 5,
+        on_run_id: Callable[[str], None] | None = None,
     ) -> str:
         """POST ``/api/service/package-workflows?submit=true``.
 
@@ -1445,6 +1494,14 @@ class AEClient:
                 that has the slug should pass it.
             retries: Retries on top of the initial attempt.
             retry_sleep_seconds: Fixed gap between attempts.
+            on_run_id: Called the instant a run id becomes known — on a normal
+                2xx submit AND on the ambiguous-submit recovery path, where the
+                reconcile read adopts a run whose submit response was lost. It
+                fires *before* this method returns the id, so a caller that
+                tracks runs for teardown has the id recorded even if a later
+                step raises; AE submit is non-idempotent, so a lost response can
+                still have started a run teardown must terminate. Must be
+                idempotent — both paths can fire for one submit.
         """
         started = time.monotonic()
         # Wall clock, not the monotonic one above: this is compared against
@@ -1461,6 +1518,13 @@ class AEClient:
                     lookup.run_id,
                     slug,
                 )
+                # Record the recovered id the moment it is known, from inside
+                # the recovery path itself — not only once this method returns.
+                # A submit whose response was lost has still started a run, and
+                # a caller that tracks runs for teardown must not depend on the
+                # normal return to learn the id.
+                if on_run_id is not None:
+                    on_run_id(lookup.run_id)
                 return WriteRecovery(body={"run_id": lookup.run_id})
             return WriteRecovery(
                 proven_absent=lookup.conclusive and _RESUBMIT_WHEN_AE_REPORTS_NO_RUN
@@ -1508,6 +1572,12 @@ class AEClient:
             run_id = data.get("run_id") if isinstance(data, dict) else None
             if run_id:
                 self._warn_on_unsubstituted_parameters(body, run_id)
+                # Record before returning: tracking a run for teardown must not
+                # hinge on the caller's post-return bookkeeping. Idempotent with
+                # the recovery-path call above — a recovered submit comes back
+                # here as a 200 carrying the same id.
+                if on_run_id is not None:
+                    on_run_id(run_id)
                 return run_id
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run_id\nresponse={body!r}",
@@ -1590,6 +1660,7 @@ class AEClient:
         *,
         retries: int = _PUBLISH_REPLICATION_ATTEMPTS - 1,
         retry_sleep_seconds: int = _PUBLISH_REPLICATION_SLEEP_SECONDS,
+        on_run_id: Callable[[str], None] | None = None,
     ) -> str:
         """POST ``/automation/api/v1/workflows/<slug>/submit`` — run *our* DAG.
 
@@ -1650,6 +1721,12 @@ class AEClient:
                 :func:`~application_sdk.testing.harness.starters.publish_seed_version`.
             retries: Retries on top of the initial attempt.
             retry_sleep_seconds: Fixed gap between attempts.
+            on_run_id: Called the instant a run GUID becomes known — on a
+                normal 2xx submit AND on the ambiguous-submit recovery path —
+                before this method returns it. Same contract as
+                :meth:`submit_workflow`'s: a caller tracking runs for teardown
+                has the id even if a later step raises. Must be idempotent —
+                both paths can fire for one submit.
 
         Returns:
             The run GUID AE assigned.
@@ -1674,6 +1751,10 @@ class AEClient:
                     lookup.run_id,
                     slug,
                 )
+                # Record the adopted id from inside recovery, as
+                # submit_workflow does: a lost response has still started a run.
+                if on_run_id is not None:
+                    on_run_id(lookup.run_id)
                 # Shaped as AE's own envelope so the extraction below has one
                 # path rather than one per origin.
                 return WriteRecovery(body={"data": {"guid": lookup.run_id}})
@@ -1718,6 +1799,9 @@ class AEClient:
             if isinstance(data, dict):
                 run_id = data.get("guid") or data.get("run_id")
             if run_id:
+                # Idempotent with the recovery-path call above.
+                if on_run_id is not None:
+                    on_run_id(str(run_id))
                 return str(run_id)
             raise AtlanApiResponseInvariantError(
                 message=f"AE submit returned no run guid\nresponse={body!r}",

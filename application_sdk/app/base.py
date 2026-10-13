@@ -29,6 +29,7 @@ from typing import (
 )
 from uuid import UUID
 
+from pydantic import BaseModel
 from temporalio import activity, workflow
 from temporalio.exceptions import FailureError
 
@@ -108,6 +109,8 @@ from application_sdk.observability.observability import AtlanObservability
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
     from application_sdk.execution.progress import ProgressWatchdogMode
 
 _task_logger = get_logger(__name__)
@@ -383,6 +386,31 @@ async def _warn_on_invalid_transformed_assets(
             "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
         )
+
+
+_TransferOutput = TypeVar("_TransferOutput", UploadOutput, DownloadOutput)
+
+
+def _tag_ref_store(
+    out: _TransferOutput,
+    store: "ObjectStore",
+    deployment: "ObjectStore | None",
+) -> _TransferOutput:
+    """Record on *out*'s ref which store its bytes are in.
+
+    ``App.upload`` / ``App.download`` route to the upstream store when one is
+    bound, but the interceptor materialises a ref into the next task from the
+    deployment store unless the ref says otherwise. In a two-store deployment
+    those are different buckets: the downstream task lists an empty prefix and
+    fails AAF-STR-009 (FND-3795). Compared by identity, the same test
+    ``single_store`` uses — the in-cluster wiring aliases one store under both
+    names, and that stays ``DEPLOYMENT``.
+    """
+    if store is deployment or not out.ref.is_durable:
+        return out
+    return out.model_copy(
+        update={"ref": out.ref.model_copy(update={"store": StoreTarget.UPSTREAM})}
+    )
 
 
 # Type variable for require() method
@@ -933,9 +961,12 @@ class App(ABC):
     the gate attributes to the source — a ``NOT_READY`` verdict, anything the
     handler raises, a frame Temporal ended — when the attributed failure is one
     the customer can act on (``GATE_BLOCKING_CATEGORIES``: auth, permission,
-    invalid input, precondition, not found). Anything else, including a probe
-    overrunning the budget or an unreachable source, is reported as
-    ``would_block`` and the run proceeds. Set it once the app's checks are
+    invalid input, precondition, not found, and a source still unavailable or
+    rate-limited on the gate's final attempt). Anything else, including a probe overrunning the
+    budget, is reported as ``would_block`` and the run proceeds. A source that
+    is cold rather than down says so through :meth:`Handler.warmup
+    <application_sdk.handler.base.Handler.warmup>`, never by raising
+    ``SOURCE_UNAVAILABLE``. Set it once the app's checks are
     trusted to gate real runs. The bare strings
     ``"hard"`` and ``"soft"`` are accepted and coerced once; any other value
     resolves to soft. This attribute is the only source of the posture: the
@@ -943,8 +974,8 @@ class App(ABC):
     adopt-preflight-gate skill.
 
     Note this posture applies to *every* outcome the gate can attribute to the
-    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``,
-    ``SOURCE_UNAVAILABLE`` or the deprecated fail-open categories: a probe that
+    source, not only a ``NOT_READY`` verdict, but never blocks on ``TIMEOUT``
+    or the deprecated fail-open categories: a probe that
     overruns :attr:`preflight_gate_timeout_seconds` and an untyped handler crash
     (``INTERNAL``) are reported, a missing credential typed ``NOT_FOUND`` blocks.
     Failures of the gate's own plumbing (secret
@@ -974,11 +1005,14 @@ class App(ABC):
     preflight_gate_max_attempts: ClassVar[int] = 2
     """Attempts the gate activity may take. Clamped to 1-3.
 
-    A retry never re-asks the handler: a source fault, a handler crash and a
-    budget overrun are each a verdict on the attempt they happen. What a retry
-    buys is the gate's own retryable plumbing — a store probe that failed, a
-    credential lookup the secret store refused — and it sizes the
-    ``schedule_to_close`` window. So an app declaring a large
+    In hard mode a ``SOURCE_UNAVAILABLE`` or ``RATE_LIMITED`` failure is
+    retried: it blocks only on the final attempt, so a source unreachable or
+    rate-limited for a moment gets the next attempt to answer. Every other source fault, handler crash and budget
+    overrun is a verdict on the attempt it happens. A retry also buys the
+    gate's own retryable plumbing — a store probe that failed, a credential
+    lookup the secret store refused — and this sizes the
+    ``schedule_to_close`` window. ``1`` means an unreachable source blocks on
+    its first answer. So an app declaring a large
     :attr:`preflight_gate_timeout_seconds` usually wants ``1`` here: at the 300s
     ceiling, two attempts reserve a ~10 minute ``schedule_to_close``."""
 
@@ -1029,12 +1063,15 @@ class App(ABC):
     traced multi-hour extractions dying at the final upload to that
     condition). A failed probe — after the gate's retry attempts are exhausted
     — appends a typed platform-attributed check and downgrades a ``READY`` or
-    ``PARTIAL`` verdict to ``NOT_READY``, so :attr:`preflight_gate_mode`
-    decides whether it blocks; soft mode only reports it as ``would_block``.
+    ``PARTIAL`` verdict to ``NOT_READY``. In hard mode it blocks only when its
+    category is in ``GATE_BLOCKING_CATEGORIES``: in-cluster stores are
+    Atlan-side and map to ``DEPENDENCY_UNAVAILABLE``, which is reported as
+    ``would_block``; in SDR mode a missing binding, denied grant or rejected
+    credential on the customer's bucket blocks. Soft mode only reports it.
 
     Deliberately opt-in while the fleet's probe precision is measured: the probe
-    costs under a second per run against healthy storage, but a hard-mode app
-    turning this on is trusting a storage canary to abort real runs — and the
+    costs under a second per run against healthy storage, but a hard-mode SDR
+    app turning this on is trusting a storage canary to abort real runs — and the
     probe is stricter than a small-artifact-only workload's real writes, which
     never touch multipart at all.
 
@@ -1691,6 +1728,7 @@ class App(ABC):
                     _source_store=source_store,
                     _app_prefix=app_prefix,
                     _tier=input.tier,
+                    _output_path=run_prefix,
                 )
             except Exception as exc:
                 if fatal:
@@ -1715,7 +1753,9 @@ class App(ABC):
                         exc_info=True,
                     )
                 continue
-            result = out  # last successful write is authoritative (upstream in SDR)
+            result = _tag_ref_store(
+                out, target_store, deployment
+            )  # last successful write is authoritative (upstream in SDR)
 
         if deferred_required_error is not None:
             raise deferred_required_error
@@ -1789,12 +1829,21 @@ class App(ABC):
         if not storage_path and input.ref is not None:
             storage_path = input.ref.storage_path or ""
 
-        return await _download(
+        # A ref this run produced keeps its tier, so its TRANSIENT output is
+        # still cleaned up; any other key is not the run's to delete (FND-3815).
+        tier = input.tier
+        if tier is None:
+            ref = input.ref
+            from_ref = ref is not None and storage_path == ref.storage_path
+            tier = ref.tier if ref is not None and from_ref else StorageTier.RETAINED
+        out = await _download(
             storage_path,
             input.local_path,
             skip_if_exists=input.skip_if_exists,
             store=store,
+            tier=tier,
         )
+        return _tag_ref_store(out, store, self.context.storage)
 
     # No ``timeout_seconds``: the work here is one store round-trip per declared
     # ref, so any number picked would scale with the size of the declaration —
@@ -1880,6 +1929,9 @@ class App(ABC):
         from application_sdk.storage.ops import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
             exists,
         )
+        from application_sdk.storage.reference import (  # noqa: PLC0415 — circular: storage/__init__.py loads sibling modules that import app.base
+            _fetch_manifest,
+        )
 
         if input.store is StoreTarget.UPSTREAM:
             store = self.context.upstream_storage or self.context.storage
@@ -1918,7 +1970,36 @@ class App(ABC):
             # Getting this wrong is not a near-miss: a one-file directory ref
             # HEADed as an object key 404s on a prefix that is perfectly
             # intact, so the run fails claiming data is lost when it is not.
-            if raw_key.endswith("/") or ref.file_count != 1:
+            if ref.manifest_path is not None:
+                # The producer wrote the manifest last, so it names exactly the
+                # objects the hand-off covers; stray objects under a reused
+                # prefix cannot pad the count.
+                manifest = await _fetch_manifest(store, ref.manifest_path)
+                if manifest is None:
+                    missing.append(f"{ref.manifest_path} (manifest)")
+                    continue
+                listed = len(manifest.files)
+                if listed < max(ref.file_count, 1):
+                    missing.append(
+                        f"{key}/ (manifest lists {listed}/{ref.file_count} files)"
+                    )
+                    continue
+                # The manifest proves every object landed when it was written,
+                # not that they are still there. One listing answers that for
+                # every entry; it is a subset check, so stray objects under a
+                # reused prefix still cannot stand in for a missing one.
+                present = set(
+                    await list_data_keys(key + "/", store=store, normalize=False)
+                )
+                absent = [
+                    e.path for e in manifest.files if f"{key}/{e.path}" not in present
+                ]
+                if absent:
+                    missing.append(
+                        f"{key}/ ({listed - len(absent)}/{listed} manifest objects)"
+                    )
+                    continue
+            elif raw_key.endswith("/") or ref.file_count != 1:
                 if ref.file_count < 1:
                     # ``len(found) < 0`` is false for every listing, so a
                     # zero-count ref would otherwise pass without checking
@@ -2259,7 +2340,8 @@ class App(ABC):
 
         1. **Tracked ``TRANSIENT``-tier refs** (always): auto-persisted
            intermediary files (``StorageTier.TRANSIENT``, the default).
-           Each key and its ``.sha256`` sidecar are deleted.
+           Each key and its ``.sha256`` sidecar are deleted, and a directory
+           ref's manifest (``manifest_path``) with it.
            ``RETAINED`` and ``PERSISTENT`` tier refs are skipped, and so is
            any key a ``TRANSIENT`` ref shares with one of them — a file key,
            its sidecar, or a key under a durable directory ref. Each such
@@ -2270,7 +2352,13 @@ class App(ABC):
            deliberately ignores tracked tiers: opting in is the documented
            way to remove ``RETAINED`` refs.
 
-        Objects under ``persistent-artifacts/`` are never deleted.
+        Objects under ``PROTECTED_STORAGE_PREFIXES`` (``persistent-artifacts/``,
+        ``connection-cache/``) are never deleted. Pass 1 also skips every ref
+        tagged ``store=UPSTREAM``: those bytes are in the upstream store, not
+        the deployment store this task deletes from. Pass 2 does not consult
+        refs: every deployment key under this run's prefix belongs to this
+        run, including the deployment copy ``App.upload`` dual-writes beside
+        an UPSTREAM ref in a two-store deployment.
 
         If no object store is configured (local dev), returns immediately with
         zero counts.  Individual delete errors increment ``error_count`` but
@@ -2333,6 +2421,9 @@ class App(ABC):
                 durable_prefixes.append(durable_path)
             else:
                 durable_keys.update((durable_path, durable_path + ".sha256"))
+            durable_manifest: str | None = getattr(ref, "manifest_path", None)
+            if durable_manifest:
+                durable_keys.add(durable_manifest)
 
         def _is_durable(key: str) -> bool:
             return key in durable_keys or any(
@@ -2354,6 +2445,14 @@ class App(ABC):
                 if not storage_path:
                     continue
                 if any(storage_path.startswith(p) for p in PROTECTED_STORAGE_PREFIXES):
+                    skipped += 1
+                    continue
+                # The ref names the upstream store; this task deletes only from
+                # the deployment store, where the same key is not this ref's.
+                if (
+                    getattr(ref, "store", StoreTarget.DEPLOYMENT)
+                    == StoreTarget.UPSTREAM
+                ):
                     skipped += 1
                     continue
                 tier = getattr(ref, "tier", StorageTier.TRANSIENT)
@@ -2385,6 +2484,22 @@ class App(ABC):
                                 deleted += 1
                             else:
                                 errors += 1
+                    # The manifest sits outside the prefix by design, so the
+                    # listing above never reaches it.
+                    manifest_key: str | None = getattr(ref, "manifest_path", None)
+                    if manifest_key:
+                        if any(
+                            manifest_key.startswith(p)
+                            for p in PROTECTED_STORAGE_PREFIXES
+                        ):
+                            skipped += 1
+                        elif _is_durable(manifest_key):
+                            skipped += 1
+                            aliased += 1
+                        elif await _delete_one(manifest_key):
+                            deleted += 1
+                        else:
+                            errors += 1
                     if aliased:
                         _warn_durable_alias(storage_path, aliased)
                 else:
@@ -2626,12 +2741,21 @@ def _collect_interaction_relays(
     """
     relays: dict[str, Callable[..., Any]] = {}
 
-    def _build_relay(method_name: str, is_coroutine: bool) -> Callable[..., Any]:
-        """Construct a wf_cls-level method that delegates to self._app_instance."""
+    def _build_relay(
+        method_name: str, is_coroutine: bool, *, external_payload: bool = False
+    ) -> Callable[..., Any]:
+        """Construct a wf_cls-level method that delegates to self._app_instance.
+
+        ``external_payload`` marks an ``@update``: its argument comes from
+        outside the run, like a start payload, so any ``store=UPSTREAM`` ref in
+        it is demoted before app code sees it (see ``_demote_upstream_refs``).
+        """
         if is_coroutine:
 
             async def _async_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
                 bound = getattr(wf_self._app_instance, method_name)
+                if external_payload:
+                    args, kwargs = _demote_args(args, kwargs)
                 return await bound(*args, **kwargs)
 
             _async_relay.__name__ = method_name
@@ -2641,6 +2765,8 @@ def _collect_interaction_relays(
 
         def _sync_relay(wf_self: Any, *args: Any, **kwargs: Any) -> Any:
             bound = getattr(wf_self._app_instance, method_name)
+            if external_payload:
+                args, kwargs = _demote_args(args, kwargs)
             return bound(*args, **kwargs)
 
         _sync_relay.__name__ = method_name
@@ -2682,7 +2808,9 @@ def _collect_interaction_relays(
         elif is_update and update_defn is not None and update_defn.name is not None:
             _validate_interaction_signature(update_defn.fn, "update", member_name)
 
-        relay = _build_relay(member_name, inspect.iscoroutinefunction(member))
+        relay = _build_relay(
+            member_name, inspect.iscoroutinefunction(member), external_payload=is_update
+        )
 
         if signal_defn is not None:
             # Rebind the definition's fn to the relay so Temporal's _bind_method
@@ -3167,7 +3295,8 @@ async def _run_preflight_gate(
     # UNAVAILABLE, or still warming at the ceiling: the WARMUP checks cannot
     # run, and the reason is the source's compute. The warmup posture alone
     # decides here, not gate_blocks: both are SOURCE_UNAVAILABLE, which
-    # gate_blocks never blocks on (FND-3036).
+    # gate_blocks would block on, and waiting for compute is the warmup
+    # posture's call (FND-3036, FND-3774).
     blocks = warmup_posture.enforces
     if seen.state is WarmupState.UNAVAILABLE:
         evidence = warmup_unavailable_details(seen, app_name)
@@ -3217,6 +3346,91 @@ def _set_health_line(text: str) -> None:
         _safe_log("debug", "Could not set the gate's health line", exc_info=True)
 
 
+_ModelT = TypeVar("_ModelT", bound=BaseModel)
+
+
+def _demote_upstream_refs(model: _ModelT) -> _ModelT:
+    """Reset ``store=UPSTREAM`` to ``DEPLOYMENT`` on every ref in an external payload.
+
+    Applied at both places a payload enters a run from outside it: the start
+    input (``_validate_workflow_input``, which also covers ``continue_with``)
+    and every ``@update`` argument (the interaction relay). Signals and queries
+    carry no payload.
+
+    ``FileReference.store`` decides which bucket the interceptor reads a ref
+    from, so it is only trusted when this run set it: ``App.download`` /
+    ``App.upload`` tag the refs they return. A workflow's start payload comes
+    from outside the run, and honouring the tag there would let whoever
+    starts the workflow aim a materialise at any key in the upstream bucket
+    (FND-3795). Demoting restores exactly the pre-tag behaviour for those refs:
+    they are read from the deployment store, as every ref was before.
+    """
+    return cast("_ModelT", _demote(model))
+
+
+def _demote_args(
+    args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[tuple[Any, ...], dict[str, Any]]:
+    """Apply :func:`_demote` to an ``@update`` relay's call arguments."""
+    return tuple(_demote(a) for a in args), {k: _demote(v) for k, v in kwargs.items()}
+
+
+_REF_DUMP_KEYS = frozenset({"storage_path", "is_durable", "store"})
+
+
+def _log_demoted(storage_path: object) -> None:
+    _safe_log(
+        "warning",
+        "Ignoring store=upstream on a FileReference in the workflow input; "
+        "only refs App.download/App.upload return in this run read the "
+        "upstream store",
+        storage_path=storage_path,
+    )
+
+
+def _demote(node: object) -> object:
+    """Tree walk for :func:`_demote_upstream_refs`; returns *node* itself if unchanged.
+
+    Reaches every place a ref can ride in a payload: typed fields, model
+    extras (an ``extra="allow"`` input carrying app state), and plain dicts
+    shaped like a dumped ``FileReference``. That last one is how an app
+    round-trips refs through untyped state (``model_dump()`` out,
+    ``FileReference(**raw)`` back in after ``continue_with``); left alone, the
+    rebuilt ref would carry a tag nobody in this run set.
+    """
+    if isinstance(node, FileReference):
+        if node.store is not StoreTarget.UPSTREAM:
+            return node
+        _log_demoted(node.storage_path)
+        return node.model_copy(update={"store": StoreTarget.DEPLOYMENT})
+    if isinstance(node, BaseModel):
+        changes: dict[str, object] = {}
+        for name in type(node).model_fields:
+            old = getattr(node, name)
+            new = _demote(old)
+            if new is not old:
+                changes[name] = new
+        for name, old in (node.model_extra or {}).items():
+            new = _demote(old)
+            if new is not old:
+                changes[name] = new
+        return node.model_copy(update=changes) if changes else node
+    if isinstance(node, (list, tuple)):
+        items = [_demote(v) for v in node]
+        if all(a is b for a, b in zip(items, node)):
+            return node
+        return items if isinstance(node, list) else tuple(items)
+    if isinstance(node, dict):
+        mapped = {k: _demote(v) for k, v in node.items()}
+        if _REF_DUMP_KEYS <= mapped.keys() and mapped["store"] == StoreTarget.UPSTREAM:
+            _log_demoted(mapped.get("storage_path"))
+            mapped["store"] = StoreTarget.DEPLOYMENT.value
+        if all(mapped[k] is node[k] for k in node):
+            return node
+        return mapped
+    return node
+
+
 def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     """Validate a decoded workflow payload against the entry point's typed contract.
 
@@ -3260,13 +3474,13 @@ def _validate_workflow_input(raw_input: Any, input_type: type[Input]) -> Input:
     if isinstance(raw_input, input_type):
         # Already the typed model (constructed by the SDK /start path or a test);
         # it was validated at construction, so re-validation would be redundant.
-        return raw_input
+        return _demote_upstream_refs(raw_input)
 
     # deferred import: circular — execution/__init__.py loads _temporal which imports app.base
     from application_sdk.execution.errors import ApplicationError  # noqa: PLC0415
 
     try:
-        return input_type.model_validate(raw_input)
+        return _demote_upstream_refs(input_type.model_validate(raw_input))
     # conformance: ignore[E004] deterministic input-validation failure; logged via _safe_log with exc_info=True and re-raised as a non-retryable ApplicationError
     except Exception as e:
         _safe_log(

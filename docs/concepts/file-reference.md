@@ -53,10 +53,11 @@ for *durable outbound* delivery.
 >    `atlan-objectstore`. Intermediate pipeline data (raw SQL rows, partial
 >    transforms) pollutes Atlan's bucket with artifacts that the publish app treats
 >    as connector output.
-> 2. **Bypasses SHA-256 dedup.** The `FileReference` interceptor maintains a
->    `.sha256` sidecar so re-transfers across workers are skipped automatically.
->    `App.upload()` performs a full upload on every call — no dedup, no sidecar,
->    no skip.
+> 2. **Re-uploads by default.** `App.upload()` runs on the same upload engine as
+>    the interceptor's persist, so it writes the same sidecars, local markers and
+>    directory manifest. But it is a separate `@task` call that uploads every file
+>    again unless you pass `skip_if_exists=True`, and its destination is a
+>    durable outbound prefix, not a run-scoped hand-off.
 > 3. **No cross-worker auto-materialization.** `FileReference` input fields are
 >    automatically re-downloaded before a task runs when the local file is absent
 >    (cross-worker fault tolerance). `App.upload()` produces a bare `FileReference`
@@ -83,6 +84,34 @@ infrastructure unless the connector explicitly decides to hand them off.
 `upstream_storage` is the `atlan-objectstore` Dapr binding (pointing to
 `{tenant}/api/blobstorage`), so `App.upload()` routes to Atlan's S3.
 
+`App.download()` reads from the same place. A ref that `App.upload()` or
+`App.download()` returns from a **distinct** upstream store carries
+`store=StoreTarget.UPSTREAM`. When you pass it into another `@task`, the
+interceptor materialises it from the upstream store, not the deployment store.
+Without that field the next task would list an empty prefix in the wrong bucket
+and fail with AAF-STR-009. Every other ref, including those from a single-store
+deployment where both names alias one store, has `store=DEPLOYMENT`. Do not set
+the field by hand. It records where the bytes are, and the SDK sets it.
+`App.download()` and the interceptor share one transfer engine. Passing
+`dl.ref` to a task on the same worker therefore costs one listing and a local
+re-hash, not a second download, because `download()` leaves the same local
+`.sha256` markers that materialise does. `App.upload()` and the interceptor's
+persist also share one upload engine. A directory `up.ref` carries a
+`manifest_path` and leaves a local `.sha256` marker beside each file, so a task
+on the same worker reuses the files instead of downloading them back, and never
+reads a stray object under the prefix as part of the hand-off. Both refuse the
+same sensitive local paths: a protected system directory itself or anything
+under it (`/etc`, `/proc`, `/sys`, `/dev`, `/root`), and any path through a
+credential directory (`.ssh`, `.aws`, `.gnupg`, `.kube`, `.vault`), an
+`.env*` name, or a match for `ATLAN_UPLOAD_FILE_BLOCKED_PATHS`. For a directory
+that applies to every file in it: one `.env` inside an output directory refuses
+the whole upload, naming the file, rather than shipping it or dropping it
+silently. The tag is honoured only for refs
+produced inside the run. A workflow's start
+input (including `continue_with`) and every `@update` argument have any
+`store=UPSTREAM` reset to `DEPLOYMENT`, so to consume another
+app's upstream output, call `App.download()` on it.
+
 **Consequence for connector authors:** if your connector produces artifacts that
 Atlan's publish app must consume, you must call `App.upload()` explicitly from
 `run()` — the interceptor alone is not sufficient. Omitting the explicit call
@@ -108,10 +137,13 @@ class FileReference(BaseModel, frozen=True):
     tier: StorageTier = StorageTier.TRANSIENT
     file_count: int = 1                # number of files; >1 for directory uploads
     auto_materialize: bool = True      # False = SDK never touches this ref
+    manifest_path: str | None = None   # directory refs: key of the exact-file-set manifest
 ```
 
-You never set `storage_path`, `is_durable`, or `file_count` yourself — the SDK
-fills them in during persist and materialize.
+You never set `is_durable`, `file_count`, or `manifest_path` yourself — the SDK
+fills them in during persist and materialize. `storage_path` is optional: leave
+it unset and the SDK generates a unique `file_refs/{uuid}` key, or set it to pin
+a canonical key (single file) or prefix (directory).
 
 > **On an entry point's contract, a `FileReference` must declare its shape.** An entry point's
 > `input`/return contracts are a public boundary — another app or the platform DAG reads what you
@@ -290,9 +322,50 @@ The SDK uploads every file in the directory recursively (bounded concurrency),
 preserves the directory structure under the storage prefix, and recreates it on
 download. `file_count` on the durable ref tells you how many files were uploaded.
 
+**The manifest.** After the last file lands, persist writes a manifest — every
+file's relative path, SHA-256 and size — and puts its key on the durable ref as
+`manifest_path`. The manifest lives under the tier's `file_refs/` namespace,
+never inside the data prefix. Materialize downloads exactly the manifest's files
+and checks each against the manifest digest; it does not list the prefix. So:
+
+- objects under the prefix that the manifest does not name — a failed earlier
+  attempt's leftovers, a timed-out attempt still writing — are ignored;
+- a listed file overwritten after the manifest was written fails with
+  `StorageIntegrityError` instead of being processed;
+- a missing manifest fails retryably rather than falling back to a listing.
+
+**Pinning a directory prefix.** Because consumers read the manifest, a directory
+ref may pin `storage_path` to a canonical prefix exactly as a single-file ref
+pins its key. For `TRANSIENT` and `RETAINED` refs the pin must sit under the
+run prefix (`output_path`), or persist raises `StorageConfigError`: two runs
+pinning one shared prefix would write the same keys, and either run's cleanup
+would delete the other's data. `PERSISTENT` pins may live anywhere under
+`persistent-artifacts/`:
+
+```python
+return ExtractOutput(
+    tables=FileReference(
+        local_path=str(output_dir),
+        storage_path=f"{output_path}/raw/table/",  # honoured; trailing / optional
+    )
+)
+```
+
+A `TRANSIENT` pin is still deleted at end of run, manifest included.
+
+**Refs without a manifest** — produced by an SDK that predates manifests, or
+built by hand — are materialized by listing the prefix. The listing is checked
+against `file_count` as a lower bound: fewer objects than declared fails
+retryably (`StorageError`, code `STR-009`), including an empty listing for a ref
+that declares any files — the default `file_count=1` does. More objects than
+declared only logs `file_ref.materialize.count_mismatch` at WARNING. A
+hand-built ref over a prefix that can legitimately be empty must declare
+`file_count=0`.
+
 The per-file sidecar fast-path applies inside directories too: on retry, files
-that already have a matching local sidecar are skipped; only changed or missing
-files are re-downloaded.
+whose local copy still matches are skipped (against the manifest digest when
+there is one, else the local sidecar); only changed or missing files are
+re-downloaded.
 
 ### Lazy Materialization
 

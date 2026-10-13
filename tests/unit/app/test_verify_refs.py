@@ -423,3 +423,130 @@ class TestVerifyRefsFeedsTheStallWatchdog(_ResetsRegistries):
             )
 
         assert progress_marks.count("storage.verify_ref") == 0
+
+
+class TestVerifyRefsWithManifest(_ResetsRegistries):
+    """FND-3762: a manifest-carrying directory ref is checked by its manifest.
+
+    The manifest is written last, so its presence is the proof the hand-off
+    landed; the prefix is not listed, so stray objects under a reused prefix
+    cannot pad a short delivery up to ``file_count``.
+    """
+
+    _DIR = f"{PREFIX}/table/"
+    _MANIFEST = "artifacts/apps/a/workflows/wf-1/run-1/file_refs/m.sdk-manifest"
+
+    def _app_with(self, store: object) -> App:
+        app = _make_app()
+        app._context._storage = store  # type: ignore[union-attr]
+        return app
+
+    def _manifest_ref(self, *, file_count: int) -> FileReference:
+        return FileReference(
+            storage_path=self._DIR,
+            is_durable=True,
+            file_count=file_count,
+            manifest_path=self._MANIFEST,
+        )
+
+    async def _seed(self, store: object, n: int, *, data: bool = True) -> None:
+        from application_sdk.storage._manifest import DirectoryManifest, ManifestEntry
+        from application_sdk.storage.ops import _put
+
+        if data:
+            for i in range(n):
+                await _put(
+                    f"{self._DIR}part-{i}.json",
+                    b"x",
+                    store,  # type: ignore[arg-type]
+                    normalize=False,
+                )
+
+        manifest = DirectoryManifest(
+            files=[
+                ManifestEntry(path=f"part-{i}.json", sha256="0" * 64, size_bytes=1)
+                for i in range(n)
+            ]
+        )
+        await _put(
+            self._MANIFEST,
+            manifest.model_dump_json().encode(),
+            store,  # type: ignore[arg-type]
+            normalize=False,
+        )
+
+    async def test_manifest_and_its_objects_present_passes(self) -> None:
+        from application_sdk.storage.factory import create_memory_store
+
+        store = create_memory_store()
+        await self._seed(store, 3)
+        app = self._app_with(store)
+
+        out = await app.verify_refs(
+            VerifyRefsInput(refs=[self._manifest_ref(file_count=3)], prefix=PREFIX)
+        )
+
+        assert out.verified_file_count == 3
+
+    async def test_manifest_whose_objects_are_gone_fails(self) -> None:
+        """The manifest proves the objects landed, not that they are still there."""
+        from application_sdk.storage.factory import create_memory_store
+
+        store = create_memory_store()
+        await self._seed(store, 3, data=False)
+        app = self._app_with(store)
+
+        with pytest.raises(StorageHandoffIncompleteError) as exc:
+            await app.verify_refs(
+                VerifyRefsInput(refs=[self._manifest_ref(file_count=3)], prefix=PREFIX)
+            )
+
+        assert exc.value.missing_keys == [
+            f"{self._DIR.rstrip('/')}/ (0/3 manifest objects)"
+        ]
+
+    async def test_stray_objects_cannot_stand_in_for_a_missing_manifest_object(
+        self,
+    ) -> None:
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _put
+
+        store = create_memory_store()
+        await self._seed(store, 3, data=False)
+        for i in range(5):
+            await _put(f"{self._DIR}leftover-{i}.json", b"x", store, normalize=False)
+        await _put(f"{self._DIR}part-0.json", b"x", store, normalize=False)
+        app = self._app_with(store)
+
+        with pytest.raises(StorageHandoffIncompleteError):
+            await app.verify_refs(
+                VerifyRefsInput(refs=[self._manifest_ref(file_count=3)], prefix=PREFIX)
+            )
+
+    async def test_missing_manifest_fails(self) -> None:
+        from application_sdk.storage.factory import create_memory_store
+
+        app = self._app_with(create_memory_store())
+
+        with pytest.raises(StorageHandoffIncompleteError) as exc:
+            await app.verify_refs(
+                VerifyRefsInput(refs=[self._manifest_ref(file_count=3)], prefix=PREFIX)
+            )
+
+        assert exc.value.missing_keys == [f"{self._MANIFEST} (manifest)"]
+
+    async def test_stray_objects_cannot_pad_a_short_manifest(self) -> None:
+        """Listing-era verify passed this: 3 objects under the prefix, 3 declared."""
+        from application_sdk.storage.factory import create_memory_store
+        from application_sdk.storage.ops import _put
+
+        store = create_memory_store()
+        await self._seed(store, 2)
+        for i in range(3):
+            await _put(f"{self._DIR}leftover-{i}.json", b"x", store, normalize=False)
+        app = self._app_with(store)
+
+        with pytest.raises(StorageHandoffIncompleteError):
+            await app.verify_refs(
+                VerifyRefsInput(refs=[self._manifest_ref(file_count=3)], prefix=PREFIX)
+            )
