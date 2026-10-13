@@ -16,6 +16,7 @@ from application_sdk.templates.contracts.incremental_sql import (
 from application_sdk.templates.contracts.sql_metadata import (
     ExtractionInput,
     ExtractionTaskInput,
+    TreeSelectionExtractionInput,
 )
 
 
@@ -531,3 +532,50 @@ class TestExcludeTableRegexRouting:
         # Declared on the SDK contract, so the unknown-key warning no longer
         # names it and schema consumers see it as SDK-provided.
         assert "exclude_table_regex" in ExtractionInput.model_fields
+
+
+class TestTreeSelectionExtractionInput:
+    """TreeSelectionExtractionInput keeps the tree and otherwise matches ExtractionInput."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"default": {"ns.a": {"t1": {}}, "ns.b": {}}},
+            {"a": {"b": {"c": {"d": {"e": {}}}}}},
+            {},
+        ],
+    )
+    def test_tree_keeps_every_level(self, value):
+        result = TreeSelectionExtractionInput.model_validate({"include_filter": value})
+        assert result.include_filter == value
+
+    @pytest.mark.parametrize(
+        "value",
+        [None, "", "^prod$", '{"^db$": ["^sch$"]}', '"DB1","DB2"'],
+    )
+    def test_non_dict_inputs_match_extraction_input(self, value):
+        expected = ExtractionInput.model_validate({"exclude_filter": value})
+        result = TreeSelectionExtractionInput.model_validate({"exclude_filter": value})
+        assert result.exclude_filter == expected.exclude_filter
+
+    @pytest.mark.parametrize("value", [{"db": ["schema"]}, ["db"]])
+    def test_filter_map_shapes_are_refused(self, value):
+        with pytest.raises(ValidationError):
+            TreeSelectionExtractionInput.model_validate({"include_filter": value})
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            {"a;drop": {}},
+            {"a": {"b--": {}}},
+            {"a": {"b": {"c": {"d": {"e": {"f": {}}}}}}},
+        ],
+    )
+    def test_sql_injection_check_still_applies(self, value):
+        with pytest.raises(ValidationError):
+            TreeSelectionExtractionInput.model_validate({"include_filter": value})
+
+    def test_defaults_are_empty_strings(self):
+        result = TreeSelectionExtractionInput()
+        assert result.include_filter == ""
+        assert result.exclude_filter == ""

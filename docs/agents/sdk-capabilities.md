@@ -1,8 +1,8 @@
 <!--
 generated-by:  capability-manifest skill (.claude/skills/capability-manifest)
-sdk-version:   3.45.0
-source-sha:    e294b5ed55215d531dcf1ac03428be6a29f8972d
-source-date:   2026-10-12T12:41:49+01:00
+sdk-version:   3.46.0
+source-sha:    e005c75938c3822c4629a570f0c12dc59f67156c
+source-date:   2026-10-13T09:03:47Z
 do-not-edit:   re-run the skill instead of hand-editing
 -->
 
@@ -8610,6 +8610,30 @@ Strongly-typed Pydantic models for SDK methods. Contracts in `application_sdk.co
   - `total_record_count: int` `= 0`
   - `chunk_count: int` `= 0`
   - `transformed_file: FileReference | None` — ``FileReference`` to the transformed asset output.
+- **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
+
+#### `TreeSelectionExtractionInput`
+
+- **Import:** `from application_sdk.templates.contracts import TreeSelectionExtractionInput`
+- **Summary:** ``ExtractionInput`` whose include/exclude filters are tree-widget selections.
+- **Fields:**
+  - `workflow_id: str` `= ''` — Temporal workflow ID for this run.
+  - `correlation_id: str` `= ''` — Caller-supplied correlation ID for tracing across systems.
+  - `app_name: str` `= ''` — Per-entrypoint app name stamped into node args by the contract toolkit
+  - `workflow_slug: str` `= ''` — AE's slug for the workflow this run belongs to (AUT-1124).
+  - `preflight_credential_refs: ClassVar[dict[str, str]]` `= {}` — Opt-in map of ``{ref_name: guid_field}`` for multi-credential apps.
+  - `connection: ConnectionRef` `= Field(default_factory=ConnectionRef)` — Typed connection reference (qualified name, name, admin users, etc.).
+  - `credential_guid: str` `= ''` — GUID of credentials stored in the secret store.
+  - `credential_ref: CredentialRef | None` — Typed credential reference — preferred over credential_guid for new apps.
+  - `extraction_method: str` `= ''` — ``"agent"`` or ``"direct"``. Empty defaults to direct.
+  - `agent_json: AgentCredentialSpec | None` — Typed agent credential spec. Non-None when extraction_method is agent.
+  - `output_prefix: str` `= ''` — Object store prefix for all output artifacts.
+  - `output_path: str` `= ''` — Local or object store path for output files.
+  - `exclude_filter: TreeSelection | str` `= Field(default='', json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Selection to exclude: an APITree-style nested dict, or a string.
+  - `include_filter: TreeSelection | str` `= Field(default='', json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA)` — Selection to include: an APITree-style nested dict, or a string.
+  - `temp_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Regex pattern for table/view names to exclude from extraction.
+  - `exclude_table_regex: Annotated[str, Field(pattern=SAFE_FILTER_PATTERN)]` `= ''` — Form-key name of :attr:`temp_table_regex` (FND-2733).
+  - `source_tag_prefix: str` `= ''` — Tag prefix for source-level metadata.
 - **Defined in:** `application_sdk/templates/contracts/sql_metadata.py`
 
 #### `UpdateMarkerInput`

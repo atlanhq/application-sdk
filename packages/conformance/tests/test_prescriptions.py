@@ -857,6 +857,17 @@ def test_p001_an_opt_out_guarding_no_unsafe_field_says_removing_it_is_the_fix() 
     assert "remove the opt-out" in message
 
 
+def test_p001_treats_tree_selection_as_payload_safe() -> None:
+    src = (
+        "class C(Input, allow_unbounded_fields=True):\n"
+        "    tree: TreeSelection = {}\n"
+        "    tree_or_str: TreeSelection | str = ''\n"
+    )
+    message = _p001_message(src)
+    assert "every field it declares is already payload-safe" in message
+    assert "does not define" not in message
+
+
 def test_p001_names_each_unsafe_field_and_why() -> None:
     src = (
         "class ExtractInput(Input, allow_unbounded_fields=True):\n"

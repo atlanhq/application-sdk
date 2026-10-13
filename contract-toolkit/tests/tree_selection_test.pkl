@@ -77,7 +77,10 @@ local apiTreeOff = treeApp(apiTree(false))
 local filterOn = filterApp(conditional(true, "apitree"), conditional(true, "apitree"))
 local filterOff = filterApp(conditional(false, "apitree"), conditional(false, "apitree"))
 local filterApiTreeOn = filterApp(apiTree(true), apiTree(true))
-local filterOverrideLine = ": TreeSelection | str = \"\"  # pyright: ignore[reportIncompatibleVariableOverride]\n"
+local includeFilterOnly = (treeApp(apiTree(false))) {
+  uiConfig { tasks { ["Metadata"] { inputs { ["include-filter"] = conditional(true, "apitree") } } } }
+}
+local filterMixed = filterApp(conditional(true, "apitree"), conditional(false, "apitree"))
 
 facts {
   ["Default: tree widgets keep the existing dict[str, Any] type"] {
@@ -110,22 +113,34 @@ facts {
   }
 
   // ExtractionInput declares include_filter / exclude_filter as FilterMap | str,
-  // which keeps two levels of a tree. Without the flag the base field is kept.
-  ["Filter widgets without treeSelection keep the base FilterMap field"] {
-    !inputPy(filterOff).contains("include_filter:")
-    !inputPy(filterOff).contains("exclude_filter:")
+  // which keeps two levels of a tree, so the filter widgets generate no field.
+  ["Filter widgets without treeSelection keep ExtractionInput"] {
+    inputPy(filterOff).contains("\nclass AppInputContract(ExtractionInput):\n")
+    inputPy(filterOff).contains("from application_sdk.templates.contracts import ExtractionInput\n")
+    !inputPy(filterOff).contains("TreeSelectionExtractionInput")
   }
 
-  ["Filter widgets with treeSelection re-declare the base field as TreeSelection | str"] {
-    inputPy(filterOn).contains("    include_filter\(filterOverrideLine)")
-    inputPy(filterOn).contains("    exclude_filter\(filterOverrideLine)")
-    inputPy(filterApiTreeOn).contains("    include_filter\(filterOverrideLine)")
-    inputPy(filterOn).split("\n").any((l) -> l.startsWith("    @field_validator(")
-      && l.contains("\"include_filter\"") && l.contains("\"exclude_filter\""))
-    inputPy(filterOn).contains("from application_sdk.contracts.types import TreeSelection\n")
+  ["Filter widgets with treeSelection extend TreeSelectionExtractionInput"] {
+    inputPy(filterOn).contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
+    inputPy(filterOn).contains("from application_sdk.templates.contracts import TreeSelectionExtractionInput\n")
+    inputPy(filterApiTreeOn).contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
   }
 
-  ["Filter override: workflow config and manifest are identical"] {
+  ["The filters stay inherited: no field is generated for them"] {
+    !inputPy(filterOn).contains("include_filter")
+    !inputPy(filterOn).contains("exclude_filter")
+  }
+
+  ["One filter widget with treeSelection is enough"] {
+    inputPy(includeFilterOnly).contains("\nclass AppInputContract(TreeSelectionExtractionInput):\n")
+  }
+
+  ["Filter widgets that disagree on treeSelection are refused"] {
+    module.catch(() -> inputPy(filterMixed))
+      .contains("include-filter and exclude-filter must both set treeSelection or neither")
+  }
+
+  ["Filter treeSelection: workflow config and manifest are identical"] {
     configJson(filterOn) == configJson(filterOff)
     filterOn.output.files["app/generated/manifest.json"].text
       == filterOff.output.files["app/generated/manifest.json"].text

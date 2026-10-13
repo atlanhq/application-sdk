@@ -114,6 +114,7 @@ _KNOWN_SAFE = frozenset(
         "UUID",
         "SecretStr",
         "FilterMap",
+        "TreeSelection",
         "FileReference",
         "Lazy",
         "ConnectionRef",

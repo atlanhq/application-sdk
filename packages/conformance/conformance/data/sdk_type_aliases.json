@@ -32,6 +32,7 @@
     "application_sdk.storage.rolling.SizeEstimatorFn": "Callable[[Any], int]",
     "application_sdk.templates.contracts.FilterMap": "Annotated[dict[str, Annotated[list[str], MaxItems(1000)]], MaxItems(100)]",
     "application_sdk.templates.contracts.sql_metadata.FilterMap": "Annotated[dict[str, Annotated[list[str], MaxItems(1000)]], MaxItems(100)]",
+    "application_sdk.templates.contracts.sql_metadata.TreeSelection": "Annotated[dict[str, 'TreeSelection'], MaxItems(1000)]",
     "application_sdk.testing.Authorizer": "Callable[[FakeRequest], FakeResponse | Mapping[str, object] | Sequence[object] | str | bytes | tuple[int, object] | None]",
     "application_sdk.testing.Handler": "Callable[[FakeRequest], FakeResponse | Mapping[str, object] | Sequence[object] | str | bytes | tuple[int, object] | None]",
     "application_sdk.testing.HandlerResult": "FakeResponse | Mapping[str, object] | Sequence[object] | str | bytes | tuple[int, object] | None",

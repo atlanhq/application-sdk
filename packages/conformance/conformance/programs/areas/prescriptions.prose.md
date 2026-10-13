@@ -319,8 +319,7 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      B005 by construction.  The SDK's `FilterMap` coercion accepts a list, a
      legacy string, and a one-level `APITree` tree.  It keeps two levels, so
      a tree the app reads deeper loses those levels: set
-     `treeSelection = true` on the widget instead, which re-declares the field
-     as `TreeSelection | str` (step 7).
+     `treeSelection = true` on the widget instead (step 3).
 
   3. **Use the SDK's own types, in the same outer shape.**
      | Field carries | Type it as |
@@ -330,7 +329,8 @@ above.  `classification` is always `"judgment"` for all P-series rules.
      | `agent_json` | `AgentCredentialSpec` |
      | wizard metadata | a `BaseMetadataConfig` subclass, or a bounded `dict[str, str]` |
      | flat filters | `FilterMap` (`application_sdk.templates.contracts`) |
-     | a tree-widget selection (`APITree` and similar) read at any depth | `TreeSelection` (`application_sdk.contracts.types`) |
+     | a tree-widget selection (`APITree` and similar) read at any depth | `TreeSelection` (`application_sdk.contracts.types`); generated contracts get it from `treeSelection = true` on the widget |
+     | an extraction app's include/exclude filters as a tree | extend `TreeSelectionExtractionInput` (`application_sdk.templates.contracts`), whose filters are `TreeSelection \| str`; generated contracts get it from `treeSelection = true` on both filter widgets |
      | a dict with known keys | a small `BaseModel` with those fields |
 
      Absorb legacy wire shapes with a `@field_validator(..., mode="before")`
@@ -367,9 +367,9 @@ above.  `classification` is always `"judgment"` for all P-series rules.
   7. **Generated contract with `Any`: fix the source, never the file.**  The
      `contract/*.pkl` widget decides the shape, and the toolkit emits
      `dict[str, Any]` for widgets such as `APITree`.  For a tree widget, set
-     `treeSelection = true`: the field generates as `TreeSelection`, or as
-     `TreeSelection | str` on an extraction app's `include-filter` /
-     `exclude-filter`.  Change the widget, or
+     `treeSelection = true`: the field generates as `TreeSelection`, and on an
+     extraction app's `include-filter` / `exclude-filter` the class extends
+     `TreeSelectionExtractionInput`.  Change the widget, or
      fix the toolkit's emission, and regenerate.  Do not hand-edit
      `app/generated/`, and do not keep a `post-generate` hook that re-inserts
      the opt-out.  When only the toolkit can fix it, say so in the proposal:

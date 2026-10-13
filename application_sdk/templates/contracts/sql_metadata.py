@@ -22,6 +22,7 @@ from application_sdk.contracts.types import (
     ConnectionRef,
     FileReference,
     MaxItems,
+    TreeSelection,
 )
 from application_sdk.credentials.ingress import (
     declared_agent_spec_type,
@@ -348,6 +349,57 @@ class ExtractionInput(Input):
     def _validate_temp_table_no_sql_injection(cls, v: str) -> str:
         validate_filter_no_sql_injection(v)
         return v
+
+
+_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA: dict[str, JsonValue] = {
+    "x-accepted-before-validation": ["APITree-style nested dict", "str", "None"]
+}
+
+
+def _coerce_tree_filter_value(v: Any) -> Any:
+    """Coerce filter input to ``TreeSelection | str`` without collapsing the tree.
+
+    Same as :func:`_coerce_filter_value` for ``None`` and strings. A dict keeps
+    every level. A list, or a dict with list values, is a ``FilterMap`` of regex
+    patterns rather than a selection of named nodes, so it is passed through for
+    ``TreeSelection`` to refuse instead of being mapped onto tree keys.
+    """
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return normalize_legacy_filter_value(v)
+    return v
+
+
+class TreeSelectionExtractionInput(ExtractionInput):
+    """``ExtractionInput`` whose include/exclude filters are tree-widget selections.
+
+    ``ExtractionInput`` types the filters as ``FilterMap | str`` and collapses an
+    APITree selection to two levels. Apps whose picker emits a deeper tree
+    (``{catalog: {namespace: {table: {}}}}``) and that read the filter themselves
+    extend this class instead: the filters are ``TreeSelection | str`` and keep
+    every level. ``None`` and string inputs are handled as in ``ExtractionInput``,
+    and the SQL-injection check still applies (it refuses nesting deeper than its
+    depth limit). ``SqlMetadataExtractor`` copies the filters into
+    ``ExtractionTaskInput``, which collapses them again, so this class is for apps
+    that read the filters directly. The contract toolkit selects it when the
+    ``include-filter`` / ``exclude-filter`` widgets set ``treeSelection = true``.
+    """
+
+    exclude_filter: TreeSelection | str = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default="", json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    """Selection to exclude: an APITree-style nested dict, or a string."""
+
+    include_filter: TreeSelection | str = Field(  # pyright: ignore[reportIncompatibleVariableOverride]
+        default="", json_schema_extra=_TREE_FILTER_FIELD_JSON_SCHEMA_EXTRA
+    )
+    """Selection to include: an APITree-style nested dict, or a string."""
+
+    @field_validator("include_filter", "exclude_filter", mode="before")
+    @classmethod
+    def _coerce_tree_filter(cls, v: Any) -> Any:
+        return _coerce_tree_filter_value(v)
 
 
 class ExtractionOutput(Output, PublishInputMixin):
