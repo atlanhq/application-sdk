@@ -170,6 +170,28 @@ Evaluation uses [`_gha_expr.py`](../../.github/scripts/tests/_gha_expr.py), a
 deliberately partial evaluator that raises on anything it does not model rather
 than guessing.
 
+## Bot-opened PRs are never labelled
+
+**Rule:** a lane that opens PRs from a bot (the conformance resync lane,
+`conformance_resync.py`) must not add labels to them, on open or on any later
+update. Identify lane PRs by **head branch + author** — for the resync lane,
+`bot/conformance-resync` + `atlan-conformance-sync[bot]` — which is what every
+consumer (the resync approval gate, the Renovate auto-approve routing,
+Connector Pulse) already matches on.
+
+**Why:** every label add is a `labeled` event, and the connector `tests.yaml`
+keeps `labeled` in its triggers for `e2e` (see above). Labelling a PR a second
+after opening it starts a second Tests run on the same head SHA; the unit job's
+`cancel-in-progress` concurrency group lets that run cancel the first one's
+unit job, and the cancelled run's `Tests Gate` concludes FAILURE. GitHub counts
+every run of a required context, so the PR stays `BLOCKED` and auto-merge never
+enqueues it, even though the second run is green. FND-3832 found this on most
+open resync PRs.
+
+If a human-readable cue is wanted, put it in the PR title (resync PRs already
+start with `chore(conformance): resync`). Enforced by the label tests in
+[`test_conformance_resync.py`](../../.github/scripts/tests/test_conformance_resync.py).
+
 ## CI cost
 
 Cost is part of authoring a workflow, not an afterthought. Review it at the
