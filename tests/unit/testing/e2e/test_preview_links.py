@@ -19,6 +19,7 @@ import orjson
 import pytest
 
 from application_sdk.testing.e2e.base import FullDAGOutcome
+from application_sdk.testing.harness import preview_hold
 from tests.unit.testing._atlas_fakes import FakeAsset, FakeAtlasClient, FakeSearchResult
 from tests.unit.testing.e2e.test_base_e2e import _ConcreteE2ETest
 
@@ -32,14 +33,19 @@ def _harness(
     counts: dict[str, int],
     behavior: Any,
 ) -> _ConcreteE2ETest:
+    client = FakeAtlasClient(behavior)
+
     @asynccontextmanager
     async def _client(self: object) -> AsyncIterator[FakeAtlasClient]:
-        yield FakeAtlasClient(behavior)
+        yield client
 
     monkeypatch.setattr(_ConcreteE2ETest, "_atlas_client", _client)
     monkeypatch.setattr(_ConcreteE2ETest, "preview_links_dir", str(tmp_path))
+    monkeypatch.delenv(preview_hold.HOLD_ENV, raising=False)
     harness = _ConcreteE2ETest()
     harness.connection_qualified_name = _QN
+    harness.connection_display_name = "openapi-1787587123106596"
+    harness._fake_client = client  # type: ignore[attr-defined]
     harness._auth = SimpleNamespace(base_url=_BASE)
     harness.dag_outcomes = [
         FullDAGOutcome(
@@ -104,3 +110,83 @@ def test_disabled_writes_nothing(
     monkeypatch.setattr(_ConcreteE2ETest, "preview_links_dir", "")
     harness._write_preview_links()
     assert not any(tmp_path.iterdir())
+
+
+# ---------------------------------------------------------------------------
+# Holding the connection so the links outlive the run
+# ---------------------------------------------------------------------------
+
+
+def _landed(_request: Any) -> FakeSearchResult:
+    return FakeSearchResult([FakeAsset(f"{_QN}/t", guid="g-1")])
+
+
+def test_a_requested_hold_marks_the_connection_and_records_the_expiry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setenv(preview_hold.HOLD_ENV, "24")
+    harness._write_preview_links()
+    [saved] = harness._fake_client.saved  # type: ignore[attr-defined]
+    assert saved.qualified_name == _QN
+    expires = preview_hold.held_until(saved.description)
+    assert expires is not None
+    assert _written(tmp_path)["expires_at"] == preview_hold.stamp(expires)
+    assert harness._preview_held_qn == _QN
+
+
+def test_a_mark_that_fails_holds_nothing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    monkeypatch.setenv(preview_hold.HOLD_ENV, "24")
+
+    async def _refuse(_asset: Any) -> None:
+        raise RuntimeError("save rejected")
+
+    monkeypatch.setattr(harness._fake_client.asset, "save", _refuse)  # type: ignore[attr-defined]
+    harness._write_preview_links()
+    assert "expires_at" not in _written(tmp_path)
+    assert not getattr(harness, "_preview_held_qn", "")
+
+
+def test_no_hold_without_the_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    harness._write_preview_links()
+    assert harness._fake_client.saved == []  # type: ignore[attr-defined]
+    assert "expires_at" not in _written(tmp_path)
+
+
+def test_teardown_leaves_a_held_connection_for_the_reaper(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    purged: list[str] = []
+
+    async def _record(_client: object, qn: str) -> object:
+        purged.append(qn)
+        return SimpleNamespace(purged=1, orphaned=(), errors=())
+
+    monkeypatch.setattr("application_sdk.testing.e2e.base.purge_connection", _record)
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    harness._submitted_connection_qns = [_QN]
+    harness._preview_held_qn = _QN
+    harness.teardown_method(method=None)
+    assert purged == []
+
+
+def test_teardown_still_deletes_an_unheld_connection(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    purged: list[str] = []
+
+    async def _record(_client: object, qn: str) -> object:
+        purged.append(qn)
+        return SimpleNamespace(purged=1, orphaned=(), errors=())
+
+    monkeypatch.setattr("application_sdk.testing.e2e.base.purge_connection", _record)
+    harness = _harness(monkeypatch, tmp_path, {"Table": 4}, _landed)
+    harness._submitted_connection_qns = [_QN]
+    harness.teardown_method(method=None)
+    assert purged == [_QN]

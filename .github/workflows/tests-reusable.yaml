@@ -2435,6 +2435,11 @@ jobs:
       E2E_SOURCE_ENV_JSON: ${{ secrets.E2E_SOURCE_ENV_JSON }}
       DATAFORGE_RESOURCE_ID: ${{ secrets.DATAFORGE_RESOURCE_ID }}
       GIT_TOKEN: ${{ secrets.ORG_PAT_GITHUB }}
+      # A PR carrying `e2e-preview` asks a passing run to keep its connection
+      # for 24h so the comment's preview links open something; the scheduled
+      # e2e-preview-reaper purges it after. Without the label teardown purges
+      # as usual. Read by application_sdk.testing.harness.preview_hold.
+      E2E_PREVIEW_HOLD_HOURS: ${{ contains(github.event.pull_request.labels.*.name, 'e2e-preview') && '24' || '' }}
     steps:
       - name: distinct-id ${{ inputs.distinct-id }}
         if: inputs.distinct-id != ''

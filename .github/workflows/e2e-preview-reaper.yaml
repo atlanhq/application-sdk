@@ -1,0 +1,74 @@
+name: E2E Preview Reaper
+
+# Purges the e2e connections a passing run held for review.
+#
+# A PR labelled `e2e-preview` asks its full-DAG e2e to keep the connection it
+# published into, so the preview links on the PR comment open real assets
+# (tests-reusable.yaml's E2E_PREVIEW_HOLD_HOURS). Teardown marks that
+# connection with an expiry instead of purging it; this job purges every marked
+# connection whose expiry has passed, on every cloud's connector and system
+# test tenant. Only connections carrying the marker AND the harness's own
+# minted qualified-name shape are ever touched: see
+# application_sdk/testing/harness/preview_hold.py.
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-preview-reaper
+  cancel-in-progress: false
+
+jobs:
+  reap:
+    name: Reap expired preview holds (${{ matrix.tenants }} / ${{ matrix.cloud }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        cloud: [aws, azure, gcp]
+        tenants: [connector, system]
+    env:
+      E2E_CLOUD: ${{ matrix.cloud }}
+      TENANT_MATRIX_JSON: ${{ matrix.tenants == 'system' && secrets.E2E_SYSTEM_TENANT_MATRIX_JSON || secrets.E2E_TENANT_MATRIX_JSON }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Skip a tenant set this repo has no secret for
+        id: has-tenants
+        run: |
+          set -euo pipefail
+          if [ -n "${TENANT_MATRIX_JSON}" ]; then echo "ok=true" >> "$GITHUB_OUTPUT"; fi
+
+      # Two invocations, mask pass first, as in tests-reusable.yaml's e2e job:
+      # registering the matrix blob as a secret does not redact the values
+      # inside it.
+      - name: Resolve the test tenant for this cloud
+        if: steps.has-tenants.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            --mask-only
+          python3 .github/scripts/resolve_e2e_tenant.py \
+            --matrix-json "$TENANT_MATRIX_JSON" \
+            --cloud "$E2E_CLOUD" \
+            >> "$GITHUB_ENV"
+
+      - name: Set up uv
+        if: steps.has-tenants.outputs.ok == 'true'
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+
+      - name: Purge expired holds
+        if: steps.has-tenants.outputs.ok == 'true'
+        run: |
+          set -euo pipefail
+          uv run --frozen python -m application_sdk.testing.harness.preview_hold reap

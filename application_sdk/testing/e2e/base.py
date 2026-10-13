@@ -81,7 +81,7 @@ import warnings
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import AbstractAsyncContextManager, contextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -137,7 +137,7 @@ from application_sdk.testing.e2e.payload import (
 )
 from application_sdk.testing.e2e.substitutions import MustacheSubstitutions
 from application_sdk.testing.e2e.tenant_pool import TenantPool, check_tenant_pool
-from application_sdk.testing.harness import atlas
+from application_sdk.testing.harness import atlas, preview_hold
 from application_sdk.testing.harness import seed as harness_seed
 from application_sdk.testing.harness._errors import MissingTenantEnvError
 from application_sdk.testing.harness.automation_engine import AEClient
@@ -1882,6 +1882,13 @@ class BaseE2ETest:
             # Emptied rather than filtered out of the loop below, so the
             # ordinals a seeding suite's teardown workflow names are built from
             # do not shift when the run's own connection is skipped.
+            conn_qn = ""
+        if conn_qn and conn_qn == getattr(self, "_preview_held_qn", ""):
+            logger.info(
+                "e2e cleanup: %s is held for preview review; the scheduled "
+                "preview-hold reaper purges it when the hold expires",
+                conn_qn,
+            )
             conn_qn = ""
         seeded = tuple(getattr(self, "_seeded_connection_qns", ()))
         # A suite that seeds under its own QN registers that name twice — once
@@ -5365,11 +5372,13 @@ class BaseE2ETest:
             links = run_sync(self._preview_links_async(types))
             out = Path(self.preview_links_dir) / f"{type(self).__name__}.json"
             out.parent.mkdir(parents=True, exist_ok=True)
-            body = {
+            body: dict[str, object] = {
                 "suite": type(self).__name__,
                 "connection_qualified_name": self.connection_qualified_name,
                 "links": links,
             }
+            if links and (until := self._hold_for_preview()):
+                body["expires_at"] = preview_hold.stamp(until)
             out.write_bytes(
                 orjson.dumps(body, option=orjson.OPT_INDENT_2 | orjson.OPT_SORT_KEYS)
             )
@@ -5385,6 +5394,52 @@ class BaseE2ETest:
                 "Could not write preview links under %s",
                 self.connection_qualified_name,
                 exc_info=True,
+            )
+
+    def _hold_for_preview(self) -> datetime | None:
+        """Mark the run's connection as held, when the run asked for a hold.
+
+        Returns the expiry only once the mark is saved: teardown skips the
+        delete for a held connection, and one held without a mark is one the
+        reaper would never find. Not offered when the run seeded lineage-parent
+        connections, which teardown deletes alongside the run's own and whose
+        absence would leave the held lineage pointing at nothing.
+        """
+        hours = preview_hold.hold_hours(os.environ)
+        if not hours:
+            return None
+        if tuple(getattr(self, "_seeded_connection_qns", ())):
+            logger.info(
+                "Preview hold not offered for %s: the run seeded other connections",
+                self.connection_qualified_name,
+            )
+            return None
+        until = preview_hold.expiry_from_now(hours)
+        try:
+            run_sync(self._mark_preview_hold_async(until))
+        # conformance: ignore[E004] a failed mark falls back to the normal delete, which is the safe direction
+        except Exception:
+            logger.warning(
+                "Could not mark %s as held for preview; teardown deletes it as usual",
+                self.connection_qualified_name,
+                exc_info=True,
+            )
+            return None
+        self._preview_held_qn = self.connection_qualified_name
+        logger.info(
+            "Preview hold: %s kept until %s",
+            self.connection_qualified_name,
+            until.isoformat(),
+        )
+        return until
+
+    async def _mark_preview_hold_async(self, until: datetime) -> None:
+        async with self._atlas_client() as client:
+            await preview_hold.mark(
+                client,
+                self.connection_qualified_name,
+                self.connection_display_name,
+                until,
             )
 
     async def _preview_links_async(self, types: tuple[str, ...]) -> dict[str, str]:

@@ -477,6 +477,10 @@ def test_call_sites_are_the_expected_files() -> None:
         # that tenant the same way a leg does. Audited: it runs the two-pass
         # --mask-only-then-write protocol, which the ordering guard below checks.
         ".github/workflows/e2e-tenant-install.yaml",
+        # Purges preview-held connections on each cloud's test tenant, so it
+        # resolves that tenant the same way. Audited: two-pass
+        # --mask-only-then-write, checked by the ordering guard below.
+        ".github/workflows/e2e-preview-reaper.yaml",
         ".github/workflows/tests-reusable.yaml",
     }
 
