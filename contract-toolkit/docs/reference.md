@@ -2868,13 +2868,13 @@ class QueryIntelligenceNode extends DAGNode {
   @Deprecated timestampKey: String = "START_TIME"
   mineOutputType: "parquet"|"json" = "json"
   @Deprecated parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
-  extraFilter: String?
+  @Deprecated extraFilter: String?
   indirectLineage: Boolean|String? = null
   ignoreOrphans: Boolean|String? = null
   @Deprecated columnsToPreserve: String?
   relatedAssetsOutputPrefix: String?
   @Deprecated parserArtifactsKey: String?
-  connectionCacheKey: String?
+  @Deprecated connectionCacheKey: String?
   currentStatePrefix: String?
   @Deprecated instanceName: String?
 }
@@ -2895,6 +2895,8 @@ per-workflow args. Configure storage at the QI app deployment, not on this node.
 | `columnsToPreserve` | All columns/fields are preserved in JSON mode (now the default). |
 | `parserArtifactsKey` | No longer consumed by QI. |
 | `instanceName` | Instance name is read from QI app environment variables, not workflow args. |
+| `extraFilter` | QI no longer filters input records; the arg is dropped by its input model. |
+| `connectionCacheKey` | QI resolves the connection cache internally, not from a per-workflow key. |
 
 These fields still emit their corresponding args into `manifest.json` when set,
 but the QI app discards them. New contracts should not set them.

@@ -1416,20 +1416,28 @@ open class NotificationNode extends DAGNode {
 open class QueryIntelligenceNode extends DAGNode {
   hidden upstream: String = "extract"
 
+  /// Runtime source for the connection qualified name.
   connectionQualifiedName: String = "$.\(upstream).outputs.connection_qualified_name"
 
+  /// Path / object-store prefix where QI should read input files from.
   inputPrefix: String = "$.\(upstream).outputs.qi_input_prefix"
 
+  /// Path / object-store prefix where QI should write output files to.
   outputPrefix: String = "$.\(upstream).outputs.qi_output_prefix"
 
+  /// Fixed dialect for all records.
   vendorName: String?
 
+  /// Per-record dialect field (JSON mode only).
   vendorKey: String?
 
+  /// Column / field containing the SQL text.
   sqlKey: String
 
+  /// Column / field containing catalog / database name.
   catalogKey: String = "DATABASE_NAME"
 
+  /// Column / field containing schema name.
   schemaKey: String = "SCHEMA_NAME"
 
   /// Deprecated: QI no longer filters records by timestamp. The arg is still
@@ -1437,8 +1445,9 @@ open class QueryIntelligenceNode extends DAGNode {
   @Deprecated { message = "QI no longer filters records by timestamp; this field is ignored." }
   timestampKey: String = "START_TIME"
 
-  /// `"json"` is the default for new integrations. `"parquet"` remains valid
-  /// for legacy miner-style inputs but should not be used by new contracts.
+  /// Input format. `"json"` is the default for new integrations. `"parquet"`
+  /// remains valid for legacy miner-style inputs but should not be used by new
+  /// contracts.
   mineOutputType: "parquet"|"json" = "json"
 
   /// Deprecated: parsing strategy is tuned internally by QI based on workload.
@@ -1446,10 +1455,33 @@ open class QueryIntelligenceNode extends DAGNode {
   @Deprecated { message = "Parsing mode is now tuned internally by QI; this field is ignored." }
   parsingMode: "fast"|"fallback"|"schema-aware"|"competitive"|"lorien-only" = "fallback"
 
+  /// Deprecated: QI no longer accepts a vendor-specific input filter. The arg
+  /// is still emitted when set but is dropped by the QI app's input model.
+  @Deprecated { message = "QI no longer filters input records; this field is ignored." }
   extraFilter: String?
 
+  /// Optional indirect lineage flag.
+  ///
+  /// Use a Boolean literal or an exact template placeholder string such as
+  /// `"{{indirect-lineage}}"` when the value must be wired from a workflow
+  /// form field. Heracles substitutes exact workflow parameter names only;
+  /// it does not resolve dotted paths such as
+  /// `"{{control_config.indirect_lineage}}"` — unresolved placeholders are
+  /// stripped from the DAG inputs before the workflow starts. The QI app
+  /// coerces the resolved string to bool via Pydantic before passing the
+  /// `--indirect-lineage` flag to the parser.
+  /// `null` (default) omits the arg so the QI Pydantic default applies.
   indirectLineage: Boolean|String? = null
 
+  /// Optional orphan-column handling flag.
+  ///
+  /// Use a Boolean literal or an exact template placeholder string such as
+  /// `"{{ignore-orphans}}"`. Heracles substitutes exact workflow parameter
+  /// names only; dotted paths are not resolved. Truthy → `--ignore-orphans`
+  /// (orphan columns dropped); falsy → `--link-orphans` (orphan columns
+  /// linked to the first table, the default). The QI app coerces the
+  /// resolved string to bool via Pydantic before invoking the parser.
+  /// `null` (default) omits the arg so the QI Pydantic default applies.
   ignoreOrphans: Boolean|String? = null
 
   /// Deprecated: all columns/fields are preserved in JSON mode (the default).
@@ -1457,6 +1489,7 @@ open class QueryIntelligenceNode extends DAGNode {
   @Deprecated { message = "All columns/fields are preserved in JSON mode; this field is ignored." }
   columnsToPreserve: String?
 
+  /// Optional related-assets output prefix.
   relatedAssetsOutputPrefix: String?
 
   /// Deprecated: parser artifacts are no longer consumed via this key. The arg
@@ -1464,8 +1497,13 @@ open class QueryIntelligenceNode extends DAGNode {
   @Deprecated { message = "No longer used by QI." }
   parserArtifactsKey: String?
 
+  /// Deprecated: QI resolves the connection cache internally; it is no longer
+  /// addressed by a per-workflow object-store key. The arg is still emitted
+  /// when set but is ignored.
+  @Deprecated { message = "QI resolves the connection cache internally; this field is ignored." }
   connectionCacheKey: String?
 
+  /// Optional current-state prefix for schema-aware parsing.
   currentStatePrefix: String?
 
   /// Deprecated: instance name is read from QI app environment variables, not
