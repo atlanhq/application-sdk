@@ -141,6 +141,24 @@ it is read instead of listing the prefix.
   `StorageIntegrityError` rather than misreading it. Bumping it needs a reader
   that accepts both, shipped first.
 
+## The `FileReference` store tag (`store`)
+
+| | |
+|---|---|
+| **Produced by** | `App.download()` / `App.upload()` in `application_sdk/app/base.py` (`_tag_ref_store`), which set `StoreTarget.UPSTREAM` when they read from or wrote to a distinct upstream store |
+| **Served at** | `FileReference.store` in Temporal payloads, as `"deployment"` or `"upstream"` |
+| **Read by** | `materialize_file_refs()` / `fetch()` (via `_resolve_ref_store` in `application_sdk/storage/file_ref_sync.py`), which pick the store a ref is materialised from |
+| **Pinned by** | `tests/unit/app/test_transfer_ref_store.py` |
+
+- **The field is additive and must stay optional, defaulting to `deployment`.**
+  A producer on an older SDK sends no `store`. It is read as `deployment`, which
+  is where that SDK's interceptor always read. A consumer on an older SDK drops
+  the field and reads `deployment` as before.
+- **Do not rename the two values.** They are `StoreTarget`'s string values, and
+  `VerifyRefsInput.store` shares them.
+- **An `upstream` ref with no upstream store bound reads the deployment store.**
+  This mirrors `App.download()`'s own `upstream_storage or storage` routing.
+
 ## The connection-scoped `persistent-artifacts` layout
 
 | | |

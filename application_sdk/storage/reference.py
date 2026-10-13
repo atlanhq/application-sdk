@@ -1161,8 +1161,9 @@ async def fetch(
     Args:
         ref: A durable ``FileReference``.  If not durable, returned as-is.
         store: Object store to download from.  If ``None``, resolved from the
-            current activity's infrastructure context — requires the call to
-            originate inside an activity.
+            current activity's infrastructure context — the upstream store for
+            a ``store=UPSTREAM`` ref, the deployment store otherwise — which
+            requires the call to originate inside an activity.
 
     Returns:
         A ``FileReference`` with ``local_path`` set to the downloaded file.
@@ -1186,6 +1187,10 @@ async def fetch(
             )
 
             raise ObjectStoreNotProvidedError()
-        store = infra.storage
+        from application_sdk.storage.file_ref_sync import (  # noqa: PLC0415 — circular: file_ref_sync imports this module
+            _resolve_ref_store,
+        )
+
+        store = _resolve_ref_store(ref, infra.storage, infra.upstream_storage)
 
     return await materialize_file_reference(store, ref)

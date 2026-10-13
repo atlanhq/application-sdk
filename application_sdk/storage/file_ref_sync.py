@@ -49,7 +49,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel
 
 from application_sdk._runtime.progress import current_progress_tracker
-from application_sdk.contracts.types import FileReference, Lazy
+from application_sdk.contracts.types import FileReference, Lazy, StoreTarget
 from application_sdk.observability.logger_adaptor import get_logger
 
 if TYPE_CHECKING:
@@ -194,8 +194,37 @@ def has_refs_to_materialize(data: Any) -> bool:
     return any(_needs_materialize(ref) for ref in _find_file_refs(data))
 
 
+def _resolve_ref_store(
+    ref: FileReference, store: ObjectStore, upstream_store: ObjectStore | None
+) -> ObjectStore:
+    """Return the store that holds *ref*'s bytes.
+
+    ``UPSTREAM`` refs read *upstream_store*; with no upstream bound they fall
+    back to *store*, mirroring ``App.download``'s own routing.
+    """
+    if ref.store is StoreTarget.UPSTREAM and upstream_store is not None:
+        return upstream_store
+    return store
+
+
+def _materialize_key(ref: FileReference) -> str:
+    """Dedup key for materialise: one download per (store, storage_path).
+
+    The same key in two stores is two different objects, so the store is part
+    of the key.
+    """
+    if ref.storage_path is None:
+        return str(id(ref))
+    return f"{ref.store.value}:{ref.storage_path}"
+
+
 async def _replace_refs(
-    data: Any, store: ObjectStore, mode: str, output_path: str | None = None
+    data: Any,
+    store: ObjectStore,
+    mode: str,
+    output_path: str | None = None,
+    *,
+    upstream_store: ObjectStore | None = None,
 ) -> Any:
     """Replace FileReference instances in a data tree using concurrent execution.
 
@@ -218,6 +247,8 @@ async def _replace_refs(
         mode: ``"persist"`` or ``"materialize"``.
         output_path: Run-scoped base prefix passed through to
             ``persist_file_reference`` for ``RETAINED``-tier refs.
+        upstream_store: Store a ref with ``store=UPSTREAM`` materialises
+            from. ``None`` falls back to *store*.
 
     Returns:
         A new object tree with replaced FileReference instances (original
@@ -258,11 +289,11 @@ async def _replace_refs(
                     )
                     _winners[key] = node
             elif mode == "materialize" and _needs_materialize(node):
-                key = node.storage_path or str(id(node))
+                key = _materialize_key(node)
                 if key not in _factories:
                     _ref = node
                     _factories[key] = lambda r=_ref: materialize_file_reference(
-                        store, r
+                        _resolve_ref_store(r, store, upstream_store), r
                     )
                     _winners[key] = node
             return
@@ -322,7 +353,7 @@ async def _replace_refs(
             ):
                 return _results.get(str(id(node)), node)
             if mode == "materialize" and _needs_materialize(node):
-                key = node.storage_path or str(id(node))
+                key = _materialize_key(node)
                 result = _results.get(key, node)
                 if node is not _winners.get(key):
                     # conformance: ignore[L018] storage_path/dedup_key/reused_local_path/local_path are in _KNOWN_EXTRA_KEYS; _build_extra_dict promotes them to indexed OTLP attributes — %-style would lose the promotion
@@ -388,8 +419,14 @@ async def persist_file_refs(
     return await _replace_refs(data, store, "persist", output_path=output_path)
 
 
-async def materialize_file_refs(store: ObjectStore, data: Any) -> Any:
+async def materialize_file_refs(
+    store: ObjectStore, data: Any, *, upstream_store: ObjectStore | None = None
+) -> Any:
     """Download all durable FileReferences in *data* to local temp files.
+
+    Each ref is read from the store it names: *upstream_store* for
+    ``store=UPSTREAM`` (what ``App.download`` / ``App.upload`` return in a
+    two-store deployment), *store* for everything else.
 
     Handles:
 
@@ -403,4 +440,6 @@ async def materialize_file_refs(store: ObjectStore, data: Any) -> Any:
         New object tree with all durable FileReferences replaced by local
         ones (``local_path`` set, ``.sha256`` sidecar written).
     """
-    return await _replace_refs(data, store, "materialize")
+    return await _replace_refs(
+        data, store, "materialize", upstream_store=upstream_store
+    )

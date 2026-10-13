@@ -108,6 +108,8 @@ from application_sdk.observability.observability import AtlanObservability
 from application_sdk.version import __version__ as _SDK_VERSION
 
 if TYPE_CHECKING:
+    from obstore.store import ObjectStore
+
     from application_sdk.execution.progress import ProgressWatchdogMode
 
 _task_logger = get_logger(__name__)
@@ -383,6 +385,31 @@ async def _warn_on_invalid_transformed_assets(
             "Transformed-asset validation outcome emission failed (handoff continues)",
             exc_info=True,
         )
+
+
+_TransferOutput = TypeVar("_TransferOutput", UploadOutput, DownloadOutput)
+
+
+def _tag_ref_store(
+    out: _TransferOutput,
+    store: "ObjectStore",
+    deployment: "ObjectStore | None",
+) -> _TransferOutput:
+    """Record on *out*'s ref which store its bytes are in.
+
+    ``App.upload`` / ``App.download`` route to the upstream store when one is
+    bound, but the interceptor materialises a ref into the next task from the
+    deployment store unless the ref says otherwise. In a two-store deployment
+    those are different buckets: the downstream task lists an empty prefix and
+    fails AAF-STR-009 (FND-3795). Compared by identity, the same test
+    ``single_store`` uses — the in-cluster wiring aliases one store under both
+    names, and that stays ``DEPLOYMENT``.
+    """
+    if store is deployment or not out.ref.is_durable:
+        return out
+    return out.model_copy(
+        update={"ref": out.ref.model_copy(update={"store": StoreTarget.UPSTREAM})}
+    )
 
 
 # Type variable for require() method
@@ -1724,7 +1751,9 @@ class App(ABC):
                         exc_info=True,
                     )
                 continue
-            result = out  # last successful write is authoritative (upstream in SDR)
+            result = _tag_ref_store(
+                out, target_store, deployment
+            )  # last successful write is authoritative (upstream in SDR)
 
         if deferred_required_error is not None:
             raise deferred_required_error
@@ -1798,12 +1827,13 @@ class App(ABC):
         if not storage_path and input.ref is not None:
             storage_path = input.ref.storage_path or ""
 
-        return await _download(
+        out = await _download(
             storage_path,
             input.local_path,
             skip_if_exists=input.skip_if_exists,
             store=store,
         )
+        return _tag_ref_store(out, store, self.context.storage)
 
     # No ``timeout_seconds``: the work here is one store round-trip per declared
     # ref, so any number picked would scale with the size of the declaration —

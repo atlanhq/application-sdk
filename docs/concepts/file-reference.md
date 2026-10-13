@@ -83,6 +83,15 @@ infrastructure unless the connector explicitly decides to hand them off.
 `upstream_storage` is the `atlan-objectstore` Dapr binding (pointing to
 `{tenant}/api/blobstorage`), so `App.upload()` routes to Atlan's S3.
 
+`App.download()` reads from the same place. A ref that `App.upload()` or
+`App.download()` returns from a **distinct** upstream store carries
+`store=StoreTarget.UPSTREAM`. When you pass it into another `@task`, the
+interceptor materialises it from the upstream store, not the deployment store.
+Without that field the next task would list an empty prefix in the wrong bucket
+and fail with AAF-STR-009. Every other ref, including those from a single-store
+deployment where both names alias one store, has `store=DEPLOYMENT`. Do not set
+the field by hand. It records where the bytes are, and the SDK sets it.
+
 **Consequence for connector authors:** if your connector produces artifacts that
 Atlan's publish app must consume, you must call `App.upload()` explicitly from
 `run()` — the interceptor alone is not sufficient. Omitting the explicit call
